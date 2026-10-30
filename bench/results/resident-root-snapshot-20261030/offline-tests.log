@@ -1,0 +1,37 @@
+test_checksum_tamper (__main__.ReplayTests.test_checksum_tamper) ... ok
+test_cleanup_missing_receipt (__main__.ReplayTests.test_cleanup_missing_receipt) ... ok
+test_cleanup_namespace_escaped (__main__.ReplayTests.test_cleanup_namespace_escaped) ... ok
+test_complete_bundle (__main__.ReplayTests.test_complete_bundle) ... ok
+test_identity_mismatch (__main__.ReplayTests.test_identity_mismatch) ... ok
+test_missing_artifact (__main__.ReplayTests.test_missing_artifact) ... ok
+test_missing_trace_row (__main__.ReplayTests.test_missing_trace_row) ... ok
+test_native_exit_failure (__main__.ReplayTests.test_native_exit_failure) ... ok
+test_native_missing_raw_journal (__main__.ReplayTests.test_native_missing_raw_journal) ... ok
+test_native_positive_count (__main__.ReplayTests.test_native_positive_count) ... ok
+test_native_wrong_filter (__main__.ReplayTests.test_native_wrong_filter) ... ok
+test_noise_guarantee_invented (__main__.ReplayTests.test_noise_guarantee_invented) ... ok
+test_patch_context_tamper (__main__.ReplayTests.test_patch_context_tamper) ... ok
+test_portable_relocation (__main__.ReplayTests.test_portable_relocation) ... ok
+test_promotion_overclaim (__main__.ReplayTests.test_promotion_overclaim) ... ok
+test_raw_timing_summary_tamper (__main__.ReplayTests.test_raw_timing_summary_tamper) ... ok
+test_runtime_assertion_gate_erased (__main__.ReplayTests.test_runtime_assertion_gate_erased) ... ok
+test_runtime_marker_stale (__main__.ReplayTests.test_runtime_marker_stale) ... ok
+test_runtime_type_error_gate_erased (__main__.ReplayTests.test_runtime_type_error_gate_erased) ... ok
+test_source_provider_tamper (__main__.ReplayTests.test_source_provider_tamper) ... ok
+test_trace_identity_mismatch (__main__.ReplayTests.test_trace_identity_mismatch) ... ok
+test_trace_marker_stale (__main__.ReplayTests.test_trace_marker_stale) ... ok
+test_trace_phase_summary_tamper (__main__.ReplayTests.test_trace_phase_summary_tamper) ... ok
+test_unsafe_path (__main__.ReplayTests.test_unsafe_path) ... ok
+test_v19_quality_attribute_removed (__main__.ReplayTests.test_v19_quality_attribute_removed) ... ok
+test_warm_identity (__main__.ReplayTests.test_warm_identity) ... ok
+test_warm_marker_even_after_rehash (__main__.ReplayTests.test_warm_marker_even_after_rehash) ... ok
+test_warm_median (__main__.ReplayTests.test_warm_median) ... ok
+test_warm_missing_row (__main__.ReplayTests.test_warm_missing_row) ... ok
+test_warm_order (__main__.ReplayTests.test_warm_order) ... ok
+test_warm_source (__main__.ReplayTests.test_warm_source) ... ok
+test_warm_type_gate (__main__.ReplayTests.test_warm_type_gate) ... ok
+
+----------------------------------------------------------------------
+Ran 32 tests in 2.837s
+
+OK

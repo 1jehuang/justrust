@@ -1,0 +1,897 @@
+{
+  "scope": "matched-instrumented-native-roots-not-speedup",
+  "rows": [
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.13801208201039117,
+      "noise": {
+        "before": {
+          "busy_seconds": 423057.2,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423058.05,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.047754,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.802245999976717
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsb08/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsb08/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsb08/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsb08/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsb08/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsb08/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsb08/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsb08/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsb08/engine/runtime"
+      },
+      "stack": "old",
+      "replicate": "warmup",
+      "trace_sha256": "fff2e41a6a8f5dc6fda2d83f3bb4b70e96cc27ddd5865f9c780bdebc8b79e71a",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          482
+        ],
+        "client planning": [
+          26196
+        ],
+        "client command": [
+          133358
+        ]
+      },
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.11926568600756582,
+      "noise": {
+        "before": {
+          "busy_seconds": 423058.29,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423059.3,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.035674000000000004,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.9743260000093132
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa14/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa14/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa14/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa14/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa14/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa14/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa14/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa14/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa14/engine/runtime"
+      },
+      "stack": "new",
+      "replicate": "warmup",
+      "trace_sha256": "a071d4cc933dbdf7d109528afaa330cfc35aef756a73fce4977dcfdc65915ace",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          461
+        ],
+        "client planning": [
+          19099
+        ],
+        "client command": [
+          114804
+        ]
+      },
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.13211147699621506,
+      "noise": {
+        "before": {
+          "busy_seconds": 423059.66,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423060.66,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.03303199999999999,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.966968
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsb08/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsb08/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsb08/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsb08/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsb08/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsb08/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsb08/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsb08/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsb08/engine/runtime"
+      },
+      "stack": "old",
+      "replicate": 0,
+      "trace_sha256": "57773ca51f77c7439fe11a272b9d58698453d321eb4da496cdc48e558897a128",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          495
+        ],
+        "client planning": [
+          18055
+        ],
+        "client command": [
+          127826
+        ]
+      },
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.1204276549979113,
+      "noise": {
+        "before": {
+          "busy_seconds": 423060.85,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423061.52,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.033709999999999976,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.6362900000419095
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa14/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa14/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa14/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa14/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa14/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa14/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa14/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa14/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa14/engine/runtime"
+      },
+      "stack": "new",
+      "replicate": 0,
+      "trace_sha256": "6be3aafc9d4a559f02f214819bc726e25d79111f4a98db651505fac84bde3070",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          470
+        ],
+        "client planning": [
+          18279
+        ],
+        "client command": [
+          116342
+        ]
+      },
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.10954485699767247,
+      "noise": {
+        "before": {
+          "busy_seconds": 423061.68,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423062.19,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.03423900000000002,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.4757610000093132
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa14/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa14/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa14/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa14/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa14/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa14/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa14/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa14/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa14/engine/runtime"
+      },
+      "stack": "new",
+      "replicate": 1,
+      "trace_sha256": "5287535b7095a4e2c401f7c1e57c7241963c6e6d329c32afc057e241993ef68f",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          447
+        ],
+        "client planning": [
+          18620
+        ],
+        "client command": [
+          105611
+        ]
+      },
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.10134524499881081,
+      "noise": {
+        "before": {
+          "busy_seconds": 423062.36,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423062.87,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.03508800000000001,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.4749120000093132
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsb08/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsb08/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsb08/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsb08/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsb08/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsb08/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsb08/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsb08/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsb08/engine/runtime"
+      },
+      "stack": "old",
+      "replicate": 1,
+      "trace_sha256": "0acdcd4bbe3f634cf1425cda3984a7f17ed5699a9d4bd80befc23179bc3cf355",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          493
+        ],
+        "client planning": [
+          19071
+        ],
+        "client command": [
+          97111
+        ]
+      },
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.09621758299181238,
+      "noise": {
+        "before": {
+          "busy_seconds": 423063.04,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423063.5,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.033837000000000006,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.42616300002095475
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsb08/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsb08/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsb08/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsb08/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsb08/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsb08/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsb08/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsb08/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsb08/engine/runtime"
+      },
+      "stack": "old",
+      "replicate": 2,
+      "trace_sha256": "b7985e2383f71c6f097ac1a6ea7755f242a67ccde11bb3b1139639c9e916064e",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          462
+        ],
+        "client planning": [
+          18049
+        ],
+        "client command": [
+          92002
+        ]
+      },
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.09316665001097135,
+      "noise": {
+        "before": {
+          "busy_seconds": 423063.66,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423064.12,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.03370000000000001,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.42630000002095475
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa14/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa14/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa14/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa14/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa14/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa14/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa14/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa14/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa14/engine/runtime"
+      },
+      "stack": "new",
+      "replicate": 2,
+      "trace_sha256": "afd3e1c7632129cceda5d69adf358acd05367dd0fab852e5fc0a3d754b185e29",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          453
+        ],
+        "client planning": [
+          17680
+        ],
+        "client command": [
+          88933
+        ]
+      },
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.09100908199616242,
+      "noise": {
+        "before": {
+          "busy_seconds": 423064.37,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423064.9,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.03585299999999997,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.4941470000279397
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa14/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa14/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa14/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa14/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa14/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa14/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa14/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa14/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa14/engine/runtime"
+      },
+      "stack": "new",
+      "replicate": 3,
+      "trace_sha256": "ad25c1773f77adda5905ee477eb9e9eff52e9fc6537a4d34f05f0c157e33d2ee",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          505
+        ],
+        "client planning": [
+          19932
+        ],
+        "client command": [
+          86622
+        ]
+      },
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.09775395700125955,
+      "noise": {
+        "before": {
+          "busy_seconds": 423065.15,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423065.76,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.036067000000000016,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.5739329999860301
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsb08/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsb08/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsb08/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsb08/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsb08/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsb08/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsb08/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsb08/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsb08/engine/runtime"
+      },
+      "stack": "old",
+      "replicate": 3,
+      "trace_sha256": "6e36b0bbc1e75f6201bdfe33c3a31573c4fa4a0517f3b88f8106a4d76be900d8",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          503
+        ],
+        "client planning": [
+          19432
+        ],
+        "client command": [
+          93307
+        ]
+      },
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.11003770600655116,
+      "noise": {
+        "before": {
+          "busy_seconds": 423065.97,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423066.48,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.03678300000000001,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.4732170000093132
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsb08/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsb08/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsb08/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsb08/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsb08/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsb08/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsb08/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsb08/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsb08/engine/runtime"
+      },
+      "stack": "old",
+      "replicate": 4,
+      "trace_sha256": "e3606e9870290cd4a135090a71a6c3edf4170e5ce1de0ebc90d530038d329145",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          484
+        ],
+        "client planning": [
+          19341
+        ],
+        "client command": [
+          105656
+        ]
+      },
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.09225086600054055,
+      "noise": {
+        "before": {
+          "busy_seconds": 423066.66,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "after": {
+          "busy_seconds": 423067.13,
+          "loadavg": [
+            10.71630859375,
+            8.02001953125,
+            6.21826171875
+          ]
+        },
+        "child_cpu_seconds": 0.037273,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.432727000030268
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa14/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa14/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa14/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa14/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa14/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa14/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa14/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa14/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa14/engine/runtime"
+      },
+      "stack": "new",
+      "replicate": 4,
+      "trace_sha256": "1997a8f2c299be163ecd1e91e133b17dca919c85068a5fdb093e29e97f5d8169",
+      "selected_nested_elapsed_us": {
+        "client metadata": [
+          472
+        ],
+        "client planning": [
+          19848
+        ],
+        "client command": [
+          87566
+        ]
+      },
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42"
+    }
+  ],
+  "source_before": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+  "status": "passed",
+  "source_restored": true,
+  "identities_unchanged": true
+}

@@ -1,0 +1,3 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source)
+    Finished `test` profile [blaze] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/jeremy/rsa13/engine/target/debug/deps/justrust-b66c6aebcb1d58bd)

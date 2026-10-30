@@ -1,0 +1,48 @@
+toolchain/resident/crates/ra-jit/src/weaken.rs:568:        let (kept, exported, mangled) = ((!private, !weak), (!private, weak), (private, weak));
+toolchain/resident/crates/ra-jit/src/weaken.rs:569:        assert_eq!(made(&data), [kept, exported, kept, mangled, mangled, mangled]);
+toolchain/resident/crates/ra-jit/src/symbols.rs:1600:                ("exported", SymbolScope::Dynamic, default),
+toolchain/resident/crates/ra-jit/src/symbols.rs:1607:        assert!(linked.has("exported"));
+toolchain/resident/crates/ra-jit/src/splice/wasm.rs:487:                            "{name} is new and exported"
+toolchain/resident/crates/ra-jit/src/main.rs:2336:    /// this crate that is not exported, which is in no module but by an import of it, and is
+toolchain/resident/crates/ra-jit/src/main.rs:3770:    exported: Vec<bool>,
+toolchain/resident/crates/ra-jit/src/main.rs:3788:    exported: Vec<bool>,
+toolchain/resident/crates/ra-jit/src/main.rs:4071:            exported: snapshot.exported,
+toolchain/resident/crates/ra-jit/src/main.rs:4099:        let exported = exported(db, &functions);
+toolchain/resident/crates/ra-jit/src/main.rs:4103:            .zip(&exported)
+toolchain/resident/crates/ra-jit/src/main.rs:4105:            .map(|(&it, &exported)| (it, exported, is_generic_function(db, it)))
+toolchain/resident/crates/ra-jit/src/main.rs:4118:            exported,
+toolchain/resident/crates/ra-jit/src/main.rs:4160:/// All reads, including allocator provenance and exported symbols, happen here
+toolchain/resident/crates/ra-jit/src/main.rs:4182:    let exported: Vec<_> = functions
+toolchain/resident/crates/ra-jit/src/main.rs:4192:        .zip(&exported)
+toolchain/resident/crates/ra-jit/src/main.rs:4194:        .map(|(&it, &exported)| (it, exported, is_generic_function(db, it)))
+toolchain/resident/crates/ra-jit/src/main.rs:4201:    RootSnapshot { functions, kept, statics, in_provided, exported, rooted, provided, main }
+toolchain/resident/crates/ra-jit/src/main.rs:4207:fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+toolchain/resident/crates/ra-jit/src/main.rs:4208:    let exported = |db: &RootDatabase, functions: &[FunctionId]| -> Vec<bool> {
+toolchain/resident/crates/ra-jit/src/main.rs:4209:        let exported = |&it| {
+toolchain/resident/crates/ra-jit/src/main.rs:4214:        functions.iter().map(exported).collect()
+toolchain/resident/crates/ra-jit/src/main.rs:4219:        return exported(db, functions);
+toolchain/resident/crates/ra-jit/src/main.rs:4226:                scope.spawn(move || hir::attach_db(&db, || exported(&db, part)))
+toolchain/resident/crates/ra-jit/src/main.rs:4803:    /// Of [`Build::skipped`], in a library's build with nothing of rustc's, those exported by
+toolchain/resident/crates/ra-jit/src/main.rs:5349:                listed.rooted.iter().filter(kept_rooted).map(|&(it, exported, _)| (it, exported)),
+toolchain/resident/crates/ra-jit/src/main.rs:5389:                listed.rooted.iter().filter(|it| !it.2).map(|&(it, exported, _)| (it, exported)),
+toolchain/resident/crates/ra-jit/src/main.rs:5414:        .partition(|&(func, exported)| exported || main.is_none() || main == Some(func));
+toolchain/resident/crates/ra-jit/src/main.rs:5537:        let exported = unit.skipped.iter().filter_map(|(func, e)| {
+toolchain/resident/crates/ra-jit/src/main.rs:5542:        exported.collect()
+toolchain/resident/crates/ra-jit/src/main.rs:5622:/// exported by name ([`Build::refused_exports`]), a line each, `symbol\tname: why`. A program
+toolchain/resident/crates/ra-jit/src/main.rs:5624:/// finds no stand-in for it in the unit: one exported under the name could take the place of
+toolchain/resident/crates/ra-jit/src/main.rs:11682:            exported: listed.exported,
+toolchain/resident/crates/ra-jit/src/main.rs:11794:                assert_eq!(cached.exported[alloc], revision != 1);
+toolchain/resident/crates/ra-jit/src/main.rs:11819:                assert_eq!(cached.exported[alloc], expected);
+toolchain/resident/crates/ra-jit/src/main.rs:11850:                assert_eq!(cached.exported[index], marked);
+toolchain/resident/crates/ra-jit/src/main.rs:12184:extern "C" fn exported() {}
+toolchain/resident/crates/ra-jit/src/main.rs:12196:                .zip(listed.exported.iter().copied())
+toolchain/resident/crates/ra-jit/src/main.rs:12200:                listed.rooted.iter().map(|&(it, exported, _)| (it, exported)).collect();
+toolchain/resident/crates/ra-jit/src/main.rs:12207:                .map(|&(it, exported, generic)| (name(it), exported, generic))
+toolchain/resident/crates/ra-jit/src/main.rs:12209:            for (wanted, exported, generic) in [
+toolchain/resident/crates/ra-jit/src/main.rs:12214:                ("exported", true, false),
+toolchain/resident/crates/ra-jit/src/main.rs:12217:                    flags.contains(&(wanted.to_owned(), exported, generic)),
+toolchain/resident/crates/ra-jit/src/macro_list.rs:4://! as a shared library, as a module of its own as it does a test harness: a static exported
+toolchain/resident/crates/ra-jit/src/link.rs:701:    /// exported, the arguments of the target's `pre-link-args`, and the C runtime's start of
+toolchain/resident/crates/ra-jit/src/doctest/extract.rs:88:    /// Where the blocks found are: a macro that is exported is in two modules.
+toolchain/resident/crates/ra-jit/src/outline.rs:803:    // be exported from the crate.
+toolchain/resident/crates/ra-jit/src/cargo/plan.rs:113:    /// exported static, and the splice reads no Mach-O library.

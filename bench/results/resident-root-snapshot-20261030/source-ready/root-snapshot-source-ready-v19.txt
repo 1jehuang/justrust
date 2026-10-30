@@ -1,0 +1,17 @@
+SOURCE READY v19: resident_root_snapshot, 2026-10-30
+Recipient session_skunk_1793325801268_bca6e773d45c6a0a
+Experimental licensed Blaze-derived resident, NOT cleanroom/shipping promotion.
+
+Exact pre-edit v18 main/doc/git patch preserved first in root-snapshot-v19/. v17 restored ONLY in owned main, then single #[cfg(test)] attribute added on original exported helper. Complete ra-jit symbol/caller audit confirms only caller is cfg(test) ListedCrate::original; helper-local exported calls reference the local closure. All original helpers/visibility, providers/reads, parallel declared_in/lower constructor warmup, original oracle body, four root fixtures and signature fixture unchanged vs v17. Exact full-source equality assertion v19 == v17 plus that attribute PASS. v18 exact source bytes compared against prior freeze PASS. No other sources restored/changed.
+Source-only rustfmt check and scoped git diff --check PASS. NO native builds/tests/workloads/source commit. Root owns new identity native/full/paired gates. No robust/default/shipping win claim. v18 +3.77% raw non-improvement documented and preserved.
+
+Full3sources/doc, pre-v18 main/doc/patch, exact v17 base, v17-v19 and v18-v19 scoped patches, full caller audit and SHA256SUMS:
+/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v19/
+SHA256:
+206f6545e73f7ae05b013d8c49582fee3806679a3b99ba0e7a1add8a128fc911 main.source-ready.rs
+4904a589917ce7f4054f45e6b66cff245393aa5824dfcd87e8db800b545c9f12 doc.source-ready.md
+0a50cf5d1abf3d812a4b942b0935810276ae0f90bfcb2b34b9b991c165e89d16 codegen.source-ready.rs
+724793541da40fe85a8f2fa738e39ae6bae70608c0b43e4b2ece80fe772c31a3 signatures.source-ready.rs
+eb509dee93321da743471e5c91bea67668a1d6b1e509acf024ac6a7124045848 main.v17-v19.patch
+939076c27210e7b4a78dea29e78534569be667d6ea93d21dab1df94ed9edf511 main.v18-v19.patch
+All earlier v16/v17/v18 lineage remains intact. Source frozen for root native/paired gates.

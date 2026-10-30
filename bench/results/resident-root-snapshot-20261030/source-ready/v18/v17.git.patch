@@ -1,0 +1,512 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index be57fd8ab..d4ddeab79 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -3778,9 +3778,22 @@ struct ListedCrate {
+     main: Option<FunctionId>,
+ }
+ 
++/// No checkout-local mutable caches belong in this Salsa value.
++#[derive(Clone, PartialEq, Eq, Debug)]
++struct RootSnapshot {
++    functions: Vec<FunctionId>,
++    kept: Vec<StaticId>,
++    statics: Vec<StaticId>,
++    in_provided: Vec<FunctionId>,
++    exported: Vec<bool>,
++    rooted: Vec<(FunctionId, bool, bool)>,
++    provided: Vec<(FunctionId, bool)>,
++    main: Option<FunctionId>,
++}
++
+ /// Whether the function, or the `impl` it is in, takes types or constants. A method a trait
+ /// provides takes `Self`.
+-fn is_generic_function(db: &RootDatabase, func: FunctionId) -> bool {
++fn is_generic_function(db: &dyn HirDatabase, func: FunctionId) -> bool {
+     let generic = |def: hir::GenericDef| !def.type_or_const_params(db).is_empty();
+     if generic(hir::Function::from(func).into()) {
+         return true;
+@@ -4036,7 +4049,7 @@ fn run_tool_std(db: &mut RootDatabase) -> anyhow::Result<()> {
+ }
+ 
+ /// Whether the root of `krate` says `#![no_main]`.
+-fn has_no_main(db: &RootDatabase, krate: Crate) -> bool {
++fn has_no_main(db: &dyn HirDatabase, krate: Crate) -> bool {
+     let root = ide_db::base_db::EditionedFileId::new(db, krate.root_file(db), krate.edition(db));
+     let attrs = syntax::ast::HasAttrs::attrs(&root.parse(db).tree());
+     attrs.filter_map(|it| it.as_simple_atom()).any(|it| it == "no_main")
+@@ -4044,6 +4057,28 @@ fn has_no_main(db: &RootDatabase, krate: Crate) -> bool {
+ 
+ impl ListedCrate {
+     fn new(db: &RootDatabase, krate: Crate) -> ListedCrate {
++        // Keep the original parallel lowering warmup OUTSIDE a tracked query.
++        // Export classification runs only on a snapshot miss, on its tracked
++        // thread. Green snapshots must not pay an unconditional export pass.
++        let _ = declared_in(db, krate);
++        let snapshot = root_snapshot(db, krate.into()).clone();
++        ListedCrate {
++            functions: snapshot.functions,
++            shared_paths: Default::default(),
++            kept: snapshot.kept,
++            statics: snapshot.statics,
++            in_provided: snapshot.in_provided,
++            exported: snapshot.exported,
++            rooted: snapshot.rooted,
++            provided: snapshot.provided,
++            main: snapshot.main,
++        }
++    }
++
++    // Independent original full classifier, deliberately not routed through the
++    // snapshot or its declaration provider. Keep this as the revision-test oracle.
++    #[cfg(test)]
++    fn original(db: &RootDatabase, krate: Crate) -> ListedCrate {
+         let Declared { functions, statics, in_provided, .. } = declared_in(db, krate);
+         let kept = statics
+             .iter()
+@@ -4088,6 +4123,84 @@ impl ListedCrate {
+     }
+ }
+ 
++/// Re-read the existing immutable declaration graph on the tracked thread. The
++/// warmup above is a scheduling optimization, never the dependency contract.
++/// Equality backdating here keeps executable-body-only edits out of classification.
++#[salsa::tracked(returns(ref))]
++fn root_declarations(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> Declared {
++    let mut declared = module_declarations(db, krate).clone();
++    while !declared.bodies.is_empty() || !declared.provided.is_empty() {
++        for under_provided in [false, true] {
++            let bodies = if under_provided {
++                std::mem::take(&mut declared.provided)
++            } else {
++                std::mem::take(&mut declared.bodies)
++            };
++            for body in bodies {
++                declared.extend(body_declarations(db, body, under_provided));
++            }
++        }
++    }
++    declared
++}
++
++// Parsing the root is an intentionally separate equality boundary: a body-only
++// edit changes its parse but must not force the full classification provider.
++#[salsa::tracked]
++fn root_no_main(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> bool {
++    has_no_main(db, krate.into())
++}
++
++#[cfg(test)]
++thread_local! {
++    static ROOT_SNAPSHOT_PROVIDERS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++}
++
++/// One coarse classification boundary, not a family of per-function wrappers.
++/// All reads, including allocator provenance and exported symbols, happen here
++/// on the query's thread, even when the parallel warmup already computed them.
++#[salsa::tracked(returns(ref))]
++fn root_snapshot(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> RootSnapshot {
++    #[cfg(test)]
++    ROOT_SNAPSHOT_PROVIDERS.with(|count| count.set(count.get() + 1));
++    let Declared { functions, statics, in_provided, .. } = root_declarations(db, krate).clone();
++    let kept = statics
++        .iter()
++        .copied()
++        .filter(|&it| {
++            hir_def::attrs::AttrFlags::query(db, it.into())
++                .contains(hir_def::attrs::AttrFlags::USED)
++                || hir_def::attrs::AttrFlags::link_section(db, it.into()).is_some()
++                || exported_static(db, it).is_some()
++        })
++        .collect();
++    let main = functions
++        .iter()
++        .copied()
++        .find(|&it| hir::Function::from(it).is_main(db))
++        .filter(|_| !root_no_main(db, krate));
++    let exported: Vec<_> = functions
++        .iter()
++        .map(|&it| {
++            exported_symbol(db, it).is_some()
++                || linked_symbol(db, it).is_some()
++                || serves_allocator(db, it)
++        })
++        .collect();
++    let rooted = functions
++        .iter()
++        .zip(&exported)
++        .filter(|&(&it, _)| !hir_ty_codegen::compile_time_only(db, it))
++        .map(|(&it, &exported)| (it, exported, is_generic_function(db, it)))
++        .collect();
++    let provided = in_provided
++        .iter()
++        .filter(|&&it| !hir_ty_codegen::compile_time_only(db, it))
++        .map(|&it| (it, is_generic_function(db, it)))
++        .collect();
++    RootSnapshot { functions, kept, statics, in_provided, exported, rooted, provided, main }
++}
++
+ /// For each of `functions`, whether a runtime looks it up by name. Its attributes say, which
+ /// are read off the source: on every core, as a build waits for this of every crate it builds.
+ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+@@ -4123,7 +4236,7 @@ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+ /// Whether a function is a method of an `impl GlobalAlloc`. The program calls the allocator
+ /// through symbols rustc writes for the `#[global_allocator]`, so no call in the source names
+ /// these methods, and they run all the same.
+-fn serves_allocator(db: &RootDatabase, func: FunctionId) -> bool {
++fn serves_allocator(db: &dyn HirDatabase, func: FunctionId) -> bool {
+     let Some(item) = hir::Function::from(func).as_assoc_item(db) else { return false };
+     let AssocItemContainer::Impl(implementation) = item.container(db) else { return false };
+     implementation.trait_(db).is_some_and(|it| {
+@@ -11559,6 +11672,351 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
+ mod tests {
+     use super::*;
+ 
++    fn resident_root_snapshot_owned(listed: ListedCrate) -> RootSnapshot {
++        RootSnapshot {
++            functions: listed.functions,
++            kept: listed.kept,
++            statics: listed.statics,
++            in_provided: listed.in_provided,
++            exported: listed.exported,
++            rooted: listed.rooted,
++            provided: listed.provided,
++            main: listed.main,
++        }
++    }
++
++    #[test]
++    fn resident_root_snapshot_reuses_and_invalidates_against_original() {
++        use test_fixture::WithFixture;
++        let fixture = r#"
++fn main() { let _body_only = 1; fn nested() {} }
++macro_rules! items { () => { fn generated() {} } }
++items!();
++#[cfg(all())] fn configured() {}
++#[cfg_attr(all(), no_mangle)] fn exposed() {}
++#[rustc_comptime] fn comptime() {}
++#[used] static KEPT: u8 = 0;
++static ORDINARY: u8 = 0;
++struct S;
++impl S { fn method() {} }
++trait Tr { fn provided() { fn under_provided() {} } }
++"#;
++        let (mut db, file) = RootDatabase::with_single_file(fixture);
++        let file = file.file_id(&db);
++        let revisions = [
++            fixture.to_owned(),
++            fixture.replace("_body_only = 1", "_body_only = 2"),
++            fixture.replace("fn nested() {}", "fn nested_added() {} fn nested() {}"),
++            fixture.replace("fn generated() {}", "fn from_macro() {} static MACRO: u8 = 0;"),
++            fixture.replace("cfg(all())", "cfg(any())"),
++            fixture.replace("cfg_attr(all(),", "cfg_attr(any(),"),
++            fixture.replace("#[rustc_comptime]", ""),
++            fixture.replace("#[used]", "#[link_section = \".roots\"]"),
++            fixture.replace("static ORDINARY", "#[no_mangle] static ORDINARY"),
++            fixture.replace("impl S", "impl<T> S"),
++            fixture.replace("fn under_provided() {}", "fn under_provided<T>() {}"),
++            format!("#![no_main]\n{fixture}"),
++            fixture.replace("fn main()", "fn not_main()"),
++            fixture.to_owned(),
++        ];
++        ROOT_SNAPSHOT_PROVIDERS.with(|count| count.set(0));
++        let mut baseline = None;
++        for (revision, text) in revisions.iter().enumerate() {
++            db.set_file_text(file, text);
++            hir::attach_db(&db, || {
++                let module = hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap();
++                let krate = module.krate(&db);
++                let before = ROOT_SNAPSHOT_PROVIDERS.with(|count| count.get());
++                // Candidate FIRST, through the real constructor, including warmup.
++                let listed = ListedCrate::new(&db, krate);
++                assert!(lock(&listed.shared_paths).is_empty());
++                let cached = resident_root_snapshot_owned(listed);
++                let after = ROOT_SNAPSHOT_PROVIDERS.with(|count| count.get());
++                if revision == 1 {
++                    assert_eq!(before, after, "body-only edit must reuse classification");
++                    assert_eq!(baseline.as_ref(), Some(&cached));
++                } else {
++                    assert_eq!(
++                        after,
++                        before + 1,
++                        "provider must invalidate at revision {revision}"
++                    );
++                }
++                if revision == 0 {
++                    assert!(cached.main.is_some());
++                    assert!(!cached.kept.is_empty());
++                    assert!(!cached.provided.is_empty());
++                    baseline = Some(cached.clone());
++                }
++                let original = resident_root_snapshot_owned(ListedCrate::original(&db, krate));
++                assert_eq!(cached, original, "original full classifier at revision {revision}");
++                let again = resident_root_snapshot_owned(ListedCrate::new(&db, krate));
++                assert_eq!(cached, again, "ordered unchanged snapshot");
++                assert_eq!(after, ROOT_SNAPSHOT_PROVIDERS.with(|count| count.get()));
++            });
++        }
++    }
++
++    #[test]
++    fn resident_root_snapshot_tracks_allocator_dependency_crate() {
++        use salsa::Setter;
++        use test_fixture::WithFixture;
++        let (mut db, files) = RootDatabase::with_many_files(
++            r#"
++//- /app.rs crate:app deps:core
++struct Alloc;
++impl core::alloc::GlobalAlloc for Alloc { fn alloc(&self) {} }
++fn main() {}
++//- /core.rs crate:core
++pub mod alloc { pub trait GlobalAlloc { fn alloc(&self); } }
++"#,
++        );
++        let [app, core] = [0, 1].map(|i| files[i].file_id(&db));
++        let texts = [
++            "pub mod alloc { pub trait GlobalAlloc { fn alloc(&self); } }",
++            "pub mod alloc { pub trait OtherAlloc { fn alloc(&self); } }",
++            "pub mod alloc { pub trait GlobalAlloc { fn alloc(&self); } }",
++        ];
++        for (revision, text) in texts.iter().enumerate() {
++            db.set_file_text(core, text);
++            hir::attach_db(&db, || {
++                let module = hir::Semantics::new(&db).file_to_module_defs(app).next().unwrap();
++                let krate = module.krate(&db);
++                let cached = resident_root_snapshot_owned(ListedCrate::new(&db, krate));
++                let original = resident_root_snapshot_owned(ListedCrate::original(&db, krate));
++                assert_eq!(cached, original, "allocator dependency revision {revision}");
++                let alloc = cached
++                    .functions
++                    .iter()
++                    .position(|&id| hir::Function::from(id).name(&db).as_str() == "alloc")
++                    .unwrap();
++                assert_eq!(cached.exported[alloc], revision != 1);
++            });
++        }
++        let core_crate: ide_db::base_db::Crate = hir::attach_db(&db, || {
++            hir::Semantics::new(&db).file_to_module_defs(core).next().unwrap().krate(&db).into()
++        });
++        for origin in [
++            CrateOrigin::Local { repo: None, name: None },
++            CrateOrigin::Lang(LangCrateOrigin::Core),
++        ] {
++            let expected = origin == CrateOrigin::Lang(LangCrateOrigin::Core);
++            let mut data = core_crate.data(&db).clone();
++            data.origin = origin;
++            core_crate.set_data(&mut db).to(data);
++            hir::attach_db(&db, || {
++                let krate =
++                    hir::Semantics::new(&db).file_to_module_defs(app).next().unwrap().krate(&db);
++                let cached = resident_root_snapshot_owned(ListedCrate::new(&db, krate));
++                let original = resident_root_snapshot_owned(ListedCrate::original(&db, krate));
++                assert_eq!(cached, original, "origin-only graph input edit");
++                let alloc = cached
++                    .functions
++                    .iter()
++                    .position(|&id| hir::Function::from(id).name(&db).as_str() == "alloc")
++                    .unwrap();
++                assert_eq!(cached.exported[alloc], expected);
++            });
++        }
++    }
++
++    #[test]
++    fn resident_root_snapshot_tracks_parallel_export_warmup_reads() {
++        use test_fixture::WithFixture;
++        // More than one 256-item export chunk on a multicore host. The cached
++        // provider must own the dependency even if only a db clone warmed it.
++        let source: String = (0..600).map(|i| format!("fn f{i}() {{}}\n")).collect();
++        let (mut db, file) = RootDatabase::with_single_file(&source);
++        let file = file.file_id(&db);
++        for marked in [false, true, false] {
++            let text = if marked {
++                source.replace("fn f511()", "#[no_mangle] fn f511()")
++            } else {
++                source.clone()
++            };
++            db.set_file_text(file, &text);
++            hir::attach_db(&db, || {
++                let krate =
++                    hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++                let cached = resident_root_snapshot_owned(ListedCrate::new(&db, krate));
++                let original = resident_root_snapshot_owned(ListedCrate::original(&db, krate));
++                assert_eq!(cached, original, "parallel export marked={marked}");
++                let index = cached
++                    .functions
++                    .iter()
++                    .position(|&id| hir::Function::from(id).name(&db).as_str() == "f511")
++                    .unwrap();
++                assert_eq!(cached.exported[index], marked);
++            });
++        }
++    }
++
++    #[test]
++    fn resident_root_snapshot_tracks_cfg_input_without_source_edit() {
++        use salsa::Setter;
++        use test_fixture::WithFixture;
++        let (mut db, file) = RootDatabase::with_single_file(
++            "fn main() {} #[cfg(root_snapshot_enabled)] fn enabled() {}",
++        );
++        let file = file.file_id(&db);
++        let krate: ide_db::base_db::Crate = hir::attach_db(&db, || {
++            hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db).into()
++        });
++        let initial = krate.cfg_options(&db).clone();
++        for enabled in [false, true, false] {
++            let mut cfg = initial.clone();
++            if enabled {
++                cfg.insert_atom(intern::Symbol::intern("root_snapshot_enabled"));
++            }
++            krate.set_cfg_options(&mut db).to(cfg);
++            hir::attach_db(&db, || {
++                let cached = resident_root_snapshot_owned(ListedCrate::new(&db, krate.into()));
++                let original =
++                    resident_root_snapshot_owned(ListedCrate::original(&db, krate.into()));
++                assert_eq!(cached, original, "cfg input enabled={enabled}");
++                assert_eq!(cached.functions.len(), if enabled { 2 } else { 1 });
++            });
++        }
++    }
++
++    fn resident_signature_flags_functions(db: &RootDatabase, krate: Crate) -> Vec<FunctionId> {
++        let mut functions = Vec::new();
++        let map = hir_def::nameres::crate_def_map(db, krate.into());
++        for (_, module) in map.modules(db) {
++            let scope = module.scope(db);
++            for item in scope.declarations() {
++                match item {
++                    ModuleDefId::FunctionId(id) => functions.push(id),
++                    ModuleDefId::TraitId(id) => {
++                        for (_, item) in &id.trait_items(db).items {
++                            if let AssocItemId::FunctionId(id) = item {
++                                functions.push(*id);
++                            }
++                        }
++                    }
++                    _ => {}
++                }
++            }
++            for id in scope.impls() {
++                for (_, item) in &id.impl_items(db).items {
++                    if let AssocItemId::FunctionId(id) = item {
++                        functions.push(*id);
++                    }
++                }
++            }
++        }
++        functions
++    }
++
++    #[test]
++    fn resident_signature_flags_match_direct_attributes_across_revisions() {
++        use hir_def::{
++            attrs::AttrFlags,
++            signatures::{FnFlags, FunctionSignature},
++        };
++        use test_fixture::WithFixture;
++        // Both true and false cfg predicates are independent of fixture defaults.
++        let fixture = r#"
++fn plain() { let _ = 1; }
++#[rustc_comptime]
++fn bare() {}
++#[cfg_attr(all(), rustc_comptime)]
++fn enabled() {}
++#[cfg_attr(any(), rustc_comptime)]
++fn disabled() {}
++#[cfg_attr(all(), cfg_attr(all(), rustc_comptime))]
++fn nested() {}
++#[rustc_comptime()]
++fn tokens() {}
++#[rustc_comptime = "yes"]
++fn value() {}
++#[other::rustc_comptime]
++fn qualified() {}
++trait Tr {
++    #[rustc_comptime]
++    fn required();
++    #[cfg_attr(all(), rustc_comptime)]
++    fn provided() {}
++}
++struct S;
++impl S { #[rustc_comptime] fn inherent() {} }
++impl Tr for S { #[rustc_comptime] fn required() {} }
++"#;
++        let (mut db, file) = RootDatabase::with_single_file(fixture);
++        let file = file.file_id(&db);
++        let revisions = [
++            fixture.to_owned(),
++            fixture.replace("let _ = 1", "let _ = 2"),
++            fixture.replace("fn plain()", "#[rustc_comptime]\nfn plain()"),
++            fixture.replace("#[rustc_comptime]", ""),
++            fixture.replace("cfg_attr(all(),", "cfg_attr(any(),"),
++            fixture.replace("#[rustc_comptime()]", "#[rustc_comptime]"),
++            fixture.replace("#[rustc_comptime = \"yes\"]", "#[rustc_comptime]"),
++            fixture.to_owned(),
++        ];
++        assert_eq!(revisions.len(), 8);
++        let mut baseline: Vec<((String, String), String)> = Vec::new();
++        let mut comparisons = 0;
++        for (revision, text) in revisions.iter().enumerate() {
++            db.set_file_text(file, text);
++            hir::attach_db(&db, || {
++                let module = hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap();
++                let ids = resident_signature_flags_functions(&db, module.krate(&db));
++                assert_eq!(ids.len(), 12, "fixture must exercise every container");
++                assert_eq!(ids.iter().copied().collect::<FxHashSet<_>>().len(), 12);
++                for id in ids {
++                    comparisons += 1;
++                    // Read the cached result FIRST. Never replace this oracle with the
++                    // signature flag or the codegen helper that consumes that flag.
++                    let signature = FunctionSignature::of(&db, id).clone();
++                    let cached = signature.flags.contains(FnFlags::RUSTC_COMPTIME);
++                    let classified = hir_ty_codegen::compile_time_only(&db, id);
++                    let original = AttrFlags::has_word(&db, id.into(), "rustc_comptime");
++                    assert_eq!(classified, original, "codegen predicate revision {revision}");
++                    assert_eq!(cached, original, "revision {revision}: {:?}", signature.name);
++                    if revision == 0 {
++                        let name = signature.name.as_str();
++                        assert_eq!(
++                            original,
++                            matches!(
++                                name,
++                                "bare"
++                                    | "enabled"
++                                    | "nested"
++                                    | "required"
++                                    | "provided"
++                                    | "inherent"
++                            )
++                        );
++                        // Neither IDs nor signature IR may outlive this database
++                        // revision. Keep an owned key distinguishing trait/impl
++                        // methods with the same name, and the complete derived
++                        // Debug snapshot, while attached to this database. This
++                        // is a same-database, body-only regression check, not a
++                        // portable signature serialization or semantic hash.
++                        let key = (
++                            format!("{:?}", id.lookup(&db).container),
++                            signature.name.as_str().to_owned(),
++                        );
++                        baseline.push((key, format!("{signature:?}")));
++                    } else if revision == 1 {
++                        let key = (
++                            format!("{:?}", id.lookup(&db).container),
++                            signature.name.as_str().to_owned(),
++                        );
++                        let before = &baseline.iter().find(|(old, _)| *old == key).unwrap().1;
++                        assert_eq!(
++                            before,
++                            &format!("{signature:?}"),
++                            "body-only edit changed signature"
++                        );
++                    }
++                }
++            });
++        }
++        assert_eq!(comparisons, 12 * 8);
++    }
++
+     #[test]
+     fn a_fetched_crate_is_named_the_same_wherever_cargo_keeps_it() {
+         let fetched = "registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.7.4/src/lib.rs";

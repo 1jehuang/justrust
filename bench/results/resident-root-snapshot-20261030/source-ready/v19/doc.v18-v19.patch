@@ -1,0 +1,86 @@
+--- /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v19/doc.v18.md	2026-10-30 10:52:46.846704306 -0700
++++ docs/resident-root-snapshot.md	2026-10-30 10:53:42.294153335 -0700
+@@ -1,6 +1,6 @@
+ # Experimental resident classified root snapshot
+ 
+-Status: SOURCE READY v18 candidate, October 30, 2026. This is the licensed
++Status: SOURCE READY v19 candidate, October 30, 2026. This is the licensed
+ Blaze-derived resident, not the clean-room compiler. This worker performs
+ source-only edits and offline evidence checks, not native builds or workloads.
+ Root owns native correctness, mechanism, and matched runtime retention gates.
+@@ -44,26 +44,36 @@
+   The provider independently re-read every dependency on its own thread.
+ - v17 removed only the unconditional outer export warmup. Export predicates
+   are serial on a classification miss. Warm green reuse skips the export pass.
+-- v18 removes only the remaining outer `declared_in(db, krate)` warmup in
++- v18 removed only the remaining outer `declared_in(db, krate)` warmup in
+   `ListedCrate::new`, with a local comment update. `root_snapshot` already
+   dependency-traverses declarations. Every tracked provider, read, original
+   full oracle, and all four fixtures remain byte-identical to v17.
+ 
+-v18 no longer schedules constructor declaration lowering through the old
+-parallel `lower` warmup. Cold graph traversal and export classification run on
+-the query's thread. This can regress cold, macro-heavy, or parallel builds.
+-The immutable snapshot still costs memory and vector cloning, and Salsa
+-validation/synchronization is not free. Avoiding a warmup is not evidence of
+-savings. No v18 speed claim is made. Root must gate cold/parallel behavior,
+-semantics, and matched total wall time before retaining the source.
++- v18 was rejected after root reported full351 native acceptance and 12 actual
++  runtime trace rows, but the matched engine median increased from about
++  0.108104s to 0.112177s (+3.77% raw, -2.78% reference-normalized). No improvement
++  was established. Its exact bytes and patches remain archived, not erased.
++- v19 restores main.rs to the exact preserved v17 bytes, then adds only
++  `#[cfg(test)]` on the original parallel `exported` helper. The v17 parallel
++  declaration/lowering warmup remains. All providers, reads, oracle bodies and
++  fixtures are unchanged. This is experimental quality cleanup, not promotion.
++
++Removing parallel warmup can regress cold, macro-heavy or parallel builds, as
++the rejected v18 observation illustrates without establishing causation. v19
++still classifies exports serially on misses. Its immutable snapshot costs
++memory/vector cloning, and Salsa validation/synchronization is not free. No
++v19 savings claim is made. Root must gate native semantics and matched total
++wall time under its new build identity before deciding source retention.
+ 
+ Complete ra-jit caller audit before the v18 edit found additional production
+ `declared_in` callers at main.rs:1115, main.rs:3623, and mirdump.rs:69 (import at
+ line 26). `lower` also has the qualified `crate::lower` caller at outline.rs:356.
+ These helpers and every call site outside the constructor remain unchanged.
+-The original parallel `exported` helper is now used only by the cfg(test) full
+-oracle. It remains unchanged, including visibility. Its possible non-test
+-unused-function warning is pending root's quality gate, not suppressed here.
++A complete export-symbol/caller search confirms that the original parallel
++`exported` helper is used only by the cfg(test) full oracle. Calls named
++`exported` inside the helper resolve to its local closure. v19 gates only this
++helper with `#[cfg(test)]`, avoiding the non-test unused-function warning. Its
++body and visibility, and the independent original oracle, are unchanged.
+ 
+ ## Test-only mechanism and original oracle
+ 
+@@ -84,18 +94,20 @@
+ 
+ Candidates are requested before their oracles. `ListedCrate::original` does not
+ call the snapshot/declaration providers. The signature fixture and every
+-tracked provider/read remain unchanged through v17 and v18. The thread-local
++tracked provider/read remain unchanged through v17, v18 and v19. The thread-local
+ counter measures provider execution, not total lowering/validation work.
+ 
+ ## Source freeze and reversal
+ 
+ Private directory:
+-`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v18/`.
+-It preserves exact pre-edit v17 main/doc and working-tree patch, full v18
+-main/document/codegen/signature snapshots, caller audit, v17-to-v18 scoped
+-patches and SHA-256 hashes. Earlier `root-snapshot/` and `root-snapshot-v17/`
+-freezes remain intact. The sibling `root-snapshot-source-ready-v18.txt` is the
+-handoff receipt. No earlier base has been restored.
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v19/`.
++It preserves exact pre-edit v18 main/doc/working-tree patch, the exact v17
++main base, full v19 main/document/codegen/signature snapshots, export-caller
++audit, exact v17-to-v19 and v18-to-v19 patches and SHA-256 hashes. All earlier
++v16/v17/v18 freezes remain intact. The sibling
++`root-snapshot-source-ready-v19.txt` is the explicit source handoff receipt.
++Only the authorized v17 main base was restored, then the cfg(test) attribute
++was added. No other source file was restored or changed.
+ 
+ Only main.rs and this document are source-worker owned. Check intervening
+ edits before any scoped patch reversal. Never reset unrelated working-tree

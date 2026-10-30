@@ -1,0 +1,19 @@
+SOURCE READY v18: resident_root_snapshot (four unchanged fixtures)
+Date 2026-10-30. Recipient session_skunk_1793325801268_bca6e773d45c6a0a.
+Experimental licensed Blaze-derived resident, NOT cleanroom. Source-only freeze, NO native/build/workload/source commit. Root owns fresh native/full gates and matched v17->v18 decision. No savings claim.
+
+Exact pre-edit v17 main/doc/git patch preserved first in root-snapshot-v18/ alongside full v18 main/doc/codegen/signatures, complete ra-jit caller-audit.txt, v17-v18 scoped patches, SHA256SUMS. Prior v16/v17 freezes intact, no restoration.
+Only main delta: remove constructor `let _ = declared_in(db, krate);` and adjust adjacent local comment. Exact full-source comparison PASS: all tracked providers/reads, helpers, other callers, full original oracle, four root fixtures, signature fixture and entire rest of main byte-identical to v17. rustfmt check and scoped diff check PASS.
+
+Production declared_in callers retained: main.rs:1115, main.rs:3623, mirdump.rs:69 with import line26. lower also qualified caller crate::lower at outline.rs:356. No helper deletion or visibility changes. exported helper remains original oracle-only, possible unused-function warning pending root quality gate.
+v18 removes constructor parallel lowering warmup, so cold/macro-heavy/parallel regressions are possible. Native tracked graph still traverses all declarations and reads all dependencies. Warmup removal is not a savings claim.
+
+Freeze directory /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v18/
+SHA256:
+e84f89498d956e702eb618de4dd52713aa70e58aa2b406cc19908f924b0b1686 main.v17.rs
+ec124a9863e76b8b7826e018d7493d5c78170c1eb294654cf2fcabe375d1f3fb main.source-ready.rs
+f0c69014548464c35d8efc0d71f67b012feffb3ede7c11413bd6ab572493c961 doc.source-ready.md
+0a50cf5d1abf3d812a4b942b0935810276ae0f90bfcb2b34b9b991c165e89d16 codegen.source-ready.rs
+724793541da40fe85a8f2fa738e39ae6bae70608c0b43e4b2ece80fe772c31a3 signatures.source-ready.rs
+571766d5c5db3c38380be5313e7194673933b37af26cabf61d8152fce89fc3cc main.v17-v18.patch
+No further live-source edits pending root gates. Evidence retention resumes separately, evidence/doc-only.

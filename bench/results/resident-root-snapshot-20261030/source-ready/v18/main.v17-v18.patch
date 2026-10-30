@@ -1,0 +1,15 @@
+--- /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v18/main.v17.rs	2026-10-30 10:43:38.424121233 -0700
++++ toolchain/resident/crates/ra-jit/src/main.rs	2026-10-30 10:43:57.731288933 -0700
+@@ -4057,10 +4057,8 @@
+ 
+ impl ListedCrate {
+     fn new(db: &RootDatabase, krate: Crate) -> ListedCrate {
+-        // Keep the original parallel lowering warmup OUTSIDE a tracked query.
+-        // Export classification runs only on a snapshot miss, on its tracked
+-        // thread. Green snapshots must not pay an unconditional export pass.
+-        let _ = declared_in(db, krate);
++        // The tracked snapshot traverses declarations itself. Do not repeat an
++        // unconditional declaration or export warmup for a green snapshot.
+         let snapshot = root_snapshot(db, krate.into()).clone();
+         ListedCrate {
+             functions: snapshot.functions,

@@ -1,0 +1,461 @@
+{
+  "scope": "nested elapsed intervals, not CPU work, time saved, critical path or total speedup",
+  "rows": [
+    {
+      "stack": "old",
+      "replicate": 0,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 270,
+            "start_us": 1793381930006360,
+            "duration_us": 12770
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 270,
+            "start_us": 1793381929980255,
+            "duration_us": 26105
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 270,
+            "start_us": 1793381930019131,
+            "duration_us": 20779
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381929958371,
+            "duration_us": 18575
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381929953645,
+            "duration_us": 121076
+          }
+        ]
+      }
+    },
+    {
+      "stack": "old",
+      "replicate": 1,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 276,
+            "start_us": 1793381930425107,
+            "duration_us": 7562
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 276,
+            "start_us": 1793381930415537,
+            "duration_us": 9569
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 276,
+            "start_us": 1793381930432670,
+            "duration_us": 14319
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930399198,
+            "duration_us": 13036
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930395118,
+            "duration_us": 81724
+          }
+        ]
+      }
+    },
+    {
+      "stack": "old",
+      "replicate": 2,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 282,
+            "start_us": 1793381930551516,
+            "duration_us": 11370
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 282,
+            "start_us": 1793381930540784,
+            "duration_us": 10731
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 282,
+            "start_us": 1793381930562887,
+            "duration_us": 12930
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930523597,
+            "duration_us": 13849
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930519446,
+            "duration_us": 79117
+          }
+        ]
+      }
+    },
+    {
+      "stack": "old",
+      "replicate": 3,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 289,
+            "start_us": 1793381930966010,
+            "duration_us": 10657
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 289,
+            "start_us": 1793381930956009,
+            "duration_us": 10000
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 289,
+            "start_us": 1793381930976667,
+            "duration_us": 14249
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930931951,
+            "duration_us": 20784
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930927000,
+            "duration_us": 99118
+          }
+        ]
+      }
+    },
+    {
+      "stack": "old",
+      "replicate": 4,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 295,
+            "start_us": 1793381931121319,
+            "duration_us": 9555
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 295,
+            "start_us": 1793381931111475,
+            "duration_us": 9844
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 295,
+            "start_us": 1793381931130875,
+            "duration_us": 15032
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381931087927,
+            "duration_us": 20258
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381931083361,
+            "duration_us": 85429
+          }
+        ]
+      }
+    },
+    {
+      "stack": "new",
+      "replicate": 0,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 262,
+            "start_us": 1793381930159800,
+            "duration_us": 11733
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 262,
+            "start_us": 1793381930139567,
+            "duration_us": 20232
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 262,
+            "start_us": 1793381930171533,
+            "duration_us": 21059
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930122944,
+            "duration_us": 13110
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930118761,
+            "duration_us": 115250
+          }
+        ]
+      }
+    },
+    {
+      "stack": "new",
+      "replicate": 1,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 268,
+            "start_us": 1793381930305230,
+            "duration_us": 4989
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 268,
+            "start_us": 1793381930298051,
+            "duration_us": 7178
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 268,
+            "start_us": 1793381930310219,
+            "duration_us": 16253
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930281436,
+            "duration_us": 13391
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930277398,
+            "duration_us": 75273
+          }
+        ]
+      }
+    },
+    {
+      "stack": "new",
+      "replicate": 2,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 274,
+            "start_us": 1793381930675022,
+            "duration_us": 5703
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 274,
+            "start_us": 1793381930667591,
+            "duration_us": 7430
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 274,
+            "start_us": 1793381930680725,
+            "duration_us": 13978
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930646530,
+            "duration_us": 18226
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930641990,
+            "duration_us": 77949
+          }
+        ]
+      }
+    },
+    {
+      "stack": "new",
+      "replicate": 3,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 280,
+            "start_us": 1793381930811243,
+            "duration_us": 7801
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 280,
+            "start_us": 1793381930803976,
+            "duration_us": 7267
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 280,
+            "start_us": 1793381930819044,
+            "duration_us": 16046
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381930781614,
+            "duration_us": 19560
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381930776954,
+            "duration_us": 94008
+          }
+        ]
+      }
+    },
+    {
+      "stack": "new",
+      "replicate": 4,
+      "intervals": {
+        "worker roots": [
+          {
+            "thread": 287,
+            "start_us": 1793381931259972,
+            "duration_us": 5888
+          }
+        ],
+        "worker apply": [
+          {
+            "thread": 287,
+            "start_us": 1793381931252208,
+            "duration_us": 7764
+          }
+        ],
+        "worker check": [
+          {
+            "thread": 287,
+            "start_us": 1793381931265860,
+            "duration_us": 17062
+          }
+        ],
+        "client planning": [
+          {
+            "thread": 1,
+            "start_us": 1793381931230267,
+            "duration_us": 18961
+          }
+        ],
+        "client command": [
+          {
+            "thread": 1,
+            "start_us": 1793381931225479,
+            "duration_us": 98158
+          }
+        ]
+      }
+    }
+  ],
+  "medians": {
+    "old": {
+      "worker roots": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 10657
+      },
+      "worker apply": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 10000
+      },
+      "worker check": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 14319
+      },
+      "client planning": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 18575
+      },
+      "client command": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 85429
+      }
+    },
+    "new": {
+      "worker roots": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 5888
+      },
+      "worker apply": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 7430
+      },
+      "worker check": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 16253
+      },
+      "client planning": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 18226
+      },
+      "client command": {
+        "single_interval_samples": 5,
+        "median_elapsed_us": 94008
+      }
+    }
+  }
+}

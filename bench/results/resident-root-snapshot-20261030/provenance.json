@@ -1,0 +1,59 @@
+{
+  "schema": "resident_root_snapshot_evidence/v1",
+  "decision": "REJECTED_NOT_REPLICATED",
+  "promotion": false,
+  "noise": "unknown",
+  "floor_percent": 10,
+  "scope": "licensed Blaze-derived native resident, scoped local filtered-libtest diagnostic, not cleanroom, shipping, broad workload or default-promotion gate",
+  "pairs": [
+    {
+      "label": "v16",
+      "baseline": "rsb05",
+      "candidate": "rsa11",
+      "baseline_version": 15,
+      "candidate_version": 16
+    },
+    {
+      "label": "v17",
+      "baseline": "rsb06",
+      "candidate": "rsa12",
+      "baseline_version": 16,
+      "candidate_version": 17
+    },
+    {
+      "label": "v17-cumulative",
+      "baseline": "rsb07",
+      "candidate": "rsa13",
+      "baseline_version": 4,
+      "candidate_version": 17
+    },
+    {
+      "label": "v18",
+      "baseline": "rsb08",
+      "candidate": "rsa14",
+      "baseline_version": 17,
+      "candidate_version": 18
+    },
+    {
+      "label": "v19",
+      "baseline": "rsb09",
+      "candidate": "rsa15",
+      "baseline_version": 4,
+      "candidate_version": 19
+    },
+    {
+      "label": "v19-reverse",
+      "baseline": "rsb10",
+      "candidate": "rsa16",
+      "baseline_version": 4,
+      "candidate_version": 19
+    }
+  ],
+  "raw_policy": "Top-level suites, native raw journals, complete existing trace files and original full-source/patch/ready receipts copied byte-for-byte. No binaries, caches, targets, install IDs or reconstructed historical source.",
+  "harness_policy": "Copied at retention time, not asserted historical per-run snapshots.",
+  "validation_policy": "Portable offline Python standard-library checks only. Historical absolute paths are provenance, not external dependencies.",
+  "source_policy": "Evidence retention never commits/restores live main.rs. Authorized source worker v18->v17+cfg(test) v19 transition preserved by exact original snapshots/patches; compiler source retention is root decision, separate from evidence.",
+  "exports_policy": "Original meta/summary/output/units journals retained directly. No slim exports required and no compiler workload invoked.",
+  "rejection": "First v19 absolute -18.51% was not replicated candidate-first: -1.16% raw, +1.67% reference-normalized. No robust source promotion. Root restored three production files separately, not this evidence worker.",
+  "v19_cleanup_policy": "Root stopped 34 completed own exact private namespaces before final v19 pair, without deleting stores. Memory pressure changed from historical pairs. Both fresh baseline and candidate run under the new cleanup policy. Final pair is separate, never pooled with historical pairs or solely attributed to the source change."
+}

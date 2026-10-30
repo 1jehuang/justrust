@@ -1,0 +1,12 @@
+{
+  "policy": "Exact declared-v4 bytes selected by SHA equality from existing historical archives, not asserted an original v4 full-tree freeze. No live source read for candidate reconstruction.",
+  "sources": {
+    "crates/ra-jit/src/main.rs": "/home/jeremy/justrust/bench/results/resident-signature-flags-20261030/baseline-head/toolchain/resident/crates/ra-jit/src/main.rs",
+    "crates/ra-jit/src/jr_engine.rs": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v15/frozen-source/crates/ra-jit/src/jr_engine.rs",
+    "crates/ra-jit/Cargo.toml": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v15/frozen-source/crates/ra-jit/Cargo.toml",
+    "crates/ra-jit/build.rs": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v15/frozen-source/crates/ra-jit/build.rs",
+    "crates/ra-jit/src/cargo/mod.rs": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v15/frozen-source/crates/ra-jit/src/cargo/mod.rs",
+    "crates/ra-jit/src/cargo/whole.rs": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v15/frozen-source/crates/ra-jit/src/cargo/whole.rs",
+    "crates/ra-jit/src/cargo/cli.rs": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v15/frozen-source/crates/ra-jit/src/cargo/cli.rs"
+  }
+}

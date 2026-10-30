@@ -1,0 +1,16 @@
+toolchain/resident/crates/ra-jit/src/mirdump.rs:69:            let mut functions = declared_in(&db, krate).functions;
+toolchain/resident/crates/ra-jit/src/main.rs:1115:            None => declared_in(self.db, krate).functions,
+toolchain/resident/crates/ra-jit/src/main.rs:1729:    fn declared_in(&self, adt: hir_def::AdtId) -> Option<FunctionId> {
+toolchain/resident/crates/ra-jit/src/main.rs:3623:                            _ = declared_in(&db, krate.into());
+toolchain/resident/crates/ra-jit/src/main.rs:4063:        let _ = declared_in(db, krate);
+toolchain/resident/crates/ra-jit/src/main.rs:4082:        let Declared { functions, statics, in_provided, .. } = declared_in(db, krate);
+toolchain/resident/crates/ra-jit/src/main.rs:4099:        let exported = exported(db, &functions);
+toolchain/resident/crates/ra-jit/src/main.rs:4206:fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+toolchain/resident/crates/ra-jit/src/main.rs:4218:        return exported(db, functions);
+toolchain/resident/crates/ra-jit/src/main.rs:4225:                scope.spawn(move || hir::attach_db(&db, || exported(&db, part)))
+toolchain/resident/crates/ra-jit/src/main.rs:4322:fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
+toolchain/resident/crates/ra-jit/src/main.rs:4337:            for body in lower(db, bodies) {
+toolchain/resident/crates/ra-jit/src/main.rs:4759:fn lower(db: &RootDatabase, bodies: Vec<DefWithBodyId>) -> Vec<DefWithBodyId> {
+toolchain/resident/crates/ra-jit/src/main.rs:12183:extern "C" fn exported() {}
+toolchain/resident/crates/ra-jit/src/main.rs:12260:                let actual = declared_in(&db, krate);
+toolchain/resident/crates/ra-jit/src/outline.rs:356:    crate::lower(db, bodies);

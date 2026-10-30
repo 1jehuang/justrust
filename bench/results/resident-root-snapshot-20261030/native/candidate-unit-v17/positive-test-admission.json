@@ -1,0 +1,30 @@
+{
+  "verdict": "passed",
+  "native_test_rows": [
+    {
+      "filter": "resident_root_snapshot",
+      "passed": 4,
+      "run_id": "20261030-102513687-1022385"
+    },
+    {
+      "filter": "resident_signature_flags",
+      "passed": 1,
+      "run_id": "20261030-102601660-1025774"
+    },
+    {
+      "filter": "resident_graph_reuse",
+      "passed": 1,
+      "run_id": "20261030-102601947-1025851"
+    },
+    {
+      "filter": "the_roots_of_a_listed_crate",
+      "passed": 1,
+      "run_id": "20261030-102602245-1025947"
+    },
+    {
+      "filter": "telemetry",
+      "passed": 3,
+      "run_id": "20261030-102602562-1025993"
+    }
+  ]
+}

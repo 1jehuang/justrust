@@ -1,0 +1,33 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: build succeeded, tests not run in 57.1s
+  time    startup 0.20s | compile 56.90s | gaps 0.01s | after 0.02s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 426 fresh. Rebuilt because: ra-jit changed (ra-jit)
+          jr_engine                         56.90s  cpu 229.6s   2880 MB
+  cpu     230.0s total, avg 4.0/peak 6.4 of 16 cores; others used 3.2 cores
+  memory  peak 2978 MB build, 2880 MB largest rustc, 30.1 GB free; stalls cpu 0.51s mem 0.00s io 0.01s
+  output  3 warnings shown, 251 hidden; 430 progress and 0 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~ 42.5s  56.9s went to recompiling oversized crates: jr_engine (79k lines, 56.9s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+  more    `justrust log 20261030-101452190-819969` full output, `justrust show 20261030-101452190-819969` full profile

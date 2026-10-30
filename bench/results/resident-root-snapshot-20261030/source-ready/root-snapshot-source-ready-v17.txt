@@ -1,0 +1,28 @@
+SOURCE READY v17: resident_root_snapshot
+Frozen 2026-10-30. Experimental licensed Blaze-derived resident, NOT cleanroom.
+Recipient: session_skunk_1793325801268_bca6e773d45c6a0a
+Own ONLY main.rs and docs/resident-root-snapshot.md. No native builds/tests/workloads/commits executed.
+
+Bounded v16 -> v17 source delta: remove unconditional outer exported(db, &declared.functions) warmup from ListedCrate::new. Retain declared_in(db, krate) and its original parallel lower warmup. Change its unused binding to let _ and update local comment only. All tracked providers/rereads, original full classification oracle, four root snapshot fixtures, signature fixture and the entire rest of main.rs are BYTE-IDENTICAL to v16, verified by exact full-source replacement comparison.
+Export classification is now serial on snapshot misses. Green snapshots avoid unconditional export traversal. Native dependencies are unchanged. Cold/export-heavy parallel builds may regress without parallel export warmup. Root owns paired native/performance gates. No v17 speed claim.
+
+Native filter: resident_root_snapshot (four tests, unchanged).
+Source-only rustfmt --check and scoped git diff --check PASS.
+Remaining original parallel exported helper is unchanged and now called only by cfg(test) original oracle, so non-test builds may report an unused-function warning. Deliberately no helper/attribute changes beyond requested bounded delta.
+
+Exact pre-edit v16 full main and document, v16 git patch, full v17 main/document/codegen/signatures, v16-v17 scoped main/doc patches and SHA256SUMS:
+/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v17/
+Earlier base is NOT restored. Prior root-snapshot/ freeze remains intact.
+
+SHA256:
+45935441f5747374933bd268cbe791238e435731a333f64e0766b9139aaeeda9 main.v16.rs
+e84f89498d956e702eb618de4dd52713aa70e58aa2b406cc19908f924b0b1686 main.source-ready.rs
+c1cc4e15ae0fcd4c3e1a8c4f079de607d1e6348da325a792666520e52de6f9bb doc.v16.md
+d640557c7239631afc07714e47c28735330268be3ed48fc9211a06251b7075a1 doc.source-ready.md
+0a50cf5d1abf3d812a4b942b0935810276ae0f90bfcb2b34b9b991c165e89d16 codegen.source-ready.rs
+724793541da40fe85a8f2fa738e39ae6bae70608c0b43e4b2ece80fe772c31a3 signatures.source-ready.rs
+18311b69a0914aa9d30b5b637948789226b3e1cbe8bc402a29b770f4ceb818e2 main.v16-v17.patch
+eacffcdeeace4895e5cd2c0cb871acc9d954846cb15eed89fc697a47c0289f25 doc.v16-v17.patch
+095779ceaff8219f208849b2656da6f202147e2d0f7a4735d0a079b6345c54d8 v16.git.patch
+
+Source frozen. Root decides retention or scoped reversal after native semantic, mechanism, full-suite and matched runtime gates. No test weakening or earlier-base restoration.

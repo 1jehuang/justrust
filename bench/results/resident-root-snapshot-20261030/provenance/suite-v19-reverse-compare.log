@@ -1,0 +1,5 @@
+Native resident scoped diagnostic: descriptive/uncontrolled, noise unknown.
+Engine median: 0.118519s -> 0.117143s, delta -0.001376s (-1.16%).
+Reference-normalized engine/reference ratio: 1.015638 -> 1.032573, relative delta +1.67%.
+Absolute median delta does not exceed requested 10% floor. No significance or speedup verdict.
+Not a comprehensive workload or default-promotion gate.

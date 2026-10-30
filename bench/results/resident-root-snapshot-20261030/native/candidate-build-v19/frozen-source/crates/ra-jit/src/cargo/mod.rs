@@ -1,0 +1,615 @@
+//! `cargo blaze build|run|test|check`: cargo's commands, with the daemon building what
+//! changed since cargo last built. `docs/cargo.md` is the design.
+
+pub(crate) mod daemon;
+pub(crate) mod keyed;
+pub(crate) mod wrapper;
+
+mod affected;
+mod ancestor;
+pub(crate) mod cli;
+mod client;
+#[cfg(unix)]
+pub(crate) mod closure;
+pub(crate) mod compile_time;
+mod directives;
+mod experimental;
+pub(crate) mod fetches;
+#[cfg(unix)]
+mod hermetic;
+pub(crate) mod layout;
+mod messages;
+pub(crate) mod metadata;
+mod own;
+pub(crate) mod own_macro;
+pub(crate) mod own_script;
+mod package;
+pub(crate) mod plan;
+mod results;
+pub(crate) mod run;
+pub(crate) mod sandboxed;
+pub(crate) mod say;
+pub(crate) mod script;
+pub(crate) mod script_sandbox;
+mod state;
+pub(crate) mod switch;
+pub(crate) mod toolchain;
+mod units;
+pub(crate) mod wasi_script;
+pub(crate) mod whole;
+
+use std::{collections::BTreeMap, path::Path, time::Instant};
+
+use anyhow::Context as _;
+
+use cli::{Asked, Invocation, Subcommand};
+use client::Start;
+use daemon::{Checkout, NotBuilt, Reply, Request};
+use state::{Built, Counts, Held, State};
+pub(crate) use toolchain::{ours_commit, ours_says};
+pub(crate) use units::Record;
+
+/// `ra-jit cargo ...`: runs the command and ends with the status cargo would end with.
+pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let result = command_code(args);
+    // `command_code` has returned, so all phase guards have recorded, including on
+    // errors. Finish before either propagating an error or exiting with the child's status.
+    crate::trace::finish();
+    std::process::exit(result?)
+}
+
+fn command_code(args: impl Iterator<Item = String>) -> anyhow::Result<i32> {
+    let _phase = Phase::new("client command");
+    let args: Vec<String> = args.collect();
+    if let [word, cargo, rest @ ..] = args.as_slice()
+        && word == SETTLE
+    {
+        return settle(cargo.parse().context("`settle` is told the cargo to wait for")?, rest)
+            .map(|()| 0);
+    }
+    let asked = Asked::parse(own::subcommand_first(args));
+    if !matches!(asked, Asked::Build(_)) {
+        crate::end_with_reader();
+    }
+    if let Asked::Build(_) = asked
+        && let Err(why) = toolchain::settle(true)
+    {
+        say::error(&why);
+        return Ok(FAILED);
+    }
+    let code = match asked {
+        Asked::Build(asked) if matches!(asked.subcommand, Subcommand::Build | Subcommand::Run) => {
+            whole::build(&asked)?
+        }
+        Asked::Build(asked) if asked.subcommand == Subcommand::Test => whole::test(&asked)?,
+        Asked::Build(asked) => check(&asked)?,
+        Asked::Own(args) => own::command(args)?,
+        Asked::Cache(args) => cache(args)?,
+        Asked::Status => status()?,
+        Asked::Stop => stop()?,
+        Asked::Enable => switch::enable()?,
+        Asked::Disable => switch::disable()?,
+        Asked::Toolchain { path } => match toolchain::settle(false) {
+            Ok(chosen) if path => {
+                println!("{}", chosen.dir().display());
+                0
+            }
+            Ok(chosen) => {
+                println!("blaze builds with {chosen}");
+                0
+            }
+            Err(why) => {
+                say::error(&why);
+                FAILED
+            }
+        },
+        Asked::Lock(args) => fetches::command(&args)?,
+        Asked::Help => {
+            println!("{HELP}");
+            0
+        }
+        Asked::Version => {
+            println!("{}", crate::version());
+            0
+        }
+    };
+    Ok(code)
+}
+
+/// Client-only opt-in. Never send these settings in a checkout or worker config:
+/// enabling measurement must not become an edit to the program being measured.
+fn telemetry_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("RA_JIT_STATS").is_some()
+            || std::env::var_os("RA_JIT_TRACE").is_some_and(|it| !it.is_empty())
+    })
+}
+
+/// Scope timing also records phases whose operation returns early with an error.
+/// Disabled commands only check the cached flag, without clock reads or allocations.
+struct Phase {
+    name: &'static str,
+    started: Option<Instant>,
+}
+
+impl Phase {
+    fn new(name: &'static str) -> Self {
+        Self { name, started: telemetry_enabled().then(Instant::now) }
+    }
+}
+
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            crate::trace::note(self.name, crate::trace::CLIENT, started);
+        }
+    }
+}
+
+const HELP: &str = "\
+blaze: cargo's build, run, test and check, from a daemon that keeps the workspace compiled
+
+usage: blaze <command> [cargo's flags]    (or cargo blaze <command>)
+
+  build, run         each program built whole by blaze, with no rustc and no cargo build
+  test               each test built whole by blaze and run as cargo runs it, then the doc
+                     tests, each example built by blaze; no rustc, rustdoc or cargo build
+  check              what the daemon's build of the same flags says, when it has one loaded;
+                     otherwise what the daemon finds loading the workspace as it, with no rustc
+  status             whether blaze is enabled, what the daemon has loaded, what fell back
+  stop               ends the daemon; the next build starts one
+  enable, disable    plain `cargo build|run|test|check` through blaze, and back
+  toolchain          blaze's own toolchain, which it builds every project with, downloaded once
+                     if it has none (`--path`: its directory)
+  lock --fetches     records what build scripts download, by sha256, in Cargo.fetches.lock
+                     (`--target <triple>`, the host's by default); a build hands it to them
+  cache              what the `#[ra_jit::cache]` functions kept, by function
+  cache clear        forgets it; `--stale`, all but what each function's code computed
+
+The daemon starts on the first build and stops after 30 minutes without one. Every other
+command of cargo's is blaze's own, or fails saying blaze has none yet: none is handed to cargo
+(`blaze --list`). The guide: https://github.com/indexable-inc/blaze/blob/main/docs/cargo.md";
+
+/// What a wrapper runs ra-jit with once rustc has linked a program under plain cargo.
+pub(super) const SETTLE: &str = "settle";
+
+/// Has the daemon load the build `typed` is the cargo command of, which the cargo `cargo`
+/// is running: once that cargo has exited, the build is asked of cargo again, which has
+/// nothing left to compile and says what it built. This process has that cargo's directory
+/// and environment. Nobody reads what it says but the log.
+fn settle(cargo: u32, typed: &[String]) -> anyhow::Result<()> {
+    // Cargo lets go of the target directory once it has built, before it runs the tests or
+    // the program, and a build links each program into place again by deleting it first:
+    // one of the tests that starts it then finds none.
+    while crate::live::alive(cargo) {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    let settled = (|| {
+        let asked = cli::of_cargo(typed).context("`settle` is told a build command")?;
+        let cwd = std::env::current_dir()?;
+        let key = asked.key(&cwd);
+        eprintln!("settling {key}: cargo {} in {}", typed.join(" "), cwd.display());
+        if let Some(state) = loaded_by_cargo(&asked, &cwd, &key)? {
+            state.write()?;
+        }
+        anyhow::Ok(())
+    })();
+    wrapper::settled(cargo);
+    settled
+}
+
+/// `cargo ra-jit cache`: what the `#[ra_jit::cache]` functions kept, which is under the target
+/// directory unless `RA_JIT_FN_CACHE_DIR` says where; `cache clear` forgets it, and `cache clear
+/// --stale` all but what each function's code computed. Any other verb is one of `ra-jit cache`,
+/// on the disk store.
+fn cache(args: Vec<String>) -> anyhow::Result<i32> {
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let stale = match args[..] {
+        [] => return list_kept(&fn_cache_dir()?).map(|()| 0),
+        ["clear"] => false,
+        ["clear", "--stale"] => true,
+        _ => {
+            crate::remote::command(args.into_iter().map(str::to_owned))?;
+            return Ok(0);
+        }
+    };
+    let dir = fn_cache_dir()?;
+    if stale {
+        let (results, bytes) = fn_cache::__private::clear_stale(&dir);
+        println!("forgot {results} results of older code ({})", size(bytes));
+        return Ok(0);
+    }
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) => println!("cleared the kept results in {}", dir.display()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => println!("no results are kept"),
+        Err(e) => return Err(e).with_context(|| format!("clearing {}", dir.display())),
+    }
+    Ok(0)
+}
+
+/// What each cached function holds: the results of its code, and of the older codes kept for an
+/// edit taken back.
+fn list_kept(dir: &std::path::Path) -> anyhow::Result<()> {
+    let (held, other) = fn_cache::__private::holdings(dir);
+    if held.is_empty() && other.0 == 0 {
+        println!("no results are kept");
+        return Ok(());
+    }
+    println!("kept in {}", dir.display());
+    for function in &held {
+        let Some(&(now, now_bytes)) = function.codes.first() else { continue };
+        let older = &function.codes[1..];
+        let (old, old_bytes) = older.iter().fold((0, 0), |(n, b), it| (n + it.0, b + it.1));
+        print!("  {}: {now} results ({})", function.name, size(now_bytes));
+        if old > 0 {
+            print!(", and {old} of {} older code ({})", older.len(), size(old_bytes));
+        }
+        println!();
+    }
+    if other.0 > 0 {
+        println!("  {} results of code no function has now ({})", other.0, size(other.1));
+    }
+    Ok(())
+}
+
+fn size(bytes: u64) -> String {
+    match bytes {
+        0..1024 => format!("{bytes} B"),
+        1024..1048576 => format!("{:.1} KiB", bytes as f64 / 1024.0),
+        _ => format!("{:.1} MiB", bytes as f64 / 1048576.0),
+    }
+}
+
+fn fn_cache_dir() -> anyhow::Result<std::path::PathBuf> {
+    Ok(match std::env::var_os("RA_JIT_FN_CACHE_DIR") {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => {
+            let metadata = metadata::no_deps(None, &[]);
+            metadata.target_directory.as_std_path().join("ra-jit").join("fn-cache")
+        }
+    })
+}
+
+/// The status of a build that failed, as cargo's of one rustc turned down.
+const FAILED: i32 = 101;
+
+/// What the `Finished` line says the build was: ra-jit's, and the remote's failure if the
+/// daemon's last exchange with it failed (`RA_JIT_REMOTE=off` stops using it).
+fn blaze_tag() -> String {
+    match crate::remote::noted_down() {
+        Some(down) => format!("blaze, remote down: {down}"),
+        None => "blaze".to_owned(),
+    }
+}
+
+/// The status a build that is over ends with when the daemon's remote failed and
+/// `RA_JIT_REMOTE_REQUIRED` makes that a failure of the build.
+fn remote_failed_it() -> Option<i32> {
+    let down = crate::remote::noted_down().filter(|_| crate::remote::required())?;
+    say::error(&format!("the remote failed and BLAZE_REMOTE_REQUIRED is set: {down}"));
+    Some(FAILED)
+}
+
+/// `cargo ra-jit check`: what the daemon says of the source as it builds the programs of
+/// the build with the same flags, when it has that build loaded. Any other check is the
+/// daemon's checker's, which loads the workspace as that build would and builds nothing,
+/// once for each target asked for. Neither runs rustc on the source. The verdict is written
+/// as `--message-format` asks: in cargo's JSON, it is what an editor shows.
+fn check(asked: &Invocation) -> anyhow::Result<i32> {
+    if asked.flags.cargos_plan {
+        say::error("`--build-plan` and `--unit-graph` are cargo's plans, and blaze makes its own");
+        return Ok(FAILED);
+    }
+    let format = match messages::Format::of(&asked.flags.message_format) {
+        Ok(format) => format,
+        Err(why) => {
+            eprintln!("error: {why}");
+            return Ok(1);
+        }
+    };
+    let started = Instant::now();
+    let cwd = std::env::current_dir()?;
+    let finished = |profile: &str| {
+        let took = started.elapsed().as_secs_f64();
+        let finished = format!("`{profile}` profile [{}] target(s) in {took:.2}s", blaze_tag());
+        say::status(asked.flags.quiet, "Finished", &finished);
+        messages::passed(format);
+    };
+    let turned_down = |said: &[crate::errors::Said]| -> anyhow::Result<i32> {
+        messages::turned_down(format, said, &state::metadata(asked));
+        toolchain::note_failed();
+        Ok(FAILED)
+    };
+    if asked.subcommand == Subcommand::Check
+        && let Some(state) = State::read(&asked.key(&cwd))
+        && !state.programs.is_empty()
+    {
+        match by_daemon(state) {
+            Ok((state, _held)) => {
+                finished(&state.profile);
+                state.write()?;
+                return Ok(0);
+            }
+            Err(NotServed::Error(said)) => return turned_down(&[said]),
+            Err(NotServed::Stale) => {}
+        }
+    }
+    let ahead = state::checked(asked)?;
+    let profile = ahead.config.selection.profile.clone();
+    let targets = match &asked.flags.targets[..] {
+        [_, _, ..] => asked.flags.targets.iter().cloned().map(Some).collect(),
+        _ => vec![ahead.config.selection.target.clone()],
+    };
+    let mut said = Vec::new();
+    for target in targets {
+        let mut ahead = ahead.clone();
+        ahead.config.selection.target = target;
+        match client::ask(Request::Check(ahead), Start::IfMissing)? {
+            Some(daemon::Reply::Checked { errors: None }) => {}
+            Some(daemon::Reply::Checked { errors: Some(errors) }) => said.push(errors),
+            Some(daemon::Reply::Cold { reason }) => {
+                eprintln!("error: blaze could not check the workspace: {reason}");
+                return Ok(FAILED);
+            }
+            reply => anyhow::bail!("the daemon answered a check with {reply:?}"),
+        }
+    }
+    if said.is_empty() {
+        finished(&profile);
+        return Ok(0);
+    }
+    turned_down(&said)
+}
+
+/// Why the daemon's programs are not the build.
+enum NotServed {
+    /// The daemon did not bring them up to date: something cargo acts on changed, or it did
+    /// not build one of them. A check loads the workspace instead.
+    Stale,
+    /// The source has errors.
+    Error(crate::errors::Said),
+}
+
+/// Has the daemon bring the programs of `state` up to date and puts them where cargo has
+/// them. Rustc sees none of it: the daemon builds what rust-analyzer passes, and its verdict
+/// on the source is the build's.
+fn by_daemon(mut state: State) -> Result<(State, Held), NotServed> {
+    use crate::trace::{CLIENT, note};
+    let checking = Instant::now();
+    let cargos = state.refusal.is_some() || state.broken_guard().is_some();
+    if cargos || state.stale_cargos().is_some() {
+        return Err(NotServed::Stale);
+    }
+    note("client checks", CLIENT, checking);
+    // What the daemon did not build for an error in the source is not built: an item
+    // rust-analyzer does not resolve is ra-jit's to fix, not rustc's to build.
+    let answers = match state.checkouts.iter().map(built).collect::<Result<Vec<_>, _>>() {
+        Ok(answers) => answers,
+        Err(NotBuilt::Error(said)) => return Err(NotServed::Error(said)),
+        Err(_) => return Err(NotServed::Stale),
+    };
+    let refused = state.programs.iter().any(|program| {
+        program.asked_as.is_some_and(|(checkout, at)| {
+            answers.get(checkout).and_then(|it| it.get(at)).is_some_and(Result::is_err)
+        })
+    });
+    if refused {
+        return Err(NotServed::Stale);
+    }
+    let settling = Instant::now();
+    let held = state.hold();
+    let cargos = match state.settle(&answers, &held) {
+        Ok(cargos) => cargos.len(),
+        Err(_) => return Err(NotServed::Stale),
+    };
+    note("client settle", CLIENT, settling);
+    let served = cargos < state.programs.len() || state.programs.is_empty();
+    state.counts.served += u64::from(served);
+    Ok((state, held))
+}
+
+/// Has the daemon build the programs of `checkout`, loading it first when it has not: of
+/// each, `Ok` or why the daemon did not build it. `Err` is why none is built: the daemon
+/// failed, or the source has an error.
+pub(super) fn built(checkout: &Checkout) -> Result<Vec<Result<(), String>>, NotBuilt> {
+    if checkout.programs.is_empty() {
+        return Ok(Vec::new());
+    }
+    let asking_at = Instant::now();
+    let reply = client::ask(Request::Build(asking(checkout)), Start::IfMissing)
+        .map_err(|it| NotBuilt::Failed(format!("{it:#}")))?;
+    crate::trace::note("client↔daemon", crate::trace::CLIENT, asking_at);
+    let programs = match reply {
+        Some(Reply::Synced { programs, spans }) => {
+            crate::trace::note_all(spans);
+            for line in programs.iter().flatten() {
+                crate::trace::note_all(crate::trace::split(line).1);
+            }
+            programs
+        }
+        None => return Err(NotBuilt::Failed(client::why_none())),
+        Some(Reply::Cold { reason }) => return Err(NotBuilt::Failed(reason)),
+        Some(other) => return Err(NotBuilt::Failed(format!("the daemon answered {other:?}"))),
+    };
+    std::iter::zip(&checkout.programs, programs)
+        .map(|(program, built)| match built {
+            Ok(_) => Ok(Ok(())),
+            Err(NotBuilt::Error(said)) => Err(NotBuilt::Error(said)),
+            Err(NotBuilt::Failed(why)) => {
+                Ok(Err(format!("blaze did not build {}: {why}", program.binary.display())))
+            }
+            Err(NotBuilt::Cargos(why)) => Ok(Err(why)),
+        })
+        .collect()
+}
+
+/// `checkout` as a request names it: with the variables of this process, which `env!`
+/// reads where cargo set none. The ones that make ra-jit the wrapper are cargo's alone.
+fn asking(checkout: &Checkout) -> Checkout {
+    // Nor are those that say what ra-jit prints of the build: one that changed would be an
+    // edit of every `env!`.
+    let wraps = |name: &str| {
+        name == wrapper::DRIVEN
+            || name == wrapper::EVERY_CRATE
+            || name == switch::VARIABLE
+            || name == switch::CHAINED
+            || telemetry_variable(name)
+    };
+    // Also filter explicit checkout entries and the public aliases that main
+    // normalizes to RA_JIT names. Neither spelling belongs in an env! input.
+    let env: BTreeMap<String, String> = std::env::vars()
+        .filter(|(name, _)| !wraps(name))
+        .chain(checkout.env.clone().into_iter().filter(|(name, _)| !telemetry_variable(name)))
+        .collect();
+    Checkout { env, ..checkout.clone() }
+}
+
+fn telemetry_variable(name: &str) -> bool {
+    matches!(name, "RA_JIT_STATS" | "RA_JIT_TRACE" | "BLAZE_STATS" | "BLAZE_TRACE")
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+
+    #[test]
+    fn both_telemetry_spellings_are_client_only() {
+        for name in ["RA_JIT_STATS", "RA_JIT_TRACE", "BLAZE_STATS", "BLAZE_TRACE"] {
+            assert!(telemetry_variable(name));
+        }
+        for name in ["RUSTFLAGS", "RA_JIT_REMOTE", "BLAZE_REMOTE", "MY_TRACE", "RA_JIT_TRACE_MORE"]
+        {
+            assert!(!telemetry_variable(name), "do not strip unrelated program inputs");
+        }
+    }
+
+    #[test]
+    fn disabled_phase_needs_no_clock_or_span() {
+        let phase = Phase { name: "disabled", started: None };
+        assert!(phase.started.is_none());
+        drop(phase);
+    }
+}
+
+/// Tells the daemon to load `checkout` as cargo just built it, starting one when there is
+/// none. `Err` is why it does not.
+fn warmed(checkout: &Checkout) -> Result<(), String> {
+    match client::ask(Request::Warm(asking(checkout)), Start::IfMissing) {
+        Ok(Some(Reply::Cold { reason })) => Err(reason),
+        Ok(_) => Ok(()),
+        Err(why) => Err(format!("{why:#}")),
+    }
+}
+
+/// Has cargo build what plain cargo just built, which leaves it nothing to compile and has it say
+/// what it built, and the daemon load that for the builds to come. `None` when cargo failed.
+fn loaded_by_cargo(asked: &Invocation, cwd: &Path, key: &str) -> anyhow::Result<Option<State>> {
+    State::give_back(key);
+    let Ok(built) = Built::by_cargo(asked)? else { return Ok(None) };
+    let mut state = State::after(asked, cwd, key, built, Counts::default())?;
+    if state.refusal.is_none() {
+        let asked = state.checkouts.iter().filter(|it| !it.programs.is_empty());
+        let cold: Vec<String> = asked.filter_map(|it| warmed(it).err()).collect();
+        for why in cold {
+            say::fallback(&why, "the daemon has no part in the next build");
+            state.count_cargo(&why);
+        }
+        for (program, why) in state.left_to_cargo() {
+            say::fallback(why, &format!("`{}` is cargo's to build", program.name));
+        }
+    }
+    Ok(Some(state))
+}
+
+/// What the store of compiled code holds and may hold, and where it is.
+fn store_status() -> String {
+    let Some(dir) = daemon::store() else {
+        return "store: none (BLAZE_CACHE says so)".to_owned();
+    };
+    let held = ra_jit_store::StoreDir::at(&dir).stats().map_or(0, |it| it.held());
+    let most = match ra_jit_store::limit_for(&dir) {
+        Ok(Some(most)) => format!("at most {} MB", most >> 20),
+        Ok(None) => "no limit".to_owned(),
+        Err(why) => why,
+    };
+    format!("store: {} MB, {most} (`blaze cache gc` collects it), {}", held >> 20, dir.display())
+}
+
+/// `cargo ra-jit status`: the daemon, its workers, the store, and how the builds of each
+/// checkout went.
+fn status() -> anyhow::Result<i32> {
+    use std::fmt::Write as _;
+    let mut said = String::new();
+    for line in switch::status(&std::env::current_dir()?).into_iter().chain(wrapper::tallied()) {
+        let _ = writeln!(said, "{line}");
+    }
+    match client::ask(Request::Status, Start::Never)? {
+        Some(Reply::Status(daemon)) => {
+            let idle =
+                daemon.idle_secs.map_or("never".to_owned(), |it| format!("after {it}s idle"));
+            let most = daemon.memory_max.map_or("no limit".to_owned(), |it| {
+                format!("workers hold at most {} MB", it >> 20)
+            });
+            let _ = writeln!(
+                said,
+                "daemon: pid {}, version {}, exits {idle}, {most}",
+                daemon.pid, daemon.version
+            );
+            for worker in daemon.workers {
+                let holds =
+                    worker.bytes.map_or(String::new(), |it| format!("holds {} MB, ", it >> 20));
+                let _ = writeln!(
+                    said,
+                    "  worker: pid {}, {}, {holds}log {}",
+                    worker.pid,
+                    worker.project.display(),
+                    worker.log.display()
+                );
+                for (root, warmth) in worker.checkouts {
+                    let _ = writeln!(said, "    {}: {warmth}", root.display());
+                }
+            }
+        }
+        Some(Reply::Restart { version }) => {
+            let _ = writeln!(
+                said,
+                "daemon: another build of blaze, version {version}; the next build replaces it"
+            );
+        }
+        _ => said.push_str("daemon: not running\n"),
+    }
+    let _ = writeln!(said, "{}", store_status());
+    for state in State::all() {
+        let to_cargo: u64 = state.counts.cargo.values().sum();
+        let _ = writeln!(
+            said,
+            "{} ({}, {}): {} builds by the daemon, {to_cargo} by cargo",
+            state.root.display(),
+            state.profile,
+            state.key,
+            state.counts.served
+        );
+        for (reason, count) in &state.counts.cargo {
+            let _ = writeln!(said, "  {count} x {reason}");
+        }
+        if let Some(refusal) = &state.refusal {
+            let _ = writeln!(said, "  every build is cargo's: {refusal}");
+        }
+    }
+    // Whoever reads this may stop reading before its end.
+    let _ = std::io::Write::write_all(&mut std::io::stdout(), said.as_bytes());
+    Ok(0)
+}
+
+/// `cargo ra-jit stop`: has the daemon stop its workers and exit.
+fn stop() -> anyhow::Result<i32> {
+    match client::ask(Request::Stop, Start::Never)? {
+        Some(_) => {
+            client::gone(&daemon::socket_in(&daemon::home()?));
+            println!("daemon: stopped");
+        }
+        None => println!("daemon: not running"),
+    }
+    Ok(0)
+}

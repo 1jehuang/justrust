@@ -1,0 +1,23 @@
+--- /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v19/main.v18.rs	2026-10-30 10:52:46.845704298 -0700
++++ toolchain/resident/crates/ra-jit/src/main.rs	2026-10-30 10:53:06.526863882 -0700
+@@ -4057,8 +4057,10 @@
+ 
+ impl ListedCrate {
+     fn new(db: &RootDatabase, krate: Crate) -> ListedCrate {
+-        // The tracked snapshot traverses declarations itself. Do not repeat an
+-        // unconditional declaration or export warmup for a green snapshot.
++        // Keep the original parallel lowering warmup OUTSIDE a tracked query.
++        // Export classification runs only on a snapshot miss, on its tracked
++        // thread. Green snapshots must not pay an unconditional export pass.
++        let _ = declared_in(db, krate);
+         let snapshot = root_snapshot(db, krate.into()).clone();
+         ListedCrate {
+             functions: snapshot.functions,
+@@ -4201,6 +4203,7 @@
+ 
+ /// For each of `functions`, whether a runtime looks it up by name. Its attributes say, which
+ /// are read off the source: on every core, as a build waits for this of every crate it builds.
++#[cfg(test)]
+ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+     let exported = |db: &RootDatabase, functions: &[FunctionId]| -> Vec<bool> {
+         let exported = |&it| {

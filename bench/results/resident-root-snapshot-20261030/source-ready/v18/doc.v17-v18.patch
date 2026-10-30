@@ -1,0 +1,173 @@
+--- /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v18/doc.v17.md	2026-10-30 10:43:38.425121243 -0700
++++ docs/resident-root-snapshot.md	2026-10-30 10:45:01.758840700 -0700
+@@ -1,20 +1,13 @@
+ # Experimental resident classified root snapshot
+ 
+-Status: SOURCE READY v17 candidate, October 30, 2026. This is the licensed
+-Blaze-derived resident, not the clean-room compiler. No native build, test,
+-workload, commit, or speed measurement was performed by this worker. Root owns
+-native correctness, mechanism, and matched runtime gates before retention.
++Status: SOURCE READY v18 candidate, October 30, 2026. This is the licensed
++Blaze-derived resident, not the clean-room compiler. This worker performs
++source-only edits and offline evidence checks, not native builds or workloads.
++Root owns native correctness, mechanism, and matched runtime retention gates.
++No source promotion or shipping/default performance claim is made here.
+ 
+ ## Boundary and dependency contract
+ 
+-`ListedCrate::new` still executes the original `declared_in` traversal and its
+-parallel `lower` warmup, outside the tracked query. v17 removes only the
+-unconditional outer parallel `exported` warmup. Export classification now runs
+-serially on snapshot misses, on the tracked provider's thread. A green snapshot
+-avoids that export pass entirely. The original parallel export helper remains
+-unchanged for the independent test-only full classifier. Its cloned-database
+-reads are never used as parent-query dependencies.
+-
+ `root_declarations` is a coarse tracked projection of the existing native
+ `module_declarations` / `body_declarations` graph. It replays the original
+ ordered worklist on the tracked thread, following ordinary and provided bodies
+@@ -29,80 +22,83 @@
+ functions, kept/all statics, in-provided functions, exported flags, rooted and
+ provided generic flags, and main. Reads of attributes, compile-time-only flags,
+ function/impl generics, main classification, and allocator trait/module/crate
+-origin remain native dependencies. All export predicates are read here on the
+-tracked provider's thread. No result from a worker thread is trusted as a
+-substitute dependency edge.
++origin remain native dependencies. All export predicates are read on the
++tracked provider's thread. No result from a cloned worker database substitutes
++for a dependency edge in the parent query.
+ 
+ `root_no_main` is a separate coarse boolean equality boundary around the
+ original root-parse predicate. Without it, an executable-body edit in the root
+ file would invalidate full classification simply because its parse changed.
+-This preserves the original predicate, including its treatment of simple root
+-attributes, rather than silently changing cfg/no_main semantics.
++It preserves the original simple-root-attribute predicate and its cfg/no_main
++semantics, rather than silently broadening or narrowing them.
+ 
+-The snapshot contains no mutex, checkout-local shared-path cache, or other
+-mutable state. Every new `ListedCrate` creates a fresh `shared_paths` mutex.
+-Existing `Listed` cache invalidation, files, built sets, diagnostics, statistics,
+-and original parallel warmup implementations are unchanged.
+-
+-## Deliberately bounded scope and performance risks
+-
+-This is a safe narrower optimization than caching the entire existing
+-`ListedCrate::new` operation as-is. Its parallel export/body reads cannot safely
+-be hidden in a single tracked provider. We cache immutable classification,
+-while leaving the existing parallel graph/lowering warmup outside it.
+-There are no per-function wrapper queries.
+-
+-Cold classification repeats warm graph traversal on the tracked thread and
+-now classifies exports serially without the previous parallel export warmup.
+-This can regress cold or export-heavy parallel builds even if warm green reuse
+-improves. It also allocates an additional immutable snapshot and clones vectors
+-into `ListedCrate`. Parallel crate listing can retain duplicate graph warmup
+-work and add Salsa synchronization. Body-only edits still pay original
+-declaration/lowering warmup, native dependency validation, and vector cloning.
+-Provider reuse is not itself a timing win.
+-There is no v17 speed claim and no default promotion. Root must inspect both raw
+-and normalized matched timings, cold behavior, and parallel behavior.
++The snapshot contains no mutex, checkout-local shared-path cache, or mutable
++state. Every new `ListedCrate` creates a fresh `shared_paths` mutex. Existing
++`Listed` cache invalidation, files and built sets are unchanged. There are no
++per-function wrapper queries.
++
++## Bounded candidate lineage and cold/parallel risks
++
++- v16 retained the original parallel `declared_in` / `lower` warmup and the
++  original parallel export warmup outside the tracked classification provider.
++  The provider independently re-read every dependency on its own thread.
++- v17 removed only the unconditional outer export warmup. Export predicates
++  are serial on a classification miss. Warm green reuse skips the export pass.
++- v18 removes only the remaining outer `declared_in(db, krate)` warmup in
++  `ListedCrate::new`, with a local comment update. `root_snapshot` already
++  dependency-traverses declarations. Every tracked provider, read, original
++  full oracle, and all four fixtures remain byte-identical to v17.
++
++v18 no longer schedules constructor declaration lowering through the old
++parallel `lower` warmup. Cold graph traversal and export classification run on
++the query's thread. This can regress cold, macro-heavy, or parallel builds.
++The immutable snapshot still costs memory and vector cloning, and Salsa
++validation/synchronization is not free. Avoiding a warmup is not evidence of
++savings. No v18 speed claim is made. Root must gate cold/parallel behavior,
++semantics, and matched total wall time before retaining the source.
++
++Complete ra-jit caller audit before the v18 edit found additional production
++`declared_in` callers at main.rs:1115, main.rs:3623, and mirdump.rs:69 (import at
++line 26). `lower` also has the qualified `crate::lower` caller at outline.rs:356.
++These helpers and every call site outside the constructor remain unchanged.
++The original parallel `exported` helper is now used only by the cfg(test) full
++oracle. It remains unchanged, including visibility. Its possible non-test
++unused-function warning is pending root's quality gate, not suppressed here.
+ 
+ ## Test-only mechanism and original oracle
+ 
+-Precise native test filter: `resident_root_snapshot` (four tests).
++Precise native filter: `resident_root_snapshot` (four unchanged tests).
+ 
+-- `resident_root_snapshot_reuses_and_invalidates_against_original`: a
+-  thread-local provider counter demands unchanged and body-only reuse, and
+-  provider execution on classification edits. Ordered snapshots are compared
+-  after every revision with `ListedCrate::original`, a separate test-only copy
+-  of the complete pre-candidate classifier. Revisions cover nested items,
+-  macro-produced functions/statics, cfg/cfg_attr, compile-time-only flags,
+-  kept/exported statics, impl/nested generics, main renaming, and no_main.
++- `resident_root_snapshot_reuses_and_invalidates_against_original`: provider
++  counts require unchanged/body-only reuse and actual invalidation, comparing
++  ordered snapshots to the independent complete pre-candidate classifier.
++  Revisions cover nested items, macros, cfg/cfg_attr, compile-time-only attrs,
++  statics, generics, main renaming and no_main.
+ - `resident_root_snapshot_tracks_allocator_dependency_crate`: dependency-file
+-  changes and origin-only native crate input changes must change allocator
+-  rooting and match the full oracle without an app source edit.
++  and origin-only native input changes must match the full allocator oracle.
+ - `resident_root_snapshot_tracks_parallel_export_warmup_reads`: 600 functions
+-  exercise multiple export chunks in the unchanged original oracle on multicore
+-  hosts, changing an attribute outside the first chunk and comparing the
+-  candidate's serial tracked classification with the full oracle. The fixture
+-  is unchanged in v17.
++  compare tracked serial classification with the original parallel oracle,
++  changing an export attribute outside the first chunk on multicore hosts.
+ - `resident_root_snapshot_tracks_cfg_input_without_source_edit`: native cfg
+-  input transitions must update the full snapshot without a source edit.
++  transitions update classification without source edits.
+ 
+-Each candidate is requested before its original oracle. The original classifier
+-does not call `root_snapshot` or `root_declarations`. Existing signature-IR
+-candidate sources and the `resident_signature_flags` fixture are not modified.
+-The counter measures only provider execution on the requesting test thread,
+-not total lowering or dependency-validation work.
++Candidates are requested before their oracles. `ListedCrate::original` does not
++call the snapshot/declaration providers. The signature fixture and every
++tracked provider/read remain unchanged through v17 and v18. The thread-local
++counter measures provider execution, not total lowering/validation work.
+ 
+ ## Source freeze and reversal
+ 
+-Private scratch directory:
+-`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v17/`.
+-It contains exact pre-edit v16 `main.v16.rs` and `doc.v16.md`, the preserved
+-v16 working-tree patch, full v17 main/document/codegen/signature snapshots,
+-scoped v16-to-v17 patches, and SHA-256 hashes. The original earlier freeze
+-remains in the sibling `root-snapshot/` directory without being restored.
+-The sibling `root-snapshot-source-ready-v17.txt` is the v17 handoff receipt.
+-
+-Only `toolchain/resident/crates/ra-jit/src/main.rs` and this new document belong
+-to this worker. For reversal, apply the private scoped patch in reverse after
+-checking for intervening edits. Do not reset unrelated working-tree changes or
+-remove the signature-IR candidate. Native acceptance and runtime results must
+-be attached by root, not inferred from formatting or provider-count source.
++Private directory:
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v18/`.
++It preserves exact pre-edit v17 main/doc and working-tree patch, full v18
++main/document/codegen/signature snapshots, caller audit, v17-to-v18 scoped
++patches and SHA-256 hashes. Earlier `root-snapshot/` and `root-snapshot-v17/`
++freezes remain intact. The sibling `root-snapshot-source-ready-v18.txt` is the
++handoff receipt. No earlier base has been restored.
++
++Only main.rs and this document are source-worker owned. Check intervening
++edits before any scoped patch reversal. Never reset unrelated working-tree
++changes or erase the signature-IR candidate. Source retention is root's
++separate decision. Native acceptance cannot be inferred from formatting or
++from test-counter source alone.

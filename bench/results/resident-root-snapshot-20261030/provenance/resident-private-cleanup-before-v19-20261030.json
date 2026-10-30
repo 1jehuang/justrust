@@ -1,0 +1,566 @@
+{
+  "scope": "native stop receipts, not independent process-exit attestation; no stores deleted",
+  "rows": [
+    {
+      "case": "rsb02",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb02/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb02/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb02",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb02/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb02/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa07",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa07/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa07/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa07",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v11-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "e607181ba8b2166e65ca432989c3f5cbd5c17a85377a32885a22533b911e56c0",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa07/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa07/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa08",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa08/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa08/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa08",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v12-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "902e71ae16d1346e020b1cb445838b9b40f510c147ddcffc5044deb50d3c0e14",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa08/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa08/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb03",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb03/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb03/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb03",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb03/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb03/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa09",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa09/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa09/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa09",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v12-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "902e71ae16d1346e020b1cb445838b9b40f510c147ddcffc5044deb50d3c0e14",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa09/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa09/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb04",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb04/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb04/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb04",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb04/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb04/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa10",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa10/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa10/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa10",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v15-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "0e138c556368ab4f87a5b19b9c8bc0a3b0b4462807711c63f28d80bc7c00718a",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa10/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa10/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb05",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb05/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb05/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb05",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v15-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "0e138c556368ab4f87a5b19b9c8bc0a3b0b4462807711c63f28d80bc7c00718a",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb05/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb05/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa11",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa11/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa11/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa11",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v16-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "070ee57c03efa330d76896d3a75f2169a2293fab514d56c8c3e7741d8758f19e",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa11/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa11/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb06",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb06/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb06/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb06",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v16-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "070ee57c03efa330d76896d3a75f2169a2293fab514d56c8c3e7741d8758f19e",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb06/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb06/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa12",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa12/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa12/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa12",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa12/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa12/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb07",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb07/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb07/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb07",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb07/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb07/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa13",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa13/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa13/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa13",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa13/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa13/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb08",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb08/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsb08",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v17-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "d95e3441b899d14c9fcb081980044fa1a0565ecc09e84bedf708ecac72627851",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsb08/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa14",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa14/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa14",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v18-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "05ee6d282103fb376b4a3e1b4d9d9648bb525945ccf2d3c82d0f00dbc60a6e42",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa14/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: stopped\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa04",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa04/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa04/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa04",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v8-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "e483c2e6c1675786e1c293266bcf1ccc7d1f9219f1b8070e917d7728c10cb9f5",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa04/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa04/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa05",
+      "stack": "reference",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+        "cargo",
+        "stop"
+      ],
+      "tool_sha256": "fa622aeca09858c050264f701fbbebd1a14aa07d2b02c1eb4de511b684ba0263",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa05/reference/blaze-home",
+        "RA_JIT_HOME": "/home/jeremy/rsa05/reference/ra-home"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    },
+    {
+      "case": "rsa05",
+      "stack": "engine",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v8-bin/jr-engine",
+        "stop"
+      ],
+      "tool_sha256": "e483c2e6c1675786e1c293266bcf1ccc7d1f9219f1b8070e917d7728c10cb9f5",
+      "namespace": {
+        "BLAZE_HOME": "/home/jeremy/rsa05/engine/engine-home/resident-v1/runtime",
+        "RA_JIT_HOME": "/home/jeremy/rsa05/engine/engine-home/resident-v1/runtime"
+      },
+      "status": 0,
+      "stdout": "daemon: not running\n",
+      "stderr": ""
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+SOURCE READY: resident_root_snapshot
+Frozen 2026-10-30, source-only candidate on experimental licensed Blaze-derived resident, NOT cleanroom.
+Owner scope: toolchain/resident/crates/ra-jit/src/main.rs and NEW docs/resident-root-snapshot.md only.
+Recipient: session_skunk_1793325801268_bca6e773d45c6a0a
+
+Precise native filter: resident_root_snapshot
+Four tests: reuses_and_invalidates_against_original, tracks_allocator_dependency_crate, tracks_parallel_export_warmup_reads, tracks_cfg_input_without_source_edit (all prefixed resident_root_snapshot_).
+Native build/tests/workloads/commits: NONE performed. Root owns native semantic/mechanism/full-suite and paired runtime retention gates. No speed claim.
+
+Design: coarse tracked root_declarations -> root_snapshot, root_no_main boolean equality boundary. Complete ordered immutable classification retained. Existing parallel declared_in/lower and exported warmups stay OUTSIDE tracked query; exported/allocator reads are repeated on tracked provider thread so db-clone reads are never assumed dependencies. Fresh mutable shared_paths remains outside snapshot. Native module/body graph, attrs, signatures, cfg, generics, main and core allocator origin remain dependencies. No content/mtime heuristic or per-function wrappers.
+Bounded tradeoff: original warmup still runs and cold classification duplicates warm graph/export reads. Potential cold and parallel regressions, memory/vector-clone overhead. Require real matched gates.
+
+Validated SOURCE ONLY:
+- rustfmt --check --edition 2024 --config skip_children=true main.rs PASS
+- git diff --check scoped files PASS
+- exact byte comparison: existing resident_signature_flags helper/fixture and entire later file tail unchanged from private pre-edit base PASS
+- exact byte comparison: independent test-only original full classifier body identical to pre-edit ListedCrate::new body PASS
+
+Private full-source freeze directory:
+/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot/
+Contains main.base.rs (captured BEFORE edits), main.source-ready.rs, codegen.source-ready.rs, signatures.source-ready.rs, resident-root-snapshot.source-ready.md, main.scoped.patch and SHA256SUMS.
+SHA256:
+a26578e35b306f61354826d68d8d65c1154f0f89ac348cc6b782736260fb3c85 main.base.rs
+45935441f5747374933bd268cbe791238e435731a333f64e0766b9139aaeeda9 main.source-ready.rs
+0a50cf5d1abf3d812a4b942b0935810276ae0f90bfcb2b34b9b991c165e89d16 codegen.source-ready.rs
+724793541da40fe85a8f2fa738e39ae6bae70608c0b43e4b2ece80fe772c31a3 signatures.source-ready.rs
+c1cc4e15ae0fcd4c3e1a8c4f079de607d1e6348da325a792666520e52de6f9bb resident-root-snapshot.source-ready.md
+d2b89ba930e5f1aaf8d0e5bee6a93cf52c558eac9fba5be0b6ed862cc7e91123 main.scoped.patch
+
+Scoped reversal: check intervening edits then reverse main.scoped.patch, not git reset or replacing the signature-IR candidate. Preserve other workers' sources. Frozen worker makes no further source changes unless root requests them.

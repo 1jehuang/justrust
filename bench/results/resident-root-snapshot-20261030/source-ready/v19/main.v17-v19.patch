@@ -1,0 +1,10 @@
+--- /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/root-snapshot-v19/main.v17.rs	2026-10-30 10:52:46.847704314 -0700
++++ toolchain/resident/crates/ra-jit/src/main.rs	2026-10-30 10:53:06.526863882 -0700
+@@ -4203,6 +4203,7 @@
+ 
+ /// For each of `functions`, whether a runtime looks it up by name. Its attributes say, which
+ /// are read off the source: on every core, as a build waits for this of every crate it builds.
++#[cfg(test)]
+ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+     let exported = |db: &RootDatabase, functions: &[FunctionId]| -> Vec<bool> {
+         let exported = |&it| {

@@ -1,0 +1,955 @@
+{
+  "audit": "PASS",
+  "decision": "REJECTED_NOT_REPLICATED",
+  "promotion": false,
+  "artifacts": 1428,
+  "native": {
+    "runs": {
+      "16": [
+        {
+          "id": "20261030-101441001-819092",
+          "command": "check",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-101452190-819969",
+          "command": "build",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-101549518-823683",
+          "command": "test",
+          "filter": "resident_root_snapshot",
+          "passed": 4
+        },
+        {
+          "id": "20261030-101635043-826902",
+          "command": "test",
+          "filter": "resident_signature_flags",
+          "passed": 1
+        },
+        {
+          "id": "20261030-101635354-826961",
+          "command": "test",
+          "filter": "resident_graph_reuse",
+          "passed": 1
+        },
+        {
+          "id": "20261030-101635674-827078",
+          "command": "test",
+          "filter": "the_roots_of_a_listed_crate",
+          "passed": 1
+        },
+        {
+          "id": "20261030-101635987-827155",
+          "command": "test",
+          "filter": "telemetry",
+          "passed": 3
+        },
+        {
+          "id": "20261030-101955341-997927",
+          "command": "test",
+          "filter": null,
+          "passed": 351
+        }
+      ],
+      "17": [
+        {
+          "id": "20261030-102404906-1017640",
+          "command": "check",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-102417178-1018572",
+          "command": "build",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-102513687-1022385",
+          "command": "test",
+          "filter": "resident_root_snapshot",
+          "passed": 4
+        },
+        {
+          "id": "20261030-102601660-1025774",
+          "command": "test",
+          "filter": "resident_signature_flags",
+          "passed": 1
+        },
+        {
+          "id": "20261030-102601947-1025851",
+          "command": "test",
+          "filter": "resident_graph_reuse",
+          "passed": 1
+        },
+        {
+          "id": "20261030-102602245-1025947",
+          "command": "test",
+          "filter": "the_roots_of_a_listed_crate",
+          "passed": 1
+        },
+        {
+          "id": "20261030-102602562-1025993",
+          "command": "test",
+          "filter": "telemetry",
+          "passed": 3
+        },
+        {
+          "id": "20261030-103851469-1232683",
+          "command": "test",
+          "filter": null,
+          "passed": 351
+        }
+      ],
+      "18": [
+        {
+          "id": "20261030-104649088-1424122",
+          "command": "check",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-104701597-1425164",
+          "command": "build",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-104757109-1428780",
+          "command": "test",
+          "filter": "resident_root_snapshot",
+          "passed": 4
+        },
+        {
+          "id": "20261030-104839927-1431618",
+          "command": "test",
+          "filter": "resident_signature_flags",
+          "passed": 1
+        },
+        {
+          "id": "20261030-104840262-1431674",
+          "command": "test",
+          "filter": "resident_graph_reuse",
+          "passed": 1
+        },
+        {
+          "id": "20261030-104840527-1431843",
+          "command": "test",
+          "filter": "the_roots_of_a_listed_crate",
+          "passed": 1
+        },
+        {
+          "id": "20261030-104840785-1431910",
+          "command": "test",
+          "filter": "telemetry",
+          "passed": 3
+        },
+        {
+          "id": "20261030-105104716-1597245",
+          "command": "test",
+          "filter": null,
+          "passed": 351
+        }
+      ],
+      "19": [
+        {
+          "id": "20261030-105715391-1624554",
+          "command": "check",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-105726891-1625358",
+          "command": "build",
+          "filter": null,
+          "passed": 0
+        },
+        {
+          "id": "20261030-105821777-1629055",
+          "command": "test",
+          "filter": "resident_root_snapshot",
+          "passed": 4
+        },
+        {
+          "id": "20261030-105905906-1632129",
+          "command": "test",
+          "filter": "resident_signature_flags",
+          "passed": 1
+        },
+        {
+          "id": "20261030-105906179-1632177",
+          "command": "test",
+          "filter": "resident_graph_reuse",
+          "passed": 1
+        },
+        {
+          "id": "20261030-105906425-1632225",
+          "command": "test",
+          "filter": "the_roots_of_a_listed_crate",
+          "passed": 1
+        },
+        {
+          "id": "20261030-105906714-1632320",
+          "command": "test",
+          "filter": "telemetry",
+          "passed": 3
+        },
+        {
+          "id": "20261030-110141703-1799063",
+          "command": "test",
+          "filter": null,
+          "passed": 351
+        }
+      ]
+    },
+    "full351_names": [
+      "answers::cargo::tests::questions_read",
+      "answers::own::tests::a_toolchain_has_the_compilers_library_in_lib_or_beside_rustc",
+      "answers::own::tests::arguments_read",
+      "answers::own::tests::cfgs_given",
+      "answers::tests::a_rustc_outside_a_toolchain_is_a_proxy_whatever_its_name",
+      "answers::tests::what_is_a_question",
+      "answers::tests::what_is_not",
+      "as_rustc::tests::features_named",
+      "as_rustc::tests::probes_read",
+      "borrowck::tests::refuses_a_workspace_whose_metadata_failed",
+      "cargo::affected::tests::what_only_shows_the_run_is_plain",
+      "cargo::cli::tests::a_flag_without_its_value_is_cargos_to_refuse",
+      "cargo::cli::tests::check_asks_of_the_build_of_its_flags_and_plain_cargo_check_is_cargos",
+      "cargo::cli::tests::flags_are_the_builds",
+      "cargo::cli::tests::flags_in_both_spellings",
+      "cargo::cli::tests::run_is_the_build_that_build_is",
+      "cargo::cli::tests::telemetry_does_not_select_a_build_or_worker",
+      "cargo::cli::tests::what_a_script_reads_is_the_commands",
+      "cargo::cli::tests::what_is_cargos_alone",
+      "cargo::cli::tests::what_is_the_programs",
+      "cargo::closure::kept::tests::a_manifest_reads_back_as_it_was_written",
+      "cargo::closure::nar::tests::a_nar_laid_out_and_written_again_is_the_one_signed",
+      "cargo::closure::nar::tests::a_nar_that_is_not_one_is_refused",
+      "cargo::closure::narinfo::tests::a_changed_narinfo_is_refused",
+      "cargo::closure::narinfo::tests::a_narinfo_of_cache_nixos_org_holds",
+      "cargo::closure::narinfo::tests::base32_is_nixs",
+      "cargo::closure::narinfo::tests::store_paths_are_checked",
+      "cargo::closure::tests::a_damaged_entry_is_not_put_in_place",
+      "cargo::closure::tests::fetched_pushed_pulled_and_laid_out",
+      "cargo::closure::tests::pins_have_every_root_of_both_hosts",
+      "cargo::closure::tests::the_real_nar_is_kept_and_laid_out_as_signed",
+      "cargo::daemon::tests::a_workers_last_error_is_said_with_what_caused_it",
+      "cargo::daemon::tests::the_workers_asked_longest_ago_are_stopped_for_the_rest_to_fit",
+      "cargo::directives::tests::link_args_are_the_list_and_rpaths_where_search_may_go",
+      "cargo::directives::tests::link_search_stays_in_the_build_the_package_and_the_system",
+      "cargo::directives::tests::rustc_env_may_forward_what_cargo_gives_only_scripts",
+      "cargo::directives::tests::rustc_env_may_not_set_what_cargo_gives",
+      "cargo::directives::tests::the_error_names_the_package_and_each_line",
+      "cargo::experimental::tests::a_workspace_opts_into_experiments_by_its_root_manifest",
+      "cargo::fetches::tests::a_download_unpacked_is_named_below_its_directory",
+      "cargo::fetches::tests::a_locked_download_is_handed_to_the_build_script_and_a_missing_or_stale_one_is_named",
+      "cargo::fetches::tests::a_script_refused_the_network_is_told_what_override_it_lacks",
+      "cargo::fetches::tests::each_override_names_the_download_of_its_crate",
+      "cargo::fetches::tests::of_several_versions_in_cargo_lock_the_one_of_the_directory_is_taken",
+      "cargo::fetches::tests::the_lock_file_reads_back_and_is_in_one_order",
+      "cargo::hermetic::tests::a_failed_run_is_told_what_it_lacked",
+      "cargo::hermetic::tests::a_package_is_its_crate_its_commit_or_its_files",
+      "cargo::hermetic::tests::a_registry_package_s_cargo_home_and_its_dependencies_out_dirs",
+      "cargo::hermetic::tests::a_run_in_its_closure_has_cargo_s_variables_and_the_closure_s_tools_alone",
+      "cargo::hermetic::tests::a_view_hides_the_target_directory_and_git_but_what_is_bound_in_them",
+      "cargo::hermetic::tests::every_root_of_the_table_and_the_toolchain_is_pinned_for_both_hosts",
+      "cargo::hermetic::tests::the_table_gives_a_crate_its_libraries_and_the_workspace_wins",
+      "cargo::keyed::tests::a_variable_read_is_its_value",
+      "cargo::keyed::tests::an_entry_is_found_while_what_it_read_is_as_it_was",
+      "cargo::layout::tests::a_directory_is_a_unit_only_where_cargo_puts_one",
+      "cargo::layout::tests::a_profile_is_found_in_both_layouts",
+      "cargo::layout::tests::a_unit_is_named_alike_in_both_layouts",
+      "cargo::layout::tests::the_dylibs_of_the_second_layout_are_found",
+      "cargo::messages::tests::as_cargo_reads_it",
+      "cargo::metadata::tests::feature_unification_is_cargo_s",
+      "cargo::metadata::tests::fixtures_are_what_cargo_metadata_gives",
+      "cargo::own::args::tests::both_spellings_and_cargos_own_flags",
+      "cargo::own::args::tests::what_cargo_refuses",
+      "cargo::own::clean::tests::bytes_as_cargo_prints_them",
+      "cargo::own::config::tests::a_flags_value_is_no_subcommand",
+      "cargo::own::doc::tests::reads_cargo_docs_flags",
+      "cargo::own::doc::tests::refuses_what_it_does_not_take",
+      "cargo::own::fmt::tests::files_are_rustfmt_and_the_rest_cargo_fmt",
+      "cargo::own::new::tests::the_tip_is_claps",
+      "cargo::own::registry::tests::descriptions_cut_as_cargo_cuts_them",
+      "cargo::own::registry::tests::versions_with_the_crate",
+      "cargo::own::remove::tests::feature_values",
+      "cargo::own::remove::tests::the_usage_line_lists_what_was_typed",
+      "cargo::own::report::tests::colors_and_links_are_taken_out",
+      "cargo::own::tests::every_name_is_one_subcommand",
+      "cargo::own::tests::flags_ahead_go_after_the_subcommand",
+      "cargo::own::tests::the_builds_are_the_ones_cli_reads",
+      "cargo::own::tests::the_last_color_given_counts",
+      "cargo::own::tests::what_is_not_built_fails_and_says_so",
+      "cargo::own::uninstall::tests::packages_are_in_cargos_order_not_the_texts",
+      "cargo::own::uninstall::tests::what_is_left_is_written_as_cargo_writes_it",
+      "cargo::own::vendor::tests::what_is_vendored",
+      "cargo::own_script::tests::a_crate_reads_what_its_build_script_set_in_either_layout",
+      "cargo::own_script::tests::a_variable_read_as_rustc_would_read_it",
+      "cargo::own_script::tests::builds_that_start_together_make_it_once",
+      "cargo::own_script::tests::debug_assertions_unless_optimized",
+      "cargo::plan::tests::headerpad_of_an_apple_link",
+      "cargo::plan::tests::link_line_of_cc",
+      "cargo::plan::tests::link_line_of_cc_for_mach_o",
+      "cargo::plan::tests::link_lines_that_are_not_cc_for_elf",
+      "cargo::plan::tests::links_keep_what_a_patch_may_call",
+      "cargo::plan::tests::ours_go_ahead_of_rustcs",
+      "cargo::plan::tests::ours_go_ahead_of_rustcs_for_link_exe",
+      "cargo::plan::tests::rustcs_copies_give_way_for_apple",
+      "cargo::plan::tests::tests_the_harness_reaches_by_symbol_only",
+      "cargo::plan::tests::the_line_without_what_nothing_reaches_is_kept_too",
+      "cargo::plan::tests::the_names_a_program_keeps_are_linked_from_their_copy",
+      "cargo::plan::tests::unstable_flags_that_change_nothing",
+      "cargo::results::tests::a_directory_looked_at_stands_as_names_come_and_go_and_one_listed_does_not",
+      "cargo::results::tests::a_pass_stands_until_what_the_test_read_changes",
+      "cargo::results::tests::a_test_that_passed_and_failed_under_one_key_is_flaky",
+      "cargo::results::tests::what_a_test_read_is_its_own_and_what_no_test_read",
+      "cargo::run::tests::the_summary_names_the_failures",
+      "cargo::sandboxed::tests::a_package_or_its_workspace_opts_its_tests_into_the_sandbox",
+      "cargo::sandboxed::tests::a_package_takes_its_tests_out_by_its_manifest",
+      "cargo::sandboxed::tests::a_workspace_takes_build_scripts_and_proc_macros_out_by_its_root_manifest",
+      "cargo::sandboxed::tests::what_was_refused_is_said_in_a_line",
+      "cargo::script::tests::a_kept_run_is_what_it_printed_and_wrote",
+      "cargo::script::tests::a_rerun_is_compared_with_what_the_other_run_left",
+      "cargo::script::tests::a_rerun_leaves_what_cargo_has_alone",
+      "cargo::script::tests::a_rerun_names_each_file_that_differs",
+      "cargo::script::tests::a_rerun_that_writes_something_else_is_told",
+      "cargo::script::tests::a_run_in_another_checkout_has_its_key_and_what_it_left_names_that_checkout",
+      "cargo::script::tests::a_run_in_the_second_layout_is_read_from_run_stdout",
+      "cargo::script::tests::a_run_is_kept_by_what_it_read_but_the_toolchain_and_its_script",
+      "cargo::script::tests::a_run_is_the_same_as_another_but_for_its_directory",
+      "cargo::script::tests::a_script_newer_than_its_source_is_as_cargo_would_compile_it",
+      "cargo::script::tests::a_script_that_read_a_variable_or_has_no_dep_info_is_cargos",
+      "cargo::script::tests::what_rerun_if_changed_names_is_read_every_file_of_a_directory",
+      "cargo::script_sandbox::tests::a_declared_variable_is_given_and_nothing_else_of_the_shell",
+      "cargo::script_sandbox::tests::a_path_dependency_in_a_workspace_of_its_own_reads_the_builds_root_manifest",
+      "cargo::script_sandbox::tests::a_run_whose_reads_are_as_they_were_needs_no_rerun",
+      "cargo::script_sandbox::tests::a_sandboxed_script_is_given_what_cargo_and_a_c_compiler_read",
+      "cargo::script_sandbox::tests::a_script_says_what_it_reads_by_either_spelling",
+      "cargo::script_sandbox::tests::a_script_that_says_it_reads_what_it_was_not_given_is_named",
+      "cargo::script_sandbox::tests::the_target_directory_is_above_the_profile_of_build",
+      "cargo::script_sandbox::tests::what_a_workspace_below_dev_shm_read_is_an_input",
+      "cargo::script_sandbox::tests::what_ra_jit_s_rustc_stands_for_is_not_missing",
+      "cargo::script_sandbox::tests::what_was_refused_names_the_package_and_the_way_out",
+      "cargo::state::tests::a_program_is_run_with_the_libraries_cargo_runs_it_with",
+      "cargo::state::tests::a_state_another_ra_jit_wrote_is_forgotten",
+      "cargo::state::tests::only_tests_changed_keeps_the_text_without_tests",
+      "cargo::state::tests::the_nearest_configuration_says_a_variable",
+      "cargo::switch::links::tests::a_kept_file_is_never_overwritten",
+      "cargo::switch::links::tests::a_link_replaced_since_is_left_alone",
+      "cargo::switch::links::tests::a_proxy_is_kept_and_comes_back",
+      "cargo::switch::tests::a_dotted_table_stays_dotted",
+      "cargo::switch::tests::a_file_without_the_table_gets_one",
+      "cargo::switch::tests::a_table_that_is_not_lines_is_left_alone",
+      "cargo::switch::tests::the_key_goes_under_the_table_that_is_there",
+      "cargo::switch::tests::the_project_wrapper_is_relative_to_the_directory_above_its_config",
+      "cargo::switch::tests::the_same_key_of_another_table_is_not_the_key",
+      "cargo::switch::tests::the_variable_comes_first_and_cargo_home_last",
+      "cargo::switch::tests::the_wrapper_that_was_there_comes_back",
+      "cargo::telemetry_tests::both_telemetry_spellings_are_client_only",
+      "cargo::telemetry_tests::disabled_phase_needs_no_clock_or_span",
+      "cargo::toolchain::own::tests::a_download_that_stopped_goes_on_from_where_it_stopped",
+      "cargo::toolchain::own::tests::a_file_that_is_not_the_published_one_is_refused",
+      "cargo::toolchain::own::tests::a_package_that_names_a_place_outside_the_toolchain_is_refused",
+      "cargo::toolchain::own::tests::an_older_nightly_blaze_downloaded_goes_once_the_new_one_is_there",
+      "cargo::toolchain::own::tests::laid_out_as_rustup_lays_out_a_toolchain",
+      "cargo::toolchain::own::tests::pins_are_of_the_host_and_the_release_blaze_builds_with",
+      "cargo::units::tests::codegen_flags_in_both_spellings",
+      "cargo::units::tests::dep_info_files_and_variables",
+      "cargo::units::tests::dep_info_that_is_empty_or_cut_short",
+      "cargo::units::tests::outputs_by_kind",
+      "cargo::units::tests::records_are_in_the_profile",
+      "cargo::units::tests::two_units_told_different_places_are_not_one_request",
+      "cargo::wasi_script::tests::a_script_is_given_cargo_s_variables_alone",
+      "cargo::wasi_script::tests::the_toolchain_c_compilers_and_pkg_config_are_allowed_and_nothing_else",
+      "content::tests::the_cargo_home_is_told_from_a_file_cargo_fetched",
+      "dep_info::tests::a_variable_reads_back",
+      "dep_info::tests::a_windows_path_keeps_its_backslashes",
+      "dep_info::tests::empty_or_cut_short",
+      "dep_info::tests::spaces_are_escaped_and_nothing_else",
+      "dep_info::tests::spaces_together_and_at_the_ends",
+      "dep_info::tests::what_is_written_reads_back",
+      "deps::tests::a_list_of_units_longer_than_is_read_is_refused",
+      "deps::tests::a_unit_is_unpacked_where_it_belongs",
+      "deps::tests::a_unit_of_the_second_layout_is_packed_and_unpacked_where_it_belongs",
+      "deps::tests::a_unit_with_a_link_or_a_file_of_another_is_refused",
+      "deps::tests::an_archive_longer_than_is_taken_is_refused",
+      "deps::tests::an_archive_that_unpacks_to_more_than_is_taken_is_refused",
+      "deps::tests::no_bytes_break_the_reading_of_a_list_of_units",
+      "deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound",
+      "doctest::extract::tests::blocks_fenced_and_indented",
+      "doctest::extract::tests::hidden_lines_are_code",
+      "doctest::extract::tests::marks_of_a_block",
+      "doctest::extract::tests::type_of_an_impl_as_rustdoc_names_it",
+      "doctest::program::tests::a_line_after_the_attributes_stays_before_the_crate",
+      "doctest::program::tests::a_main_of_its_own_stays",
+      "doctest::program::tests::a_result_is_unwrapped",
+      "doctest::program::tests::attributes_alone_have_a_main",
+      "doctest::program::tests::attributes_and_extern_crates_stay_outside",
+      "doctest::program::tests::its_own_extern_crates_go_before_the_injected_one",
+      "doctest::program::tests::statements_go_into_a_main",
+      "errors::tests::a_reply_has_the_text_and_the_errors_as_they_are",
+      "errors::tests::as_rustc_writes_it",
+      "errors::tests::in_colour_as_rustc_writes_it",
+      "errors::tests::rustc_ends_a_crate_it_turned_down_so",
+      "errors::tests::tabs_lines_and_ranges_past_the_line",
+      "jr_engine::tests::build_identity_requires_a_full_lowercase_digest",
+      "jr_engine::tests::homes_must_be_explicit_absolute_non_root_paths",
+      "jr_engine::tests::identity_never_claims_to_be_upstream",
+      "link::split::tests::a_functions_unwind_entry_goes_with_it",
+      "link::split::tests::the_parts_refer_to_what_the_object_did",
+      "link::tests::a_native_library_of_a_windows_program_is_named_as_link_exe_takes_it",
+      "link::tests::a_raw_dylib_is_linked_by_its_import_library_whatever_its_extension",
+      "link::tests::a_scripts_libraries_are_read_as_rustc_reads_them",
+      "link::tests::a_wasm_modules_stand_ins_are_the_segment_named_for_them",
+      "link::tests::an_apple_link_has_fixups_in_tables_for_the_splice",
+      "macro_sandbox::tests::a_server_is_given_the_toolchain_s_variables_and_no_secret",
+      "manifest::tests::a_manifest_reads_back_as_written",
+      "manifest::tests::objects_alike_but_for_order_and_numbers_are_the_same_program",
+      "manifest::tests::variables_of_the_store_and_the_log_do_not_change_the_key",
+      "memory::tests::a_control_group_allows_what_it_and_those_above_it_allow",
+      "memory::tests::a_line_of_proc_is_read_as_bytes",
+      "memory::tests::this_process_and_the_machine_hold_some",
+      "outline::tests::a_body_that_declares_items_is_kept",
+      "outline::tests::blank_space_and_comments_are_left_out",
+      "outline::tests::bodies_are_left_out",
+      "outline::tests::bodies_others_see_into_are_kept",
+      "outline::tests::functions_added_alone",
+      "outline::tests::functions_are_found_again_by_the_skeleton_after_an_edit_to_bodies",
+      "outline::tests::functions_are_not_found_by_the_skeleton_where_ids_can_move",
+      "outline::tests::functions_taken_away_alone",
+      "outline::tests::generics_of_modules_are_told_apart",
+      "outline::tests::inline_functions_alone_are_told_apart",
+      "outline::tests::more_than_functions_added",
+      "outline::tests::what_a_macro_is_handed_is_kept",
+      "outline::tests::what_others_see_is_kept",
+      "outline::tests::what_rustc_copies_is_told",
+      "plan::tests::force_frame_pointers_is_read_in_each_spelling",
+      "plan::tests::link_args_are_read_in_order_in_each_spelling",
+      "plan::tests::link_dead_code_is_read_in_each_spelling",
+      "plan::tests::the_flags_that_cap_lints_are_read",
+      "plan::tests::unstable_flags_are_ignored_or_refused_by_name",
+      "process::tests::a_line_is_read_back_as_it_was_written",
+      "remote::collect::tests::ages_are_a_count_and_a_unit",
+      "remote::collect::tests::an_unlisted_object_is_given_longer_than_a_push_reuses_it",
+      "remote::gateway::tests::a_pack_goes_up_and_comes_back_in_ranges",
+      "remote::gateway::tests::a_pack_the_gateway_changed_is_rejected_and_not_kept",
+      "remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times",
+      "remote::gateway::tests::a_refusal_names_the_tenant_the_operation_and_the_variable_and_not_the_token",
+      "remote::gateway::tests::a_token_that_cannot_do_what_is_asked_is_an_error_that_says_so",
+      "remote::gateway::tests::a_write_lands_only_on_what_was_read_and_a_wrong_hash_never",
+      "remote::gateway::tests::an_address_names_the_tenant_and_where_the_token_is",
+      "remote::gateway::tests::what_is_over_a_put_goes_up_in_parts_checked_whole",
+      "remote::signed::tests::a_list_is_taken_from_a_trusted_key_only",
+      "remote::signed::tests::a_list_nobody_signed_is_taken_only_when_asked_for",
+      "remote::signed::tests::a_list_signed_without_a_turn_is_not_signed",
+      "remote::signed::tests::a_list_that_was_changed_or_moved_is_refused",
+      "remote::signed::tests::a_memory_that_is_damaged_takes_no_list_until_it_is_forgotten",
+      "remote::signed::tests::a_turn_is_past_the_last_and_not_behind_the_clock",
+      "remote::signed::tests::an_empty_list_is_signed_as_any_other",
+      "remote::signed::tests::an_older_list_is_not_taken_again",
+      "remote::signed::tests::no_bytes_are_taken_for_a_list_that_was_signed",
+      "remote::signed::tests::the_turn_is_signed_with_the_list",
+      "remote::signed::tests::two_that_take_at_once_remember_the_later",
+      "remote::tests::a_list_that_was_put_back_is_not_taken",
+      "remote::tests::a_machine_without_a_key_does_not_write_a_signed_list_back",
+      "remote::tests::a_manifest_longer_than_is_read_is_refused",
+      "remote::tests::a_memory_that_is_damaged_stops_a_push_and_a_pull",
+      "remote::tests::a_pack_longer_than_its_list_says_is_not_written",
+      "remote::tests::a_pack_that_unpacks_to_more_than_its_list_says_is_not_written",
+      "remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked",
+      "remote::tests::a_packed_pack_longer_than_its_list_says_is_not_unpacked",
+      "remote::tests::a_signer_does_not_add_to_a_list_that_was_put_back",
+      "remote::tests::an_object_is_read_to_the_bound_and_not_past_it",
+      "remote::tests::an_object_without_an_end_is_given_up_on",
+      "remote::tests::no_bytes_break_the_reading_of_a_manifest",
+      "remote::tests::the_keys_of_a_pack_are_no_longer_than_the_pack",
+      "remote::tests::what_a_stopped_fetch_left_does_not_count_against_the_bound_twice",
+      "sandbox::linux::tests::a_unix_socket_is_where_its_links_lead",
+      "sandbox::linux::tests::a_view_binds_a_store_path_from_anywhere",
+      "sandbox::linux::tests::a_view_shows_its_binds_and_nothing_of_the_machine",
+      "sandbox::linux::tests::a_view_that_cannot_be_made_says_why_before_anything_runs",
+      "sandbox::linux::tests::every_run_refuses_terminal_input_and_io_uring",
+      "sandbox::tests::a_container_is_known_by_its_marks",
+      "sandbox::tests::a_record_is_its_lines_in_order_once",
+      "sandbox::tests::blaze_sandbox_wins_over_ra_jit_sandbox",
+      "shipped::tests::a_workspace_turns_fetching_what_is_public_off_in_its_root_manifest",
+      "socket::tests::a_client_that_never_reads_is_given_up_on",
+      "socket::tests::a_directory_others_can_swap_is_refused",
+      "socket::tests::a_log_that_was_there_becomes_the_users_alone",
+      "socket::tests::a_reply_has_a_time_limit_once_the_request_is_read",
+      "socket::tests::a_silent_or_endless_client_is_given_up_on",
+      "socket::tests::a_socket_in_a_shared_directory_is_never_open_to_others",
+      "socket::tests::a_socket_let_go_of_is_free_while_processes_start",
+      "socket::tests::one_connection_too_many_is_closed",
+      "socket::tests::one_process_serves_a_socket",
+      "socket::tests::the_directory_and_the_socket_are_the_users_alone",
+      "splice::debug::tests::a_section_that_outgrows_its_room_alone_moves_behind_every_room",
+      "splice::debug::tests::each_starts_as_far_into_a_block_as_it_was_and_behind_the_one_before",
+      "splice::debug::tests::what_fits_in_the_room_leaves_every_section_where_it_was_laid_out",
+      "splice::debug::tests::what_the_code_reaches_moves_and_no_copy_is_written_over_before_it_is_read",
+      "splice::debug::tests::what_the_linker_left_moves_whole_on_the_first_splice",
+      "splice::lasting::tests::a_static_keeps_its_place",
+      "splice::lasting::tests::first_values",
+      "splice::macho::tests::a_first_link_has_the_room_its_objects_unwind_information_wants",
+      "splice::macho::tests::an_objects_unwind_sections_are_found_by_their_load_commands",
+      "splice::macho::tests::frames_behind_leave_the_table_of_a_large_program_alone",
+      "splice::macho::tests::frames_in_front_overflow_the_table_of_a_large_program",
+      "splice::macho::tests::room_for_both_tables_of_a_program_of_16_mb_of_frames",
+      "splice::macho::tests::room_for_the_unwind_table",
+      "splice::sha256::tests::as_sha2",
+      "splice::tests::a_copy_keeps_no_blocks_of_what_was_let_go_of",
+      "splice::tests::a_program_written_in_place_starts_after_the_write",
+      "splice::tests::a_static_left_behind_is_not_as_it_first_was",
+      "splice::tests::aarch64_instructions",
+      "splice::tests::aarch64_reach",
+      "splice::tests::the_names_read_stay_across_a_splice_and_not_a_link",
+      "stub::tests::a_crate_named_twice_is_one_extern_crate",
+      "stub::tests::a_stand_in_forwards_to_ra_jits_allocator",
+      "stub::tests::allocators_not_in_strings_and_under_the_cfgs_of_their_modules",
+      "stub::tests::allocators_under_the_cfgs_of_inline_modules",
+      "stub::tests::allocators_with_their_cfgs_through_modules",
+      "symbols::tests::a_binary_that_mentions_its_library_more_than_itself",
+      "symbols::tests::a_patch_calls_no_function_an_optimized_object_kept_to_itself",
+      "symbols::tests::a_test_named_as_a_crate_of_the_sysroot",
+      "symbols::tests::crate_sources_of_a_path_with_a_space",
+      "symbols::tests::every_name_of_a_symbol_is_found",
+      "symbols::tests::place_of_a_static_in_a_closure",
+      "symbols::tests::private_functions_of_crates_that_share_a_name",
+      "symbols::tests::the_crate_that_compiled_a_copy",
+      "symbols::tests::the_function_a_symbol_is_an_instance_of",
+      "symbols::tests::thin_lto_promoted_names_are_no_copies",
+      "tests::a_fetched_crate_is_named_the_same_wherever_cargo_keeps_it",
+      "tests::a_file_shared_by_targets_is_read_within_the_crates_given",
+      "tests::a_file_written_after_it_was_loaded_is_taken_for_a_changed_one",
+      "tests::a_library_is_told_apart_by_the_hash_its_metadata_gives_it",
+      "tests::a_link_command_of_lto_has_no_core",
+      "tests::a_link_that_failed_says_what_the_linker_said_last",
+      "tests::a_link_writes_the_executable_aside_under_its_name",
+      "tests::a_lock_a_thread_panicked_with_is_still_taken",
+      "tests::a_macro_names_the_private_modules_of_where_it_is_defined",
+      "tests::a_source_written_since_rustc_built_it_is_found_through_a_link",
+      "tests::resident_graph_reuse_tracks_nested_items_and_macro_edits",
+      "tests::resident_root_snapshot_reuses_and_invalidates_against_original",
+      "tests::resident_root_snapshot_tracks_allocator_dependency_crate",
+      "tests::resident_root_snapshot_tracks_cfg_input_without_source_edit",
+      "tests::resident_root_snapshot_tracks_parallel_export_warmup_reads",
+      "tests::resident_signature_flags_match_direct_attributes_across_revisions",
+      "tests::the_commit_of_a_toolchain_is_the_one_its_channel_manifest_names",
+      "tests::the_external_symbols_of_a_coff_object_are_the_ones_it_defines",
+      "tests::the_roots_of_a_listed_crate_are_its_functions_but_those_only_the_const_evaluator_runs",
+      "tests::the_symbols_of_an_object_are_read_again_only_when_the_file_changed",
+      "tests::the_toolchain_is_named_alike_ahead_of_cargo_and_from_rustcs_link_line",
+      "tier::tests::a_function_is_shown_by_its_path_without_ids_or_hashes",
+      "trace::tests::the_rows_add_up_to_the_whole",
+      "unstable::tests::a_refusal_names_the_flag",
+      "unstable::tests::spellings",
+      "unstable::tests::the_table_is_sorted_and_has_each_name_once",
+      "unstable::tests::treatments",
+      "weaken::tests::a_name_of_cs_in_ours_can_still_be_exported",
+      "weaken::tests::a_static_private_to_rustcs_elf_object_is_made_a_hidden_global",
+      "weaken::tests::a_static_private_to_rustcs_object_is_made_linkable",
+      "whole::tests::only_elf_is_packed",
+      "whole::tests::packed_reads_back_as_it_was",
+      "whole::tests::read_by_a_link_is_not_removed",
+      "whole::tests::written_anew_leaves_nothing_of_the_last"
+    ],
+    "full351_names_sha256": "46b08df4cf3782c0f225bef8467aa3e32441b9d48e11b0d78a77d3aae61bf241"
+  },
+  "pre_v19_cleanup": {
+    "stop_receipts": 34,
+    "scope": "native stop receipts, not independent process-exit attestation; no stores deleted",
+    "historical_pairs_pooled_with_final": false,
+    "memory_pressure_changed_before_final_pair": true
+  },
+  "separate_warm_observation": {
+    "rows": 141,
+    "timed_triples": 42,
+    "permutation_repetitions": 7,
+    "medians_seconds": {
+      "old": 0.10035844549565809,
+      "new": 0.10059280800487613,
+      "blaze": 0.10320122750272276
+    },
+    "exact_medians": {
+      "old": "0.10035844549565809",
+      "new": "0.100592808004876135",
+      "blaze": "0.10320122750272276"
+    },
+    "exact_new_vs_old_percent": "0.2335254477693005565428372819849915931890700205000",
+    "noise": "unknown",
+    "promotion": false,
+    "scope": "extended interleaved warm-store diagnostic, not cold support, comprehensive gate, significance or default promotion"
+  },
+  "timings": {
+    "v16": {
+      "pair": [
+        "rsb05",
+        "rsa11"
+      ],
+      "engine_samples": [
+        [
+          0.13929587700113188,
+          0.114881208006409,
+          0.11710269600735046,
+          0.11415940499864519,
+          0.10866802198870573
+        ],
+        [
+          0.1443441180017544,
+          0.15414212399628013,
+          0.10284326199325733,
+          0.1085446599900024,
+          0.10396331000083592
+        ]
+      ],
+      "raw_delta_percent": -5.515739367967898,
+      "normalized_delta_percent": -4.999955516251687,
+      "exact_decimal_replay": {
+        "engine_before": "0.114881208006409",
+        "engine_after": "0.1085446599900024",
+        "reference_before": "0.11613115500949789",
+        "reference_after": "0.11550064399489202",
+        "raw_percent": "-5.5157393679679066953290888618583804366363351591990",
+        "normalized_percent": "-4.9999555162516978348997971254122170268314790201420"
+      },
+      "noise": "unknown",
+      "promotion": false,
+      "absolute_floor_exceeded": false
+    },
+    "v17": {
+      "pair": [
+        "rsb06",
+        "rsa12"
+      ],
+      "engine_samples": [
+        [
+          0.1724521249998361,
+          0.13268953601073008,
+          0.11774463900655974,
+          0.10812162299407646,
+          0.11693675999413244
+        ],
+        [
+          0.15427694701065775,
+          0.1121764150011586,
+          0.10338458699698094,
+          0.11144745099591091,
+          0.11479817399231251
+        ]
+      ],
+      "raw_delta_percent": -4.729067966390321,
+      "normalized_delta_percent": -14.399950369001512,
+      "exact_decimal_replay": {
+        "engine_before": "0.11774463900655974",
+        "engine_after": "0.1121764150011586",
+        "reference_before": "0.10305484400305431",
+        "reference_after": "0.11469772600685246",
+        "raw_percent": "-4.7290679663903215474476995265350928419578125343010",
+        "normalized_percent": "-14.399950369001524806663723282490028958813349105827"
+      },
+      "noise": "unknown",
+      "promotion": false,
+      "absolute_floor_exceeded": false
+    },
+    "v17-cumulative": {
+      "pair": [
+        "rsb07",
+        "rsa13"
+      ],
+      "engine_samples": [
+        [
+          0.1383000249916222,
+          0.10634210900752805,
+          0.10960429300030228,
+          0.0945990449981764,
+          0.10602470798767172
+        ],
+        [
+          0.1384017579985084,
+          0.11405777499021497,
+          0.09654528100509197,
+          0.09716505100368522,
+          0.09845956500794273
+        ]
+      ],
+      "raw_delta_percent": -7.412439035817231,
+      "normalized_delta_percent": -7.185478300377579,
+      "exact_decimal_replay": {
+        "engine_before": "0.10634210900752805",
+        "engine_after": "0.09845956500794273",
+        "reference_before": "0.10756978100107517",
+        "reference_after": "0.10730673900980037",
+        "raw_percent": "-7.4124390358172301088782817056868681380534212680820",
+        "normalized_percent": "-7.1854783003775735366080891683069196938822971366610"
+      },
+      "noise": "unknown",
+      "promotion": false,
+      "absolute_floor_exceeded": false
+    },
+    "v18": {
+      "pair": [
+        "rsb08",
+        "rsa14"
+      ],
+      "engine_samples": [
+        [
+          0.1324163779936498,
+          0.12510228100290988,
+          0.099439594996511,
+          0.10152659501181915,
+          0.10810380399925634
+        ],
+        [
+          0.15568637300748378,
+          0.11217672500060871,
+          0.09953325398964807,
+          0.1113861150079174,
+          0.11239469899737742
+        ]
+      ],
+      "raw_delta_percent": 3.767601925812336,
+      "normalized_delta_percent": -2.778825955613129,
+      "exact_decimal_replay": {
+        "engine_before": "0.10810380399925634",
+        "engine_after": "0.11217672500060871",
+        "reference_before": "0.11974967800779268",
+        "reference_after": "0.12781307200202718",
+        "raw_percent": "3.7676019258123314036955591162330628022338407211200",
+        "normalized_percent": "-2.7788259556131357941402872352446903035652683304170"
+      },
+      "noise": "unknown",
+      "promotion": false,
+      "absolute_floor_exceeded": false
+    },
+    "v19": {
+      "pair": [
+        "rsb09",
+        "rsa15"
+      ],
+      "engine_samples": [
+        [
+          0.1279486139974324,
+          0.11449606998939998,
+          0.12336566000885796,
+          0.1158255369955441,
+          0.10315082500164863
+        ],
+        [
+          0.13176825499976985,
+          0.1159072550071869,
+          0.09279083198634908,
+          0.09438135699019767,
+          0.09282194299157709
+        ]
+      ],
+      "raw_delta_percent": -18.514207282433237,
+      "normalized_delta_percent": -21.76090005846686,
+      "exact_decimal_replay": {
+        "engine_before": "0.1158255369955441",
+        "engine_after": "0.09438135699019767",
+        "reference_before": "0.11704127400298603",
+        "reference_after": "0.12189814299927093",
+        "raw_percent": "-18.514207282433237984726928269161788731223909753231",
+        "normalized_percent": "-21.760900058466872554857728973955041622774323600485"
+      },
+      "noise": "unknown",
+      "promotion": false,
+      "absolute_floor_exceeded": true
+    },
+    "v19-reverse": {
+      "pair": [
+        "rsb10",
+        "rsa16"
+      ],
+      "engine_samples": [
+        [
+          0.14743451999675017,
+          0.1244437520072097,
+          0.10541245799686294,
+          0.11851948899857234,
+          0.10696635399654042
+        ],
+        [
+          0.14070216499385424,
+          0.10377732499910053,
+          0.11773992898815777,
+          0.11714330599352252,
+          0.11226945600355975
+        ]
+      ],
+      "raw_delta_percent": -1.1611449025623166,
+      "normalized_delta_percent": 1.6674056928683623,
+      "exact_decimal_replay": {
+        "engine_before": "0.11851948899857234",
+        "engine_after": "0.11714330599352252",
+        "reference_before": "0.11669462600548286",
+        "reference_after": "0.11344799399375916",
+        "raw_percent": "-1.1611449025623095635485916318074555850394042117460",
+        "normalized_percent": "1.6674056928683504178072253803568292253857729597300"
+      },
+      "noise": "unknown",
+      "promotion": false,
+      "absolute_floor_exceeded": false
+    }
+  },
+  "traces": {
+    "16": {
+      "actual_rows": 12,
+      "medians": {
+        "old": {
+          "worker roots": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 6562
+          },
+          "worker apply": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 8797
+          },
+          "worker check": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 17249
+          },
+          "client planning": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 15770
+          },
+          "client command": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 96293
+          }
+        },
+        "new": {
+          "worker roots": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 7107
+          },
+          "worker apply": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 8948
+          },
+          "worker check": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 17369
+          },
+          "client planning": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 15936
+          },
+          "client command": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 107094
+          }
+        }
+      },
+      "scope": "nested elapsed intervals, not CPU work, time saved, critical path or total speedup"
+    },
+    "17": {
+      "actual_rows": 12,
+      "medians": {
+        "old": {
+          "worker roots": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 10657
+          },
+          "worker apply": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 10000
+          },
+          "worker check": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 14319
+          },
+          "client planning": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 18575
+          },
+          "client command": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 85429
+          }
+        },
+        "new": {
+          "worker roots": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 5888
+          },
+          "worker apply": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 7430
+          },
+          "worker check": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 16253
+          },
+          "client planning": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 18226
+          },
+          "client command": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 94008
+          }
+        }
+      },
+      "scope": "nested elapsed intervals, not CPU work, time saved, critical path or total speedup"
+    },
+    "18": {
+      "actual_rows": 12,
+      "medians": {
+        "old": {
+          "worker roots": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 7454
+          },
+          "worker apply": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 9884
+          },
+          "worker check": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 19267
+          },
+          "client planning": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 19071
+          },
+          "client command": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 97111
+          }
+        },
+        "new": {
+          "worker roots": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 5802
+          },
+          "worker apply": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 8209
+          },
+          "worker check": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 17213
+          },
+          "client planning": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 18620
+          },
+          "client command": {
+            "single_interval_samples": 5,
+            "median_elapsed_us": 88933
+          }
+        }
+      },
+      "scope": "nested elapsed intervals, not CPU work, time saved, critical path or total speedup"
+    }
+  },
+  "scope": "unknown noise, scoped diagnostic only, not shipping or broad/default-promotion gate",
+  "source": "v16/v17/v18/v19 full source lineage retained; evidence retention never restores or commits live compiler source"
+}
