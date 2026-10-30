@@ -48,6 +48,7 @@ def order(stacks, replicate):
 
 def run_process(command, cwd, env, prefix, timeout):
     """Blocking wait, with no subprocess timeout polling quantization."""
+    before, child_before = base.cpu_snapshot(), base.child_cpu()
     start = time.perf_counter()
     status, error = None, None
     expired = threading.Event()
@@ -74,8 +75,16 @@ def run_process(command, cwd, env, prefix, timeout):
                 timer.join()
         except OSError as exc:
             error = repr(exc)
+    elapsed = time.perf_counter() - start
+    after, child_after = base.cpu_snapshot(), base.child_cpu()
+    noise = {'before': before, 'after': after,
+             'child_cpu_seconds': child_after - child_before,
+             'contamination': 'unknown',
+             'reason': 'Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.'}
+    if before and after:
+        noise['other_cpu_seconds_estimate'] = max(0, after['busy_seconds'] - before['busy_seconds'] - (child_after - child_before))
     return dict(command=list(map(str, command)), status=status, error=error,
-                timed_out=expired.is_set(), elapsed_seconds=time.perf_counter() - start,
+                timed_out=expired.is_set(), elapsed_seconds=elapsed, noise=noise,
                 environment=logged_environment(env))
 
 
@@ -98,8 +107,7 @@ def accepted(row, output, expected=None, marker=None):
     parsed = test_results(output)
     return (base.succeeded(row) and parsed is not None and parsed['failed'] == 0
             and (expected is None or parsed == expected)
-            and (marker is None or re.search(r'(?<![A-Za-z0-9_])' + re.escape(marker)
-                                             + r'(?![A-Za-z0-9_])', output) is not None))
+            and (marker is None or re.findall(r'JR_RUNTIME_EXECUTED_\d+', output) == [marker]))
 
 
 def environment(args, stack):

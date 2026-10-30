@@ -41,6 +41,10 @@ class HarnessTests(unittest.TestCase):
                                     'JR_RUNTIME_EXECUTED_2'))
         self.assertTrue(h.accepted(row, output(marker='JR_RUNTIME_EXECUTED_2'), expected,
                                    'JR_RUNTIME_EXECUTED_2'))
+        for marker in ('JR_RUNTIME_EXECUTED_2 JR_RUNTIME_EXECUTED_2',
+                       'JR_RUNTIME_EXECUTED_1 JR_RUNTIME_EXECUTED_2'):
+            self.assertFalse(h.accepted(row, output(marker=marker), expected,
+                                       'JR_RUNTIME_EXECUTED_2'))
 
     def test_failure_output(self):
         parsed = h.test_results(output(marker='panic: JR_RUNTIME_FAILURE', failed=True))
