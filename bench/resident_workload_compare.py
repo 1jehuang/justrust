@@ -13,6 +13,20 @@ import resident_engine_compare as shared
 
 runtime = shared.runtime
 STACKS = ['reference', 'engine']
+ENV_RECEIPT_ALLOWLIST = frozenset((
+    'HOME', 'JR_ENGINE_HOME', 'RA_JIT_HOME', 'RA_JIT_CACHE', 'CARGO_HOME',
+    'CARGO_TARGET_DIR', 'RUSTUP_HOME', 'BLAZE_HOME', 'BLAZE_CACHE',
+    'BLAZE_BACKEND', 'BLAZE_OPT', 'BLAZE_REMOTE', 'RA_JIT_REMOTE',
+    'BLAZE_PROC_MACRO_SERVER', 'RA_JIT_PROC_MACRO_SERVER',
+    'XDG_RUNTIME_DIR', 'XDG_CACHE_HOME', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
+)) | frozenset(runtime.PROFILES)
+
+
+def receipt_environment(env):
+    """Log only explicit build controls, never the inherited ambient environment."""
+    return {key: env[key] for key in sorted(ENV_RECEIPT_ALLOWLIST) if key in env}
+
+
 # Anchors inspected using git show f97fcc2:src/{summary,shim,record}.rs.
 WORKLOADS = {
     'summary-test': ('src/summary.rs', 'summary::tests::',
@@ -91,6 +105,7 @@ def execute(args):
                     tools_before=tool_identity(),
                     toolchain_before=shared.toolchain_identity(args.toolchain),
                     contracts={}, environments={}, profiles=runtime.PROFILES,
+                    environment_receipt_policy='explicit allowlist of build controls and private paths; ambient variables omitted',
                     store_policy='unseeded private stores per stack, reused across workloads',
                     proc_macro_policy='same explicit frozen native server' if args.proc_macro_server
                     else 'both server variables explicitly 0, rustc-built proc macros')
@@ -122,6 +137,7 @@ def execute(args):
         command = cmd or shared.command(tools[stack], stack, arguments=arguments)
         input_digest = runtime.base.digest(args.source / WORKLOADS[workload][0])
         row = runtime.run_process(command, args.source, envs[stack], prefix, args.timeout)
+        row['environment'] = receipt_environment(envs[stack])
         text = '\n'.join(prefix.with_suffix('.' + suffix).read_text(errors='replace')
                          for suffix in ('stdout', 'stderr'))
         row.update(stack=stack, workload=workload, phase=phase, replicate=rep,
@@ -140,7 +156,7 @@ def execute(args):
         for stack in STACKS:
             envs[stack] = shared.environment(args.output, stack, args.toolchain,
                                              args.proc_macro_server)
-            metadata['environments'][stack] = envs[stack]
+            metadata['environments'][stack] = receipt_environment(envs[stack])
             row, text = invoke(stack, selected[0], 'version',
                                cmd=[str(tools[stack]), '--version'])
             pattern = (re.escape(shared.REFERENCE_VERSION) + '$' if stack == 'reference'
@@ -194,10 +210,12 @@ def execute(args):
         metadata['error'] = repr(exc)
         raise
     finally:
+        metadata['source_restored'] = False
         for name, backup in backups.items():
             (args.source / name).write_bytes(backup.read_bytes())
         try:
             metadata['source_after'] = shared.source_hashes(args.source)
+            metadata['source_restored'] = metadata['source_before'] == metadata['source_after']
             metadata['tools_after'] = tool_identity()
             metadata['toolchain_after'] = shared.toolchain_identity(args.toolchain)
             unchanged = all(metadata[k + '_before'] == metadata[k + '_after']

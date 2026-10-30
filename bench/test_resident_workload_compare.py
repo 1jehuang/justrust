@@ -3,6 +3,7 @@
 import argparse
 import copy
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -44,6 +45,16 @@ class FixtureTests(unittest.TestCase):
                 self.assertFalse(before.rstrip().endswith(b'#[test]'))
                 self.assertIn(b'let p = parse_pass(', source)
                 self.assertEqual(prefix, 'shim::tests::')
+
+    def test_environment_receipt_allowlist_excludes_ambient_secrets(self):
+        env = dict(API_TOKEN='test-only-secret', AWS_SECRET_ACCESS_KEY='another-secret',
+                   UNKNOWN_FUTURE_SETTING='not-allowlisted', JR_ENGINE_HOME='/private/engine',
+                   CARGO_PROFILE_TEST_OPT_LEVEL='0', BLAZE_PROC_MACRO_SERVER='0')
+        before = env.copy()
+        self.assertEqual(harness.receipt_environment(env), {
+            'JR_ENGINE_HOME': '/private/engine', 'CARGO_PROFILE_TEST_OPT_LEVEL': '0',
+            'BLAZE_PROC_MACRO_SERVER': '0'})
+        self.assertEqual(env, before)
 
     def test_reject_ambiguous_anchor(self):
         anchor = harness.WORKLOADS['shim-test'][2].encode()
@@ -91,6 +102,7 @@ class MockWorkflowTests(unittest.TestCase):
 
             def run(command, cwd, env, prefix, timeout):
                 self.assertEqual(timeout, 3)
+                self.assertEqual(env['API_TOKEN'], 'JR_TEST_ONLY_API_TOKEN_SENTINEL')
                 self.assertEqual(cwd, source)
                 stack = 'reference' if command[0] == str(tools[0]) else 'engine'
                 phase = next((p for p in ('version', 'prepare', 'type-error', 'type-recovery',
@@ -132,14 +144,17 @@ class MockWorkflowTests(unittest.TestCase):
                     status = 101
                 if mode == 'reference-failed' and stack == 'reference' and phase == 'prepare':
                     status = 101
+                if mode == 'extra-source-file' and phase == 'edit':
+                    (source / 'unexpected.txt').write_text('synthetic unexpected input')
                 if mode == 'source-mutation' and stack == 'engine' and phase == 'edit':
                     (source / path).write_bytes(contents + b'\n// mutated\n')
                 prefix.with_suffix('.stdout').write_text(text)
                 prefix.with_suffix('.stderr').write_text('')
                 return dict(command=command, status=status, error=error, timed_out=timed_out,
-                            elapsed_seconds=0.125)
+                            environment=dict(env), elapsed_seconds=0.125)
 
-            with patch.object(harness.shared, 'pinned_source') as pristine, patch.object(
+            with patch.dict(os.environ, {'API_TOKEN': 'JR_TEST_ONLY_API_TOKEN_SENTINEL'}), patch.object(
+                    harness.shared, 'pinned_source') as pristine, patch.object(
                     harness.shared, 'toolchain_identity', return_value={'frozen': 'mock'}), patch.object(
                     harness.runtime, 'run_process', side_effect=run):
                 if mode == 'exception':
@@ -154,6 +169,14 @@ class MockWorkflowTests(unittest.TestCase):
             metadata = json.loads((args.output / 'metadata.json').read_text())
             summary = json.loads((args.output / 'summary.json').read_text())
             records = json.loads((args.output / 'records.json').read_text())
+            self.assertEqual(metadata['source_restored'], mode != 'extra-source-file')
+            serialized = json.dumps([metadata, records, summary])
+            self.assertNotIn('API_TOKEN', serialized)
+            self.assertNotIn('JR_TEST_ONLY_API_TOKEN_SENTINEL', serialized)
+            for env in metadata['environments'].values():
+                self.assertLessEqual(set(env), harness.ENV_RECEIPT_ALLOWLIST)
+            for row in records:
+                self.assertLessEqual(set(row['environment']), harness.ENV_RECEIPT_ALLOWLIST)
             for row in records:
                 self.assertTrue(Path(row['raw_prefix'] + '.stdout').exists())
             return result, metadata, summary, calls
@@ -190,6 +213,13 @@ class MockWorkflowTests(unittest.TestCase):
     def test_mutated_identity_excludes_everything(self):
         result, metadata, summary, _ = self.workflow('identity')
         self.assertEqual(result, 1)
+        self.assertFalse(metadata['unchanged'])
+        self.assertEqual(summary['medians_seconds'], {})
+
+    def test_source_restored_false_for_unexpected_input(self):
+        result, metadata, summary, _ = self.workflow('extra-source-file')
+        self.assertEqual(result, 1)
+        self.assertFalse(metadata['source_restored'])
         self.assertFalse(metadata['unchanged'])
         self.assertEqual(summary['medians_seconds'], {})
 

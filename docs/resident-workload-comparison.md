@@ -64,7 +64,9 @@ Every anchor must occur exactly once. None of the edits changes test names.
 - Before writing source, fsynced exclusive backup files are saved. `finally`
   restores their bytes on normal completion, rejected gates, and exceptions.
   The final full source, binary, and toolchain identities must equal the initial
-  identities, and toolchain links must remain correct. Identity failure clears
+  identities, and toolchain links must remain correct. `source_restored` explicitly
+  records whether the full final source manifest matches the initial manifest,
+  including on rejected gates and exceptions. Identity failure clears
   all medians. As with any Python `finally`, SIGKILL or power loss requires
   operator restoration from the saved backups before restarting.
 
@@ -93,7 +95,19 @@ preserving the existing rustc-built proc-macro control.
 
 Output consists of `metadata.json`, `records.json`, `summary.json`, original
 source backups, and raw `*.stdout` / `*.stderr` files. These are private receipts
-containing absolute paths and full environments, not public benchmark exports.
+containing absolute paths and raw engine diagnostics, not public benchmark
+exports. Environment maps in both metadata and process rows use the explicit
+`ENV_RECEIPT_ALLOWLIST`: private cache/source-independent state paths, pinned
+profile controls, backend/remote controls, and proc-macro server settings only.
+Ambient variables, including `API_TOKEN` and unrecognized future variables, are
+omitted. This filters logging only, not the actual child environment. Raw engine
+stdout/stderr is not scrubbed and must remain private.
+
+The initial rwc01/rwc02 runs predate allowlist hardening and retain the original
+private full-environment metadata. Never publish or rewrite those originals.
+Any published evidence must be a separately generated sanitized derivative with
+explicitly documented omissions, not a claim that the original raw receipts
+were redacted. Even new allowlisted receipts retain private absolute paths.
 `summary.json` reports medians separately for each workload/stack and explicitly
 lists excluded stacks. Exit status is zero only when every selected workload
 has accepted samples from both stacks and unchanged final identities. Never
@@ -111,6 +125,9 @@ expensive toolchain verification. They cover exact anchors, ordinary-function
 reachability in source, exact names/counts, selected workloads, positive sample
 counts, matching bytes and rotation, error/recovery gates, timeouts, stale
 markers, identity mutation, failure exclusion, raw receipts, and restoration
-following interruption. They do not build Rust, run resident workloads, or
-modify the reference source directory. Native correctness/performance remains
-unmeasured until the root executes the CLI and inspects its receipts.
+following interruption, explicit `source_restored` receipts, and API_TOKEN
+omission from every metadata/process environment map while the mock child still
+receives the unchanged variable. They do not build Rust, run resident workloads, or
+modify the reference source directory. These source-only tests do not establish
+native correctness or performance. Those require separate root-owned CLI runs
+and inspection of their receipts, not extrapolation from the mock suite.
