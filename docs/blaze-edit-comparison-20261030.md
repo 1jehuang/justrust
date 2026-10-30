@@ -103,6 +103,10 @@ Twelve owned run summaries were exported into
 `data/runs/xps14-blaze-owned-{off,on}-20261030/`, including the six calls per stack
 (prepare, expected error, recovery, three edits). The initial failed setup is
 retained under `failed-long-socket-path/`, never merged with the complete run.
+Its twelve owned calls were separately exported under
+`data/runs/xps14-blaze-failed-socket-{off,on}-20261030/` so every retained log's
+run ID has a repository summary. These are not additional successful Blaze
+samples and are not added to the complete-run medians.
 
 Exact complete-run invocation (the output directory must not already exist):
 
