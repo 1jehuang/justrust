@@ -1,0 +1,9 @@
+cargo:rerun-if-changed=build.rs
+cargo:rustc-env=JR_ENGINE_ORIGIN=5d4f78f7577cf7170993b74f735099dd03f5c6ca
+cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-unidentified
+cargo:rerun-if-env-changed=RA_JIT_GIT_SHA
+cargo:rustc-env=RA_JIT_GIT_SHA=blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local
+cargo:rerun-if-changed=src/sandbox/macos_interpose.c
+cargo:rerun-if-env-changed=CC
+cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET
+cargo:rerun-if-env-changed=CARGO_WORKSPACE_DIR

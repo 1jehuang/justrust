@@ -1,0 +1,4 @@
+
+thread 'main' (3199058) panicked at /home/jeremy/justrust/toolchain/resident/crates/ra-jit/build.rs:57:13:
+resident source identity cannot read /home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/harness/toolchain: No such file or directory (os error 2)
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

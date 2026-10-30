@@ -1,0 +1,17 @@
+cargo:rerun-if-changed=build.rs
+cargo:rustc-env=JR_ENGINE_ORIGIN=5d4f78f7577cf7170993b74f735099dd03f5c6ca
+cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-unidentified
+cargo:rerun-if-env-changed=RA_JIT_GIT_SHA
+cargo:rustc-env=RA_JIT_GIT_SHA=blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local
+cargo:rerun-if-changed=src/sandbox/macos_interpose.c
+cargo:rerun-if-env-changed=CC
+cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET
+cargo:rerun-if-env-changed=CARGO_WORKSPACE_DIR
+cargo:rerun-if-changed=/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/crates
+cargo:rerun-if-changed=/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/vendor
+cargo:rerun-if-changed=/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/Cargo.toml
+cargo:rerun-if-changed=/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/Cargo.lock
+cargo:rerun-if-changed=/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/.cargo/config.toml
+cargo:rerun-if-changed=/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/fixture/harness/toolchain
+cargo:rustc-env=RA_JIT_SOURCES=aa03cf8e006a0790f119e8bce98eb4c97c67dd7ee23ae43a47f1ba42832ff336
+cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-aa03cf8e006a0790f119e8bce98eb4c97c67dd7ee23ae43a47f1ba42832ff336

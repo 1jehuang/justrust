@@ -14,8 +14,14 @@
 
 use std::path::{Path, PathBuf};
 
+const JR_ENGINE_ORIGIN: &str = "5d4f78f7577cf7170993b74f735099dd03f5c6ca";
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rustc-env=JR_ENGINE_ORIGIN={JR_ENGINE_ORIGIN}");
+    // An unidentified build is not evidence of a particular owned source tree.
+    // The native entry rejects it for build/test operations.
+    println!("cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-unidentified");
     git_sha();
     sandbox_library();
     println!("cargo:rerun-if-env-changed=CARGO_WORKSPACE_DIR");
@@ -42,8 +48,14 @@ fn main() {
         hash.update(&(bytes.len() as u64).to_le_bytes());
         hash.update(bytes);
     };
+    // Private formats must not share an upstream store identity, even before
+    // the first semantic fork. This salts the existing complete source key.
+    field(b"justrust-resident-v1");
+    field(JR_ENGINE_ORIGIN.as_bytes());
     for path in &files {
-        let Ok(bytes) = std::fs::read(path) else { continue };
+        let bytes = std::fs::read(path).unwrap_or_else(|error| {
+            panic!("resident source identity cannot read {}: {error}", path.display())
+        });
         let name = path.strip_prefix(&root).unwrap_or(path).to_string_lossy().replace('\\', "/");
         field(name.as_bytes());
         field(&bytes);
@@ -56,35 +68,22 @@ fn main() {
     field(&[u8::from(std::env::var_os("CARGO_CFG_DEBUG_ASSERTIONS").is_some())]);
     let hex: String = hash.finish().iter().map(|byte| format!("{byte:02x}")).collect();
     println!("cargo:rustc-env=RA_JIT_SOURCES={hex}");
+    println!("cargo:rustc-env=JR_ENGINE_BUILD_ID=resident-v1-{hex}");
 }
 
 /// On macOS, the library every process of a sandbox loads (`src/sandbox/macos_interpose.c`),
 /// built with the C compiler of the system (`CC` when set), which `src/sandbox/macos.rs`
 /// carries in the executable. A C file and no build dependency: dyld loads only a dynamic
 /// library, which cargo builds from Rust only as a crate of its own.
-/// `RA_JIT_GIT_SHA`, the commit `blaze --version` names (`blaze 0.20261026.0 (fb82b09)`): what
-/// the build was told (the release workflow and the flake set it, where there is no `.git`),
-/// else the checkout's HEAD in seven characters, else none, as a published crate builds. The
-/// build runs again when HEAD moves (its reflog grows with each commit and checkout).
+/// Explicit build label, otherwise the recorded Blaze origin plus a local-fork marker.
+/// The enclosing justrust repository's HEAD is never interpreted as an upstream revision.
 fn git_sha() {
     println!("cargo:rerun-if-env-changed=RA_JIT_GIT_SHA");
     let given = std::env::var("RA_JIT_GIT_SHA").unwrap_or_default();
     let sha = if given.is_empty() {
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(env!("CARGO_MANIFEST_DIR"))
-                .output()
-                .ok()
-                .filter(|out| out.status.success())?;
-            String::from_utf8(out.stdout).ok().map(|it| it.trim().to_owned())
-        };
-        for path in ["HEAD", "logs/HEAD"] {
-            if let Some(file) = git(&["rev-parse", "--path-format=absolute", "--git-path", path]) {
-                println!("cargo:rerun-if-changed={file}");
-            }
-        }
-        git(&["rev-parse", "--short=7", "HEAD"]).unwrap_or_default()
+        // This ordinary source tree lives inside justrust. The enclosing Git
+        // HEAD is not a Blaze commit and must never be presented as one.
+        format!("blaze-{JR_ENGINE_ORIGIN}+justrust-local")
     } else {
         given
     };

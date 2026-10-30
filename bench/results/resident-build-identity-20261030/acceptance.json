@@ -1,0 +1,123 @@
+{
+  "schema": 1,
+  "scope": "resident-build-script-identity-only",
+  "status": "passed",
+  "source_sha256": "7b2c813f9fbba24c6d84ff8dc79f9192f3d57577bf2f656bb41f768153bab49b",
+  "rustc_sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8",
+  "rows": [
+    {
+      "name": "compile",
+      "command": [
+        "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+        "--edition=2024",
+        "/home/jeremy/justrust/toolchain/resident/crates/ra-jit/build.rs",
+        "-o",
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {}
+    },
+    {
+      "name": "missing-workspace",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-unidentified",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local"
+      }
+    },
+    {
+      "name": "baseline",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-a1e9cfbfddbed93d798bf4b8bf6a3b55038ddac6a22717822e399675d96ebc13",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local",
+        "RA_JIT_SOURCES": "a1e9cfbfddbed93d798bf4b8bf6a3b55038ddac6a22717822e399675d96ebc13"
+      }
+    },
+    {
+      "name": "target-change",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-a65cb0db003d444dc2c89d4d58a3943ad8f479da0957f4bc12de7190da781428",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local",
+        "RA_JIT_SOURCES": "a65cb0db003d444dc2c89d4d58a3943ad8f479da0957f4bc12de7190da781428"
+      }
+    },
+    {
+      "name": "feature-change",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-03a9be72f1ecf66666ca298ebff57a2c8debd10698a86660d428eb8b2d6b0ba5",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local",
+        "RA_JIT_SOURCES": "03a9be72f1ecf66666ca298ebff57a2c8debd10698a86660d428eb8b2d6b0ba5"
+      }
+    },
+    {
+      "name": "debug-change",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-aa03cf8e006a0790f119e8bce98eb4c97c67dd7ee23ae43a47f1ba42832ff336",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local",
+        "RA_JIT_SOURCES": "aa03cf8e006a0790f119e8bce98eb4c97c67dd7ee23ae43a47f1ba42832ff336"
+      }
+    },
+    {
+      "name": "explicit-label",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-a1e9cfbfddbed93d798bf4b8bf6a3b55038ddac6a22717822e399675d96ebc13",
+        "RA_JIT_GIT_SHA": "explicit-local-label",
+        "RA_JIT_SOURCES": "a1e9cfbfddbed93d798bf4b8bf6a3b55038ddac6a22717822e399675d96ebc13"
+      }
+    },
+    {
+      "name": "source-change",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 0,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-dae1f4d5fa51fec0b74ac3f4490fd0185ba0652768b1450587445500a3ebb68b",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local",
+        "RA_JIT_SOURCES": "dae1f4d5fa51fec0b74ac3f4490fd0185ba0652768b1450587445500a3ebb68b"
+      }
+    },
+    {
+      "name": "missing-declared-input",
+      "command": [
+        "/home/jeremy/.jcode/scratch/resident-build-identity-v2-20261030/build-script"
+      ],
+      "status": 101,
+      "values": {
+        "JR_ENGINE_ORIGIN": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+        "JR_ENGINE_BUILD_ID": "resident-v1-unidentified",
+        "RA_JIT_GIT_SHA": "blaze-5d4f78f7577cf7170993b74f735099dd03f5c6ca+justrust-local"
+      }
+    }
+  ]
+}
