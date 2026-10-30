@@ -63,6 +63,13 @@ and diagnostic codes, then compares complete parsed JSON diagnostic trees
 (including spans, suggestions, children, and rendered text) across all four
 runs. The fresh reference catches stale results even when both incremental
 modes fail identically. Unknown flags or non-JSON compiler errors fail closed.
+Every invocation also enables `-Zincremental-verify-ich`. With `--output`, the
+harness retains an `acceptance.json` with exact compiler executable/driver
+hashes, compiler version and sysroot queries, sources, commands, unfiltered
+diagnostics, expected outcomes, completed case count and verdict. A partial
+report is kept on failure and printed in full. The output directory must be
+new, with an existing parent, and is created with mode 0700. Without `--output`,
+temporary evidence is removed when the command exits.
 
 Coverage: empty owners, crate/parent forbid, command-line deny, attribute
 addition/removal, body-local attributes, fulfilled/unfulfilled and inherited
@@ -82,9 +89,10 @@ the test. Do not silently discard diagnostic differences to get a pass.
 From the repository root, only after explicit release:
 
 ```sh
-# Build native compiler and its sysroot. This is intentionally not run yet.
-(cd toolchain/rustc && ./build-jr.sh dev)
-python3 bench/reuse-lint-accept.py toolchain/rustc/build/jr/dev/bin/rustc
+# Build native compiler and matching sysroot/tools. Not run in this window.
+(cd toolchain/rustc && ./x build --stage 1 compiler/rustc library src/tools/rustdoc src/tools/clippy)
+python3 bench/reuse-lint-accept.py toolchain/rustc/build/host/stage1/bin/rustc \
+  --output "$HOME/.jcode/scratch/query-retention-bench-20261030/lint-native-accept"
 ```
 
 For a release-quality performance comparison, build the same optimized mode

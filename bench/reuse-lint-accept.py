@@ -8,9 +8,12 @@ Nothing runs at import time. Unit tests use no compiler.
 """
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 
 FLAG = "-Zjr-empty-lint-level-fast-path="
@@ -81,33 +84,90 @@ def command(rustc, root, cache, enabled, extra=()):
     return [str(rustc), str(root / "main.rs"), "--crate-name", "lint_accept",
             "--crate-type=lib", "--edition=2024", "--emit=metadata",
             "--error-format=json", "--color=never", "-o", str(root / "out.rmeta"),
-            "-Cincremental=" + str(cache), FLAG + ("yes" if enabled else "no"), *extra]
+            "-Cincremental=" + str(cache), "-Zincremental-verify-ich",
+            FLAG + ("yes" if enabled else "no"), *extra]
 
 
-def run(rustc, root):
+def run(rustc, root, report=None):
     for index, step in enumerate(steps()):
         (root / "main.rs").write_text(step.source)
         results = []
+        observation = {"name": step.name, "source": step.source,
+                       "expected_codes": step.codes, "expected_failure": step.fails,
+                       "invocations": []}
+        if report is not None:
+            report["observations"].append(observation)
         for enabled in (False, True):
             for fresh in (False, True):
                 cache = root / (f"fresh-{index}-{enabled}" if fresh else f"incremental-{enabled}")
-                proc = subprocess.run(command(rustc, root, cache, enabled, step.flags),
+                argv = command(rustc, root, cache, enabled, step.flags)
+                proc = subprocess.run(argv,
                                       capture_output=True, text=True, timeout=120)
+                observation["invocations"].append({
+                    "enabled": enabled, "fresh": fresh, "command": argv,
+                    "status": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr,
+                })
                 assert not proc.stdout.strip(), (step.name, "unexpected stdout", proc.stdout)
                 result = (proc.returncode, diagnostics(proc.stderr))
                 check_expected(step, result)
                 results.append(result)
         assert all(result == results[0] for result in results), (step.name, results)
+        if report is not None:
+            report["completed_cases"] += 1
         print(f"PASS {step.name}: off/on, fresh/incremental", flush=True)
+
+
+def digest(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def capture(rustc, root):
+    report = {"schema": 1, "scope": "native-lint-diagnostics-correctness-only",
+              "verdict": "incomplete", "verify_ich": True,
+              "planned_cases": len(list(steps())), "completed_cases": 0,
+              "observations": [], "compiler": {"path": str(rustc)}}
+    try:
+        report["compiler"]["sha256"] = digest(rustc)
+        for name, args in (("version", ["-vV"]), ("sysroot", ["--print", "sysroot"])):
+            result = subprocess.run([str(rustc), *args], capture_output=True,
+                                    text=True, timeout=120)
+            report["compiler"][name] = {"status": result.returncode,
+                                        "stdout": result.stdout, "stderr": result.stderr}
+            if result.returncode:
+                raise RuntimeError(f"Compiler identity query failed: {name}: {result.stderr}")
+        sysroot = Path(report["compiler"]["sysroot"]["stdout"].strip())
+        drivers = sorted((sysroot / "lib").glob("*rustc_driver*"))
+        report["drivers"] = [{"path": str(path.resolve()), "sha256": digest(path)}
+                             for path in drivers if path.is_file()]
+        if not report["drivers"]:
+            raise RuntimeError("No native rustc driver found in sysroot")
+        run(rustc, root, report)
+        report["verdict"] = "passed"
+    except BaseException as error:
+        report["verdict"] = "failed"
+        report["error"] = repr(error)
+        print(json.dumps(report, indent=2), file=sys.stderr)
+        raise
+    finally:
+        (root / "acceptance.json").write_text(json.dumps(report, indent=2) + "\n")
+    return report
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("rustc", type=Path, help="new native jr-rustc binary, not justrust")
+    parser.add_argument("--output", type=Path, help="New private evidence directory; refuses overwrite")
     args = parser.parse_args()
     rustc = args.rustc.resolve(strict=True)
-    with tempfile.TemporaryDirectory(prefix="jr-empty-lint-accept-") as directory:
-        run(rustc, Path(directory))
+    os.umask(0o077)
+    if args.output is not None:
+        root = args.output.resolve()
+        root.mkdir(mode=0o700, exist_ok=False)
+        capture(rustc, root)
+    else:
+        with tempfile.TemporaryDirectory(prefix="jr-empty-lint-accept-") as directory:
+            capture(rustc, Path(directory))
     print("Native acceptance passed (diagnostics and status only, no speed claim).")
 
 

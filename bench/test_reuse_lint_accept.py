@@ -42,6 +42,7 @@ class HarnessTests(unittest.TestCase):
         self.assertIn(harness.FLAG + "yes", on)
         self.assertEqual(off[:-1], on[:-1])
         self.assertIn("-Cincremental=/cache", on)
+        self.assertIn("-Zincremental-verify-ich", on)
 
     def test_edit_matrix_and_persistent_cache(self):
         calls = []
@@ -52,7 +53,11 @@ class HarnessTests(unittest.TestCase):
             with patch.object(harness, "steps", return_value=iter([
                 harness.Step("a", "first"), harness.Step("b", "second")
             ])), patch.object(harness.subprocess, "run", side_effect=fake_run), contextlib.redirect_stdout(io.StringIO()):
-                harness.run(Path("/not-executed"), Path(tmp))
+                report = {"observations": [], "completed_cases": 0}
+                harness.run(Path("/not-executed"), Path(tmp), report)
+                self.assertEqual(report["completed_cases"], 2)
+                self.assertEqual(len(report["observations"]), 2)
+                self.assertEqual(len(report["observations"][0]["invocations"]), 4)
         self.assertEqual(len(calls), 8)
         self.assertEqual([src for _, src in calls], ["first"] * 4 + ["second"] * 4)
         caches = [next(arg for arg in cmd if arg.startswith("-Cincremental=")) for cmd, _ in calls]
@@ -77,6 +82,18 @@ class HarnessTests(unittest.TestCase):
                      "macro-empty", "macro-attribute", "macro-reverted", "type-error",
                      "parse-error", "recovery", "attribute-added", "attribute-removed"):
             self.assertIn(name, names)
+
+    def test_capture_failure_retains_partial_evidence(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with patch.object(harness, "digest", side_effect=OSError("identity unavailable")), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(OSError, "identity unavailable"):
+                    harness.capture(Path("/not-executed"), root)
+            report = json.loads((root / "acceptance.json").read_text())
+            self.assertEqual(report["verdict"], "failed")
+            self.assertEqual(report["completed_cases"], 0)
+            self.assertTrue(report["verify_ich"])
+            self.assertIn("identity unavailable", report["error"])
 
 
 if __name__ == "__main__":
