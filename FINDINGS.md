@@ -1,5 +1,28 @@
 # Findings: where agent build time goes
 
+## 2026-10-30: deeper cache reuse is real, but remote no-op latency remains
+
+Inventory: `docs/caching-levels.md`, with 18 reuse levels and their input
+contracts. Three native experiments are committed and default-off: associated
+item query retention (`84c0f3e16`), overlapping Cargo subtree validation
+(`b0878ebcc`), and two audited module-local Clippy passes (`a29b1e69a`).
+The query fixture eliminated 10 proven-green recomputations at +1,522 cache
+bytes. Same-binary Cargo measurements improved overlapping roots 44.99 to
+31.11 ms but regressed a single root 35.37 to 39.16 ms, so no default promotion.
+Clippy passed 48 real-driver invocations and the official UI suite; profile
+showed lint_mod executions 3 cold, 0 unchanged, 2 after a one-module edit.
+Cfg switching required a private versioned incremental namespace. Two initial
+passes were rejected for diagnostic-ordering differences without blessing UI
+snapshots. Details and raw focused evidence live in the linked experiment docs.
+
+The installed shipping client passed 831 tests (`20261029-205934738-2526594`)
+and all-target lint (`20261029-205609282-2475935`). That cached lint still cost
+2.58 s client-visible versus 0.05 s Cargo, 62 fresh units, and 1.94 s sync.
+This is not a matched performance comparison. The comprehensive baseline was
+blocked by an existing benchmark snapshot lock. No general speed claim or
+hosted native activation. Safe local whole-command result replay, authoritative
+input receipts, and a resident expansion/semantic graph remain unfinished.
+
 ## 2026-10-29: Clippy's cached path still paid for ignored build-tree scans
 
 Fixed ignored-lockfile discovery in `29c6e250b`: collapse ignored directories
