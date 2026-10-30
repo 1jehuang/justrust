@@ -1,0 +1,176 @@
+{
+  "id": "20261030-083420086-3897618",
+  "args": [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "subcommand": "build",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "23a1490cb84f",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793374460.0999043,
+  "wall": 62.014179706573486,
+  "exit": 0,
+  "cpu_secs": 259.713046,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 296,
+    "processes": 11,
+    "sample_span_secs": 62.013445138931274,
+    "max_sample_gap_secs": 0.22144436836242676
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.158613920211792,
+    "lock_wait": 0.0,
+    "compile": 61.81104779243469,
+    "build_gaps": 0.020554304122924805,
+    "test_run": 0.0,
+    "tail": 0.02396368980407715
+  },
+  "units": {
+    "compiled": 3,
+    "local": 3,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 424,
+    "rustc_cpu_secs": 258.48,
+    "rustc_wall_sum": 66.73571681976318,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "jr_engine",
+      "kind": "bin",
+      "local": true,
+      "start": 6.762484788894653,
+      "wall": 55.21336078643799,
+      "wall_share": 55.21336102485657,
+      "cpu": 224.320691,
+      "max_rss_mb": 2850.74609375,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 78687
+    },
+    {
+      "name": "blaze_metadata",
+      "kind": "lib",
+      "local": true,
+      "start": 0.158613920211792,
+      "wall": 5.771874904632568,
+      "wall_share": 3.3095403909683228,
+      "cpu": 20.877817,
+      "max_rss_mb": 502.94921875,
+      "frontend_threads": null,
+      "rmeta_secs": 0.8430778980255127,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 1776
+    },
+    {
+      "name": "blaze_tree",
+      "kind": "lib",
+      "local": true,
+      "start": 1.0058197975158691,
+      "wall": 5.750481128692627,
+      "wall_share": 3.2881463766098022,
+      "cpu": 13.276998,
+      "max_rss_mb": 387.94921875,
+      "frontend_threads": null,
+      "rmeta_secs": 0.5532181262969971,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 1304
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 4.187962289090321,
+    "peak_build_cores": 6.517016655127581,
+    "peak_build_rss_mb": 2942.42578125,
+    "peak_unit_rss_mb": 2850.74609375,
+    "min_mem_available_mb": 50205,
+    "avg_other_cores": 3.0025297528345902,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.519695,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.015511999999999996
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 254,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "blaze-metadata",
+      "reason": "the file `crates/blaze-metadata/src/lib.rs` has changed"
+    },
+    {
+      "package": "ra-jit",
+      "reason": "the file `crates` has changed"
+    },
+    {
+      "package": "blaze-tree",
+      "reason": "the dependency `blaze-metadata` was rebuilt"
+    }
+  ],
+  "all_units": 3,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-083420086-3897618.scope",
+    "final_weight": 187,
+    "setup_secs": 0.012953861,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

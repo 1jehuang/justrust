@@ -1,0 +1,112 @@
+[
+  {
+    "pid": 3897654,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config term.progress.when=\"always\" --config term.progress.width=200 build --release --locked -p ra-jit --bin jr-engine -j 6",
+    "kind": "cargo",
+    "first_seen": 1793374460.100746,
+    "last_seen": 1793374522.0142586,
+    "cpu_secs": 0.17,
+    "max_rss_mb": 110.39453125
+  },
+  {
+    "pid": 3897666,
+    "comm": "build_script_bu",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/6284e41a1113b0fb/out/build_script_build",
+    "kind": "target-binary",
+    "first_seen": 1793374460.3101482,
+    "last_seen": 1793374460.9382982,
+    "cpu_secs": 0.68,
+    "max_rss_mb": 3.7109375
+  },
+  {
+    "pid": 3897662,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_metadata --edition=2024 crates/blaze-metadata/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clipp",
+    "kind": "rustc",
+    "first_seen": 1793374460.3101482,
+    "last_seen": 1793374466.0035636,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.57421875
+  },
+  {
+    "pid": 3897663,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name blaze_metadata --edition=2024 crates/blaze-metadata/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy:",
+    "kind": "rustc",
+    "first_seen": 1793374460.3101482,
+    "last_seen": 1793374466.0035636,
+    "cpu_secs": 20.85,
+    "max_rss_mb": 502.69921875
+  },
+  {
+    "pid": 3897750,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_tree --edition=2024 crates/blaze-tree/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_i",
+    "kind": "rustc",
+    "first_seen": 1793374461.1478357,
+    "last_seen": 1793374466.8449862,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.67578125
+  },
+  {
+    "pid": 3897751,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name blaze_tree --edition=2024 crates/blaze-tree/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless",
+    "kind": "rustc",
+    "first_seen": 1793374461.1478357,
+    "last_seen": 1793374466.8449862,
+    "cpu_secs": 13.27,
+    "max_rss_mb": 382.8203125
+  },
+  {
+    "pid": 3898181,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name jr_engine --edition=2024 crates/ra-jit/src/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=unused_lifetimes --w",
+    "kind": "rustc",
+    "first_seen": 1793374467.0539038,
+    "last_seen": 1793374522.0142586,
+    "cpu_secs": 222.76,
+    "max_rss_mb": 2827.0
+  },
+  {
+    "pid": 3898180,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name jr_engine --edition=2024 crates/ra-jit/src/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::usel",
+    "kind": "rustc",
+    "first_seen": 1793374467.0539038,
+    "last_seen": 1793374522.0142586,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 5.03125
+  },
+  {
+    "pid": 3901797,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccSsJc6c.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/17e1ed60353df23d/out/jr_engine /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib",
+    "kind": "linker",
+    "first_seen": 1793374521.8041449,
+    "last_seen": 1793374522.0142586,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.28125
+  },
+  {
+    "pid": 3901798,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccSsJc6c.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/17e1ed60353df23d/out/jr_engine /usr/lib/gcc/x86_64-pc-linux-gnu",
+    "kind": "other",
+    "first_seen": 1793374521.8041449,
+    "last_seen": 1793374522.0142586,
+    "cpu_secs": 1.48,
+    "max_rss_mb": 545.16796875
+  },
+  {
+    "pid": 3901796,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/17e1ed60353df23d/out/rustcqhYOWU/symbols.o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/17e1ed60353df23d/out/jr_engine.jr_engine.da2a022f475ac49b-cgu.00.rcgu.o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/17e1ed60353df23d/out/jr_engine.jr_engine.da2a022f475ac49b-cgu.01.rcgu.o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/bu",
+    "kind": "linker",
+    "first_seen": 1793374521.8041449,
+    "last_seen": 1793374522.0142586,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 3.09765625
+  }
+]

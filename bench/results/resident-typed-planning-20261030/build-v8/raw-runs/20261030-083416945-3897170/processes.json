@@ -1,0 +1,72 @@
+[
+  {
+    "pid": 3897203,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --release --locked -p blaze-metadata --test resident_typed_planning -j 6 -- typed_programs --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793374456.9612687,
+    "last_seen": 1793374458.0065024,
+    "cpu_secs": 0.2,
+    "max_rss_mb": 112.12890625
+  },
+  {
+    "pid": 3897215,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name resident_typed_planning --edition=2024 crates/blaze-metadata/tests/resident_typed_planning.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then",
+    "kind": "rustc",
+    "first_seen": 1793374457.1703875,
+    "last_seen": 1793374457.5885587,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.765625
+  },
+  {
+    "pid": 3897216,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name resident_typed_planning --edition=2024 crates/blaze-metadata/tests/resident_typed_planning.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref -",
+    "kind": "rustc",
+    "first_seen": 1793374457.1703875,
+    "last_seen": 1793374457.5885587,
+    "cpu_secs": 0.57,
+    "max_rss_mb": 151.5234375
+  },
+  {
+    "pid": 3897230,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/cccTYcb0.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/blaze-metadata/eb33a4bcddba12b3/out/resident_typed_planning-eb33a4bcdd",
+    "kind": "other",
+    "first_seen": 1793374457.5885587,
+    "last_seen": 1793374457.5885587,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 64.5703125
+  },
+  {
+    "pid": 3897228,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/blaze-metadata/eb33a4bcddba12b3/out/rustcuM7M7M/symbols.o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/blaze-metadata/eb33a4bcddba12b3/out/resident_typed_planning-eb33a4bcddba12b3.resident_typed_planning.b3c90ee56b132c43-cgu.0.rcgu.o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/blaze-metadata/eb33a4bcddba12b3/out/resident_typed_planning-eb33a4bcddba12b3.resident_typed_planning.b3c90ee56b1",
+    "kind": "linker",
+    "first_seen": 1793374457.5885587,
+    "last_seen": 1793374457.5885587,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.91015625
+  },
+  {
+    "pid": 3897229,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/cccTYcb0.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/blaze-metadata/eb33a4bcddba12b3/out/resident_typed_planning-eb33a4bcddba12b3 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc",
+    "kind": "linker",
+    "first_seen": 1793374457.5885587,
+    "last_seen": 1793374457.5885587,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.28125
+  },
+  {
+    "pid": 3897273,
+    "comm": "resident_typed_",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/blaze-metadata/eb33a4bcddba12b3/out/resident_typed_planning-eb33a4bcddba12b3 -Z unstable-options --report-time typed_programs --nocapture",
+    "kind": "target-binary",
+    "first_seen": 1793374457.7975433,
+    "last_seen": 1793374457.7975433,
+    "cpu_secs": 0.14,
+    "max_rss_mb": 11.21484375
+  }
+]

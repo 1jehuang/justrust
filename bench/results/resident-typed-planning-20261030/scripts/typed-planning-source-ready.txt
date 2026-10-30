@@ -1,0 +1,19 @@
+SOURCE READY / FROZEN 2026-10-30T15:27:12Z
+Lane: resident-typed-planning (sunflower)
+Licensed Blaze-derived experimental native resident code, not cleanroom.
+Exact changed files:
+toolchain/resident/crates/blaze-metadata/src/lib.rs
+toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
+toolchain/resident/crates/blaze-metadata/tests/resident_typed_planning.rs
+docs/resident-typed-planning.md
+Intended native test filter: typed_programs
+Intended native integration test target: resident_typed_planning (package blaze-metadata)
+Root invocation from toolchain/resident: justrust test -p blaze-metadata --test resident_typed_planning -- typed_programs
+Also run whole existing metadata/resolver and resident CLI semantic gates, including actual status/diagnostic and old baseline/candidate JSON bytes.
+Source-only checks PASS: scoped rustfmt --check and git diff --check.
+No builds, native workloads, tests, or commits run by this lane. No speedup claimed. Root owns all acceptance and timings.
+SHA256:
+e6a3b87dab7a5b17f2e300e5e173608cd6985c45158a9203f8ba1574dc659e9f  toolchain/resident/crates/blaze-metadata/src/lib.rs
+8974812146961ff0ca9a70b1306eb8cf96d5b27c37871f1c239a8655843082dd  toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
+b77ea54971399acc1f9825c885738a611ca990c9deb6203448fce419dc1d0f6f  toolchain/resident/crates/blaze-metadata/tests/resident_typed_planning.rs
+768357bfcc365d3d0c82bfb7ad7df5caa56c99acca11b2a7283d340c0a4649b3  docs/resident-typed-planning.md

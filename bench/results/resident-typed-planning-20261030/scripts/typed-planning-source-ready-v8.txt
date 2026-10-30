@@ -1,0 +1,22 @@
+SOURCE READY / FROZEN v8 2026-10-30T15:32:28Z
+Lane: resident-typed-planning (sunflower)
+Licensed Blaze-derived experimental native resident code, not cleanroom.
+Exact overall changed files:
+toolchain/resident/crates/blaze-metadata/src/lib.rs
+toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
+toolchain/resident/crates/blaze-metadata/tests/resident_typed_planning.rs
+docs/resident-typed-planning.md
+v8 repair changes ONLY integration fixture and documentation, not production source. v7 logs preserved.
+Shared fixture now legal rlib+cdylib+staticlib, asserts linked order [Cdylib, Staticlib].
+New fifth differential test changes a valid manifest revision to rlib+dylib, asserts [Dylib], default dylib inclusion and library test/harness behavior.
+Original rejected rlib+cdylib+staticlib+dylib combination preserved as deliberate negative, comparing full old/typed error chains and independently asserting exact full error text/status convention.
+Intended native test filter: typed_programs (five integration tests)
+Intended native integration test target: resident_typed_planning (package blaze-metadata)
+Root invocation from toolchain/resident: justrust test -p blaze-metadata --test resident_typed_planning -- typed_programs
+Source-only checks PASS: scoped rustfmt --check and git diff --check.
+No builds/tests/native workloads/commits run by this lane. Root owns all native acceptance and performance. No speedup claimed.
+SHA256:
+e6a3b87dab7a5b17f2e300e5e173608cd6985c45158a9203f8ba1574dc659e9f  toolchain/resident/crates/blaze-metadata/src/lib.rs
+8974812146961ff0ca9a70b1306eb8cf96d5b27c37871f1c239a8655843082dd  toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
+6b57f050d8cbc2bcfac52da070cb32fa90a103413e0bdb4bd693868aced27a6b  toolchain/resident/crates/blaze-metadata/tests/resident_typed_planning.rs
+7ab60efbd0974a180a72f7a3da5c31f3ca689f50ff5d2a42dc712c43cc873fd8  docs/resident-typed-planning.md

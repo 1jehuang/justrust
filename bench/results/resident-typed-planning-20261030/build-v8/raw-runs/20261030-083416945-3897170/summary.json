@@ -1,0 +1,182 @@
+{
+  "id": "20261030-083416945-3897170",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "blaze-metadata",
+    "--test",
+    "resident_typed_planning",
+    "-j",
+    "6",
+    "--",
+    "typed_programs",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "23a1490cb84f",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793374456.956775,
+  "wall": 1.0638377666473389,
+  "exit": 0,
+  "cpu_secs": 1.547081,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 7,
+    "processes": 7,
+    "sample_span_secs": 1.0595855712890625,
+    "max_sample_gap_secs": 0.20915722846984863
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.18711566925048828,
+    "lock_wait": 0.0,
+    "compile": 0.5187487602233887,
+    "build_gaps": 0.0019207000732421875,
+    "test_run": 0.32820773124694824,
+    "tail": 0.027844905853271484
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 161,
+    "rustc_cpu_secs": 0.79,
+    "rustc_wall_sum": 0.5187487602233887,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "resident_typed_planning (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.18711566925048828,
+      "wall": 0.5187487602233887,
+      "wall_share": 0.5187487602233887,
+      "cpu": 0.786168,
+      "max_rss_mb": 224.5703125,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "resident_typed_planning-eb33a4bcddba12b3",
+        "start": 0.7266232967376709,
+        "wall": 0.32820773124694824,
+        "passed": 5,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 5,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.33,
+    "slowest": [
+      {
+        "name": "typed_programs_match_json_targets_features_and_package_selection",
+        "binary": "resident_typed_planning-eb33a4bcddba12b3",
+        "secs": 0.325,
+        "passed": true
+      },
+      {
+        "name": "typed_programs_match_resolver_configuration_platform_and_errors",
+        "binary": "resident_typed_planning-eb33a4bcddba12b3",
+        "secs": 0.016,
+        "passed": true
+      },
+      {
+        "name": "typed_programs_leave_metadata_json_bytes_unchanged",
+        "binary": "resident_typed_planning-eb33a4bcddba12b3",
+        "secs": 0.008,
+        "passed": true
+      },
+      {
+        "name": "typed_programs_match_distinct_legal_library_types_and_invalid_combination",
+        "binary": "resident_typed_planning-eb33a4bcddba12b3",
+        "secs": 0.008,
+        "passed": true
+      },
+      {
+        "name": "typed_programs_match_json_from_cold_and_after_manifest_edits",
+        "binary": "resident_typed_planning-eb33a4bcddba12b3",
+        "secs": 0.005,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.362,
+    "timed": 5
+  },
+  "resources": {
+    "avg_build_cores": 1.4542452322176824,
+    "peak_build_cores": 1.3387058245532444,
+    "peak_build_rss_mb": 329.7421875,
+    "peak_unit_rss_mb": 224.5703125,
+    "min_mem_available_mb": 52703,
+    "avg_other_cores": 2.945888929918704,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.009988,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.000133
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 47,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "blaze-metadata",
+      "reason": "the file `crates/blaze-metadata/tests/resident_typed_planning.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-083416945-3897170.scope",
+    "final_weight": 978,
+    "setup_secs": 0.010323222,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

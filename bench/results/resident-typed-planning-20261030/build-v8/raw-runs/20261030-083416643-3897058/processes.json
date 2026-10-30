@@ -1,0 +1,32 @@
+[
+  {
+    "pid": 3897138,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config term.progress.when=\"always\" --config term.progress.width=200 check --release --locked -p blaze-metadata --tests -j 6",
+    "kind": "cargo",
+    "first_seen": 1793374456.6656525,
+    "last_seen": 1793374456.874524,
+    "cpu_secs": 0.16,
+    "max_rss_mb": 111.74609375
+  },
+  {
+    "pid": 3897153,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name resident_typed_planning --edition=2024 crates/blaze-metadata/tests/resident_typed_planning.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,metadata -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_",
+    "kind": "rustc",
+    "first_seen": 1793374456.874524,
+    "last_seen": 1793374456.874524,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.66796875
+  },
+  {
+    "pid": 3897154,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name resident_typed_planning --edition=2024 crates/blaze-metadata/tests/resident_typed_planning.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,metadata -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asr",
+    "kind": "rustc",
+    "first_seen": 1793374456.874524,
+    "last_seen": 1793374456.874524,
+    "cpu_secs": 0.02,
+    "max_rss_mb": 153.21484375
+  }
+]

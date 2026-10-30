@@ -1,0 +1,61 @@
+{
+  "causal_savings_claim": false,
+  "decision": "REJECTED_NOT_PROMOTED",
+  "default_promotion": false,
+  "edited_rows": 10,
+  "floor_percent": 10,
+  "limitations": "Offline receipt consistency, not rerun or proof of causation. Compatibility-control proc macros. Noise unknown. One scoped workload, not comprehensive.",
+  "metadata_parity_cases": 6,
+  "native_tests": {
+    "existing_metadata_manifest": 49,
+    "typed": 5
+  },
+  "nested_elapsed_medians_us": {
+    "new": {
+      "client command": 105761,
+      "client metadata": 523,
+      "client planning": 20599
+    },
+    "old": {
+      "client command": 210462,
+      "client metadata": 529,
+      "client planning": 21160
+    }
+  },
+  "profile_rows": 12,
+  "recorder_ids": [
+    "20261030-082919308-3876051",
+    "20261030-082928590-3877656",
+    "20261030-083416643-3897058",
+    "20261030-083416945-3897170",
+    "20261030-083418031-3897292",
+    "20261030-083420086-3897618",
+    "20261030-083522278-3901841",
+    "20261030-083608236-3904995",
+    "20261030-083608501-3905044"
+  ],
+  "repeat_engine_raw_change_percent": 3.47969860937134,
+  "repeat_reference_normalized_change_percent": -0.8582831966974291,
+  "source_hashes": {
+    "baseline/toolchain/resident/crates/blaze-metadata/src/lib.rs": "af59a6616646759334113567cd8818d2066a111999d2878d16ea879811e48dd5",
+    "baseline/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs": "1c913b348bb893d478d9bba1ab21c80180fafa0aef104d116d31bf7e45d27b48",
+    "candidate/toolchain/resident/crates/blaze-metadata/src/lib.rs": "e6a3b87dab7a5b17f2e300e5e173608cd6985c45158a9203f8ba1574dc659e9f",
+    "candidate/toolchain/resident/crates/blaze-metadata/tests/resident_typed_planning.rs": "6b57f050d8cbc2bcfac52da070cb32fa90a103413e0bdb4bd693868aced27a6b",
+    "candidate/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs": "8974812146961ff0ca9a70b1306eb8cf96d5b27c37871f1c239a8655843082dd"
+  },
+  "status": "PASS",
+  "suites_seconds": {
+    "rsa01": {
+      "engine": 0.10961705099907704,
+      "reference": 0.1109231570007978
+    },
+    "rsa04": {
+      "engine": 0.10225796500162687,
+      "reference": 0.11854641500394791
+    },
+    "rsa05": {
+      "engine": 0.1134313939983258,
+      "reference": 0.1157766399992397
+    }
+  }
+}

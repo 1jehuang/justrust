@@ -1,0 +1,3 @@
+# Preserve exact raw patch context and captured libtest output whitespace.
+candidate.patch -whitespace
+*.stdout -whitespace

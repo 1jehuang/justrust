@@ -1,0 +1,37 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: check succeeded, tests not run in 9.2s
+  time    startup 0.17s | compile 9.03s | gaps 0.02s | after 0.03s
+  units   146 compiled (9 local, 137 deps, 0 build scripts), 18 fresh
+          blaze_registry                     0.97s  cpu   1.0s    327 MB
+          tokio                              0.59s  cpu   3.4s    486 MB
+          blaze_manifest                     0.56s  cpu   1.5s    306 MB
+          hyper_util                         0.42s  cpu   0.5s    250 MB
+  cpu     40.7s total, avg 4.4/peak 5.9 of 16 cores; others used 4.6 cores
+  memory  peak 1899 MB build, 486 MB largest rustc, 50.5 GB free; stalls cpu 0.09s mem 0.00s io 0.01s
+  output  3 warnings shown, 44 hidden; 309 progress and 0 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  3.0s  rebuilt 137 registry dependencies and 0 build scripts (3.0s)
+  more    `justrust log 20261030-082919308-3876051` full output, `justrust show 20261030-082919308-3876051` full profile

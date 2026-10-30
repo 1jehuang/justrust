@@ -1,0 +1,138 @@
+{
+  "id": "20261030-083608501-3905044",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6",
+    "--",
+    "telemetry",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "23a1490cb84f",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793374568.5171506,
+  "wall": 0.24927496910095215,
+  "exit": 0,
+  "cpu_secs": 0.475502,
+  "measurement_coverage": {
+    "samples": 3,
+    "processes": 1,
+    "sample_span_secs": 0.24858403205871582,
+    "max_sample_gap_secs": 0.21038246154785156
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.23476648330688477,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 0.006727457046508789,
+    "tail": 0.007781028747558594
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 429,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "jr_engine-93ff5023e9192f9b",
+        "start": 0.23476648330688477,
+        "wall": 0.006727457046508789,
+        "passed": 3,
+        "failed": 0,
+        "filtered_out": 343
+      }
+    ],
+    "passed": 3,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 343,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "cargo::cli::tests::telemetry_does_not_select_a_build_or_worker",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cargo::telemetry_tests::both_telemetry_spellings_are_client_only",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cargo::telemetry_tests::disabled_phase_needs_no_clock_or_span",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 3
+  },
+  "resources": {
+    "avg_build_cores": 1.9075401020606675,
+    "peak_build_cores": 1.093247024052366,
+    "peak_build_rss_mb": 112.46875,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 52857,
+    "avg_other_cores": 3.4675357800092153,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.0019199999999999998,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.0
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 254,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-083608501-3905044.scope",
+    "final_weight": 1000,
+    "setup_secs": 0.014857226,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

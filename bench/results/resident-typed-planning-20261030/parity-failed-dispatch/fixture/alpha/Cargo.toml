@@ -1,0 +1,13 @@
+[package]
+name='alpha'
+version='0.1.0'
+edition='2021'
+[dependencies]
+beta={path='../beta'}
+[features]
+default=['enabled']
+enabled=[]
+[[bin]]
+name='feature-bin'
+path='src/main.rs'
+required-features=['enabled']

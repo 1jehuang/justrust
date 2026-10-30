@@ -1,0 +1,33 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: 5 tests passed in 1.1s
+  time    startup 0.19s | compile 0.52s | tests 0.33s | after 0.03s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 161 fresh. Rebuilt because: edited crates/blaze-metadata/tests/resident_typed_planning.rs (blaze-metadata)
+          resident_typed_planning (test)     0.52s  cpu   0.8s    225 MB
+  tests   5 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 0.33s
+  cpu     1.5s total, avg 1.5/peak 1.3 of 16 cores; others used 2.9 cores
+  memory  peak 330 MB build, 225 MB largest rustc, 51.5 GB free; stalls cpu 0.01s mem 0.00s io 0.00s
+  output  3 warnings shown, 44 hidden; 168 progress and 5 passing-test lines hidden
+  waste   none detected
+  more    `justrust log 20261030-083416945-3897170` full output, `justrust show 20261030-083416945-3897170` full profile

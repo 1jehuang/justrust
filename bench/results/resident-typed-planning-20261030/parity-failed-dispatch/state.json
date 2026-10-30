@@ -1,0 +1,117 @@
+{
+  "scope": "native-old-new-identical-metadata-bytes-not-speedup",
+  "rows": [
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "metadata",
+        "--format-version",
+        "1"
+      ],
+      "status": 1,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.0032014750031521544,
+      "noise": {
+        "before": {
+          "busy_seconds": 386740.92,
+          "loadavg": [
+            14.64404296875,
+            8.234375,
+            6.6357421875
+          ]
+        },
+        "after": {
+          "busy_seconds": 386740.95,
+          "loadavg": [
+            14.64404296875,
+            8.234375,
+            6.6357421875
+          ]
+        },
+        "child_cpu_seconds": 0.002832,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.027168000027939676
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa04/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa04/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa04/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/typed-planning-metadata-parity-v8-20261030/shared-target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa04/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa04/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa04/engine/rustup-home"
+      },
+      "case": "full",
+      "variant": "old",
+      "tool_sha256": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8"
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v8-bin/jr-engine",
+        "metadata",
+        "--format-version",
+        "1"
+      ],
+      "status": 1,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.0032611229980830103,
+      "noise": {
+        "before": {
+          "busy_seconds": 386741.16,
+          "loadavg": [
+            14.64404296875,
+            8.234375,
+            6.6357421875
+          ]
+        },
+        "after": {
+          "busy_seconds": 386741.19,
+          "loadavg": [
+            14.64404296875,
+            8.234375,
+            6.6357421875
+          ]
+        },
+        "child_cpu_seconds": 0.002962,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.027038000027939678
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa04/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa04/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa04/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/typed-planning-metadata-parity-v8-20261030/shared-target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa04/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa04/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa04/engine/rustup-home"
+      },
+      "case": "full",
+      "variant": "new",
+      "tool_sha256": "e483c2e6c1675786e1c293266bcf1ccc7d1f9219f1b8070e917d7728c10cb9f5"
+    }
+  ],
+  "status": "failed",
+  "error": "ValueError('full: unexpected failure')"
+}

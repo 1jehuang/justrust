@@ -1,0 +1,2 @@
+error: invalid value '999' for '--format-version <VERSION>'
+  [possible values: 1]

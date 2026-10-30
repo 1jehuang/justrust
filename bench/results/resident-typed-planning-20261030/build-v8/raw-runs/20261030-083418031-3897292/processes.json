@@ -1,0 +1,72 @@
+[
+  {
+    "pid": 3897327,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --release --locked -p blaze-metadata -p blaze-resolve -p blaze-manifest --lib -j 6",
+    "kind": "cargo",
+    "first_seen": 1793374458.0457122,
+    "last_seen": 1793374459.9136524,
+    "cpu_secs": 0.12,
+    "max_rss_mb": 111.8125
+  },
+  {
+    "pid": 3897340,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_resolve --edition=2024 crates/blaze-resolve/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asr",
+    "kind": "rustc",
+    "first_seen": 1793374458.2522693,
+    "last_seen": 1793374459.9136524,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.7734375
+  },
+  {
+    "pid": 3897337,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_manifest --edition=2024 crates/blaze-manifest/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_a",
+    "kind": "rustc",
+    "first_seen": 1793374458.2522693,
+    "last_seen": 1793374458.8727949,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.65234375
+  },
+  {
+    "pid": 3897338,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v8/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_metadata --edition=2024 crates/blaze-metadata/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_a",
+    "kind": "rustc",
+    "first_seen": 1793374458.2522693,
+    "last_seen": 1793374458.4594655,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.69921875
+  },
+  {
+    "pid": 3897342,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name blaze_metadata --edition=2024 crates/blaze-metadata/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=unused_lifetimes --warn=u",
+    "kind": "rustc",
+    "first_seen": 1793374458.2522693,
+    "last_seen": 1793374458.4594655,
+    "cpu_secs": 0.29,
+    "max_rss_mb": 256.91015625
+  },
+  {
+    "pid": 3897344,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name blaze_resolve --edition=2024 crates/blaze-resolve/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=unused_lifetimes --warn=unu",
+    "kind": "rustc",
+    "first_seen": 1793374458.2522693,
+    "last_seen": 1793374459.9136524,
+    "cpu_secs": 4.61,
+    "max_rss_mb": 412.765625
+  },
+  {
+    "pid": 3897339,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name blaze_manifest --edition=2024 crates/blaze-manifest/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=unused_lifetimes --warn=u",
+    "kind": "rustc",
+    "first_seen": 1793374458.2522693,
+    "last_seen": 1793374458.8727949,
+    "cpu_secs": 0.7,
+    "max_rss_mb": 315.04296875
+  }
+]

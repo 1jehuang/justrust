@@ -1,0 +1,59 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+thread 'typed_programs_leave_metadata_json_bytes_unchanged' (3878099) panicked at crates/blaze-metadata/tests/resident_typed_planning.rs:70:71:
+called `Result::unwrap()` on an `Err` value: failed to load manifest for workspace member `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-0/zeta`
+referenced by workspace at `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-0/Cargo.toml`
+thread 'typed_programs_match_json_from_cold_and_after_manifest_edits' (3878100) panicked at crates/blaze-metadata/tests/resident_typed_planning.rs:226:5:
+assertion failed: typed.is_ok()
+test typed_programs_match_json_from_cold_and_after_manifest_edits ... FAILED <0.002s>
+test typed_programs_leave_metadata_json_bytes_unchanged ... FAILED <0.002s>
+thread 'typed_programs_match_resolver_configuration_platform_and_errors' (3878102) panicked at crates/blaze-metadata/tests/resident_typed_planning.rs:265:20:
+called `Result::unwrap()` on an `Err` value: (101, "failed to load manifest for workspace member `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-1/zeta`\nreferenced by workspace at `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-1/Cargo.toml`: failed to parse manifest at `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-1/zeta/Cargo.toml`: library `zeta` cannot set the crate type of both `dylib` and `cdylib`")
+test typed_programs_match_resolver_configuration_platform_and_errors ... FAILED <0.003s>
+thread 'typed_programs_match_json_targets_features_and_package_selection' (3878101) panicked at crates/blaze-metadata/tests/resident_typed_planning.rs:205:89:
+called `Result::unwrap()` on an `Err` value: (101, "failed to load manifest for workspace member `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-3/zeta`\nreferenced by workspace at `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-3/Cargo.toml`: failed to parse manifest at `/home/jeremy/.jcode/scratch/resident-typed-planning-3878098-3/zeta/Cargo.toml`: library `zeta` cannot set the crate type of both `dylib` and `cdylib`")
+test typed_programs_match_json_targets_features_and_package_selection ... FAILED <0.115s>
+
+failures:
+
+failures:
+    typed_programs_leave_metadata_json_bytes_unchanged
+    typed_programs_match_json_from_cold_and_after_manifest_edits
+    typed_programs_match_json_targets_features_and_package_selection
+    typed_programs_match_resolver_configuration_platform_and_errors
+
+test result: FAILED. 0 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+error: test failed, to rerun pass `-p blaze-metadata --test resident_typed_planning`
+
+justrust: FAILED: 4 of 4 tests failed in 5.7s
+  time    startup 0.20s | compile 5.33s | gaps 0.05s | tests 0.12s | after 0.02s
+  units   2 compiled (2 local, 0 deps, 0 build scripts), 161 fresh. Rebuilt because: edited crates/blaze-metadata/src/lib.rs (blaze-metadata)
+          blaze_metadata                     4.93s  cpu  22.0s    513 MB
+          resident_typed_planning (test)     0.40s  cpu   0.7s    223 MB
+  tests   0 passed, 4 failed, 0 ignored, 0 filtered out, 1 binary in 0.12s
+  cpu     23.2s total, avg 4.1/peak 6.0 of 16 cores; others used 3.3 cores
+  memory  peak 628 MB build, 513 MB largest rustc, 51.1 GB free; stalls cpu 0.06s mem 0.00s io 0.00s
+  output  3 warnings shown, 44 hidden; 169 progress and 0 passing-test lines hidden
+  waste   none detected
+  more    `justrust log 20261030-082928590-3877656` full output, `justrust show 20261030-082928590-3877656` full profile
