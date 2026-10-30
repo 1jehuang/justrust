@@ -157,6 +157,15 @@ Hosted validation of the final producer and public executable:
   runs record native checksums. Environment absence-to-value and value-to-absence
   transitions also invalidate, with no plaintext value in receipts. This is
   ordinary ordered-edit acceptance, not a concurrent compiler-read proof.
+- Complete native Cargo library suite from `toolchain/cargo`: 238 tests passed,
+  `20261029-224344766-3558116`. Public receipt-test Clippy also passed,
+  `20261029-224353297-3558115`, with the ten inherited warnings.
+  The earlier root-directory `--manifest-path` invocation
+  `20261029-224314633-3554934` had 236 passes and two missing-source-path
+  failures in `diagnostics::rules::tests::ensure_updated_lints` and
+  `ensure_updated_lint_groups`. Rebuilding/running from the native package
+  directory changed `CARGO_RUSTC_CURRENT_DIR` and passed all 238. No assertion
+  or fixture was weakened to obtain the pass.
 - Direct collector rejection test: `20261029-223703501-3515493`, validating
   SHA-256 acceptance, wrong-length denial, and equal-length changed-content
   denial. This unit test supplements, not replaces, the six actual CLI tests.
