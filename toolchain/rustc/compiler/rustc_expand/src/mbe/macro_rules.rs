@@ -466,15 +466,18 @@ fn expand_macro<'cx, 'a: 'cx>(
         })
     });
 
-    // Literal-only rules cannot invoke the Rust fragment parser, emit matcher
-    // diagnostics, or register gated spans. All other rules use the original
-    // path, including mixed rule sets where an earlier arm might have effects.
+    // Every arm is audited: only literal or TT matching, and transcription
+    // without metavar-span side-table writes. Mixed fragment rule sets fall back.
     if cache_eligible && let Some(definition) = cache_definition {
         let id = cx.current_expansion.id;
         let compute = || {
-            let Ok((index, MacroRule::Func { rhs, .. }, matches)) =
-                try_match_macro(psess, &arg, rules, &mut NoopTracker)
-            else {
+            // TT parsing cannot add gates. Isolate the existing gates because
+            // try_match_macro's ambiguity exit does not restore its snapshot.
+            // A speculative failure must leave the original path's state intact.
+            let gates = mem::take(&mut *psess.gated_spans.spans.borrow_mut());
+            let matched = try_match_macro(psess, &arg, rules, &mut NoopTracker);
+            *psess.gated_spans.spans.borrow_mut() = gates;
+            let Ok((index, MacroRule::Func { rhs, .. }, matches)) = matched else {
                 return None;
             };
             let mbe::TokenTree::Delimited(span, _, rhs) = rhs else { return None };
@@ -1016,12 +1019,7 @@ pub fn compile_declarative_macro(
         && !sess.opts.unstable_opts.incremental_ignore_spans
         && rules.iter().all(|rule| match rule {
             MacroRule::Func { lhs, rhs, .. } => {
-                lhs.iter().all(|loc| {
-                    matches!(
-                        loc,
-                        MatcherLoc::Token { .. } | MatcherLoc::Delimited | MatcherLoc::Eof
-                    )
-                }) && literal_transcriber(rhs)
+                cacheable_matcher(lhs) && cacheable_transcriber(rhs, lhs)
             }
             _ => false,
         }))
@@ -1043,11 +1041,157 @@ pub fn compile_declarative_macro(
     mk_syn_ext(SyntaxExtensionKind::MacroRules(Arc::new(exp)))
 }
 
-fn literal_transcriber(tree: &mbe::TokenTree) -> bool {
+fn cacheable_matcher(lhs: &[MatcherLoc]) -> bool {
+    lhs.iter().all(|loc| match loc {
+        MatcherLoc::MetaVarDecl { kind, .. } => *kind == NonterminalKind::TT,
+        MatcherLoc::Token { .. }
+        | MatcherLoc::Delimited
+        | MatcherLoc::Eof
+        | MatcherLoc::Sequence { .. }
+        | MatcherLoc::SequenceKleeneOpNoSep { .. }
+        | MatcherLoc::SequenceSep { .. }
+        | MatcherLoc::SequenceKleeneOpAfterSep { .. } => true,
+    })
+}
+
+/// Keep this synchronized with `transcribe::maybe_use_metavar_location`.
+/// General TT substitution writes a global span table, and its output can depend
+/// on collisions in that table. Only its undelimited-sequence early return is
+/// side-effect free. Do not generalize this to standalone or separated variables.
+fn cacheable_transcriber(tree: &mbe::TokenTree, lhs: &[MatcherLoc]) -> bool {
     match tree {
         mbe::TokenTree::Token(_) => true,
-        mbe::TokenTree::Delimited(_, _, inner) => inner.tts.iter().all(literal_transcriber),
+        mbe::TokenTree::Delimited(_, _, inner) => {
+            inner.tts.iter().all(|tt| cacheable_transcriber(tt, lhs))
+        }
+        mbe::TokenTree::Sequence(_, seq) => {
+            seq.separator.is_none()
+                && matches!(seq.kleene.op, KleeneOp::ZeroOrMore | KleeneOp::OneOrMore)
+                && matches!(&seq.tts[..], [mbe::TokenTree::MetaVar(_, ident)] if lhs.iter().any(|loc| {
+                    matches!(loc, MatcherLoc::MetaVarDecl { bind, kind: NonterminalKind::TT, .. }
+                        if rustc_span::MacroRulesNormalizedIdent::new(*bind)
+                            == rustc_span::MacroRulesNormalizedIdent::new(*ident))
+                }))
+        }
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod declarative_cache_tests {
+    use super::*;
+    use rustc_span::{DUMMY_SP, create_default_session_globals_then};
+
+    fn declaration(name: &str, kind: NonterminalKind) -> MatcherLoc {
+        MatcherLoc::MetaVarDecl {
+            span: DUMMY_SP,
+            bind: Ident::from_str(name),
+            kind,
+            next_metavar: 0,
+            seq_depth: 1,
+        }
+    }
+
+    fn variable(name: &str) -> mbe::TokenTree {
+        mbe::TokenTree::MetaVar(DUMMY_SP, Ident::from_str(name))
+    }
+
+    fn repetition(
+        tts: Vec<mbe::TokenTree>,
+        separator: Option<Token>,
+        op: KleeneOp,
+    ) -> mbe::TokenTree {
+        mbe::TokenTree::Sequence(
+            DelimSpan::dummy(),
+            SequenceRepetition {
+                tts,
+                separator,
+                kleene: mbe::KleeneToken::new(op, DUMMY_SP),
+                num_captures: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn only_tt_fragments_are_admitted() {
+        create_default_session_globals_then(|| {
+            assert!(cacheable_matcher(&[declaration("t", NonterminalKind::TT)]));
+            for fragment in [
+                "item",
+                "block",
+                "stmt",
+                "pat",
+                "pat_param",
+                "expr",
+                "expr_2021",
+                "ty",
+                "ident",
+                "lifetime",
+                "literal",
+                "meta",
+                "path",
+                "vis",
+                "guard",
+            ] {
+                let kind =
+                    NonterminalKind::from_symbol(Symbol::intern(fragment), || Edition::Edition2024)
+                        .unwrap();
+                assert!(
+                    !cacheable_matcher(&[
+                        declaration("t", NonterminalKind::TT),
+                        declaration("other", kind),
+                    ]),
+                    "{fragment}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn only_raw_singleton_undelimited_references_are_admitted() {
+        create_default_session_globals_then(|| {
+            let lhs = [declaration("t", NonterminalKind::TT)];
+            // Lexical shapes: $($t)* and $($t)+. These hit the transcriber's
+            // early return before marking or recording a metavariable span.
+            for op in [KleeneOp::ZeroOrMore, KleeneOp::OneOrMore] {
+                assert!(cacheable_transcriber(&repetition(vec![variable("t")], None, op), &lhs,));
+            }
+            // $t, $($t)?, $($t),*, $(prefix $t)*, $($unknown)*, and nested
+            // repetitions are deliberately not part of the side-effect audit.
+            assert!(!cacheable_transcriber(&variable("t"), &lhs));
+            assert!(!cacheable_transcriber(
+                &repetition(vec![variable("t")], None, KleeneOp::ZeroOrOne),
+                &lhs,
+            ));
+            assert!(!cacheable_transcriber(
+                &repetition(
+                    vec![variable("t")],
+                    Some(Token::new(token::Comma, DUMMY_SP)),
+                    KleeneOp::ZeroOrMore
+                ),
+                &lhs,
+            ));
+            assert!(!cacheable_transcriber(
+                &repetition(
+                    vec![mbe::TokenTree::Token(Token::new(token::Plus, DUMMY_SP)), variable("t")],
+                    None,
+                    KleeneOp::ZeroOrMore
+                ),
+                &lhs,
+            ));
+            assert!(!cacheable_transcriber(
+                &repetition(vec![variable("unknown")], None, KleeneOp::ZeroOrMore),
+                &lhs,
+            ));
+            assert!(!cacheable_transcriber(
+                &repetition(
+                    vec![repetition(vec![variable("t")], None, KleeneOp::ZeroOrMore)],
+                    None,
+                    KleeneOp::ZeroOrMore
+                ),
+                &lhs,
+            ));
+        });
     }
 }
 

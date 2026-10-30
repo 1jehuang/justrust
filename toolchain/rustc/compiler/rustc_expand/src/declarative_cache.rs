@@ -1,8 +1,9 @@
 //! Native, deliberately bounded declarative match/transcribe cache boundary.
 //!
-//! No proc macro is ever executed here. Callers admit only literal matchers and
-//! literal transcribers, with no parser fragments or interpolation. Parsing the
-//! result and recording rule usage remain outside the cached operation.
+//! No proc macro is ever executed here. Callers admit literal and audited `tt`
+//! matchers, with only literal or raw singleton undelimited-repetition output.
+//! General metavariable transcription has span-table effects and is rejected.
+//! Parsing the result and recording rule usage remain outside the cached operation.
 
 use rustc_ast::token::{Delimiter, TokenKind};
 use rustc_ast::tokenstream::{TokenStream, TokenTree};
