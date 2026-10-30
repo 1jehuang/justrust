@@ -50,6 +50,8 @@ pub struct BuildRunner<'a, 'gctx> {
     pub build_explicit_deps: HashMap<Unit, BuildDeps>,
     /// Fingerprints used to detect if a unit is out-of-date.
     pub fingerprints: HashMap<Unit, Arc<Fingerprint>>,
+    /// Opt-in unit input prerequisite capture, never command replay authority.
+    pub freshness_receipt: Option<super::fingerprint::jr_freshness_receipt::Handle>,
     /// Cache of file mtimes to reduce filesystem hits.
     pub mtime_cache: HashMap<PathBuf, FileTime>,
     /// Cache of file checksums to reduce filesystem reads.
@@ -121,6 +123,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
             compilation: Compilation::new(bcx)?,
             build_script_outputs: Arc::new(Mutex::new(BuildScriptOutputs::default())),
             fingerprints: HashMap::default(),
+            freshness_receipt: super::fingerprint::jr_freshness_receipt::Capture::new(bcx),
             mtime_cache: HashMap::default(),
             checksum_cache: HashMap::default(),
             compiled: HashSet::default(),
@@ -167,6 +170,7 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
     /// [`ops::cargo_compile`]: crate::ops::cargo_compile
     #[tracing::instrument(skip_all)]
     pub fn compile(self, exec: &Arc<dyn Executor>) -> CargoResult<Compilation<'gctx>> {
+        let freshness_receipt = self.freshness_receipt.clone();
         let mut owner = super::job_queue::jr_execution_graph::owner::Owner::from_env(self.bcx.gctx);
         // Declaration is durable before child construction. Keep the owner outside
         // the fallible body so every normal return, including errors, is sealed.
@@ -175,6 +179,10 @@ impl<'a, 'gctx> BuildRunner<'a, 'gctx> {
         let result = self.compile_owned(exec, queue, &mut owner);
         compiler_registry.finish(result.is_ok());
         owner.finish(result.is_ok());
+        super::fingerprint::jr_freshness_receipt::Capture::finish(
+            &freshness_receipt,
+            result.is_ok(),
+        );
         result
     }
 

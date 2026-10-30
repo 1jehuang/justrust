@@ -379,6 +379,7 @@
 mod dep_info;
 mod dirty_reason;
 pub mod jr_cutoff;
+pub mod jr_freshness_receipt;
 mod rustdoc;
 
 use crate::util::data_structures::HashMap;
@@ -479,6 +480,14 @@ pub fn prepare_target(
         FingerprintComparison::Fresh => None,
         FingerprintComparison::Dirty { reason } => Some(reason),
     };
+
+    jr_freshness_receipt::observe(
+        build_runner,
+        unit,
+        &fingerprint,
+        &loc,
+        dirty_reason.is_none(),
+    );
 
     if let Some(logger) = bcx.logger {
         let index = bcx.unit_to_index[unit];
