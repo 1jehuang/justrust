@@ -1878,6 +1878,7 @@ impl<'s> Checker<'s> {
             }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
+            | InferKind::Projection(_, _, fields)
             | InferKind::Opaque(_, fields) => {
                 for field in fields.iter() {
                     self.check_slot_free_evidence(field, depth + 1)?;

@@ -2,6 +2,12 @@
 //! unrelated unresolved slot never supplies fabricated normalization evidence.
 use super::*;
 
+pub(super) enum ProjectedConstraintProgress {
+    Complete,
+    Pending,
+    Conflict(FactsError),
+}
+
 impl Inference<'_, '_> {
     pub(super) fn projected_schema(
         &self,
@@ -21,6 +27,47 @@ impl Inference<'_, '_> {
     ) -> Result<Option<InferTerm>, String> {
         self.checker.infer_work(depth)?;
         let kind = match term.as_ref() {
+            InferKind::Projection(declaration, item, children) => {
+                self.checker.infer_storage(children.len())?;
+                let mut actuals = Vec::new();
+                for child in children.iter() {
+                    let Some(child) =
+                        self.normalize_schema_projections(child, depth + 1, defaults)?
+                    else {
+                        return Ok(None);
+                    };
+                    let Some(actual) =
+                        self.resolve_projection_input(&child, depth + 1, defaults)?
+                    else {
+                        // Only independently constrained input slots may close
+                        // a projection. Its expected output never supplies them.
+                        return Ok(None);
+                    };
+                    actuals.push(actual);
+                }
+                let mut actuals = actuals.into_iter();
+                let receiver = actuals.next().ok_or("projection inference lost receiver")?;
+                let raw = ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+                    trait_ref: ir::TraitRef {
+                        declaration: *declaration,
+                        self_ty: receiver,
+                        args: actuals.collect(),
+                    },
+                    item: *item,
+                }));
+                let plan = self.checker.signatures.plan()?;
+                let caller = self.checker.facts();
+                let facts = caller.validated().ok_or(
+                    "unsupported: projected call inference requires validated caller facts",
+                )?;
+                let normal = facts
+                    .normalize_substituted_projection_type(&raw, &plan.budget)
+                    .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
+                return self
+                    .checker
+                    .infer_type_term(&normal, None, depth + 1)
+                    .map(Some);
+            }
             InferKind::Rigid(ir::Ty::AssociatedType(projection)) => {
                 let Some(receiver) =
                     self.projected_schema(&projection.trait_ref.self_ty, depth + 1, defaults)?
@@ -137,6 +184,13 @@ impl Inference<'_, '_> {
         }
         let map = |child: &InferTerm| self.resolve_projection_input(child, depth + 1, defaults);
         let ty = match term.as_ref() {
+            InferKind::Projection(..) => {
+                let Some(normal) = self.normalize_schema_projections(term, depth + 1, defaults)?
+                else {
+                    return Ok(None);
+                };
+                return self.resolve(&normal, defaults, depth + 1);
+            }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
             | InferKind::Opaque(_, fields) => {
@@ -226,6 +280,21 @@ impl Inference<'_, '_> {
         constraints: Vec<(InferTerm, InferTerm)>,
         fallback: bool,
     ) -> Result<bool, String> {
+        match self.constrain_projected_terms_progress(constraints, fallback)? {
+            ProjectedConstraintProgress::Complete => Ok(true),
+            ProjectedConstraintProgress::Pending => Ok(false),
+            ProjectedConstraintProgress::Conflict(error) => {
+                let plan = self.checker.signatures.plan()?;
+                Err(error.into_legacy_diagnostic(&plan.budget))
+            }
+        }
+    }
+
+    pub(super) fn constrain_projected_terms_progress(
+        &mut self,
+        constraints: Vec<(InferTerm, InferTerm)>,
+        fallback: bool,
+    ) -> Result<ProjectedConstraintProgress, String> {
         let mut pending = Vec::new();
         for (formal, actual) in constraints {
             self.split_projected_constraint(formal, actual, &mut pending, 0)?;
@@ -236,7 +305,16 @@ impl Inference<'_, '_> {
             let mut deferred = Vec::new();
             for (formal, actual) in pending {
                 if let Some(formal) = self.normalize_schema_projections(&formal, 0, defaults)? {
-                    self.constrain(&formal, &actual, 0)?;
+                    // Only a type-equation conflict is a candidate mismatch.
+                    // Proof/metadata admission errors above and resource
+                    // failures here retain their diagnostic category.
+                    if let Err(error) = self.core.constrain(&formal, &actual, 0) {
+                        let plan = self.checker.signatures.plan()?;
+                        if error.kind() == tr::FactsErrorKind::InvalidMetadata {
+                            return Ok(ProjectedConstraintProgress::Conflict(error));
+                        }
+                        return Err(error.into_legacy_diagnostic(&plan.budget));
+                    }
                 } else {
                     deferred.push((formal, actual));
                 }
@@ -247,12 +325,12 @@ impl Inference<'_, '_> {
                     // and currently closed projected constraint has settled.
                     defaults = true;
                 } else {
-                    return Ok(false);
+                    return Ok(ProjectedConstraintProgress::Pending);
                 }
             }
             pending = deferred;
         }
-        Ok(true)
+        Ok(ProjectedConstraintProgress::Complete)
     }
 
     // A projected child must not block an independent sibling from binding the

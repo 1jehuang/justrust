@@ -6953,6 +6953,7 @@ fn replay_shared_local_inputs(
             .intern_nominal(decl, args, ir::FactsCtx::Validated(facts), budget)
             .map_err(|e| source_error(budget, &e))
     })?;
+    let result = facts.normalize_substituted_projection_type(&result, budget)?;
     if !sr::replay_types_equal(&result, &canonical_signature.result, budget)?
         || !replay_type_equal(&checked.exprs[call_id.0].ty, &signature.result, budget)?
     {

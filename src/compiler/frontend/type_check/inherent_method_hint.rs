@@ -88,6 +88,8 @@ impl Checker<'_> {
                 solver.constrain(&formal, &actual, 0)?;
             }
         }
+        self.infer_storage(formals.len() + usize::from(expected.is_some()))?;
+        let mut constraints = Vec::new();
         if let Some(expected) = expected {
             let formal = self.method_owner_term(
                 &solver.schema(&schema.signature.result, 0)?,
@@ -95,7 +97,7 @@ impl Checker<'_> {
                 0,
             )?;
             let actual = self.infer_type_term(expected, None, 0)?;
-            solver.constrain(&formal, &actual, 0)?;
+            constraints.push((formal, actual));
         }
         for (formal, expr) in formals.iter().zip(args) {
             // Arguments that do not mention a method parameter carry no
@@ -112,9 +114,17 @@ impl Checker<'_> {
             else {
                 return Ok(InherentMethodInference::Applicable(None));
             };
-            if solver.constrain(&formal, &evidence, 0).is_err() {
-                return Ok(InherentMethodInference::Applicable(None));
-            }
+            constraints.push((formal, evidence));
+        }
+        // Projection families are not injective. The expected result is an
+        // equality to prove after input constraints close its arguments, never
+        // a source of invented method actuals. Reuse the shared pending queue.
+        self.infer_storage(constraints.len())?;
+        if matches!(
+            solver.constrain_projected_terms_progress(constraints.clone(), false)?,
+            super::projected_formals::ProjectedConstraintProgress::Conflict(_)
+        ) {
+            return Ok(InherentMethodInference::Applicable(None));
         }
         // The closure argument can determine a method parameter that occurs
         // only in its callable Output equality, e.g. Result::map_err's G.
@@ -167,8 +177,14 @@ impl Checker<'_> {
                 )?;
             }
         }
-        Ok(InherentMethodInference::Applicable(
-            solver.finish(true).ok().flatten(),
-        ))
+        // Output equalities may have supplied previously absent method slots.
+        // Revisit the pending equations only now, with numeric fallback last.
+        if !matches!(
+            solver.constrain_projected_terms_progress(constraints, true)?,
+            super::projected_formals::ProjectedConstraintProgress::Complete
+        ) {
+            return Ok(InherentMethodInference::Applicable(None));
+        }
+        Ok(InherentMethodInference::Applicable(solver.finish(true)?))
     }
 }

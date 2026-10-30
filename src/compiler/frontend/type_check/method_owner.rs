@@ -61,6 +61,18 @@ impl Checker<'_> {
                         .into(),
                 )
             }
+            InferKind::Projection(declaration, item, children) => {
+                self.infer_storage(children.len())?;
+                InferKind::Projection(
+                    *declaration,
+                    *item,
+                    children
+                        .iter()
+                        .map(|child| self.method_owner_term(child, bindings, depth + 1))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                )
+            }
             InferKind::Ref(kind, referent) => InferKind::Ref(
                 *kind,
                 self.method_owner_term(referent, bindings, depth + 1)?,

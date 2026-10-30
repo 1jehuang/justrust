@@ -21,6 +21,7 @@ pub(super) enum InferKind {
     RawPtr(ir::BorrowKind, InferTerm),
     Nominal(ir::DeclId, Arc<[InferTerm]>),
     Opaque(Arc<ir::OpaqueTy>, Arc<[InferTerm]>),
+    Projection(ir::DeclId, ir::DeclId, Arc<[InferTerm]>),
 }
 
 pub(super) struct CallInferenceState {
@@ -62,6 +63,33 @@ impl CallInferenceState {
         self.work(depth)?;
         Ok(match term.as_ref() {
             InferKind::Rigid(ty) => Some(ty.clone()),
+            InferKind::Projection(declaration, item, terms) => {
+                self.storage(terms.len())?;
+                let mut actuals = Vec::new();
+                actuals.try_reserve_exact(terms.len()).map_err(|_| {
+                    FactsError::resource(&self.budget, "projection inference allocation")
+                })?;
+                for term in terms.iter() {
+                    let Some(ty) = self.resolve(term, fallback, depth + 1, materialize)? else {
+                        return Ok(None);
+                    };
+                    actuals.push(ty);
+                }
+                let mut actuals = actuals.into_iter();
+                let self_ty = actuals.next().ok_or_else(|| {
+                    FactsError::invalid(&self.budget, "projection inference lost receiver")
+                })?;
+                Some(ir::Ty::AssociatedType(Arc::new(
+                    ir::AssociatedTypeProjection {
+                        trait_ref: ir::TraitRef {
+                            declaration: *declaration,
+                            self_ty,
+                            args: actuals.collect(),
+                        },
+                        item: *item,
+                    },
+                )))
+            }
             InferKind::Opaque(descriptor, terms) => {
                 self.storage(terms.len())?;
                 let mut actuals = Vec::with_capacity(terms.len());
@@ -265,6 +293,19 @@ impl CallInferenceState {
                     )?,
                 )
             }
+            InferKind::Projection(declaration, item, fields) => {
+                self.storage(fields.len())?;
+                InferKind::Projection(
+                    *declaration,
+                    *item,
+                    self.collect_terms(
+                        fields.len(),
+                        fields
+                            .iter()
+                            .map(|term| self.bind_schema(term, slots, depth + 1)),
+                    )?,
+                )
+            }
             InferKind::Ref(kind, inner) => {
                 InferKind::Ref(*kind, self.bind_schema(inner, slots, depth + 1)?)
             }
@@ -395,6 +436,14 @@ impl CallInferenceState {
                     self.collect_terms(args.len(), args.iter().map(|a| self.taint(a, depth + 1)))?,
                 )
             }
+            InferKind::Projection(declaration, item, args) => {
+                self.storage(args.len())?;
+                InferKind::Projection(
+                    *declaration,
+                    *item,
+                    self.collect_terms(args.len(), args.iter().map(|a| self.taint(a, depth + 1)))?,
+                )
+            }
             _ => return Ok(term.clone()),
         };
         self.node(kind)
@@ -474,6 +523,21 @@ impl CallInferenceState {
             (InferKind::Slice(x), InferKind::Slice(y)) => {
                 self.node(InferKind::Slice(self.merge(x, y, depth + 1)?))
             }
+            (InferKind::Projection(d, i, x), InferKind::Projection(e, j, y))
+                if d == e && i == j && x.len() == y.len() =>
+            {
+                self.storage(x.len())?;
+                self.node(InferKind::Projection(
+                    *d,
+                    *i,
+                    self.collect_terms(
+                        x.len(),
+                        x.iter()
+                            .zip(y.iter())
+                            .map(|(x, y)| self.merge(x, y, depth + 1)),
+                    )?,
+                ))
+            }
             (InferKind::Nominal(d, x), InferKind::Nominal(e, y))
                 if d == e && x.len() == y.len() =>
             {
@@ -519,6 +583,7 @@ impl CallInferenceState {
             }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
+            | InferKind::Projection(_, _, fields)
             | InferKind::Opaque(_, fields) => {
                 for f in fields.iter() {
                     self.occurs(slot, f, depth + 1)?;
@@ -662,7 +727,9 @@ impl CallInferenceState {
                     "generic slice inference shape mismatch",
                 )),
             },
-            InferKind::Rigid(_) => {
+            // Projection families are not injective. Do not infer their
+            // arguments from an expected output or structurally invert them.
+            InferKind::Projection(_, _, _) | InferKind::Rigid(_) => {
                 if matches!(evidence.as_ref(), InferKind::Unknown(_)) {
                     Ok(())
                 } else {
@@ -683,6 +750,31 @@ impl CallInferenceState {
     ) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match ty {
+            ir::Ty::AssociatedType(projection) => {
+                let count = projection
+                    .trait_ref
+                    .args
+                    .len()
+                    .checked_add(1)
+                    .ok_or_else(|| {
+                        FactsError::resource(&self.budget, "projection inference child overflow")
+                    })?;
+                self.storage(count)?;
+                let mut children = Vec::new();
+                children.try_reserve_exact(count).map_err(|_| {
+                    FactsError::resource(&self.budget, "projection inference child allocation")
+                })?;
+                for ty in std::iter::once(&projection.trait_ref.self_ty)
+                    .chain(projection.trait_ref.args.iter())
+                {
+                    children.push(self.type_term(ty, schema, depth + 1)?);
+                }
+                InferKind::Projection(
+                    projection.trait_ref.declaration,
+                    projection.item,
+                    children.into(),
+                )
+            }
             ir::Ty::Opaque(descriptor) => {
                 let count = descriptor.types().count();
                 self.storage(count)?;
@@ -1695,6 +1787,17 @@ fn terms_equal(
         | (InferKind::Float, InferKind::Float)
         | (InferKind::UnknownFloat, InferKind::UnknownFloat) => true,
         (InferKind::Unknown(a), InferKind::Unknown(b)) => a == b,
+        (InferKind::Projection(a, i, x), InferKind::Projection(b, j, y)) => {
+            if a != b || i != j || x.len() != y.len() {
+                return Ok(false);
+            }
+            for (a, b) in x.iter().zip(y.iter()) {
+                if !terms_equal(a, b, budget, at + 1)? {
+                    return Ok(false);
+                }
+            }
+            true
+        }
         (InferKind::Ref(a, x), InferKind::Ref(b, y))
         | (InferKind::RawPtr(a, x), InferKind::RawPtr(b, y)) => {
             a == b && terms_equal(x, y, budget, at + 1)?
@@ -2247,6 +2350,112 @@ mod call_input_trace_tests {
                 .unwrap_err()
                 .is_resource()
         );
+    }
+
+    #[test]
+    fn associated_result_substitutes_only_source_inferred_own_slots() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let caller = env(1);
+        let declaration = own.binder().declaration;
+        let item = caller.binder().declaration;
+        let projection = |argument| {
+            ir::Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+                trait_ref: ir::TraitRef {
+                    declaration,
+                    self_ty: ir::Ty::Bool,
+                    args: Arc::from([argument, param(&caller, 0)]),
+                },
+                item,
+            }))
+        };
+        let result = projection(param(&own, 0));
+        let trace = infer_input_schema_trace(
+            Some(own.clone()),
+            &[param(&own, 0)],
+            &result,
+            &[ir::Ty::Char],
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(
+            trace
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .unwrap(),
+            projection(ir::Ty::Char)
+        );
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 0,
+            ..Default::default()
+        });
+        assert!(
+            trace
+                .result_type(&limited, &mut |_, _| unreachable!())
+                .unwrap_err()
+                .is_resource()
+        );
+
+        let mut forged = (*trace).clone();
+        let InferKind::Projection(owner, _, children) = forged.result_schema.as_ref() else {
+            unreachable!()
+        };
+        forged.result_schema =
+            Arc::new(InferKind::Projection(*owner, declaration, children.clone()));
+        assert!(trace.validate_replayed(&forged, &budget).is_err());
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        for case in [
+            "declaration",
+            "receiver",
+            "ordered-own-and-caller",
+            "rigid-caller-owner",
+            "missing-child",
+            "extra-child",
+            "invalid-slot",
+        ] {
+            let InferKind::Projection(owner, member, children) = trace.result_schema.as_ref()
+            else {
+                unreachable!()
+            };
+            let mut owner = *owner;
+            let mut children = children.to_vec();
+            match case {
+                "declaration" => owner = item,
+                "receiver" => children[0] = state.node(InferKind::Rigid(ir::Ty::Char)).unwrap(),
+                "ordered-own-and-caller" => children.swap(1, 2),
+                "rigid-caller-owner" => {
+                    children[2] = state.node(InferKind::Rigid(param(&own, 0))).unwrap();
+                }
+                "missing-child" => {
+                    children.pop();
+                }
+                "extra-child" => children.push(state.node(InferKind::Rigid(ir::Ty::Bool)).unwrap()),
+                "invalid-slot" => children[1] = state.node(InferKind::Slot(1)).unwrap(),
+                _ => unreachable!(),
+            }
+            let mut forged = (*trace).clone();
+            forged.result_schema = state
+                .node(InferKind::Projection(owner, *member, children.into()))
+                .unwrap();
+            assert_eq!(
+                trace
+                    .validate_replayed(&forged, &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata,
+                "{case}",
+            );
+            if case == "invalid-slot" {
+                assert_eq!(
+                    forged
+                        .result_type(&budget, &mut |_, _| unreachable!())
+                        .unwrap_err()
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata,
+                );
+            }
+        }
+        assert!(state.occurs(0, &trace.result_schema, 0).is_err());
     }
 
     #[test]

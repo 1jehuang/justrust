@@ -1121,6 +1121,9 @@ fn locked_registry_time_core_matches_stock_end_to_end() {
         format!("version=4\n[[package]]\nname='probe'\nversion='0.1.0'\ndependencies=['time-core']\n[[package]]\nname='time-core'\nversion='0.1.2'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{checksum}'\n"),
     ).unwrap();
     let source = r#"fn main() {
+        assert_eq!(time_core::convert::Day::per(time_core::convert::Week), 7);
+        assert_eq!(time_core::convert::Hour::per(time_core::convert::Day), 24);
+        assert_eq!(time_core::convert::Minute::per(time_core::convert::Hour), 60);
         println!("{} {} {}", time_core::convert::Day::per(time_core::convert::Week), time_core::convert::Hour::per(time_core::convert::Day), time_core::convert::Minute::per(time_core::convert::Hour));
         for year in [-800i32, -401, -400, -396, -391, -1, 0, 4, 9, 2019, 2020, i32::MIN, i32::MAX] {
             println!("{} {}", year, time_core::util::weeks_in_year(year));

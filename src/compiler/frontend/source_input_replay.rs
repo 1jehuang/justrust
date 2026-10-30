@@ -1490,7 +1490,7 @@ impl Replay<'_> {
                         self.budget,
                         depth + 1,
                     )?;
-                    trace.result_type(self.budget, &mut |decl, args| {
+                    let result = trace.result_type(self.budget, &mut |decl, args| {
                         self.original
                             .plan
                             .intern_nominal(
@@ -1500,7 +1500,10 @@ impl Replay<'_> {
                                 self.budget,
                             )
                             .map_err(|e| source_error(self.budget, &e))
-                    })?
+                    })?;
+                    self.original
+                        .facts
+                        .normalize_substituted_projection_type(&result, self.budget)?
                 }
             }
             (

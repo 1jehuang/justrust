@@ -75,6 +75,18 @@ impl Checker<'_> {
                     self.prepare_callable_arguments(argument, depth + 1)?;
                 }
             }
+            Expr::Binary { left, right, .. } => {
+                // Binary checking asks for both operand hints before checking
+                // either child. Prepare declarations, not runtime values, so
+                // those hints can read authenticated closure Output evidence.
+                self.prepare_callable_arguments(left, depth + 1)?;
+                self.prepare_callable_arguments(right, depth + 1)?;
+            }
+            Expr::Format { arguments, .. } => {
+                for argument in arguments {
+                    self.prepare_callable_arguments(argument, depth + 1)?;
+                }
+            }
             Expr::MethodCall { receiver, args, .. } => {
                 self.prepare_callable_arguments(receiver, depth + 1)?;
                 for argument in args {
