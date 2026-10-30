@@ -9,6 +9,7 @@ import subprocess
 import sys
 
 FLAG = '-Zjr-cache-small-query-values'
+SELECTED = ('hir_owner_parent_q', 'constness', 'coroutine_kind')
 BASE = '''#![allow(dead_code)]
 extern crate retention_dep;
 const fn value() -> u32 { 7 }
@@ -142,14 +143,103 @@ def capture(rustc, root):
     return report
 
 
+def selected_recompute_counts(summary):
+    markers = summary['native_green_reuse']['markers']
+    # Missing selected-kind records are count-zero only when both native marker
+    # families are observed and all their query names resolve in this capture.
+    if any(markers[k]['evidence'] != 'observed' or markers[k]['records_without_query_name'] != 0
+           for k in ('jr_incremental_green_query', 'jr_incremental_green_recompute')):
+        raise AssertionError('Missing native marker coverage or unresolved native query names')
+    counts = markers['jr_incremental_green_recompute']['query_name_interval_records']
+    return {kind: counts.get(kind, 0) for kind in SELECTED}
+
+
+def capture_profile_counts(rustc, root):
+    """Small native count experiment, never a time-saved estimate."""
+    import reuse_ceiling
+
+    root.mkdir(mode=0o700, parents=False, exist_ok=False)
+    report = dict(schema=1, scope='native-query-retention-counts-not-time-saved',
+                  verdict='incomplete', verify_ich=True, allow_unmapped_event_labels=True, observations=[])
+    selected = SELECTED
+    source = BASE.replace('extern crate retention_dep;\n', '').replace('retention_dep::number(1)', '2u32')
+    try:
+        version = run([rustc, '-vV'])
+        sysroot = run([rustc, '--print', 'sysroot'])
+        report['compiler'] = dict(path=str(rustc), sha256=digest(rustc), version=version)
+        report['sysroot_query'] = sysroot
+        if version['status'] or sysroot['status']:
+            raise AssertionError('Compiler identity query failed: ' + json.dumps(report, indent=2))
+        drivers = sorted((Path(sysroot['stdout'].strip()) / 'lib').glob('*rustc_driver*'))
+        if not drivers:
+            raise AssertionError('No rustc_driver library found')
+        report['drivers'] = [dict(path=str(p.resolve()), sha256=digest(p)) for p in drivers if p.is_file()]
+        for name, content, expected in [('warm', source, '15\n'), ('unchanged', source, '15\n'),
+                                        ('body-edit', source.replace('{ 7 }', '{ 8 }'), '16\n')]:
+            observation = dict(name=name, source=content, modes={})
+            report['observations'].append(observation)
+            for mode in ('off', 'on'):
+                work = root / mode
+                work.mkdir(mode=0o700, exist_ok=True)
+                fixture = work / 'fixture.rs'
+                fixture.write_text(content)
+                binary = work / 'fixture'
+                prefix = work / name
+                command = [rustc, fixture, '--crate-name=retention_profile', '--edition=2024',
+                           '-C', f'incremental={work / "incremental"}', '-Zincremental-verify-ich',
+                           f'{FLAG}={"yes" if mode == "on" else "no"}',
+                           f'-Zself-profile={prefix}', '-Zself-profile-events=default,function-args',
+                           '-o', binary]
+                record = dict(compile=run(command))
+                observation['modes'][mode] = record
+                if record['compile']['status']:
+                    raise AssertionError('Profile compilation failed: ' + json.dumps(observation, indent=2))
+                record['runtime'] = run([binary])
+                if (record['runtime']['status'], record['runtime']['stdout'], record['runtime']['stderr']) != (0, expected, ''):
+                    raise AssertionError('Incorrect profile runtime: ' + json.dumps(observation, indent=2))
+                profiles = sorted(prefix.glob('*.mm_profdata')) if prefix.is_dir() else sorted(work.glob(name + '*.mm_profdata'))
+                if len(profiles) != 1:
+                    raise AssertionError(f'Expected one native profile for {mode}/{name}, found {profiles}')
+                raw = reuse_ceiling.query_profile.read_input(str(profiles[0]))
+                events, strings = reuse_ceiling.query_profile.prepare(raw, True, False)
+                summary = reuse_ceiling.summarize_records(
+                    reuse_ceiling.query_profile.iter_prepared_records(events, strings, True), strings.resolve)
+                record['profile'] = dict(path=str(profiles[0]), sha256=digest(profiles[0]),
+                                         bytes=len(raw), summary=summary)
+            off, on = (observation['modes'][m] for m in ('off', 'on'))
+            compare(off['compile'], on['compile'], root / 'off', root / 'on', name)
+            if name != 'warm':
+                counts = {}
+                for mode in ('off', 'on'):
+                    counts[mode] = selected_recompute_counts(observation['modes'][mode]['profile']['summary'])
+                observation['selected_green_recompute_counts'] = counts
+                if any(counts['off'][kind] < counts['on'][kind] for kind in selected):
+                    raise AssertionError('Selected green-recompute counts increased: ' + json.dumps(observation, indent=2))
+        totals = {mode: {kind: sum(o['selected_green_recompute_counts'][mode][kind]
+                                  for o in report['observations'] if o['name'] != 'warm')
+                         for kind in selected} for mode in ('off', 'on')}
+        report['selected_green_recompute_totals'] = totals
+        if any(totals['off'][kind] <= totals['on'][kind] for kind in selected):
+            raise AssertionError('Selected green-recompute totals did not all decrease: ' + json.dumps(totals, indent=2))
+        report['verdict'] = 'passed'
+    except Exception as error:
+        report['verdict'] = 'failed'
+        report['error'] = str(error)
+        raise
+    finally:
+        (root / 'count-evidence.json').write_text(json.dumps(report, indent=2) + '\n')
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--rustc', '--compiler', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True, help='New private directory, parent must exist')
+    parser.add_argument('--profile-counts', action='store_true', help='Small warm native count experiment instead of correctness matrix')
     args = parser.parse_args()
     os.umask(0o077)
-    report = capture(args.rustc.resolve(), args.output.resolve())
-    print(json.dumps(dict(output=str(args.output), verdict=report['verdict'], cases=report['completed_cases']), indent=2))
+    report = (capture_profile_counts if args.profile_counts else capture)(args.rustc.resolve(), args.output.resolve())
+    print(json.dumps(dict(output=str(args.output), verdict=report['verdict'], cases=len(report['observations'])), indent=2))
 
 
 if __name__ == '__main__':

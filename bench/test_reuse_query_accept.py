@@ -51,6 +51,28 @@ class AcceptanceTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'full error so far'):
                 accept.run(['rustc'])
 
+    def test_native_counts_require_observed_resolved_markers(self):
+        markers = {name: dict(evidence='observed', records_without_query_name=0,
+                              query_name_interval_records={'constness': 4})
+                   for name in ('jr_incremental_green_query', 'jr_incremental_green_recompute')}
+        summary = dict(native_green_reuse=dict(markers=markers))
+        self.assertEqual(accept.selected_recompute_counts(summary),
+                         dict(hir_owner_parent_q=0, constness=4, coroutine_kind=0))
+        for name in markers:
+            markers[name]['evidence'] = 'unknown-marker-absent'
+            with self.assertRaises(AssertionError):
+                accept.selected_recompute_counts(summary)
+            markers[name]['evidence'] = 'observed'
+            markers[name]['records_without_query_name'] = 1
+            with self.assertRaises(AssertionError):
+                accept.selected_recompute_counts(summary)
+            markers[name]['records_without_query_name'] = 0
+
+    def test_profile_output_is_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileExistsError):
+                accept.capture_profile_counts(Path(tmp) / 'missing', Path(tmp))
+
     def test_case_inventory(self):
         cases = accept.cases()
         self.assertEqual(len(cases), 22)

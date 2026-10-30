@@ -67,8 +67,55 @@ A subsequent compiler rebuild requires a new capture directory.
 
 The companion `old-compiler-negative/acceptance.json` is an intentional failure:
 the old stage2 compiler rejected the unsupported flag, the harness exited 1,
-and the full error was retained. It is not a passing acceptance result. Six
-Python unit tests also passed. None of these observations is a speedup claim.
+and the full error was retained. It is not a passing acceptance result. Eight
+Python unit tests now pass. None of these observations is a speedup claim.
+
+## Native self-profile count evidence
+
+The separate small-fixture mode uses explicit `=no` / `=yes` flag values,
+`-Zself-profile-events=default,function-args`, and
+`-Zincremental-verify-ich` on every compilation. It runs only six tiny direct
+compiler invocations: warm, unchanged, and body edit in each independent mode.
+It uses the decoder and native marker summary in `bench/reuse_ceiling.py`, not
+numeric query IDs joined across invocations.
+
+```sh
+python3 bench/reuse-query-accept.py --profile-counts \
+  --rustc toolchain/rustc/build/host/stage1/bin/rustc \
+  --output "$HOME/query-retention-counts-$(date +%s)"
+```
+
+`bench/results/query-value-retention-20261030/native-profile-counts-v4/count-evidence.json`
+contains the captured count report, original compiler commands and diagnostics,
+exact fixture sources, profile SHA-256 values, compiler/driver hashes, and native
+marker summaries. The compiler hashes match the acceptance captures above.
+The observed `jr_incremental_green_recompute` interval record counts were:
+
+| Probe | Query kind | Flag off | Flag on |
+| --- | --- | ---: | ---: |
+| Unchanged | `hir_owner_parent_q` | 0 | 0 |
+| Unchanged | `constness` | 4 | 0 |
+| Unchanged | `coroutine_kind` | 7 | 0 |
+| Body edit | `hir_owner_parent_q` | 8 | 0 |
+| Body edit | `constness` | 4 | 0 |
+| Body edit | `coroutine_kind` | 6 | 0 |
+
+For these query kinds, the corresponding proven-green route marker counts were
+identical between modes: 0/4/7 on the unchanged probe and 8/4/6 on the body edit
+probe, in the table's query order. Thus this fixture observes the selected
+queries taking the green route while recording fewer entries into the green
+provider-recompute branch with retention enabled. It does not infer the parent
+query was requested on the unchanged probe.
+
+The decoder explicitly permits unmapped ordinary virtual event labels, which
+occur in these real profiles. The count gate still requires both native marker
+families to be observed and rejects any unresolved query names in those native
+markers. It rejects any selected-count increase per probe and requires every
+selected kind's total count across the two warm probes to decrease. Missing
+selected-kind records are recorded as zero **observed records** only in this
+controlled capture, not a general assertion that absent profiler events prove
+zero execution. Capture completeness remains unknown in the underlying report.
+No nested spans are summed and no count is converted into CPU time or time saved.
 
 ## Evidence and limits
 
