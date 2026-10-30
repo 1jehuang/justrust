@@ -15,11 +15,12 @@ The opt-in local cache stores authority-free intermediate values and output byte
 | Operation | Input boundary | Reuse restriction |
 | --- | --- | --- |
 | Native ELF link | Ordered function names and object code, export/call/string relocation offsets and payloads, panic entry mode, implementation identity | Vtables are ineligible. External linkers and C ABI inputs do not use this cache. |
+| Exact-input machine object | Complete immutable source namespace, exhaustive effective source options, implementation identity and current canonical instance symbol | Trusted-local only. Current source/body, ownership, cleanup and C ABI admission still runs before lookup. A hit skips optimizer and machine generation, not semantic proof production. External/project inputs, export mode and unsupported object encodings are ineligible. Any captured source change invalidates this coarse namespace. |
 | Stack-emitter machine object | Explicit encoding of supported CFG values, types, places, operations, signatures and resolved symbols | Proof-dependent or otherwise unsupported shapes reach the normal backend instead of finding a cache entry. |
 | SSA lowering | Explicit supported CFG encoding and current signatures | Current source/body admission still runs. Stored values cannot restore loan, world, or declaration authority. |
 | Local/post-inline optimization and SSA machine object | Exact SSA value encoding, relevant current callee signatures/symbols, implementation identity and distinct operation domains | Decoded SSA must pass current structural verification and resource admission. Callee and proof capabilities are reconstructed from the current graph. |
 
-The implementation lives in `src/compiler/link_cache.rs`, `native_cache_key.rs`, `cache.rs`, `ssa/lowering_cache.rs`, and the bounded object/SSA codecs. These are operation-specific contracts, not evidence that arbitrary compiler processes are hermetic.
+The implementation lives in `src/compiler/link_cache.rs`, `build_cache.rs`, `native_cache_key.rs`, `cache.rs`, `ssa/lowering_cache.rs`, and the bounded object/SSA codecs. These are operation-specific contracts, not evidence that arbitrary compiler processes are hermetic.
 
 Changing an operation's semantic inputs requires updating its encoding and version domain. Unsupported forms must remain ineligible until encoded explicitly. Raw process-local IDs, pointer identity, Debug formatting and noncryptographic summaries cannot stand in for stable semantic inputs. Storage placement and paid accounting receipts are not semantic inputs or transferable authority.
 
