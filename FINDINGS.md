@@ -9081,3 +9081,31 @@ excluded. The flag stays off. Next hypothesis is separately audited TT-only raw
 pass-through reuse, not unsafe procedural-macro caching. See
 `docs/declarative-real-eligibility-20261030.md` and
 `docs/blaze-declarative-br37-20261030.md`.
+
+## 2026-10-30: TT reuse and demand-only persistence do not close the Blaze gap
+
+The default-off TT pass-through extension (`87ab34640`) passed 357 exact native
+semantic compilations and separate literal/TT positive-hit gates. Real edit run
+`20261030-051853305-2385022` observed 634 eligible successful lookups with one
+provider execution, while restoration had 633 with zero providers. The actual
+four filtered tests executed and all 63 source hashes were restored. Portable
+raw-profile and journal replay is retained in
+`bench/results/declarative-tt-real-20261030/` (`c38250534`). Prospective `br40`
+medians were off 1.229047s, TT 1.217220s, seeded-warm Blaze Cranelift 0.101007s
+and LLVM 0.093102s. The small TT difference is not an established latency win.
+
+A second default-off native experiment (`c9f4aa85f`) skips only end-session
+promotion of otherwise undemanded green values, preserving existing absent-value
+provider fallback and hash verification. Its 288 semantic compilations plus ten
+profiled mechanism compilations passed. Real edit receipts
+`20261030-053627090-2589045` and `20261030-053702229-2593817` measured result-cache
+persistence intervals of 128.603ms off and 55.100ms demand-only. These are separate
+profiled observations, not time saved or a total-latency claim. The independent
+matched `br42` workflow instead observed 1.421465s off versus 1.430772s demand-only,
+with all five correctness contracts and 25 executed edits passing. Both the
+mechanism evidence and this non-win are retained (`145f2ade9`, `10fd1a4ac`).
+No default is promoted. The more-than-10x scoped Blaze gap remains, cold Blaze
+support and comprehensive promotion gates remain incomplete, and maximizing
+retained values is not itself the objective. Next diagnostic isolates the owned
+Cranelift backend and four-thread frontend/overlapped-persistence paths under
+the same executed-test contract rather than claiming more cache hits are faster.
