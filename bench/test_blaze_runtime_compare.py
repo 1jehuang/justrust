@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Synthetic harness tests. Never load Blaze or a native compiler."""
 import argparse
+import json
 import os
 from pathlib import Path
 import signal
@@ -84,7 +85,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid'):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -108,17 +109,26 @@ class HarnessTests(unittest.TestCase):
                 import re
                 marker = re.search(rb'JR_RUNTIME_EXECUTED_\d+', contents).group().decode()
                 text = output(marker=marker)
+            if command[0] == '/fake/justrust':
+                recording = Path(env['JUSTRUST_HOME']) / 'runs' / f'run-{len(observed)}'
+                if raw_mode != 'missing':
+                    recording.mkdir(parents=True)
+                    raw = ''.join(json.dumps({'t': i, 's': 'o', 'l': line}) + '\n'
+                                  for i, line in enumerate(text.splitlines()))
+                    (recording / 'output.jsonl').write_text(raw if raw_mode == 'valid' else '{bad json')
+                text = 'justrust: condensed UI, no test names or diagnostics'
             prefix.with_suffix('.stdout').write_text(text)
             prefix.with_suffix('.stderr').write_text('')
             return dict(status=status, error=None, timed_out=False, elapsed_seconds=.001)
         with patch.object(h.base, 'identities', return_value={'fake': 'identity'}), \
-             patch.object(h, 'environment', side_effect=lambda a, s: {'HOME': str(a.output / s)}), \
+             patch.object(h, 'environment', side_effect=lambda a, s: {
+                 'HOME': str(a.output / s), 'JUSTRUST_HOME': str(a.output / s / '.justrust')}), \
              patch.object(h, 'run_process', side_effect=fake):
             if crash:
                 with self.assertRaises(RuntimeError):
                     h.execute(args)
             else:
-                self.assertEqual(h.execute(args), 1 if stale else 0)
+                self.assertEqual(h.execute(args), 1 if stale or raw_mode != 'valid' else 0)
         self.assertEqual(pinned.read_bytes(), ORIGINAL)
         self.assertEqual((args.output / 'source.original').read_bytes(), ORIGINAL)
         return observed
@@ -131,6 +141,47 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(len(edits), 4)
                 self.assertEqual(len({data for _, data in edits}), 1)
                 self.assertIn('owned-off' if rep == 0 else 'all3on', edits[0][0])
+
+    def test_missing_or_malformed_raw_logs_excluded(self):
+        for mode in ('missing', 'malformed'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp:
+                self.exercise(Path(temp), raw_mode=mode)
+                summary = json.loads((Path(temp) / 'out/summary.json').read_text())
+                self.assertNotIn('owned-off', summary['medians_seconds'])
+                self.assertNotIn('all3on', summary['medians_seconds'])
+                records = json.loads((Path(temp) / 'out/records.json').read_text())
+                self.assertTrue(all(r.get('raw_output_error') for r in records
+                                    if r['stack'] in ('owned-off', 'all3on')))
+
+    def test_raw_logs_reject_stale_and_ambiguous_runs(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env = {'JUSTRUST_HOME': str(root / 'private')}
+            runs = root / 'private/runs'
+            old = runs / 'old'
+            old.mkdir(parents=True)
+            (old / 'output.jsonl').write_text(json.dumps({'s': 'o', 'l': output()}) + '\n')
+            before = h.recorded_runs(env)
+            with self.assertRaises(ValueError):
+                h.recorded_output(env, before, root / 'stale')
+            for name in ('new-a', 'new-b'):
+                (runs / name).mkdir()
+            with self.assertRaises(ValueError):
+                h.recorded_output(env, before, root / 'ambiguous')
+
+    def test_raw_log_artifact_and_no_console_duplication(self):
+        with tempfile.TemporaryDirectory() as temp:
+            self.exercise(Path(temp))
+            root = Path(temp) / 'out'
+            records = json.loads((root / 'records.json').read_text())
+            row = next(r for r in records if r['stack'] == 'owned-off' and r['phase'] == 'edit')
+            self.assertEqual(row['elapsed_seconds'], .001)
+            artifact = root / row['raw_output']['artifact']
+            self.assertTrue(artifact.is_file())
+            self.assertEqual(h.base.digest(artifact), row['raw_output']['sha256'])
+            self.assertIn('JR_RUNTIME_EXECUTED_1', artifact.read_text())
+            self.assertNotIn('JR_RUNTIME_EXECUTED', (root / 'edit-000-owned-off.stdout').read_text())
+            self.assertTrue(row['accepted'])
 
     def test_restore_on_exception(self):
         with tempfile.TemporaryDirectory() as temp:

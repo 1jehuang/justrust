@@ -88,6 +88,40 @@ def run_process(command, cwd, env, prefix, timeout):
                 environment=logged_environment(env))
 
 
+def recorded_runs(env):
+    """Snapshot only this stack's private recording home, never global last."""
+    root = Path(env['JUSTRUST_HOME']) / 'runs'
+    return {p.name for p in root.iterdir() if p.is_dir()} if root.is_dir() else set()
+
+
+def recorded_output(env, before, prefix):
+    """Retrieve fresh unabridged output after timing, with strict provenance.
+
+    Console rendering is intentionally lossy. Never append it to saved output:
+    doing so duplicates runtime markers and can conceal missing raw capture.
+    """
+    fresh = recorded_runs(env) - before
+    if len(fresh) != 1:
+        raise ValueError(f'expected one fresh recorded run, found {len(fresh)}')
+    run_id = fresh.pop()
+    root = Path(env['JUSTRUST_HOME']) / 'runs' / run_id
+    raw = (root / 'output.jsonl').read_bytes()
+    artifact = prefix.with_suffix('.raw-output.jsonl')
+    with artifact.open('xb') as stream:
+        stream.write(raw)
+    lines = []
+    for line in raw.decode('utf-8').splitlines():
+        entry = json.loads(line)
+        if (not isinstance(entry, dict) or not isinstance(entry.get('l'), str)
+                or entry.get('s') not in ('o', 'e')):
+            raise ValueError('invalid recorded output line schema')
+        lines.append(entry['l'])
+    if not lines:
+        raise ValueError('empty recorded output')
+    return '\n'.join(lines) + '\n', {'run_id': run_id,
+        'artifact': artifact.name, 'sha256': hashlib.sha256(raw).hexdigest()}
+
+
 def test_results(output):
     names = re.findall(r'^test ([^\s]+) \.\.\. (?:(?:[^\n]*\n)*?)(ok|FAILED|ignored)\s*$', output, re.M)
     totals = re.findall(r'test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; (\d+) measured; (\d+) filtered out', output)
@@ -162,8 +196,22 @@ def execute(args):
         cmd = [str(args.blaze if stack.startswith('blaze') else args.justrust), args.command]
         cmd += (['--lib', '--', args.test_filter, '--test-threads=1', '--nocapture']
                 if args.command == 'test' else ['--bin', args.binary])
+        owned = not stack.startswith('blaze')
+        before_runs = recorded_runs(env) if owned else None
         row = run_process(cmd, args.source, env, prefix, args.timeout)
-        output = ''.join(prefix.with_suffix('.' + s).read_text(errors='replace') for s in ('stdout', 'stderr'))
+        if owned:
+            try:
+                output, provenance = recorded_output(env, before_runs, prefix)
+                row['raw_output'] = provenance
+            except (OSError, ValueError, UnicodeError) as exc:
+                output = ''
+                row['raw_output_error'] = repr(exc)
+                # Successful compilation without verifiable runtime output is
+                # not a successful runtime benchmark, including build mode.
+                row['error'] = row.get('error') or 'raw output retrieval failed'
+        else:
+            output = ''.join(prefix.with_suffix('.' + s).read_text(errors='replace') for s in ('stdout', 'stderr'))
+            row['raw_output'] = {'source': 'direct Blaze stdout/stderr'}
         row.update(stack=stack, phase=phase, replicate=rep,
                    source_sha256=hashlib.sha256(contents).hexdigest(), parsed=test_results(output))
         if args.command == 'build' and base.succeeded(row):
