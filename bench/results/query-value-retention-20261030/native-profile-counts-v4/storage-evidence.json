@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "scope": "tiny-fixture-incremental-storage-after-warm-and-body-edit-not-a-performance-result",
+  "source_report": "count-evidence.json",
+  "modes": {
+    "off": {
+      "files": 12,
+      "logical_bytes": 162449,
+      "allocated_bytes": 188416,
+      "query_cache_files": [{"bytes": 32946, "allocated_bytes": 36864}]
+    },
+    "on": {
+      "files": 12,
+      "logical_bytes": 162765,
+      "allocated_bytes": 188416,
+      "query_cache_files": [{"bytes": 33262, "allocated_bytes": 36864}]
+    }
+  }
+}

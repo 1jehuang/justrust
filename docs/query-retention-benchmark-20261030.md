@@ -88,6 +88,15 @@ values are actually retained rather than merely accepting an unused flag:
 from 8 to 0, and `coroutine_kind` from 13 to 0. Those are fixture scope-entry
 counts, not percentages of all IR or a wall-time improvement.
 
+The same marker fixture's final incremental directories contain 12 files each.
+Logical storage is 162,449 bytes off and 162,765 bytes on. The query-cache file
+is 32,946 versus 33,262 bytes, an observed 316-byte increase. Both directories
+occupy 188,416 allocated bytes at the filesystem's block granularity. This is a
+small-fixture disk observation after its warm/body-edit sequence, not a constant
+bytes-per-query cost, a memory measurement, or a projection for real projects.
+The exact measurements are retained beside `count-evidence.json` in
+`bench/results/query-value-retention-20261030/native-profile-counts-v4/storage-evidence.json`.
+
 The comprehensive baseline is in progress. There is no before/after performance
 result yet and no default promotion. All points, coverage errors, command/change
 breakdowns, noise and cache/storage costs must be reviewed before a decision.
