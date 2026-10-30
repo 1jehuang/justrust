@@ -5,8 +5,11 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -65,6 +68,7 @@ impl Drop for Running {
 }
 #[derive(Debug)]
 struct Captured {
+    pid: u32,
     status: ExitStatus,
     stdout: Vec<u8>,
     stderr: Vec<u8>,
@@ -82,6 +86,7 @@ fn capture(command: &mut Command, scratch: &Scratch, seconds: u64) -> Captured {
             .spawn()
             .unwrap_or_else(|error| panic!("spawn {command:?}: {error}")),
     );
+    let pid = child.0.id();
     let start = Instant::now();
     let status = loop {
         if let Some(status) = child.0.try_wait().unwrap() {
@@ -94,6 +99,7 @@ fn capture(command: &mut Command, scratch: &Scratch, seconds: u64) -> Captured {
         std::thread::sleep(Duration::from_millis(5));
     };
     Captured {
+        pid,
         status,
         stdout: fs::read(stdout).unwrap(),
         stderr: fs::read(stderr).unwrap(),
@@ -156,10 +162,64 @@ fn rhs_reads_precede_carrier_borrow() {
 
 #[test]
 fn runtime_index_compound_traps_after_value_carrier_and_index() {
-    // Stock aborts (panic=abort, 134) after printing the same stdout; the
-    // native runtime trap convention is exit 101.
     let (source, expected) = fixture("index_trap");
-    runs_with_exit(&source, &expected, 101);
+    let scratch = Scratch::new();
+    let input = scratch.source(&source);
+    let stock = scratch.path("stock");
+    let built = capture(
+        Command::new(stock_rustc::stock_rustc())
+            .args(["--edition=2024", "-Cpanic=abort"])
+            .arg(&input)
+            .arg("-o")
+            .arg(&stock),
+        &scratch,
+        20,
+    );
+    assert!(built.status.success(), "{built:?}");
+    let run = |path: &Path| {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "ulimit -c 0; exec \"$1\"", "temp-place-panic"])
+            .arg(path)
+            .env("RUST_BACKTRACE", "0");
+        capture(&mut command, &scratch, 5)
+    };
+    let stock = run(&stock);
+    assert_eq!(stock.status.signal(), Some(6), "{stock:?}");
+    assert_eq!(stock.stdout, expected.as_bytes());
+    let diagnostic = |result: &Captured| {
+        let text = String::from_utf8(result.stderr.clone()).unwrap();
+        let identity = format!("thread 'main' ({})", result.pid);
+        assert!(text.contains(&identity), "{text}");
+        text.replace(&identity, "thread 'main' (<PID>)")
+    };
+    let expected_diagnostic = diagnostic(&stock);
+    assert!(expected_diagnostic.contains("index out of bounds"));
+    for workers in [1, 8] {
+        let output = scratch.path(&format!("native-{workers}"));
+        for check in [true, false] {
+            let built = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+            assert!(
+                built.status.success(),
+                "workers={workers}, check={check}: {built:?}"
+            );
+            if check {
+                assert!(!output.exists(), "CHECK published an executable");
+            }
+        }
+        let actual = run(&output);
+        assert_eq!(
+            actual.status.signal(),
+            Some(6),
+            "workers={workers}: {actual:?}"
+        );
+        assert_eq!(actual.stdout, stock.stdout, "workers={workers}");
+        assert_eq!(
+            diagnostic(&actual),
+            expected_diagnostic,
+            "workers={workers}"
+        );
+    }
 }
 
 #[test]

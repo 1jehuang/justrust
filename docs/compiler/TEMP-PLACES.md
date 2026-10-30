@@ -61,9 +61,11 @@ compound assignment, `**call()` chains.
 
 - `tests/temp_places.rs`: three frozen stock sources with oracle stdout
   (`tests/fixtures/temp_places`, `SHA256SUMS`, `ORACLE`), CHECK/BUILD/run at
-  workers 1 and 8. The index trap gives trap and stdout parity only: identical
-  stdout and a trap at the same point, but native exit 101 versus stock abort
-  134 (existing runtime trap convention). This is not exit-status parity.
+  workers 1 and 8. The index trap is compared live against pinned stock
+  `panic=abort`: identical stdout, SIGABRT, and bounds diagnostic including
+  source location and operands, with only the process ID normalized. This
+  follows the source-located bounds panic contract; exit 101 is not accepted
+  as equivalent to abort.
 - `tests/temp_places_authority.rs`: 15 invalid and 3 legal-unsupported
   sources, CHECK and BUILD, workers 1 and 8, no executable published.
 - `tests/reference_fields.rs`: the unchanged historical
