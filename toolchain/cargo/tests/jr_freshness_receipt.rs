@@ -50,6 +50,65 @@ fn run(command: &mut Command) -> Output {
     output
 }
 
+fn content_command(root: &Path) -> Command {
+    let mut cmd = command(root);
+    cmd.args([
+        "-Zchecksum-freshness",
+        "--config",
+        "build.fingerprint=\"content\"",
+    ])
+    .env("__CARGO_TEST_CHANNEL_OVERRIDE_DO_NOT_USE_THIS", "nightly")
+    .env("RUSTC_BOOTSTRAP", "1");
+    cmd
+}
+
+#[test]
+fn content_closure_invalidates_backdated_includes_modules_and_environment() {
+    let temp = fixture(
+        "",
+        "mod nested;\npub const TEXT: &str = include_str!(\"input.txt\");\npub const BYTES: &[u8] = include_bytes!(\"input.bin\");\npub const ENV: Option<&str> = option_env!(\"JR_RECEIPT_TEST_VALUE\");\n",
+    );
+    let root = temp.path();
+    fs::write(root.join("src/nested.rs"), "pub const VALUE: u8 = 1;\n").unwrap();
+    fs::write(root.join("src/input.txt"), "alpha").unwrap();
+    fs::write(root.join("src/input.bin"), b"12345").unwrap();
+    run(&mut content_command(root));
+    run(&mut content_command(root));
+    assert_eq!(receipt(root)["prerequisite_supported"], true);
+    for (name, bytes) in [
+        ("input.txt", b"bravo".as_slice()),
+        ("input.bin", b"54321".as_slice()),
+        ("nested.rs", b"pub const VALUE: u8 = 2;\n".as_slice()),
+    ] {
+        let path = root.join("src").join(name);
+        let old = fs::metadata(&path).unwrap();
+        assert_eq!(old.len(), bytes.len() as u64);
+        fs::write(&path, bytes).unwrap();
+        filetime::set_file_mtime(&path, filetime::FileTime::from_last_modification_time(&old))
+            .unwrap();
+        run(&mut content_command(root));
+        assert_eq!(receipt(root)["units"][0]["native_fresh"], false, "{name}");
+        run(&mut content_command(root));
+        let fresh = receipt(root);
+        assert_eq!(fresh["prerequisite_supported"], true, "{name}: {fresh:#}");
+        let input = fresh["units"][0]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|input| input["path"] == path.to_str().unwrap())
+            .unwrap();
+        assert!(input["native_dep_info_checksum"].is_string());
+    }
+    run(content_command(root).env("JR_RECEIPT_TEST_VALUE", "private-test-value"));
+    assert_eq!(receipt(root)["units"][0]["native_fresh"], false);
+    run(content_command(root).env("JR_RECEIPT_TEST_VALUE", "private-test-value"));
+    let fresh = receipt(root);
+    assert_eq!(fresh["prerequisite_supported"], true);
+    assert!(!fresh.to_string().contains("private-test-value"));
+    run(&mut content_command(root));
+    assert_eq!(receipt(root)["units"][0]["native_fresh"], false);
+}
+
 fn receipt(root: &Path) -> Value {
     let value: Value =
         serde_json::from_slice(&fs::read(root.join("receipt.json")).unwrap()).unwrap();

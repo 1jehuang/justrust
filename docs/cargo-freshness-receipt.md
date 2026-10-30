@@ -151,6 +151,12 @@ Hosted validation of the final producer and public executable:
 
 - Library check: `20261029-223459011-3499713`.
 - Six actual native CLI tests: `20261029-223502373-3499705`.
+- Extended seven-test public CLI suite: `20261029-223850129-3526908`.
+  Same-length backdated edits to `include_str!`, `include_bytes!`, and module
+  sources each invalidate the native content fingerprint. Subsequent unchanged
+  runs record native checksums. Environment absence-to-value and value-to-absence
+  transitions also invalidate, with no plaintext value in receipts. This is
+  ordinary ordered-edit acceptance, not a concurrent compiler-read proof.
 - Direct collector rejection test: `20261029-223703501-3515493`, validating
   SHA-256 acceptance, wrong-length denial, and equal-length changed-content
   denial. This unit test supplements, not replaces, the six actual CLI tests.
