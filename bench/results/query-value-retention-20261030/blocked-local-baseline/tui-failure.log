@@ -1,0 +1,119 @@
+warning: profile package spec `cosmic-text` in profile `selfdev` did not match any packages
+warning: profile package spec `swash` in profile `selfdev` did not match any packages
+
+help: a package with a similar name exists: `ahash`
+warning: profile package spec `unicode-linebreak` in profile `selfdev` did not match any packages
+help: a package with a similar name exists: `wasi`
+help: a package with a similar name exists: `ahash`
+help: a package with a similar name exists: `wasi`
+help: a package with a similar name exists: `ahash`
+help: a package with a similar name exists: `wasi`
+0;💫 jcode Startup-session · work ~0stest tui::app::remote::tests::process_remote_followups_sends_startup_prompt_before_history_arrives ... ok <0.022s>
+0;💫 jcode Different-sessiontest tui::app::remote_notifications::tests::present_swarm_notification_without_tldr_keeps_plain_content ... ok <0.000s>
+0;🔌 jcode/ancient-server Session_existingtest tui::app::tests::ancient_server_history_is_deferred_via_client_side_release_check ... ok <0.388s>
+test tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session ... FAILED <0.421s>
+0;🔌 jcode/current-server Session_currenttest tui::app::tests::current_release_server_history_is_not_deferred_by_client_check ... ok <0.184s>
+0;🙉 jcode/stale-server Kikazarutest tui::app::tests::indeterminate_background_update_preserves_last_known_percent ... ok <0.006s>
+0;💫 jcode/old-server Session_existingtest tui::app::tests::pending_prompt_transition_invalidates_the_memo ... ok <0.008s>
+0;💫 jcode/old-server Session_existingtest tui::app::tests::older_server_reporting_no_update_is_still_deferred_via_client_check ... ok <0.776s>
+test tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn ... FAILED <0.009s>
+0;🔌 jcode/stale-server Session_existingtest tui::app::tests::stale_server_history_is_deferred_before_remote_state_is_applied ... ok <0.007s>
+test tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn ... FAILED <0.016s>
+0;jcode SSH fixture-host skill-startup-remotetest tui::app::tests::skill_startup_ssh_history_replaces_warmed_empty_candidates_without_local_skills ... ok <0.595s>
+0;jcode SSH test-remote remote-only-sessiontest tui::app::tests::ssh_remote_history_is_authoritative_even_when_empty_or_server_version_differs ... ok <0.755s>
+test tui::app::tests::test_alt_shift_i_is_inert_without_inline_images ... FAILED <0.010s>
+0;🦠 jcode Microbetest tui::app::tests::test_available_models_updated_event_surfaces_authed_provider_in_remote_model_picker ... ok <0.035s>
+0;🔌 jcode Evergreentest tui::app::tests::test_duplicate_history_for_same_session_is_ignored_after_fast_path_restore ... ok <0.067s>
+0;🐻 jcode Beartest tui::app::tests::test_detailed_catalog_replaces_placeholder_routes_after_names_only_update ... ok <0.708s>
+0;🦀 jcode Crabtest tui::app::tests::test_duplicate_available_models_updated_event_is_a_no_op ... ok <0.674s>
+0;🙊 jcode Iwazarutest tui::app::tests::test_handle_server_event_available_models_updated_replaces_remote_model_catalog ... ok <0.019s>
+0;🦷 jcode Sabertooth0;🔌 jcode Bonehoundtest tui::app::tests::test_finish_turn_does_not_duplicate_existing_poke_followup ... ok <0.995s>
+0;🌵 jcode Cactus0;🔌 jcode Mushroomtest tui::app::tests::test_handle_server_event_history_preserves_reasoning_effort_for_same_session_when_missing ... ok <0.057s>
+0;🌻 jcode Sunflower · workingtest tui::app::tests::test_handle_server_event_history_same_session_midstream_duplicate_is_dropped_and_keeps_preview ... ok <0.040s>
+0;🌸 jcode Blossomtest tui::app::tests::test_handle_server_event_history_same_session_rewind_reapply_clears_streaming_preview_diagram ... ok <0.069s>
+0;🌷 jcode Tulip · workingtest tui::app::tests::test_handle_server_event_history_same_session_rewind_then_late_done_does_not_resurrect_content ... ok <0.090s>
+0;🍁 jcode Maple0;🌹 jcode Rosetest tui::app::tests::test_handle_server_event_history_session_change_clears_pending_interleaves ... ok <0.102s>
+0;🔌 jcode Palmtree0;🔌 jcode Battest tui::app::tests::test_handle_server_event_interrupted_clears_stream_state_and_sets_idle ... ok <0.036s>
+0;🌐 jcode Herbtest tui::app::tests::test_handle_server_event_history_with_interruption_queues_continuation ... ok <0.114s>
+0;💫 Release planningtest tui::app::tests::test_handle_server_event_session_renamed_updates_remote_title ... ok <0.017s>
+0;🔌 jcode Beartest tui::app::tests::test_handle_server_event_tool_start_flushes_streaming_text_before_tool_message ... ok <0.060s>
+0;🔌 jcode Clovertest tui::app::tests::test_info_widget_remote_anthropic_api_key_shows_cost_based_usage ... ok <0.005s>
+0;🔌 jcode Ses_resume_activetest tui::app::tests::test_initial_state ... ok <0.018s>
+0;🔌 reload restoretest tui::app::tests::test_initial_history_bootstrap_preserves_restored_interleave_state ... ok <0.671s>
+0;🔌 reload prompt already in historytest tui::app::tests::test_model_picker_opens_simplified_state_before_async_routes_complete ... ok <0.094s>
+0;🌐 resume metest tui::app::tests::test_metadata_only_history_preserves_fast_restored_startup_state ... ok <0.440s>
+0;🍄 jcode Mushroomtest tui::app::tests::test_pinned_diagram_not_shown_when_terminal_too_narrow ... ok <0.023s>
+0;🐅 jcode Tigresstest tui::app::tests::test_remote_final_catalog_replaces_post_login_loading_state_in_place ... ok <0.014s>
+0;💫 jcode Fasttest tui::app::tests::test_remote_prompt_jump_ctrl_brackets ... ok <0.030s>
+0;💫 jcode Rewindtest tui::app::tests::test_remote_auto_poke_challenges_abrupt_confidence_increase ... ok <0.844s>
+test tui::app::tests::test_restore_session_adds_reload_message ... FAILED <0.010s>
+test tui::app::tests::test_restore_session_with_selfdev_reload_tool_result_queues_continuation ... FAILED <0.024s>
+test tui::app::tests::test_tui_openai_compatible_local_refresh_failure_is_pending_not_final_failure ... FAILED <0.016s>
+
+failures:
+
+---- tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session stdout ----
+
+thread 'tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session' (2804005) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:660:9:
+assertion failed: app.suggestion_prompts().is_empty() || !app.onboarding_welcome_active()
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn stdout ----
+
+thread 'tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn' (2808567) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1583:10:
+test session should start in a Git repository
+
+---- tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn stdout ----
+
+thread 'tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn' (2813112) panicked at crates/jcode-tui/src/tui/app/tests/onboarding_flow.rs:1598:10:
+test session should start in a Git repository
+
+---- tui::app::tests::test_alt_shift_i_is_inert_without_inline_images stdout ----
+
+thread 'tui::app::tests::test_alt_shift_i_is_inert_without_inline_images' (2814148) panicked at crates/jcode-tui/src/tui/app/tests/scroll_copy_02/part_02.rs:229:5:
+assertion failed: app.status_notice().is_none()
+
+---- tui::app::tests::test_restore_session_adds_reload_message stdout ----
+
+thread 'tui::app::tests::test_restore_session_adds_reload_message' (2830869) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:506:5:
+assertion `left == right` failed
+  left: 0
+ right: 2
+
+---- tui::app::tests::test_restore_session_with_selfdev_reload_tool_result_queues_continuation stdout ----
+
+thread 'tui::app::tests::test_restore_session_with_selfdev_reload_tool_result_queues_continuation' (2830908) panicked at crates/jcode-tui/src/tui/app/tests/remote_startup_input_03/part_01.rs:550:5:
+assertion failed: app.hidden_queued_system_messages.iter().any(|message|
+        message.contains("Continue exactly where you left off"))
+
+failures:
+    tui::app::tests::answering_no_on_continue_prompt_lands_on_regular_session
+    tui::app::tests::preparing_recent_project_review_finishes_onboarding_and_seeds_the_first_turn
+    tui::app::tests::starting_recent_project_review_runs_as_a_visible_local_turn
+    tui::app::tests::test_alt_shift_i_is_inert_without_inline_images
+    tui::app::tests::test_restore_session_adds_reload_message
+    tui::app::tests::test_restore_session_with_selfdev_reload_tool_result_queues_continuation
+    tui::app::tests::test_tui_openai_compatible_local_refresh_failure_is_pending_not_final_failure
+
+test result: FAILED. 2480 passed; 7 failed; 18 ignored; 0 measured; 0 filtered out; finished in 24.58s
+
+error: test failed, to rerun pass `-p jcode-tui --lib`
+
+justrust: FAILED: 7 of 2488 tests failed in 25.4s
+  time    startup 0.75s | compile 0.00s | tests 22.00s | after 2.61s
+  rustc   pinned toolchain jr-50f30aea8dbb
+  units   0 compiled (0 local, 0 deps, 0 build scripts), 580 fresh
+  tests   2481 passed, 7 failed, 18 ignored, 2504 filtered out, 1 binary in 22.00s
+          slowest tests (2453 timed, 381.8s summed; a suite cannot finish before its slowest test):
+              4.72s  tui::app::tests::remote_reasoning_delta_burst_is_paced_not_dumped
+              4.71s  tui::app::tests::remote_ownership_gate_reads_the_remote_goal_assessment
+              4.71s  tui::app::tests::remote_post_login_validation_waits_for_catalog_refresh
+              4.68s  tui::app::tests::repro_reasoning_rendered_then_removed_when_turn_ends_open
+              4.53s  tui::app::tests::rehearsal_finds_logins_jcode_already_trusts
+  cpu     40.8s total, avg 1.6/peak 5.1 of 16 cores; others used 12.5 cores (14 other rustc), priority weight 1000 -> 587
+  memory  peak 521 MB build, 0 MB largest rustc, 43.9 GB free; stalls cpu 5.58s mem 0.03s io 0.44s
+  output  3 warnings shown, 11 hidden; 585 progress and 2465 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 22.0s  tests in jcode_tui-9802cab00a7743fa took 22.0s to run; the slowest test alone took 4.7s (tui::app::tests::remote_reasoning_delta_burst_is_paced_not_dumped). Speed it up or split it, or filter to the tests you changed
+          ~  9.9s  machine was busy: other processes used 13 of 16 cores on average (up to 14 rustc from other builds) and tasks stalled 5.6s waiting for CPU
+  more    `justrust log 20261029-212155285-1968926458` full output, `justrust show 20261029-212155285-1968926458` full profile

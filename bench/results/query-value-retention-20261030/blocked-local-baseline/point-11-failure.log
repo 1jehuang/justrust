@@ -1,0 +1,96 @@
+warning: profile package spec `cosmic-text` in profile `selfdev` did not match any packages
+warning: profile package spec `swash` in profile `selfdev` did not match any packages
+
+help: a package with a similar name exists: `ahash`
+warning: profile package spec `unicode-linebreak` in profile `selfdev` did not match any packages
+help: a package with a similar name exists: `wasi`
+help: a package with a similar name exists: `ahash`
+help: a package with a similar name exists: `wasi`
+help: a package with a similar name exists: `ahash`
+help: a package with a similar name exists: `wasi`
+{"model":"unknown","provider":"failing-test","session_id":"session_swan_1793333644740_c56a9781f11ca4da","type":"start"}
+{"message":"one-shot sentinel failure","model":"unknown","provider":"failing-test","session_id":"session_swan_1793333644740_c56a9781f11ca4da","type":"error"}
+{"model":"unknown","provider":"test","session_id":"session_turkey_1793333647972_1b82c9bb05ac089e","type":"start"}
+{"text":"ok","type":"text_delta"}
+{"stop_reason":"end_turn","type":"message_end"}
+{"connection_phase":null,"connection_type":null,"model":"unknown","provider":"test","session_id":"session_turkey_1793333647972_1b82c9bb05ac089e","status_detail":null,"text":"ok","type":"done","upstream_provider":null,"usage":{"cache_creation_input_tokens":null,"cache_read_input_tokens":null,"input_tokens":0,"output_tokens":0}}
+
+test server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution ... FAILED <0.009s>
+test tool::bash::tests::repository_commands_export_a_logged_cargo_function ... FAILED <0.000s>
+test server::tests::background_task_wake_runs_live_session_immediately_when_idle ... FAILED <2.011s>
+
+test tool::tests::tool_descriptions_stay_under_token_cap ... FAILED <0.001s>
+test tool::tests::tool_parameter_descriptions_stay_under_token_cap ... FAILED <0.001s>
+test tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result ... FAILED <0.183s>
+
+failures:
+
+---- server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution stdout ----
+
+thread 'server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution' (2725049) panicked at crates/jcode-app-core/src/server/debug_command_exec.rs:835:10:
+debug selfdev reload should succeed: Could not find jcode repository directory
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- tool::bash::tests::repository_commands_export_a_logged_cargo_function stdout ----
+
+thread 'tool::bash::tests::repository_commands_export_a_logged_cargo_function' (2725612) panicked at crates/jcode-app-core/src/tool/bash_tests.rs:84:14:
+test runs inside the jcode repository
+
+---- server::tests::background_task_wake_runs_live_session_immediately_when_idle stdout ----
+
+thread 'server::tests::background_task_wake_runs_live_session_immediately_when_idle' (2725343) panicked at crates/jcode-app-core/src/server/tests.rs:414:6:
+wake delivery should start streaming promptly: Elapsed(())
+
+---- tool::tests::tool_descriptions_stay_under_token_cap stdout ----
+
+thread 'tool::tests::tool_descriptions_stay_under_token_cap' (2728720) panicked at crates/jcode-app-core/src/tool/tests.rs:715:5:
+tool descriptions over the 20-token cap:
+compile_remote (~101 tokens): Compile in an isolated Linux sandbox using Jcode subscription cloud-compute credits (shared with cloud agents). Uploads eligible source files and returns compiler output and metered usage. Requires a Jcode subscription; use action=status to check access and credits. Use only when the user has requested remote builds or authorized source sharing. Failed builds also consume credits. No automatic top-ups.
+
+---- tool::tests::tool_parameter_descriptions_stay_under_token_cap stdout ----
+
+thread 'tool::tests::tool_parameter_descriptions_stay_under_token_cap' (2728721) panicked at crates/jcode-app-core/src/tool/tests.rs:786:5:
+1 parameter descriptions over the 25-token cap:
+gmail $.properties.bcc (~26 tokens): Comma-separated Bcc addresses, hidden from other recipients. On update_draft, omit to keep, "" to clear.
+
+---- tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result stdout ----
+
+thread 'tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result' (2728649) panicked at crates/jcode-app-core/src/tool/tests.rs:1934:5:
+    1	hello
+
+failures:
+    server::debug_command_exec::tests::debug_tool_selfdev_reload_returns_promptly_for_direct_execution
+    server::tests::background_task_wake_runs_live_session_immediately_when_idle
+    tool::bash::tests::repository_commands_export_a_logged_cargo_function
+    tool::tests::post_tool_feedback_hook_appends_stdout_to_tool_result
+    tool::tests::tool_descriptions_stay_under_token_cap
+    tool::tests::tool_parameter_descriptions_stay_under_token_cap
+
+test result: FAILED. 1484 passed; 6 failed; 15 ignored; 0 measured; 0 filtered out; finished in 40.91s
+
+error: test failed, to rerun pass `-p jcode-app-core --lib`
+
+justrust: FAILED: 6 of 1868 tests failed in 86.1s
+  time    startup 0.40s | compile 26.73s | tests 58.70s | after 0.22s
+  rustc   pinned toolchain jr-50f30aea8dbb
+  units   29 compiled (29 local, 0 deps, 0 build scripts), 672 fresh. Rebuilt because: jcode-provider-openrouter-runtime changed (4 crates); edited crates/jcode-provider-openrouter-runtime/src/lib.rs (jcode-provider-openrouter-runtime)
+          jcode_base (test)                  5.16s  cpu  14.2s   1769 MB
+          jcode                              2.67s  cpu   4.4s    950 MB
+          jcode_provider_openrouter_runti…   2.66s  cpu   4.7s    900 MB
+          jcode (test)                       2.20s  cpu   6.6s   1797 MB
+  tests   1862 passed, 6 failed, 22 ignored, 1504 filtered out, 12 binaries in 58.70s
+          slowest tests (1867 timed, 855.6s summed; a suite cannot finish before its slowest test):
+              8.84s  server::client_session::tests::clear_tests::handle_clear_session_replaces_runtime_handles_and_updates_shutdown_registration
+              8.79s  server::client_lifecycle::tests::system_prompt_socket_creation_attach_resume_fork_and_no_leaking
+              8.73s  server::client_session::tests::concurrency::failed_server_resume_keeps_original_concurrency_owner
+              8.70s  server::client_session::tests::concurrency::viewer_attach_reuses_live_owner_without_tracking_placeholder
+              8.61s  server::client_session::tests::idle_prewarm_never_holds_agent_lock_across_pending_preparation
+  cpu     119.7s total, avg 1.4/peak 8.0 of 16 cores; others used 8.5 cores (32 other rustc), priority weight 1000 -> 329
+  memory  peak 6185 MB build, 2008 MB largest rustc, 30.9 GB free; stalls cpu 13.12s mem 0.01s io 0.71s
+  output  3 warnings shown, 12 hidden; 749 progress and 1884 passing-test lines hidden
+  waste   4 issues (estimated cost each; they can overlap):
+          ~ 40.8s  tests in jcode_app_core-b9ffd16f58f05c6d took 40.8s to run; the slowest test alone took 8.8s (server::client_session::tests::clear_tests::handle_clear_session_replaces_runtime_handles_and_updates_shutdown_registration). Speed it up or split it, or filter to the tests you changed
+          ~ 22.9s  machine was busy: other processes used 9 of 16 cores on average (up to 32 rustc from other builds) and tasks stalled 13.1s waiting for CPU
+          ~ 11.4s  jcode-provider-doctor, jcode, jcode-base rebuilt only because jcode-provider-openrouter-runtime changed (edited crates/jcode-provider-openrouter-runtime/src/lib.rs) (11.4s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~  4.4s  5.2s went to recompiling oversized crates: jcode_base (139k lines, 5.2s, rebuilt for an upstream change). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits
+  more    `justrust log 20261029-211336755-1968926792` full output, `justrust show 20261029-211336755-1968926792` full profile

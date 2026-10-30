@@ -2,12 +2,20 @@
 
 ## Status
 
-Source-only, default-off experiment. Native compiler build, native acceptance,
-and performance measurements are **pending**. The frozen scalar baseline
-measurement window must be explicitly released by the coordinator before any
-bootstrap or actual rustc/Cargo/justrust workload. The Python unit tests mock
-subprocess execution and do not establish native correctness. No speedup claim
-or default promotion is justified by this patch.
+Default-off experiment with a passed focused native correctness gate. After the
+scalar baseline was stopped, the owned stage1 compiler and matching library,
+rustdoc and Clippy were rebuilt. All 22 cases passed off/on with fresh and
+incremental caches, totaling 88 compiler invocations with fingerprint verification.
+Exact sources, commands, diagnostics and artifact hashes are retained in
+`bench/results/query-value-retention-20261030/lint-native-accept/acceptance.json`.
+The compiler executable SHA-256 is
+`570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144`,
+and its driver SHA-256 is
+`c7b44ed95c8f59faaf47be89a72db8a4445e9ff1595f5c458afa9890aff72fa5`.
+The executable hash alone does not identify compiler implementation changes:
+the driver differs from the frozen scalar experiment. Performance measurements
+and broader regression coverage remain pending. No speedup claim or default
+promotion is justified by this finite correctness gate.
 
 ## Hypothesis and implementation
 
@@ -80,16 +88,16 @@ not general Rust regression coverage or a test of proc-macro execution, native
 linking, custom lint drivers, or all query-cycle/error-ordering possibilities.
 
 The harness uses metadata output to exercise lint analysis without linking.
-Its fixture expectations are source-reviewed but not compiler-validated yet.
-If an expectation is wrong, investigate it against the off build before changing
-the test. Do not silently discard diagnostic differences to get a pass.
+Its fixture expectations passed against the native off build and all three
+other configurations. This finite result does not establish equivalence for
+all Rust programs or all diagnostic ordering interactions.
 
-## Handoff after the coordinator frees the window
+## Reproducing the native gate
 
-From the repository root, only after explicit release:
+From the repository root, with no overlapping timed measurement:
 
 ```sh
-# Build native compiler and matching sysroot/tools. Not run in this window.
+# Build native compiler and matching sysroot/tools.
 (cd toolchain/rustc && ./x build --stage 1 compiler/rustc library src/tools/rustdoc src/tools/clippy)
 python3 bench/reuse-lint-accept.py toolchain/rustc/build/host/stage1/bin/rustc \
   --output "$HOME/.jcode/scratch/query-retention-bench-20261030/lint-native-accept"

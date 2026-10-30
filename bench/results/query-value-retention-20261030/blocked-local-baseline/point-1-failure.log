@@ -1,0 +1,79 @@
+warning: use of deprecated method `std::sync::atomic::Atomic::<usize>::fetch_update`: renamed to `try_update` for consistency
+  --> crates/jcode-desktop-api/src/image_ids.rs:41:18
+   |
+41 |                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+   |                  ^^^^^^^^^^^^
+   |
+   = note: `#[warn(deprecated)]` on by default
+help: replace the use of the deprecated method
+   |
+41 -                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+41 +                 .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+   |
+
+warning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique
+  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:29:9
+   |
+23 | #[derive(Clone, PartialEq)]
+   |                 --------- in this derive macro expansion
+...
+29 |         curve: fn(f32) -> f32,
+   |         ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the address of the same function can vary between different codegen units
+   = note: furthermore, different functions could have the same address after being merged together
+   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>
+   = note: `#[warn(unpredictable_function_pointer_comparisons)]` on by default
+
+warning: function pointer comparisons do not produce meaningful results since their addresses are not guaranteed to be unique
+  --> crates/jcode-desktop-ui-core/src/pulse_text.rs:37:9
+   |
+23 | #[derive(Clone, PartialEq)]
+   |                 --------- in this derive macro expansion
+...
+37 |         curve: fn(f32) -> f32,
+   |         ^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: the address of the same function can vary between different codegen units
+   = note: furthermore, different functions could have the same address after being merged together
+   = note: for more information visit <https://doc.rust-lang.org/nightly/core/ptr/fn.fn_addr_eq.html>
+
+test workspace::tests::the_hint_chip_uses_only_spare_tab_space ... FAILED <0.042s>
+
+failures:
+
+---- workspace::tests::the_hint_chip_uses_only_spare_tab_space stdout ----
+
+thread 'workspace::tests::the_hint_chip_uses_only_spare_tab_space' (2317342) panicked at crates/jcode-desktop-ui/src/workspace.rs:13388:9:
+assertion `left == right` failed
+  left: Bounds { origin: Point { x: 844.5px, y: 6px }, size: Size { 208px × 28px } }
+ right: Bounds { origin: Point { x: 869.5px, y: 6px }, size: Size { 208px × 28px } }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    workspace::tests::the_hint_chip_uses_only_spare_tab_space
+
+test result: FAILED. 1302 passed; 1 failed; 10 ignored; 0 measured; 0 filtered out; finished in 17.25s
+
+error: test failed, to rerun pass `-p jcode-desktop-ui --lib`
+
+justrust: FAILED: 1 of 1303 tests failed in 35.4s
+  time    startup 0.60s | compile 17.27s | gaps 0.02s | tests 17.26s | after 0.23s
+  rustc   pinned toolchain jr-50f30aea8dbb
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 743 fresh. Rebuilt because: edited crates/jcode-desktop-ui/src (jcode-desktop-ui)
+          jcode_desktop_ui (test)           17.27s  cpu  27.1s   2499 MB
+  tests   1302 passed, 1 failed, 10 ignored, 0 filtered out, 1 binary in 17.26s
+          slowest tests (1303 timed, 191.9s summed; a suite cannot finish before its slowest test):
+             14.60s  panel::startup_lifecycle_tests::startup_each_native_submission_paints_the_newest_row
+             11.63s  panel::prompt::tests::native_scroll_paints_historical_prompt_cards
+              6.87s  panel::tail_glide::tests::tool_cards_and_text_after_them_glide_instead_of_jumping
+              6.18s  panel::side_document::tests::pdf_document_renders_pages_navigates_by_keyboard_and_restores_scroll
+              5.40s  workspace::pending_tests::pending_editor_accepts_input_during_motion_and_settles_visible_from_full_width_and_overflow
+  cpu     122.3s total (sampled process lower bound), avg 3.5/peak 9.4 of 16 cores; others used 11.3 cores (2 other rustc), priority weight 1000 -> 323
+  memory  peak 4573 MB build, 2499 MB largest rustc, 41.9 GB free; stalls cpu 17.32s mem 0.13s io 0.14s
+  output  3 warnings shown, 24 hidden; 750 progress and 1312 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~ 17.3s  tests in jcode_desktop_ui-cb985d98bab1de40 took 17.3s to run; the slowest test alone took 14.6s (panel::startup_lifecycle_tests::startup_each_native_submission_paints_the_newest_row). Speed it up or split it, or filter to the tests you changed
+          ~ 14.4s  17.3s went to recompiling oversized crates: jcode_desktop_ui (119k lines, 17.3s). Specifically, crates/jcode-desktop-ui/src is an input of jcode-desktop-ui's build script, so each edit reruns it and recompiles jcode-desktop-ui and its 1 dependents (~91.3s per edit over 1 recorded runs). Embed it in a small leaf crate used only where it is read, or load it at runtime (`justrust split` for all candidates)
+          ~ 12.5s  machine was busy: other processes used 11 of 16 cores on average (up to 2 rustc from other builds) and tasks stalled 17.3s waiting for CPU
+  more    `justrust log 20261029-204601072-1968926134` full output, `justrust show 20261029-204601072-1968926134` full profile

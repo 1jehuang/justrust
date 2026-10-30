@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "pid": 1968558,
+  "status": "failed",
+  "started_unix": 1793330211.6212842,
+  "identities": {
+    "justrust-client": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+    "home/toolchains/staged/jr-50f30aea8dbb/bin/rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "home/toolchains/staged/jr-50f30aea8dbb/lib/librustc_driver-e2bd696299265a4a.so": "502401b14a878674fddf862e4fe7c7dca0948da8a7b8e8aefd3543ffd57a0eb7"
+  },
+  "runs": {
+    "no": {
+      "command": [
+        "/usr/bin/python3",
+        "-u",
+        "bench/versus.py",
+        "run",
+        "--synth",
+        "1",
+        "-n",
+        "1",
+        "--only",
+        "none",
+        "--stack",
+        "retention:JUSTRUST_TOOLCHAIN=jr-50f30aea8dbb,JUSTRUST_DEPCACHE=0,JUSTRUST_LOCALCACHE=0,JUSTRUST_REMOTE=0,RUSTFLAGS=-Zjr-cache-small-query-values=no",
+        "--no-report",
+        "--no-instructions"
+      ],
+      "started_unix": 1793330211.9763594,
+      "status": "running",
+      "log": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/pair-no.log",
+      "pid": 1968926
+    }
+  },
+  "updated_unix": 1793334635.6503584,
+  "mode": "no",
+  "error": "KeyboardInterrupt()"
+}

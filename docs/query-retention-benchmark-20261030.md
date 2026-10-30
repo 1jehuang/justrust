@@ -97,8 +97,20 @@ bytes-per-query cost, a memory measurement, or a projection for real projects.
 The exact measurements are retained beside `count-evidence.json` in
 `bench/results/query-value-retention-20261030/native-profile-counts-v4/storage-evidence.json`.
 
-The comprehensive baseline is in progress. There is no before/after performance
-result yet and no default promotion. All points, coverage errors, command/change
-breakdowns, noise and cache/storage costs must be reviewed before a decision.
-Even a successful result would establish only a measured frontier for this
-candidate and workload, not the theoretical maximum reuse.
+The comprehensive baseline was stopped after 22 of 40 points, with seven failed
+points. The candidate was not run and no comparison is valid. Exact partial
+observations, launcher state and all seven failing command logs are retained in
+`bench/results/query-value-retention-20261030/blocked-local-baseline/`.
+Failures include inherited credentials and session context, missing Git context
+in archived snapshots, UI state/timing failures, and pinned tool-description
+length assertions. These occurred with retention disabled. They are not evidence
+of a compiler regression or a successful baseline. Concurrent local compilation
+also made the observed timing samples noisy. Snapshot sources and test coverage
+were not modified to obtain a pass. A separate benchmark-hermeticity investigation
+is addressing context failures without hiding the remaining pinned-source defects.
+
+There is no before/after performance result and no default promotion. The broad
+gate remains blocked, not replaced by the native fixture. All points, coverage
+errors, command/change breakdowns, noise and cache/storage costs must be reviewed
+before a decision. Even a successful result would establish only a measured
+frontier for this candidate and workload, not the theoretical maximum reuse.

@@ -1,0 +1,53 @@
+warning: profile package spec `cosmic-text` in profile `selfdev` did not match any packages
+warning: profile package spec `swash` in profile `selfdev` did not match any packages
+
+help: a package with a similar name exists: `ahash`
+warning: profile package spec `unicode-linebreak` in profile `selfdev` did not match any packages
+help: a package with a similar name exists: `wasi`
+help: a package with a similar name exists: `ahash`
+help: a package with a similar name exists: `wasi`
+help: a package with a similar name exists: `ahash`
+help: a package with a similar name exists: `wasi`
+test provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list ... FAILED <0.021s>
+
+failures:
+
+---- provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list stdout ----
+
+thread 'provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list' (2749828) panicked at crates/jcode-base/src/provider/tests/catalog_subscription.rs:162:5:
+assertion `left == right` failed
+  left: ["claude-fable-5", "claude-fable-5-1", "claude-haiku-4-5", "claude-nebula-preview", "claude-nebula-preview[1m]", "claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-6[1m]", "claude-opus-4-8", "claude-opus-5", "claude-opus-5-5", "claude-sonnet-4-20250514", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-4-6[1m]", "claude-sonnet-5"]
+ right: ["claude-nebula-preview", "claude-nebula-preview[1m]"]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+failures:
+    provider::tests::test_anthropic_live_catalog_replaces_static_fallback_list
+
+test result: FAILED. 1773 passed; 1 failed; 5 ignored; 0 measured; 0 filtered out; finished in 13.51s
+
+error: test failed, to rerun pass `-p jcode-base --lib`
+
+justrust: FAILED: 1 of 1774 tests failed in 40.7s
+  time    startup 0.21s | compile 26.89s | gaps 0.03s | tests 13.52s | after 0.04s
+  rustc   pinned toolchain jr-50f30aea8dbb
+  units   4 compiled (4 local, 0 deps, 0 build scripts), 372 fresh. Rebuilt because: edited crates/jcode-provider-openai/src/stream.rs (jcode-provider-openai); jcode-base changed (jcode-provider-openrouter-runtime); jcode-provider-openai changed (jcode-base)
+          jcode_base (test)                 15.15s  cpu  25.2s   2166 MB
+          jcode_base                        10.95s  cpu  19.2s   1772 MB
+          jcode_provider_openrouter_runti…   0.51s  cpu   1.5s    521 MB
+          jcode_provider_openai              0.28s  cpu   0.6s    341 MB
+  tests   1773 passed, 1 failed, 5 ignored, 0 filtered out, 1 binary in 13.52s
+          slowest tests (1774 timed, 92.5s summed; a suite cannot finish before its slowest test):
+             10.94s  provider::image_clamp::tests::many_images_clamp_to_2000
+              4.95s  provider::image_clamp::tests::few_images_clamp_to_8000
+              4.03s  jev::tests::voice_twenty_candidates_cross_real_transport_in_bounded_same_state_batches
+              3.68s  jev::tests::browser_auth_billing_and_redirect_failures_never_retry_or_fallback
+              3.29s  provider::image_clamp::tests::oversized_base64_image_is_reencoded_under_byte_cap
+  cpu     92.9s total, avg 2.3/peak 12.6 of 16 cores; others used 8.3 cores (18 other rustc), priority weight 1000 -> 388
+  memory  peak 3310 MB build, 2166 MB largest rustc, 24.6 GB free; stalls cpu 3.17s mem 0.14s io 0.49s
+  output  3 warnings shown, 9 hidden; 385 progress and 1778 passing-test lines hidden
+  waste   4 issues (estimated cost each; they can overlap):
+          ~ 26.6s  jcode-base, jcode-provider-openrouter-runtime rebuilt only because jcode-base, jcode-provider-openai changed (edited crates/jcode-provider-openai/src/stream.rs) (26.6s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~ 22.3s  26.1s went to recompiling oversized crates: jcode_base (139k lines, 26.1s, rebuilt for an upstream change). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits
+          ~ 13.5s  tests in jcode_base-a6526a42437d0233 took 13.5s to run; the slowest test alone took 10.9s (provider::image_clamp::tests::many_images_clamp_to_2000). Speed it up or split it, or filter to the tests you changed
+          ~ 10.6s  machine was busy: other processes used 8 of 16 cores on average (up to 18 rustc from other builds) and tasks stalled 3.2s waiting for CPU
+  more    `justrust log 20261029-211608628-1968926708` full output, `justrust show 20261029-211608628-1968926708` full profile
