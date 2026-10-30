@@ -49,7 +49,7 @@ impl LocalCache {
     /// If a writer replaces the entry after this observation, load_bounded
     /// still enforces the admitted bound and validates the complete record.
     pub fn payload_size(&self, key: &[u8; 32], max_bytes: usize) -> Option<usize> {
-        let metadata = std::fs::metadata(self.entry_path(key)).ok()?;
+        let metadata = std::fs::symlink_metadata(self.entry_path(key)).ok()?;
         if !metadata.is_file() {
             return None;
         }
@@ -60,8 +60,18 @@ impl LocalCache {
     }
 
     fn read_entry(&self, key: &[u8; 32], max_bytes: usize) -> io::Result<Vec<u8>> {
-        let mut file = File::open(self.entry_path(key))?;
-        let size = file.metadata()?.len();
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+        // Linux x86-64 UAPI O_NOFOLLOW | O_NONBLOCK. A named pipe must be a
+        // miss even with no writer, and an entry must not redirect the read.
+        options.custom_flags(0x20000 | 0x800);
+        let mut file = options.open(self.entry_path(key))?;
+        let metadata = file.metadata()?;
+        if !metadata.is_file() {
+            return Err(invalid("cache entry is not a regular file"));
+        }
+        let size = metadata.len();
         if !(HEADER_SIZE as u64..=(HEADER_SIZE + max_bytes) as u64).contains(&size) {
             return Err(invalid("cache file size out of bounds"));
         }
@@ -269,6 +279,85 @@ mod tests {
         );
         assert_eq!(cache.load(&[2; 32]), None);
         assert_eq!(fs::read_dir(&cache.directory).unwrap().count(), 2);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn nonregular_cache_entries_are_nonblocking_misses() {
+        use std::os::unix::ffi::OsStrExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        const CHILD: &str = "JUSTRUST_CACHE_FIFO_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let directory = Directory::new();
+            let mut child = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "persistent_cache::tests::nonregular_cache_entries_are_nonblocking_misses",
+                    "--nocapture",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, &directory.0)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if child.try_wait().unwrap().is_some() {
+                    let output = child.wait_with_output().unwrap();
+                    assert!(output.status.success(), "{output:?}");
+                    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+                    return;
+                }
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let output = child.wait_with_output().unwrap();
+                    panic!("cache read blocked on a nonregular entry: {output:?}");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+
+        let cache = LocalCache::new(PathBuf::from(std::env::var_os(CHILD).unwrap()).join("cache"));
+        create_directory(&cache.directory).unwrap();
+        let path = cache.entry_path(&[7; 32]);
+        let fifo = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        unsafe extern "C" {
+            fn mkfifo(path: *const std::ffi::c_char, mode: u32) -> i32;
+        }
+        // Valid terminated pathname, Linux mode_t is u32. No writer is opened,
+        // so a blocking O_RDONLY open would never return before the deadline.
+        assert_eq!(unsafe { mkfifo(fifo.as_ptr(), 0o600) }, 0);
+        assert_eq!(cache.payload_size(&[7; 32], MAX_ENTRY_BYTES), None);
+        assert_eq!(cache.load(&[7; 32]), None);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn symlink_entries_cannot_redirect_valid_cache_reads_or_writes() {
+        use std::os::unix::fs::symlink;
+        let directory = Directory::new();
+        let cache = directory.cache();
+        let other = LocalCache::new(directory.0.join("other"));
+        let key = [9; 32];
+        other.store(&key, b"original").unwrap();
+        create_directory(&cache.directory).unwrap();
+        symlink(other.entry_path(&key), cache.entry_path(&key)).unwrap();
+        assert_eq!(cache.payload_size(&key, MAX_ENTRY_BYTES), None);
+        assert_eq!(cache.load(&key), None);
+        assert_eq!(other.load(&key), Some(b"original".to_vec()));
+        cache.store(&key, b"replacement").unwrap();
+        assert_eq!(cache.load(&key), Some(b"replacement".to_vec()));
+        assert_eq!(other.load(&key), Some(b"original".to_vec()));
+
+        fs::remove_file(cache.entry_path(&key)).unwrap();
+        symlink("/dev/zero", cache.entry_path(&key)).unwrap();
+        assert_eq!(cache.load(&key), None);
+        fs::remove_file(cache.entry_path(&key)).unwrap();
+        fs::create_dir(cache.entry_path(&key)).unwrap();
+        assert_eq!(cache.load(&key), None);
     }
 
     #[test]
