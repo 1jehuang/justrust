@@ -1447,6 +1447,13 @@ def cmd_compare(args) -> None:
         except ValueError as error:
             sys.exit(f"bench: {error}")
         return
+    if "native_cache" in a or "native_cache" in b:
+        import native_cache
+        try:
+            print(native_cache.compare(a, b))
+        except ValueError as error:
+            sys.exit(f"bench: {error}")
+        return
     if "native_frontend" in a or "native_frontend" in b:
         import native_frontend
         try:
@@ -1551,6 +1558,8 @@ def main() -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     import native_frontend
     native_frontend.add_parser(sub)
+    import native_cache
+    native_cache.add_parser(sub)
     sub.add_parser("list").set_defaults(fn=cmd_list)
     r = sub.add_parser("run")
     r.add_argument("scenarios", nargs="*")
