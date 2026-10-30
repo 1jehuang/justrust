@@ -321,7 +321,7 @@ fn main() {
             Case {
                 name: "map_err_closure_cannot_take_ok_type",
                 source: "fn main(){let r:Result<i32,u8>=Ok(1);let _=r.map_err(|e:i32| e);}",
-                expect: Expect::Invalid("E0277"),
+                expect: Expect::Invalid("E0631"),
             },
         ],
     );

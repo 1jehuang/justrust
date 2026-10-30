@@ -595,7 +595,7 @@ fn function_item_values_match_stock() {
             Case {
                 name: "fn_item_wrong_argument",
                 source: "fn dbl(x: i32) -> i32 { x * 2 } fn ap<F: Fn(i64) -> i64>(f: F, v: i64) -> i64 { f(v) } fn main() { println!(\"{}\", ap(dbl, 4)); }",
-                expect: Expect::Invalid("E0277"),
+                expect: Expect::Invalid("E0631"),
             },
             Case {
                 name: "fn_item_wrong_output",
