@@ -2610,6 +2610,8 @@ options! {
         "justrust: experimentally persist associated-item lookup values (default: no)"),
     jr_cache_small_query_values: bool = (false, parse_bool, [TRACKED],
         "justrust: experimentally persist small proven-green query values (default: no)"),
+    jr_demand_query_cache: bool = (false, parse_bool, [TRACKED],
+        "justrust: experimentally skip end-session query cache promotions (default: no)"),
     jr_empty_lint_level_fast_path: bool = (false, parse_bool, [TRACKED],
         "justrust: skip lint-level setup for attribute-free non-crate owners (default: no)"),
     jr_query_graph: Option<PathBuf> = (None, parse_opt_pathbuf, [UNTRACKED],

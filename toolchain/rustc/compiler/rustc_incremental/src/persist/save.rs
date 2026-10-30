@@ -73,7 +73,17 @@ pub(crate) fn save_dep_graph(tcx: TyCtxt<'_>) {
                     // quite a lot of work, especially in builds with few or no changes.
                     // Can we be smarter about how we identify values that need promotion?
                     // Can we promote values without decoding them into the memory cache?
-                    tcx.dep_graph.exec_cache_promotions(tcx);
+                    if sess.opts.unstable_opts.jr_demand_query_cache {
+                        // Keep serializing loaded/computed values below, but do not load
+                        // additional green values merely to retain them for a future session.
+                        // A later demand for a missing disk value uses the existing provider
+                        // fallback and incremental hash verification.
+                        let _timer = tcx
+                            .prof
+                            .generic_activity("jr_demand_query_cache_promotion_skipped");
+                    } else {
+                        tcx.dep_graph.exec_cache_promotions(tcx);
+                    }
 
                     // Drop the memory map so that we can remove the file and write to it.
                     on_disk_cache.close_serialized_data_mmap();
