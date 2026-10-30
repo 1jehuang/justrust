@@ -1,0 +1,167 @@
+{
+  "scope": "real-pinned-scalar-retention-mechanism-only",
+  "source_commit": "f97fcc2",
+  "speedup": null,
+  "time_saved_ns": null,
+  "maximum_reuse": null,
+  "captures": {
+    "off-unchanged": {
+      "profile_sha256": "502a8398f972976cd4363fbf9fb530baf50d9d79204621d3c8911fe09ecb4b22",
+      "compiler_status": 0,
+      "original_strict_decoder_status": 2,
+      "allow_unmapped_event_labels": true,
+      "unresolved_event_label_records": 73091,
+      "unknown_query_labels": 0,
+      "selected": {
+        "hir_owner_parent_q": {
+          "Query": 965,
+          "IncrementalLoadResult": 0,
+          "native_green_records": {
+            "jr_incremental_green_query": 965,
+            "jr_incremental_green_recompute": 965
+          }
+        },
+        "constness": {
+          "Query": 2431,
+          "IncrementalLoadResult": 0,
+          "native_green_records": {
+            "jr_incremental_green_query": 2431,
+            "jr_incremental_green_recompute": 2431
+          }
+        },
+        "coroutine_kind": {
+          "Query": 2729,
+          "IncrementalLoadResult": 0,
+          "native_green_records": {
+            "jr_incremental_green_query": 2729,
+            "jr_incremental_green_recompute": 2729
+          }
+        }
+      }
+    },
+    "on-unchanged": {
+      "profile_sha256": "85fff2d6341d190f4acccf76bfda54b7e4c29e13bd8bcb7176f78f1be423f2d5",
+      "compiler_status": 0,
+      "original_strict_decoder_status": 2,
+      "allow_unmapped_event_labels": true,
+      "unresolved_event_label_records": 75497,
+      "unknown_query_labels": 0,
+      "selected": {
+        "hir_owner_parent_q": {
+          "Query": 0,
+          "IncrementalLoadResult": 965,
+          "native_green_records": {
+            "jr_incremental_green_query": 965,
+            "jr_incremental_green_recompute": null
+          }
+        },
+        "constness": {
+          "Query": 0,
+          "IncrementalLoadResult": 2395,
+          "native_green_records": {
+            "jr_incremental_green_query": 2395,
+            "jr_incremental_green_recompute": null
+          }
+        },
+        "coroutine_kind": {
+          "Query": 0,
+          "IncrementalLoadResult": 2729,
+          "native_green_records": {
+            "jr_incremental_green_query": 2729,
+            "jr_incremental_green_recompute": null
+          }
+        }
+      }
+    },
+    "off-body-edit": {
+      "profile_sha256": "9f693e25b61d115869b5ee2f1b4ce4f9c8ffb952b578e8910bb7fbeb2a27bf71",
+      "compiler_status": 0,
+      "original_strict_decoder_status": 2,
+      "allow_unmapped_event_labels": true,
+      "unresolved_event_label_records": 11633,
+      "unknown_query_labels": 0,
+      "selected": {
+        "hir_owner_parent_q": {
+          "Query": 3291,
+          "IncrementalLoadResult": 0,
+          "native_green_records": {
+            "jr_incremental_green_query": 3277,
+            "jr_incremental_green_recompute": 3277
+          }
+        },
+        "constness": {
+          "Query": 2560,
+          "IncrementalLoadResult": 0,
+          "native_green_records": {
+            "jr_incremental_green_query": 2545,
+            "jr_incremental_green_recompute": 2545
+          }
+        },
+        "coroutine_kind": {
+          "Query": 2751,
+          "IncrementalLoadResult": 0,
+          "native_green_records": {
+            "jr_incremental_green_query": 2737,
+            "jr_incremental_green_recompute": 2737
+          }
+        }
+      }
+    },
+    "on-body-edit": {
+      "profile_sha256": "0e55eb00f028c6a60caa4e4268061ada55f71033f43e54ca778d39f049fdac38",
+      "compiler_status": 0,
+      "original_strict_decoder_status": 2,
+      "allow_unmapped_event_labels": true,
+      "unresolved_event_label_records": 11633,
+      "unknown_query_labels": 0,
+      "selected": {
+        "hir_owner_parent_q": {
+          "Query": 14,
+          "IncrementalLoadResult": 3277,
+          "native_green_records": {
+            "jr_incremental_green_query": 3277,
+            "jr_incremental_green_recompute": null
+          }
+        },
+        "constness": {
+          "Query": 121,
+          "IncrementalLoadResult": 2439,
+          "native_green_records": {
+            "jr_incremental_green_query": 2545,
+            "jr_incremental_green_recompute": 106
+          }
+        },
+        "coroutine_kind": {
+          "Query": 14,
+          "IncrementalLoadResult": 2737,
+          "native_green_records": {
+            "jr_incremental_green_query": 2737,
+            "jr_incremental_green_recompute": null
+          }
+        }
+      }
+    }
+  },
+  "storage": {
+    "off": {
+      "state": "after-body-edit-before-restoration-compile",
+      "query_cache_path": "/home/jeremy/.jcode/scratch/provider-cost-real-20261030/target/debug/incremental/justrust-3pjduvgcb2neo/s-hnop06ai92-14wchj7-cqlrgz05rqjbt1sv3bltdk6kn/query-cache.bin",
+      "logical_bytes": 13539731,
+      "allocated_bytes": 13541376,
+      "sha256": "9c5a7b565b1b733d762d892638e923803dea69f07da1a996ab2e8cf25ae2250f"
+    },
+    "on": {
+      "state": "after-body-edit-before-restoration-compile",
+      "query_cache_path": "/home/jeremy/.jcode/scratch/real-scalar-profile-20261030/target/debug/incremental/justrust-3pjduvgcb2neo/s-hnop8szn8k-1rvnflo-bwm8848hn5pz5o6im4i405tzb/query-cache.bin",
+      "logical_bytes": 13687486,
+      "allocated_bytes": 13688832,
+      "sha256": "1ef413834fe3c5085c58ffa206c128bc692f29925f60b4e4e1aec77a398d85c9"
+    }
+  },
+  "limitations": [
+    "Explicit unknown-label mode preserves unresolved records. No cross-invocation numeric IDs joined.",
+    "Absent events are not a global no-work assertion. Counts are capture observations, not a request-constant avoidance calculation.",
+    "Independent isolated targets/profile roots differ. Identical binary identities, pinned source state and normalized policy verified except intended scalar flag.",
+    "Instrumented, unpaired and potentially contended. No causal timing or default promotion. Storage is one matched edited state, not a universal cache cost."
+  ]
+}
