@@ -241,8 +241,11 @@ arguments are enabled:
 * `jr_incremental_eval_always_different_value`
 * `jr_incremental_eval_always_no_hash`
 
-These describe a provider that already executed and a stable query key found in
-the previous graph. Ordinary and eval-always categories remain separate. Equality
+These legacy labels classify a result allocated for a stable query key found in
+the previous graph. **They include both provider executions and fed query
+results**, so their counts do not establish provider execution. Real pinned-source
+captures exposed this distinction: `def_kind` is locally fed, not provided.
+Ordinary and eval-always categories remain separate. Equality
 compares its current result fingerprint with the previous result fingerprint.
 `no_hash` means equality is unknown, not different. New keys are outside this
 inventory. A same-result observation does **not** establish that inputs changed,

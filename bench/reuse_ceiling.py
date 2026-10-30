@@ -101,7 +101,7 @@ def reexecution_summary(markers):
         unknown_names = 0
         for event, name in values:
             # Check the event shape without assigning meaning to classification
-            # duration. This marker is emitted after provider execution.
+            # duration. Legacy markers include provider and feed allocation paths.
             interval_union_ns([(event.get('start_ns'), event.get('end_ns'))])
             if name is None:
                 unknown_names += 1
@@ -116,7 +116,7 @@ def reexecution_summary(markers):
     return dict(markers=result, capture_complete=None, marker_filter_enabled=None,
                 changed_input_queries=None, avoidable_provider_calls=None,
                 provider_elapsed_ns=None, cpu_work_ns=None, time_saved_ns=None,
-                scope='Retrospective result-hash classifications for re-executed existing keys only. Eval-always is separate. New keys are excluded; no_hash is unknown value equality. Same value does not prove changed inputs, avoidable execution, or prospective reuse. Marker durations are not provider durations.')
+                scope='Legacy mixed result-hash classifications for existing keys at allocation: includes provider execution AND fed query results. These records do not establish provider execution. Eval-always is separate. New keys are excluded; no_hash is unknown value equality. Same value does not prove changed inputs, avoidable execution, or prospective reuse. Marker durations are not provider durations.')
 
 
 def summarize_records(records, resolve_event=None):

@@ -118,6 +118,8 @@ class ReuseTests(unittest.TestCase):
 
     def test_reexecution_absence_retains_unknowns(self):
         report = rc.summarize_records([])['native_reexecution_results']
+        self.assertIn('fed query results', report['scope'])
+        self.assertIn('do not establish provider execution', report['scope'])
         self.assertEqual(len(report['markers']), 6)
         for marker in report['markers'].values():
             self.assertEqual(marker['evidence'], 'unknown-marker-absent')
