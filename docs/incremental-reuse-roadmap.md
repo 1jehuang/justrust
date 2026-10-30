@@ -103,7 +103,7 @@ work and memory cost alongside any claimed gain.
 | Boundary | What is established | What remains unestablished |
 | --- | --- | --- |
 | Proven-green value acquisition | Native named markers distinguish acquisition from provider recomputation; real warm application reports retain per-thread unions | Whole-compiler coverage, removable critical-path time, and a universal reusable-IR percentage |
-| Three scalar query values | Default-off tracked retention; 22-case native edit/error/cross-crate gate; selected fixture recomputations decrease; observed extra query-cache storage is 316 bytes in that fixture | Real-workload benefit, general memory/storage cost, exhaustive correctness, and shared-cache flag transitions |
+| Three scalar query values | Default-off tracked retention; 22-case native edit/error/cross-crate gate; selected fixture recomputations decrease; observed extra query-cache storage is 316 bytes in that fixture | Real-workload benefit, general memory/storage cost and exhaustive correctness |
 | Empty lint-owner setup | Default-off tracked fast path; 22-case native diagnostic gate, 88 invocations with incremental fingerprint verification | Performance, arbitrary macro/custom-lint/query-cycle behavior, broader Rust regressions |
 | End-to-end scalar workload | Exact blocked comprehensive baseline and failed named diagnostic retained, including all failure output | A passing matched before/after comparison and default promotion |
 | Resident arena-owned state | Lifetime and diagnostic-generation requirements identified | A bounded, cancellation-safe implementation and measured benefit |

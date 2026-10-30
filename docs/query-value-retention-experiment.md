@@ -132,5 +132,11 @@ only this finite incremental correctness check. It does not prove query values
 were actually deserialized, exhaustive language correctness, compatibility of
 flag-on caches with flag-off caches, or any performance benefit. The deliberately
 separate cache directories do not test toggling the tracked flag in one cache.
+That boundary is now covered separately by `reuse-query-transition.py`: 66
+no/yes/no transitions across 22 cases passed against fresh references with
+fingerprint verification and exact diagnostics/runtime. See
+`query-retention-transitions.md` and its retained native report. This finite
+transition gate does not turn the original count fixture into a performance
+measurement or prove format compatibility with a stock compiler.
 Any future performance/default-promotion claim still requires the comprehensive
 session-weighted benchmark and relevant broader correctness gates.

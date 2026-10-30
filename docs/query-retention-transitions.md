@@ -82,7 +82,9 @@ Validation on 2026-10-30:
   reference with exact diagnostics and expected runtime, including errors and
   recovery. This covers 264 compiler fixture invocations, plus runtime and
   identity checks.
-- Full private report and raw per-process evidence are retained at
+- The exact report is committed at
+  `bench/results/query-value-retention-20261030/native-mode-transitions/acceptance.json`.
+  Full private report and raw per-process evidence are retained at
   `/home/jeremy/.jcode/scratch/query-retention-transition-20261030-native-01/`.
 - `acceptance.json` SHA-256:
   `7ed0356418715174f55cdc0574225acecaa40c63ac74cb00cf396dea918e0aa8`.
