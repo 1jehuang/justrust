@@ -1106,6 +1106,117 @@ fn locked_registry_unchanged_probe_boundaries() {
 }
 
 #[test]
+fn locked_registry_time_core_matches_stock_end_to_end() {
+    let scratch = target_dir("registry-time-core-acceptance");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let cargo_home = seed_registry_cache("time-core-0.1.2");
+    let checksum = "ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3";
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='probe'\nversion='0.1.0'\nedition='2024'\n[dependencies]\ntime-core='=0.1.2'\n",
+    ).unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        format!("version=4\n[[package]]\nname='probe'\nversion='0.1.0'\ndependencies=['time-core']\n[[package]]\nname='time-core'\nversion='0.1.2'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{checksum}'\n"),
+    ).unwrap();
+    let source = r#"fn main() {
+        println!("{} {} {}", time_core::convert::Day::per(time_core::convert::Week), time_core::convert::Hour::per(time_core::convert::Day), time_core::convert::Minute::per(time_core::convert::Hour));
+        for year in [-800i32, -401, -400, -396, -391, -1, 0, 4, 9, 2019, 2020, i32::MIN, i32::MAX] {
+            println!("{} {}", year, time_core::util::weeks_in_year(year));
+        }
+    }"#;
+    let client = project.join("src/main.rs");
+    std::fs::write(&client, source).unwrap();
+    let library_source = cargo_home
+        .join("registry/src")
+        .join(CRATES_IO_CACHE_ID)
+        .join("time-core-0.1.2/src/lib.rs");
+    let expected_stdout = b"7 24 60\n-800 52\n-401 52\n-400 52\n-396 53\n-391 53\n-1 52\n0 52\n4 53\n9 53\n2019 52\n2020 53\n-2147483648 52\n2147483647 52\n";
+    for workers in ["1", "8"] {
+        let stock_target = scratch.join(format!("stock-{workers}"));
+        std::fs::create_dir_all(&stock_target).unwrap();
+        let library = stock_target.join("libtime_core.rlib");
+        for check in [true, false] {
+            let stock_library = if check {
+                stock_target.join("libtime_core.rmeta")
+            } else {
+                library.clone()
+            };
+            let mut command = Command::new(stock_rustc::stock_rustc());
+            command.args([
+                "--edition=2021",
+                "--crate-type=rlib",
+                "--crate-name=time_core",
+            ]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let stock = command
+                .arg(&library_source)
+                .arg("-o")
+                .arg(&stock_library)
+                .output()
+                .unwrap();
+            assert!(
+                stock.status.success(),
+                "workers={workers} check={check}: {stock:?}"
+            );
+            let mut command = Command::new(stock_rustc::stock_rustc());
+            command.args(["--edition=2024", "--crate-name=probe"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let stock = command
+                .arg(&client)
+                .arg("--extern")
+                .arg(format!("time_core={}", stock_library.display()))
+                .arg("-o")
+                .arg(stock_target.join(if check { "probe.rmeta" } else { "probe" }))
+                .output()
+                .unwrap();
+            assert!(
+                stock.status.success(),
+                "workers={workers} check={check}: {stock:?}"
+            );
+        }
+        let expected = Command::new(stock_target.join("probe")).output().unwrap();
+        assert!(expected.status.success(), "{expected:?}");
+        assert_eq!(expected.stdout, expected_stdout);
+        for command in ["check", "build", "run"] {
+            let output = native_command()
+                .args([command, "-j", workers])
+                .current_dir(&project)
+                .env("CARGO_HOME", &cargo_home)
+                .env(
+                    "CARGO_TARGET_DIR",
+                    scratch.join(format!("native-{workers}")),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "workers={workers} {command}: {output:?}"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("Input capture: immutable native project namespace"),
+                "{stderr}"
+            );
+            assert!(
+                !stderr.contains("native input capture is unproven"),
+                "{stderr}"
+            );
+            if command == "run" {
+                assert_eq!(output.stdout, expected.stdout);
+            } else {
+                assert!(output.stdout.is_empty(), "{output:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn locked_registry_nix_base32_matches_stock_end_to_end() {
     let scratch = target_dir("registry-nix-base32-acceptance");
     let project = scratch.join("project");
