@@ -1,0 +1,537 @@
+{
+  "schema": 2,
+  "scope": "provider-only-retrospective-reexecuted-value-classification",
+  "allocation_origin": "query-provider-only-feed-and-nonquery-tasks-excluded",
+  "verify_ich": true,
+  "self_profile_events": "generic-activity,function-args",
+  "verdict": "failed",
+  "observations": [
+    {
+      "name": "initial",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 7 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "9\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "9f35dee260280c69b8ac62fafd0a9329c0c4ee9a2affab5fea7d77386a413304",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/initial",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "19e993cc3954eb129002b351a4642149683523f4f18286e5235bbb1e063b0b0f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/initial/reexecuted_fixture-3635078.mm_profdata",
+            "sha256": "d121a2f5194d9c64b02d1cfcebdc87e4de553013dec77b04696604d1fb9e5360",
+            "bytes": 199919,
+            "markers": {
+              "jr_incremental_provider_reexecuted_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "unchanged",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 7 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "9\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "9f35dee260280c69b8ac62fafd0a9329c0c4ee9a2affab5fea7d77386a413304",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/unchanged",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "19e993cc3954eb129002b351a4642149683523f4f18286e5235bbb1e063b0b0f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/unchanged/reexecuted_fixture-3635199.mm_profdata",
+            "sha256": "c102b5a126e7f6479061072800ed221e9a597ba1ae7f5573626c31b981fac0d9",
+            "bytes": 191211,
+            "markers": {
+              "jr_incremental_provider_reexecuted_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "body-edit",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 8 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "10\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "bab7fa97a0ec468946ba87399311edc0a9c786e9cc42880e2795f10acb038283",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "10\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/body-edit",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "d3a41ee5ff41b8ebe607e4f688f39e280236100861187baa092a35b05e9321f7",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "10\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/body-edit/reexecuted_fixture-3635295.mm_profdata",
+            "sha256": "c742144dfe7489c32318baf01e27f13ec7f2b7f9c7aa9ad63b7abc79dada683c",
+            "bytes": 239013,
+            "markers": {
+              "jr_incremental_provider_reexecuted_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "type-error",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { \"wrong\" }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": null,
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture.rs:2:21\n  |\n2 | fn value() -> u32 { \"wrong\" }\n  |               ---   ^^^^^^^ expected `u32`, found `&str`\n  |               |\n  |               expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/type-error",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture.rs:2:21\n  |\n2 | fn value() -> u32 { \"wrong\" }\n  |               ---   ^^^^^^^ expected `u32`, found `&str`\n  |               |\n  |               expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/type-error/reexecuted_fixture-3635372.mm_profdata",
+            "sha256": "351e7382aa8b0728ca232b1591eaa3d95f21b82ab0a74dfe65f31a6ce46ff78d",
+            "bytes": 568509,
+            "markers": {
+              "jr_incremental_provider_reexecuted_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "recovery",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 7 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "9\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "9f35dee260280c69b8ac62fafd0a9329c0c4ee9a2affab5fea7d77386a413304",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/recovery",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "19e993cc3954eb129002b351a4642149683523f4f18286e5235bbb1e063b0b0f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/provider-only-legacy-negative-20261030/on/recovery/reexecuted_fixture-3635670.mm_profdata",
+            "sha256": "320d84a22e16e7c7d06e02a4a9383775878b5768bb0dd33a14f8924d257e902c",
+            "bytes": 237996,
+            "markers": {
+              "jr_incremental_provider_reexecuted_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_reexecuted_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_provider_eval_always_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "provider_elapsed_ns": null,
+  "time_saved_ns": null,
+  "inputs_changed": null,
+  "provider_avoidable": null,
+  "capture_complete": null,
+  "compiler": {
+    "path": "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+    "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "version": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+        "-vV"
+      ],
+      "status": 0,
+      "stdout": "rustc 1.101.0-nightly (0c2b726d1 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 0c2b726d11f459e247117a7554f9fe9c8034c474\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "stderr": ""
+    }
+  },
+  "sysroot_query": {
+    "command": [
+      "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+      "--print",
+      "sysroot"
+    ],
+    "status": 0,
+    "stdout": "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot\n",
+    "stderr": ""
+  },
+  "drivers": [
+    {
+      "path": "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "47caa85292e729553328c669d88631e0b90550a173609941aebcd14c0a3cf10c"
+    }
+  ],
+  "error": "Missing native ordinary same_value evidence"
+}
