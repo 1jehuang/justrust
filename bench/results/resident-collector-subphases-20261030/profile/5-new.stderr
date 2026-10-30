@@ -1,0 +1,38 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source)
+    Finished `test` profile [blaze] target(s) in 0.14s
+     Running unittests src/lib.rs (/home/jeremy/rsa23/engine/target/debug/deps/justrust-662154c65254519f)
+blaze time: 148.3 ms: worker check 51.7 (35%), worker build-rest 31.8 (21%), client planning 18.9 (13%), worker roots 12.7 (9%), worker apply 11.4 (8%), client command 4.5 (3%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     4.5 ms   3.0%
+blaze    client test                        0.3 ms   0.2%
+blaze    client metadata                    0.5 ms   0.3%
+blaze    client planning                   18.9 ms  12.8%
+blaze    client checkout                    0.3 ms   0.2%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      0.5 ms   0.3%
+blaze    daemon read request                0.2 ms   0.1%
+blaze    daemon                             0.3 ms   0.2%
+blaze    daemon↔worker                      0.4 ms   0.3%
+blaze    worker wait                        0.4 ms   0.2%
+blaze    worker settle                      0.0 ms   0.0%
+blaze    worker read                        2.3 ms   1.6%
+blaze    worker apply                      11.4 ms   7.7%
+blaze    worker roots                      12.7 ms   8.5%
+blaze    worker check                      51.7 ms  34.9%
+blaze    worker reach                       0.4 ms   0.2%
+blaze    worker resolve                     1.8 ms   1.2%
+blaze    worker define                      0.0 ms   0.0%
+blaze    worker object                      0.5 ms   0.3%
+blaze    worker statics                     0.8 ms   0.6%
+blaze    worker setup                       1.3 ms   0.9%
+blaze    worker compile-rest                0.9 ms   0.6%
+blaze    worker write                       0.0 ms   0.0%
+blaze    worker build-rest                 31.8 ms  21.4%
+blaze    worker report                      0.1 ms   0.0%
+blaze    worker refuse                      2.1 ms   1.4%
+blaze    worker link                        1.0 ms   0.7%
+blaze    client install artifacts           0.1 ms   0.1%
+blaze    client test execution              3.1 ms   2.1%
+blaze    total                            148.3 ms 100.0%
+blaze: trace written to /home/jeremy/.jcode/scratch/resident-semantic-subphases-v26-profile-20261030/5-new.trace.json

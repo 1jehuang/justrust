@@ -1,0 +1,161 @@
+{
+  "id": "20261030-135438404-3757691",
+  "args": [
+    "test",
+    "--manifest-path",
+    "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/Cargo.toml",
+    "--release",
+    "--offline",
+    "--locked",
+    "-p",
+    "hir",
+    "--lib",
+    "-j",
+    "6",
+    "--",
+    "resident_collector_subphases",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "3dffe2be0a60",
+    "dirty_files": 7
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793393678.414165,
+  "wall": 2.8594212532043457,
+  "exit": 0,
+  "cpu_secs": 3.386222,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 15,
+    "processes": 3,
+    "sample_span_secs": 2.8554580211639404,
+    "max_sample_gap_secs": 0.2093348503112793
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.12403607368469238,
+    "lock_wait": 0.0,
+    "compile": 2.7132115364074707,
+    "build_gaps": 0.0018534660339355469,
+    "test_run": 0.0033288002014160156,
+    "tail": 0.016991376876831055
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 140,
+    "rustc_cpu_secs": 2.94,
+    "rustc_wall_sum": 2.7132112979888916,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "hir (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.12403607368469238,
+      "wall": 2.7132112979888916,
+      "wall_share": 2.7132115364074707,
+      "cpu": 2.940471,
+      "max_rss_mb": 545.98828125,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "hir-4fb16347be4d63f6",
+        "start": 2.8504981994628906,
+        "wall": 0.0033288002014160156,
+        "passed": 2,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "diagnostics::resident_collector_subphases_tests::resident_collector_subphases_disabled_no_clock_helper",
+        "binary": "hir-4fb16347be4d63f6",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "diagnostics::resident_collector_subphases_tests::resident_collector_subphases_actual_scopes_bounded_inventory",
+        "binary": "hir-4fb16347be4d63f6",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 2
+  },
+  "resources": {
+    "avg_build_cores": 1.184233346592534,
+    "peak_build_cores": 1.1016642418456353,
+    "peak_build_rss_mb": 593.4296875,
+    "peak_unit_rss_mb": 545.98828125,
+    "min_mem_available_mb": 33921,
+    "avg_other_cores": 3.75540466296956,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.032083,
+    "psi_mem_secs": 0.000046,
+    "psi_io_secs": 0.032265
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 33,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-135438404-3757691.scope",
+    "final_weight": 958,
+    "setup_secs": 0.00925613,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

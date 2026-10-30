@@ -1,0 +1,24 @@
+request: sync at_us=1793393828967401
+change: 1 files
+diagnostics collector: label=hir.collect.module_inclusive calls=60 cumulative_ns=203759091 inclusive=true
+diagnostics collector: label=hir.collect.item_case calls=331 cumulative_ns=577746 inclusive=true
+diagnostics collector: label=hir.collect.signature_generic_inclusive calls=445 cumulative_ns=936905 inclusive=true
+diagnostics collector: label=hir.collect.signature_fields_inclusive calls=169 cumulative_ns=48253 inclusive=true
+diagnostics collector: label=hir.collect.wellformed calls=331 cumulative_ns=292210 inclusive=true
+diagnostics collector: label=hir.collect.impl_inclusive calls=115 cumulative_ns=122618624 inclusive=true
+diagnostics collector: label=hir.collect.selected_body_inclusive calls=373 cumulative_ns=192428756 inclusive=true
+diagnostics collector: label=hir.collect.body_expr_inclusive calls=373 cumulative_ns=121230636 inclusive=true
+diagnostics collector: label=hir.collect.body_inference_inclusive calls=373 cumulative_ns=5599418 inclusive=true
+diagnostics collector: label=hir.collect.missing_unsafe calls=373 cumulative_ns=6790409 inclusive=true
+diagnostics collector: label=hir.collect.body_validation calls=373 cumulative_ns=11465267 inclusive=true
+diagnostics collector: label=hir.collect.body_borrowck calls=373 cumulative_ns=43438460 inclusive=true
+diagnostics collector: label=hir.collect.signature_setup_inclusive calls=330 cumulative_ns=899751 inclusive=true
+diagnostics collector: label=hir.collect.impl_checks_inclusive calls=115 cumulative_ns=214355 inclusive=true
+check timing: FileId(562): asked_callback_calls=373 asked_callback_cumulative_ns=336614 (source/hash/selective predicate, included in semantic)
+edit (apply 10.9ms): compiled 3990 of 3990 fns (+120 instances) in 67.0ms (+1.1µs emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 443.9µs, resolve 1.5ms, define 17.9µs, fallback 0.0ns, object 436.2µs, 1 rounds
+link: 955.6µs (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 100.1ms
+diagnostics transport: retained=9 stale=0 dropped=0 cap=4000

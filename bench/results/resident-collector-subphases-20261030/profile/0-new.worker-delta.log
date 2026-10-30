@@ -1,0 +1,39 @@
+request: sync at_us=1793393827065743
+change: 1 files
+diagnostics collector: label=hir.collect.module_inclusive calls=60 cumulative_ns=266933337 inclusive=true
+diagnostics collector: label=hir.collect.item_case calls=331 cumulative_ns=957375 inclusive=true
+diagnostics collector: label=hir.collect.signature_generic_inclusive calls=445 cumulative_ns=1443038 inclusive=true
+diagnostics collector: label=hir.collect.signature_fields_inclusive calls=169 cumulative_ns=83227 inclusive=true
+diagnostics collector: label=hir.collect.wellformed calls=331 cumulative_ns=444420 inclusive=true
+diagnostics collector: label=hir.collect.impl_inclusive calls=115 cumulative_ns=142246046 inclusive=true
+diagnostics collector: label=hir.collect.selected_body_inclusive calls=373 cumulative_ns=249677225 inclusive=true
+diagnostics collector: label=hir.collect.body_expr_inclusive calls=373 cumulative_ns=139691224 inclusive=true
+diagnostics collector: label=hir.collect.body_inference_inclusive calls=373 cumulative_ns=31552607 inclusive=true
+diagnostics collector: label=hir.collect.missing_unsafe calls=373 cumulative_ns=13152792 inclusive=true
+diagnostics collector: label=hir.collect.body_validation calls=373 cumulative_ns=16365903 inclusive=true
+diagnostics collector: label=hir.collect.body_borrowck calls=373 cumulative_ns=44853635 inclusive=true
+diagnostics collector: label=hir.collect.signature_setup_inclusive calls=330 cumulative_ns=1391344 inclusive=true
+diagnostics collector: label=hir.collect.impl_checks_inclusive calls=115 cumulative_ns=371682 inclusive=true
+check timing: FileId(562): asked_callback_calls=373 asked_callback_cumulative_ns=436386 (source/hash/selective predicate, included in semantic)
+diagnostics collector: label=hir.collect.module_inclusive calls=112 cumulative_ns=173605530 inclusive=true
+diagnostics collector: label=hir.collect.item_case calls=242 cumulative_ns=364593 inclusive=true
+diagnostics collector: label=hir.collect.signature_generic_inclusive calls=224 cumulative_ns=427443 inclusive=true
+diagnostics collector: label=hir.collect.signature_fields_inclusive calls=31 cumulative_ns=9252 inclusive=true
+diagnostics collector: label=hir.collect.wellformed calls=64 cumulative_ns=168229 inclusive=true
+diagnostics collector: label=hir.collect.impl_inclusive calls=14 cumulative_ns=112689457 inclusive=true
+diagnostics collector: label=hir.collect.selected_body_inclusive calls=231 cumulative_ns=152803382 inclusive=true
+diagnostics collector: label=hir.collect.body_expr_inclusive calls=231 cumulative_ns=2475959 inclusive=true
+diagnostics collector: label=hir.collect.body_inference_inclusive calls=231 cumulative_ns=6324014 inclusive=true
+diagnostics collector: label=hir.collect.missing_unsafe calls=231 cumulative_ns=5168060 inclusive=true
+diagnostics collector: label=hir.collect.body_validation calls=231 cumulative_ns=1939930 inclusive=true
+diagnostics collector: label=hir.collect.body_borrowck calls=231 cumulative_ns=120658770 inclusive=true
+diagnostics collector: label=hir.collect.signature_setup_inclusive calls=210 cumulative_ns=478505 inclusive=true
+diagnostics collector: label=hir.collect.impl_checks_inclusive calls=14 cumulative_ns=115167 inclusive=true
+check timing: FileId(33): asked_callback_calls=231 asked_callback_cumulative_ns=162465 (source/hash/selective predicate, included in semantic)
+edit (apply 30.2ms): compiled 3990 of 3990 fns (+120 instances) in 1.3s (+1.2µs emit)
+stats: 10923 of 44574 functions compiled, 33651 reused
+patch: 7 functions
+phases: compile 711.0µs, resolve 1.6ms, define 14.9µs, fallback 0.0ns, object 463.5µs, 1 rounds
+link: 1.6ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 1.4s
+diagnostics transport: retained=17 stale=249 dropped=0 cap=4000

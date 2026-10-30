@@ -1,0 +1,237 @@
+{
+  "id": "20261030-135710393-3931042",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "3dffe2be0a60",
+    "dirty_files": 7
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793393830.4150622,
+  "wall": 17.106107234954834,
+  "exit": 0,
+  "cpu_secs": 7.053221000000001,
+  "measurement_coverage": {
+    "samples": 83,
+    "processes": 2,
+    "sample_span_secs": 17.104048252105713,
+    "max_sample_gap_secs": 0.21428203582763672
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.47425293922424316,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 16.618191957473755,
+    "tail": 0.013662338256835938
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 429,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "jr_engine-93ff5023e9192f9b",
+        "start": 0.47425293922424316,
+        "wall": 16.618191957473755,
+        "passed": 351,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 351,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 16.59,
+    "slowest": [
+      {
+        "name": "remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 16.524,
+        "passed": true
+      },
+      {
+        "name": "remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 1.747,
+        "passed": true
+      },
+      {
+        "name": "deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.933,
+        "passed": true
+      },
+      {
+        "name": "remote::gateway::tests::what_is_over_a_put_goes_up_in_parts_checked_whole",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.914,
+        "passed": true
+      },
+      {
+        "name": "remote::gateway::tests::a_pack_goes_up_and_comes_back_in_ranges",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.429,
+        "passed": true
+      },
+      {
+        "name": "remote::tests::a_pack_that_unpacks_to_more_than_its_list_says_is_not_written",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.303,
+        "passed": true
+      },
+      {
+        "name": "whole::tests::packed_reads_back_as_it_was",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.261,
+        "passed": true
+      },
+      {
+        "name": "whole::tests::read_by_a_link_is_not_removed",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.261,
+        "passed": true
+      },
+      {
+        "name": "whole::tests::written_anew_leaves_nothing_of_the_last",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.261,
+        "passed": true
+      },
+      {
+        "name": "remote::tests::a_manifest_longer_than_is_read_is_refused",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.248,
+        "passed": true
+      },
+      {
+        "name": "remote::signed::tests::no_bytes_are_taken_for_a_list_that_was_signed",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.22,
+        "passed": true
+      },
+      {
+        "name": "socket::tests::a_client_that_never_reads_is_given_up_on",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.214,
+        "passed": true
+      },
+      {
+        "name": "deps::tests::an_archive_that_unpacks_to_more_than_is_taken_is_refused",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.212,
+        "passed": true
+      },
+      {
+        "name": "splice::tests::a_program_written_in_place_starts_after_the_write",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.201,
+        "passed": true
+      },
+      {
+        "name": "deps::tests::a_list_of_units_longer_than_is_read_is_refused",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.167,
+        "passed": true
+      },
+      {
+        "name": "cargo::closure::tests::fetched_pushed_pulled_and_laid_out",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.164,
+        "passed": true
+      },
+      {
+        "name": "remote::gateway::tests::a_pack_the_gateway_changed_is_rejected_and_not_kept",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.16,
+        "passed": true
+      },
+      {
+        "name": "socket::tests::a_socket_let_go_of_is_free_while_processes_start",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.144,
+        "passed": true
+      },
+      {
+        "name": "cargo::keyed::tests::an_entry_is_found_while_what_it_read_is_as_it_was",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.134,
+        "passed": true
+      },
+      {
+        "name": "cargo::closure::tests::the_real_nar_is_kept_and_laid_out_as_signed",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.13,
+        "passed": true
+      }
+    ],
+    "timed_secs": 25.017,
+    "timed": 351
+  },
+  "resources": {
+    "avg_build_cores": 0.41232180431953336,
+    "peak_build_cores": 9.734640762068778,
+    "peak_build_rss_mb": 859.984375,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 20665,
+    "avg_other_cores": 3.1575112775157983,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.18397300000000003,
+    "psi_mem_secs": 0.016014,
+    "psi_io_secs": 0.06056700000000001
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 254,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-135710393-3931042.scope",
+    "final_weight": 887,
+    "setup_secs": 0.019861327,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

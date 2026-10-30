@@ -1,0 +1,388 @@
+PASS unchanged 2444 source files and private snapshot
+{
+  "verdict": "passed",
+  "source": {
+    "files": 2444,
+    "private_delta": "Cargo.lock",
+    "four_path_patch_replayed": true
+  },
+  "native": [
+    {
+      "run_id": "20261030-133307142-3479390",
+      "filter": "resident_semantic_subphases",
+      "passed": 5
+    },
+    {
+      "run_id": "20261030-133436214-3485583",
+      "filter": "diagnostic_hash::tests",
+      "passed": 2
+    },
+    {
+      "run_id": "20261030-133436486-3485632",
+      "filter": "diagnostics_timing_tests",
+      "passed": 3
+    },
+    {
+      "run_id": "20261030-133436701-3485707",
+      "filter": "resident_graph_reuse",
+      "passed": 1
+    },
+    {
+      "run_id": "20261030-133436923-3485756",
+      "filter": "the_roots_of_a_listed_crate",
+      "passed": 1
+    },
+    {
+      "run_id": "20261030-133437181-3485842",
+      "filter": "telemetry",
+      "passed": 3
+    },
+    {
+      "run_id": "20261030-133629708-3652589",
+      "filter": null,
+      "passed": 351
+    }
+  ],
+  "disabled_suites": [
+    {
+      "namespace": "rsb16",
+      "rows": 22,
+      "disabled_telemetry": true
+    },
+    {
+      "namespace": "rsa22",
+      "rows": 22,
+      "disabled_telemetry": true
+    }
+  ],
+  "profile": [
+    {
+      "row": 0,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 430,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 7,
+            "diagnostics.semantic.syntax_walk": 205,
+            "diagnostics.semantic.module_context": 0,
+            "diagnostics.semantic.collect": 116165,
+            "diagnostics.semantic.render_and_filter": 1360
+          }
+        },
+        {
+          "pid": 3649083,
+          "tid": 429,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 11,
+            "diagnostics.semantic.syntax_walk": 543,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 148160,
+            "diagnostics.semantic.render_and_filter": 43
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ],
+        [
+          33,
+          231
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 1,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 435,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 11,
+            "diagnostics.semantic.syntax_walk": 255,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 254759,
+            "diagnostics.semantic.render_and_filter": 1000
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 2,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 451,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 13,
+            "diagnostics.semantic.syntax_walk": 268,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 72131,
+            "diagnostics.semantic.render_and_filter": 1103
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 3,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 468,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 14,
+            "diagnostics.semantic.syntax_walk": 251,
+            "diagnostics.semantic.module_context": 2,
+            "diagnostics.semantic.collect": 112705,
+            "diagnostics.semantic.render_and_filter": 1216
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 4,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 484,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 13,
+            "diagnostics.semantic.syntax_walk": 242,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 97967,
+            "diagnostics.semantic.render_and_filter": 1238
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 5,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 501,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 18,
+            "diagnostics.semantic.syntax_walk": 241,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 100109,
+            "diagnostics.semantic.render_and_filter": 1577
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    }
+  ],
+  "scope": "Actual correctness and inclusive telemetry receipts only, no speedup verdict"
+}
+{
+  "scope": "Offline re-signed mutation controls and isolated relocated replay, no native calls.",
+  "baseline": "passed",
+  "mutations": [
+    {
+      "name": "reintroduced_semantic_guard",
+      "verdict": "rejected",
+      "reason": "accepted frozen source anchor: toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "altered_four_file_patch",
+      "verdict": "rejected",
+      "reason": "four-file patch anchor",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "snapshot_nonlock_delta",
+      "verdict": "rejected",
+      "reason": "private delta not lock-only",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "private_lock_corrupt",
+      "verdict": "rejected",
+      "reason": "retained lock mismatch",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "full351_count_downgrade",
+      "verdict": "rejected",
+      "reason": "native test counts/exit",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "actual_api_test_missing",
+      "verdict": "rejected",
+      "reason": "actual API test absent from journal",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "runtime_marker_missing",
+      "verdict": "rejected",
+      "reason": "runtime edit marker absent/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "type_error_false_success",
+      "verdict": "rejected",
+      "reason": "expected negative gate succeeded",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_label_missing",
+      "verdict": "rejected",
+      "reason": "same-thread five actual phases missing/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_wrong_thread",
+      "verdict": "rejected",
+      "reason": "same-thread five actual phases missing/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_outside_outer",
+      "verdict": "rejected",
+      "reason": "phase outside actual same-thread semantic outer",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_overlap",
+      "verdict": "rejected",
+      "reason": "actual phases not contiguous in label order",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_duplicate",
+      "verdict": "rejected",
+      "reason": "same-thread five actual phases missing/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "transport_drop",
+      "verdict": "rejected",
+      "reason": "profile drops/stale/retained counts",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "two_files_collapsed",
+      "verdict": "rejected",
+      "reason": "profile actual file callback rows",
+      "all_mutable_hashes_resigned": true
+    }
+  ],
+  "relocation": {
+    "verdict": "passed",
+    "independent_cwd": true,
+    "actual_validator_from_relocated_bundle": true,
+    "no_original_scratch_or_repository_reads": true
+  },
+  "verdict": "passed"
+}
+[stderr] .................................................usage: compare [-h] --source SOURCE --output OUTPUT --blaze BLAZE
+[stderr]                --justrust JUSTRUST --rustc RUSTC --cargo CARGO
+[stderr]                [--native-cargo NATIVE_CARGO] [--wild WILD] [--samples SAMPLES]
+[stderr]                [--command {test,build}] [--binary BINARY]
+[stderr]                [--test-filter TEST_FILTER] [--edit-test EDIT_TEST]
+[stderr]                [--edit-file EDIT_FILE] [--edit-anchor EDIT_ANCHOR]
+[stderr]                [--blaze-llvm] [--owned-experiments] [--native-macro-cache]
+[stderr]                [--declarative-macro-cache] [--demand-query-cache]
+[stderr]                [--cgu-inline-traversal] [--native-backend-frontier]
+[stderr]                [--blaze-seed-cache BLAZE_SEED_CACHE] [--timeout TIMEOUT]
+[stderr] compare: error: --native-macro-cache requires --wild so hotpatch is not inert
+[stderr] .................usage: profile [--incremental {on,off}]
+[stderr] profile: error: expected suite run arguments
+[stderr] ....usage: profile --debug-info {0,1,2} [--lto {off}]
+[stderr] profile: error: expected suite run arguments after --debug-info
+[stderr] ..................frontend mapping: report output already exists
+[stderr] frontend mapping: report and graph output paths must differ
+FIXTURE /home/jeremy/.jcode/scratch/headless-launch-z9kn9hfd
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 3998479, "child": 3998480, "mode": "plain", "probe": {"pid": 3998480, "sid": 3998479, "pgid": 3998480, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [3998480], "reaped": [3998480], "remaining": []}, "stderr": ""}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3998534, "child": 3998535, "mode": "command", "exit": 87, "cleanup": {"killed": [3998538], "reaped": [3998537, 3998538], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 02:09:57 PM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nFri Oct 30 02:09:57 PM PDT 2026\n'
+PRIVATE_TMUX_EARLY_KILL {"pid": 3998556, "sid": 3998556, "pgid": 3998556, "start": "13643255", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 3998556, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+OBSERVED {"supervisor": 3998564, "child": 3998565, "mode": "timeout", "probe": {"pid": 3998566, "sid": 3998564, "pgid": 3998565, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [3998565, 3998566], "reaped": [3998565, 3998566], "remaining": []}, "stderr": ""}
+PRIVATE_TMUX_NATURAL_EXIT {"pid": 3998630, "sid": 3998630, "pgid": 3998630, "start": "13643299", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 3998630, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3998677, "child": 3998681, "mode": "command", "exit": 23, "cleanup": {"killed": [3998685], "reaped": [3998683, 3998685], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 02:09:58 PM PDT 2026\nEXIT 23\nFri Oct 30 02:09:58 PM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3998734, "child": 3998738, "mode": "command", "exit": 143, "cleanup": {"killed": [3998742], "reaped": [3998740, 3998742], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 02:09:59 PM PDT 2026\nTerminated                 /usr/bin/python3 /home/jeremy/.jcode/scratch/headless-launch-z9kn9hfd/public-status-143/home/payload.py\nEXIT 143\nFri Oct 30 02:09:59 PM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3998796, "child": 3998802, "mode": "command", "exit": 0, "cleanup": {"killed": [3998806], "reaped": [3998804, 3998806], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 02:09:59 PM PDT 2026\nEXIT 0\nFri Oct 30 02:09:59 PM PDT 2026\n'
+OBSERVED {"supervisor": 3998809, "child": 3998810, "mode": "setsid", "probe": {"pid": 3998811, "sid": 3998811, "pgid": 3998811, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+CHILD_STDERR 'setsid: child 3998816 did not exit normally: Success\n'
+OBSERVED {"supervisor": 3998814, "child": 3998815, "mode": "setsid", "probe": {"pid": 3998816, "sid": 3998816, "pgid": 3998816, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 3998816 did not exit normally: Success\n"}
+CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 3998822, "child": 3998826, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+[stderr] ................................................................................................................usage: python3 -m unittest [-h] [--repo REPO] [--patch PATCH |
+[stderr]                            --source-commit SOURCE_COMMIT]
+[stderr]                            [--allow-file ALLOW_FILE]
+[stderr]                            [--baseline-result BASELINE_RESULT] --out OUT
+[stderr]                            [-n N] [--warmup WARMUP] [--mode {hosted,local}]
+[stderr]                            [--toolchain TOOLCHAIN]
+[stderr] python3 -m unittest: error: refusing to overwrite an existing result
+[stderr] ......frontend mapping: report output already exists
+[stderr] frontend mapping: report and graph output paths must differ
+table
+saved /home/jeremy/.jcode/scratch/tmpq7pv92ut/baseline.json
+round 1 remote fresh-check measured=True: failed exit=1 wall=0.000s
+[stderr] .................................................................................................................................................................................................................................................................................................................................................................................................................bench: desktop-noop-test (1/1)
+[stderr] .bench: desktop-noop-test (1/1)
+[stderr] bench: desktop-noop-test (1/1)
+[stderr] ......................................bench: desktop-noop-test (1/1)
+[stderr] ......................................................
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 700 tests in 10.498s
+[stderr] 
+[stderr] OK
+
+--- Command finished with exit code: 0 ---

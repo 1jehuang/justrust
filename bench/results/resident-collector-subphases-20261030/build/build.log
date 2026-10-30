@@ -1,0 +1,37 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: build succeeded, tests not run in 87.2s
+  time    startup 0.23s | compile 86.94s | gaps 0.02s | after 0.03s
+  units   9 compiled (9 local, 0 deps, 0 build scripts), 418 fresh. Rebuilt because: hir changed (4 crates); load-cargo changed (2 crates); edited vendor/rust-analyzer/crates/hir/src/diagnostics.rs (hir)
+          jr_engine                         59.70s  cpu 240.0s   2860 MB
+          hir                                6.87s  cpu  30.2s    855 MB
+          ide_db                             6.08s  cpu  32.7s    677 MB
+          blaze_doc                          4.80s  cpu  22.2s    499 MB
+  cpu     379.7s total, avg 4.4/peak 6.6 of 16 cores; others used 3.7 cores
+  memory  peak 2940 MB build, 2860 MB largest rustc, 31.0 GB free; stalls cpu 1.06s mem 0.00s io 0.03s
+  output  3 warnings shown, 251 hidden; 446 progress and 0 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 47.8s  65.8s went to recompiling oversized crates: jr_engine (79k lines, 59.7s), ide_db (42k lines, 6.1s, rebuilt for an upstream change). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 20.4s  ide-db, load-cargo, blaze-lints, ra-jit-macro-wasm, ra-jit-expand, ide-diagnostics, blaze-doc rebuilt only because hir, ide-db, load-cargo changed (edited vendor/rust-analyzer/crates/hir/src/diagnostics.rs) (20.4s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+  more    `justrust log 20261030-135019088-3723817` full output, `justrust show 20261030-135019088-3723817` full profile

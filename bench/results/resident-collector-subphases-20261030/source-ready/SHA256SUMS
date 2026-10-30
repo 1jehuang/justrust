@@ -1,0 +1,12 @@
+76941256b74a094de85ba0e3f7c4cac693e926d8040aae186f129fb8dc8625aa  frozen/docs/resident-collector-subphases.md
+e7671894d8995c52859196f8e278674e0177cf57055ca62212d664debf363c04  frozen/toolchain/resident/crates/ra-jit/src/main.rs
+8767edd40c7083d18ae89e1e356ed6a9e438663cf583cd5e103ffe0fa61e91ab  frozen/toolchain/resident/vendor/rust-analyzer/crates/hir/src/diagnostics.rs
+59df9e4b6ad6643f94836cceec8bf9c429fc04645914855b63512fbb3f1b667b  frozen/toolchain/resident/vendor/rust-analyzer/crates/hir/src/lib.rs
+925856a45cef9a62f6f20c86275917b7117e9a89a19b9c6ab6893637d2774344  frozen/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+1d2bc3c379bcbd64978a0613e59bf046707dbc850fabb8bb09b49a6ea161314c  frozen/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+68a9b0625158dcc201da88c5c0777cf9a2eb193d6053089ef7c1b9bf375a51a0  originals/toolchain/resident/crates/ra-jit/src/main.rs
+7a978c10407069427e24bdf89f941d821646b354d6cf214f74dcf43d350d07a2  originals/toolchain/resident/vendor/rust-analyzer/crates/hir/src/diagnostics.rs
+04451d2752287e4d223a9d6869366969e67f08ac225d3ef1b7810cb45c468ced  originals/toolchain/resident/vendor/rust-analyzer/crates/hir/src/lib.rs
+7af1b6eb7fc616d3230a1970673165da1d9a724af72666a4b3e8d721930176b0  originals/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+75695280c0733b18166d35b8acf1b943dab2d218beb6bd46cead08fde545c770  originals/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+fab82069606ddfcda7f900b0845337b0ebc68bf138f92fc84a08d23a486230ac  /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/collector-subphases-v26/source.patch

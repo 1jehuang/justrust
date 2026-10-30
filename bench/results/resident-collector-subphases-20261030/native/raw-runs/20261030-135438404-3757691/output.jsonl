@@ -1,0 +1,497 @@
+{"t":1793393678.4287753,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793393678.428781,"s":"e","l":"  --> lib/rowan/Cargo.toml"}
+{"t":1793393678.4287846,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793393678.4287875,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793393678.4287903,"s":"e","l":"   |"}
+{"t":1793393678.4287932,"s":"e","l":"27 ~ serde1 = [\"serde\", \"text-size/serde\"]"}
+{"t":1793393678.428796,"s":"e","l":"28 + [lints]"}
+{"t":1793393678.428799,"s":"e","l":"29 + workspace = true"}
+{"t":1793393678.4288015,"s":"e","l":"   |"}
+{"t":1793393678.4288046,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793393678.4288075,"s":"e","l":"   |"}
+{"t":1793393678.4288101,"s":"e","l":"27 ~ serde1 = [\"serde\", \"text-size/serde\"]"}
+{"t":1793393678.428813,"s":"e","l":"28 + [lints]"}
+{"t":1793393678.4288156,"s":"e","l":"   |"}
+{"t":1793393678.4288573,"s":"e","l":"warning: `rowan` (manifest) generated 1 warning"}
+{"t":1793393678.5311668,"s":"e","l":"       Fresh proc-macro2 v1.0.106"}
+{"t":1793393678.5312319,"s":"e","l":"       Fresh once_cell v1.21.4"}
+{"t":1793393678.5312335,"s":"e","l":"       Fresh tracing-core v0.1.36"}
+{"t":1793393678.5312343,"s":"e","l":"       Fresh cfg-if v1.0.4"}
+{"t":1793393678.5312347,"s":"e","l":"       Fresh quote v1.0.45"}
+{"t":1793393678.5312352,"s":"e","l":"       Fresh libc v0.2.186"}
+{"t":1793393678.5312862,"s":"e","l":"       Fresh serde_core v1.0.228"}
+{"t":1793393678.531287,"s":"e","l":"       Fresh crossbeam-utils v0.8.21"}
+{"t":1793393678.5312877,"s":"e","l":"       Fresh shlex v2.0.1"}
+{"t":1793393678.5312881,"s":"e","l":"       Fresh pin-project-lite v0.2.17"}
+{"t":1793393678.531336,"s":"e","l":"       Fresh syn v2.0.117"}
+{"t":1793393678.531337,"s":"e","l":"       Fresh find-msvc-tools v0.1.11"}
+{"t":1793393678.5313826,"s":"e","l":"       Fresh smallvec v1.15.1"}
+{"t":1793393678.5313833,"s":"e","l":"       Fresh either v1.16.0"}
+{"t":1793393678.5314288,"s":"e","l":"       Fresh tracing-attributes v0.1.31"}
+{"t":1793393678.5314295,"s":"e","l":"       Fresh cc v1.4.3"}
+{"t":1793393678.531475,"s":"e","l":"       Fresh rustc-hash v2.1.2"}
+{"t":1793393678.5314758,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793393678.5314765,"s":"e","l":"       Fresh foldhash v0.2.0"}
+{"t":1793393678.5315225,"s":"e","l":"       Fresh tracing v0.1.44"}
+{"t":1793393678.5315232,"s":"e","l":"       Fresh object v0.39.1"}
+{"t":1793393678.5315237,"s":"e","l":"       Fresh allocator-api2 v0.2.21"}
+{"t":1793393678.5315688,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793393678.531615,"s":"e","l":"       Fresh ar_archive_writer v0.5.3"}
+{"t":1793393678.5316157,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793393678.5316846,"s":"e","l":"       Fresh indexmap v2.14.0"}
+{"t":1793393678.5317314,"s":"e","l":"       Fresh serde_derive v1.0.228"}
+{"t":1793393678.531732,"s":"e","l":"       Fresh crossbeam-epoch v0.9.18"}
+{"t":1793393678.531777,"s":"e","l":"       Fresh memchr v2.8.1"}
+{"t":1793393678.5318232,"s":"e","l":"       Fresh scopeguard v1.2.0"}
+{"t":1793393678.5318239,"s":"e","l":"       Fresh serde v1.0.228"}
+{"t":1793393678.5318244,"s":"e","l":"       Fresh psm v0.1.32"}
+{"t":1793393678.53187,"s":"e","l":"       Fresh lock_api v0.4.14"}
+{"t":1793393678.5318706,"s":"e","l":"       Fresh crossbeam-deque v0.8.6"}
+{"t":1793393678.531871,"s":"e","l":"       Fresh memoffset v0.9.1"}
+{"t":1793393678.5319211,"s":"e","l":"       Fresh stacker v0.1.25"}
+{"t":1793393678.5319254,"s":"e","l":"       Fresh parking_lot_core v0.9.12"}
+{"t":1793393678.531974,"s":"e","l":"       Fresh itertools v0.15.0"}
+{"t":1793393678.5319746,"s":"e","l":"       Fresh crossbeam-channel v0.5.15"}
+{"t":1793393678.5319753,"s":"e","l":"       Fresh jod-thread v1.0.0"}
+{"t":1793393678.5320208,"s":"e","l":"       Fresh unicode-ident v1.0.24"}
+{"t":1793393678.5320215,"s":"e","l":"       Fresh unicode-properties v0.1.4"}
+{"t":1793393678.532022,"s":"e","l":"       Fresh stable_deref_trait v1.2.1"}
+{"t":1793393678.5320675,"s":"e","l":"       Fresh hashbrown v0.14.5"}
+{"t":1793393678.5320687,"s":"e","l":"       Fresh stdx v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/stdx)"}
+{"t":1793393678.5320694,"s":"e","l":"       Fresh rayon-core v1.13.0"}
+{"t":1793393678.5321155,"s":"e","l":"       Fresh camino v1.2.2"}
+{"t":1793393678.532116,"s":"e","l":"       Fresh ra-ap-rustc_lexer v0.166.0"}
+{"t":1793393678.5321617,"s":"e","l":"       Fresh triomphe v0.1.15"}
+{"t":1793393678.5321622,"s":"e","l":"       Fresh thin-vec v0.2.18"}
+{"t":1793393678.5321634,"s":"e","l":"       Fresh text-size v1.1.1"}
+{"t":1793393678.532208,"s":"e","l":"       Fresh rustc-literal-escaper v0.0.7"}
+{"t":1793393678.5322537,"s":"e","l":"       Fresh rayon v1.12.0"}
+{"t":1793393678.5322545,"s":"e","l":"       Fresh paths v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/paths)"}
+{"t":1793393678.5322998,"s":"e","l":"       Fresh syn v3.0.3"}
+{"t":1793393678.5323005,"s":"e","l":"       Fresh countme v3.0.1"}
+{"t":1793393678.5323458,"s":"e","l":"       Fresh drop_bomb v0.1.5"}
+{"t":1793393678.5323467,"s":"e","l":"       Fresh edition v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/edition)"}
+{"t":1793393678.5323474,"s":"e","l":"       Fresh rustc-hash v1.1.0"}
+{"t":1793393678.5323966,"s":"e","l":"       Fresh arrayvec v0.7.6"}
+{"t":1793393678.532397,"s":"e","l":"       Fresh winnow v0.7.15"}
+{"t":1793393678.532444,"s":"e","l":"       Fresh rowan v0.17.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/lib/rowan)"}
+{"t":1793393678.5324447,"s":"e","l":"       Fresh fst v0.4.7"}
+{"t":1793393678.5324454,"s":"e","l":"       Fresh typeid v1.0.3"}
+{"t":1793393678.532446,"s":"e","l":"       Fresh salsa-macros v0.28.5 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/salsa-macros)"}
+{"t":1793393678.5324924,"s":"e","l":"       Fresh parser v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/parser)"}
+{"t":1793393678.532493,"s":"e","l":"       Fresh portable-atomic v1.13.1"}
+{"t":1793393678.5325391,"s":"e","l":"       Fresh parking_lot v0.12.5"}
+{"t":1793393678.5325398,"s":"e","l":"       Fresh intrusive-collections v0.10.1"}
+{"t":1793393678.5325406,"s":"e","l":"       Fresh hashlink v0.12.0"}
+{"t":1793393678.5325866,"s":"e","l":"       Fresh crossbeam-queue v0.3.12"}
+{"t":1793393678.532587,"s":"e","l":"       Fresh smol_str v0.3.6"}
+{"t":1793393678.5325878,"s":"e","l":"       Fresh inventory v0.3.24"}
+{"t":1793393678.5326333,"s":"e","l":"       Fresh nohash-hasher v0.2.0"}
+{"t":1793393678.5326343,"s":"e","l":"       Fresh salsa-macro-rules v0.28.5 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/salsa-macro-rules)"}
+{"t":1793393678.532635,"s":"e","l":"       Fresh boxcar v0.2.14"}
+{"t":1793393678.5326807,"s":"e","l":"       Fresh dashmap v6.2.1"}
+{"t":1793393678.5326815,"s":"e","l":"       Fresh syntax v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/syntax)"}
+{"t":1793393678.5327377,"s":"e","l":"warning: function `is_range_pat_op` is never used"}
+{"t":1793393678.5327406,"s":"e","l":"    --> crates/syntax/src/ast/node_ext.rs:1066:4"}
+{"t":1793393678.5327451,"s":"e","l":"     |"}
+{"t":1793393678.5327477,"s":"e","l":"1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {"}
+{"t":1793393678.5327501,"s":"e","l":"     |    ^^^^^^^^^^^^^^^"}
+{"t":1793393678.5327528,"s":"e","l":"     |"}
+{"t":1793393678.5327551,"s":"e","l":"     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5327575,"s":"e","l":"       Fresh vfs v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/vfs)"}
+{"t":1793393678.5327582,"s":"e","l":"       Fresh salsa v0.28.5 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/salsa)"}
+{"t":1793393678.5328074,"s":"e","l":"       Fresh la-arena v0.3.1"}
+{"t":1793393678.5328078,"s":"e","l":"       Fresh bitflags v2.12.1"}
+{"t":1793393678.5328085,"s":"e","l":"       Fresh intern v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/intern)"}
+{"t":1793393678.53281,"s":"e","l":"warning: `syntax` (lib) generated 1 warning"}
+{"t":1793393678.5328104,"s":"e","l":"       Fresh span v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/span)"}
+{"t":1793393678.532858,"s":"e","l":"       Fresh ra-ap-rustc_index_macros v0.166.0"}
+{"t":1793393678.5328586,"s":"e","l":"       Fresh log v0.4.31"}
+{"t":1793393678.532859,"s":"e","l":"       Fresh rustc-stable-hash v0.1.2"}
+{"t":1793393678.5329053,"s":"e","l":"       Fresh synstructure v0.13.2"}
+{"t":1793393678.5329058,"s":"e","l":"       Fresh semver v1.0.28"}
+{"t":1793393678.5329554,"s":"e","l":"       Fresh tt v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/tt)"}
+{"t":1793393678.5329564,"s":"e","l":"       Fresh ra-ap-rustc_index v0.166.0"}
+{"t":1793393678.5329568,"s":"e","l":"       Fresh ra-ap-rustc_hashes v0.166.0"}
+{"t":1793393678.5330024,"s":"e","l":"       Fresh cov-mark v2.2.0"}
+{"t":1793393678.5330029,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793393678.5330036,"s":"e","l":"       Fresh powerfmt v0.2.0"}
+{"t":1793393678.5330498,"s":"e","l":"       Fresh syntax-bridge v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/syntax-bridge)"}
+{"t":1793393678.5330508,"s":"e","l":"       Fresh cfg v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/cfg)"}
+{"t":1793393678.5330982,"s":"e","l":"       Fresh deranged v0.5.8"}
+{"t":1793393678.533099,"s":"e","l":"       Fresh ra-ap-rustc_abi v0.166.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rustc_abi)"}
+{"t":1793393678.5330997,"s":"e","l":"       Fresh time-core v0.1.8"}
+{"t":1793393678.533146,"s":"e","l":"       Fresh base-db v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/base-db)"}
+{"t":1793393678.5331469,"s":"e","l":"       Fresh mbe v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/mbe)"}
+{"t":1793393678.533193,"s":"e","l":"       Fresh num-conv v0.2.2"}
+{"t":1793393678.5331938,"s":"e","l":"       Fresh num_threads v0.1.7"}
+{"t":1793393678.5331943,"s":"e","l":"       Fresh lazy_static v1.5.0"}
+{"t":1793393678.533244,"s":"e","l":"       Fresh sharded-slab v0.1.7"}
+{"t":1793393678.5332458,"s":"e","l":"       Fresh hir-expand v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir-expand)"}
+{"t":1793393678.5332499,"s":"e","l":"warning: unused variable: `span`"}
+{"t":1793393678.5332525,"s":"e","l":"   --> crates/hir-expand/src/builtin/derive_macro.rs:134:27"}
+{"t":1793393678.533255,"s":"e","l":"    |"}
+{"t":1793393678.5332577,"s":"e","l":"134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {"}
+{"t":1793393678.5332623,"s":"e","l":"    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`"}
+{"t":1793393678.5332649,"s":"e","l":"    |"}
+{"t":1793393678.5332675,"s":"e","l":"    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.533316,"s":"e","l":"       Fresh time v0.3.47"}
+{"t":1793393678.5333166,"s":"e","l":"       Fresh rustc_apfloat v0.2.3+llvm-462a31f5a5ab"}
+{"t":1793393678.533317,"s":"e","l":"       Fresh tracing-log v0.2.0"}
+{"t":1793393678.5333176,"s":"e","l":"       Fresh ena v0.14.4"}
+{"t":1793393678.5333662,"s":"e","l":"warning: `hir-expand` (lib) generated 1 warning (run `cargo fix --lib -p hir-expand` to apply 1 suggestion)"}
+{"t":1793393678.533367,"s":"e","l":"       Fresh ra-ap-rustc_type_ir_macros v0.166.0"}
+{"t":1793393678.5333676,"s":"e","l":"       Fresh derive-where v1.6.1"}
+{"t":1793393678.533368,"s":"e","l":"       Fresh thread_local v1.1.9"}
+{"t":1793393678.533416,"s":"e","l":"       Fresh ra-ap-rustc_ast_ir v0.166.0"}
+{"t":1793393678.5334167,"s":"e","l":"       Fresh ra-ap-rustc_parse_format v0.166.0"}
+{"t":1793393678.5334172,"s":"e","l":"       Fresh nu-ansi-term v0.50.3"}
+{"t":1793393678.5334644,"s":"e","l":"       Fresh tracing-subscriber v0.3.23"}
+{"t":1793393678.5334651,"s":"e","l":"       Fresh ra-ap-rustc_type_ir v0.166.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rustc_type_ir)"}
+{"t":1793393678.533466,"s":"e","l":"       Fresh hir-def v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir-def)"}
+{"t":1793393678.5335126,"s":"e","l":"       Fresh macros v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/macros)"}
+{"t":1793393678.5335135,"s":"e","l":"       Fresh perf-event-open-sys v4.0.0"}
+{"t":1793393678.533514,"s":"e","l":"       Fresh oorandom v11.1.5"}
+{"t":1793393678.5335603,"s":"e","l":"       Fresh ra-ap-rustc_next_trait_solver v0.166.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rustc_next_trait_solver)"}
+{"t":1793393678.5335612,"s":"e","l":"warning: unreachable statement"}
+{"t":1793393678.5335622,"s":"e","l":"   --> /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rustc_next_trait_solver/src/solve/normalizes_to/mod.rs:342:21"}
+{"t":1793393678.5336154,"s":"e","l":"    |"}
+{"t":1793393678.5336163,"s":"e","l":"341 |                     ecx.opaque_accesses.rerun_always(RerunReason::FetchEligibleAssocItem)?;"}
+{"t":1793393678.533617,"s":"e","l":"    |                                                                                          - any code following this expression is unreachable"}
+{"t":1793393678.5336177,"s":"e","l":"342 |                     return Err(NoSolution.into());"}
+{"t":1793393678.5336185,"s":"e","l":"    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement"}
+{"t":1793393678.533619,"s":"e","l":"    |"}
+{"t":1793393678.5336194,"s":"e","l":"    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5336204,"s":"e","l":"warning: unreachable statement"}
+{"t":1793393678.5336208,"s":"e","l":"   --> /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rustc_next_trait_solver/src/solve/trait_goals.rs:242:17"}
+{"t":1793393678.5336215,"s":"e","l":"    |"}
+{"t":1793393678.533622,"s":"e","l":"241 |                 ecx.opaque_accesses.rerun_always(RerunReason::AutoTraitLeakage)?;"}
+{"t":1793393678.5336227,"s":"e","l":"    |                                                                                - any code following this expression is unreachable"}
+{"t":1793393678.5336235,"s":"e","l":"242 |                 return Err(NoSolution.into());"}
+{"t":1793393678.5336242,"s":"e","l":"    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement"}
+{"t":1793393678.533625,"s":"e","l":"       Fresh tracing-tree v0.4.1"}
+{"t":1793393678.5336728,"s":"e","l":"       Fresh unicode-width v0.2.2"}
+{"t":1793393678.5336735,"s":"e","l":"       Fresh perf-event v0.4.8"}
+{"t":1793393678.533674,"s":"e","l":"       Fresh dissimilar v1.0.11"}
+{"t":1793393678.5337236,"s":"e","l":"warning: `ra-ap-rustc_next_trait_solver` (lib) generated 2 warnings"}
+{"t":1793393678.5337243,"s":"e","l":"       Fresh hir-ty v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir-ty)"}
+{"t":1793393678.5337253,"s":"e","l":"warning: unused import: `StoredTy`"}
+{"t":1793393678.5337257,"s":"e","l":"  --> crates/hir-ty/src/mir/lower.rs:65:9"}
+{"t":1793393678.5337265,"s":"e","l":"   |"}
+{"t":1793393678.533727,"s":"e","l":"65 |         StoredTy, TyKind, TypingMode, UnevaluatedConst,"}
+{"t":1793393678.5337274,"s":"e","l":"   |         ^^^^^^^^"}
+{"t":1793393678.5337281,"s":"e","l":"   |"}
+{"t":1793393678.5337286,"s":"e","l":"   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5337405,"s":"e","l":"warning: unnecessary parentheses around pattern"}
+{"t":1793393678.533741,"s":"e","l":"    --> crates/hir-ty/src/mir/lower.rs:2558:20"}
+{"t":1793393678.5337415,"s":"e","l":"     |"}
+{"t":1793393678.5337422,"s":"e","l":"2558 |             if let (OperandKind::Copy(place) | OperandKind::Move(place)) = &operand.kind"}
+{"t":1793393678.533743,"s":"e","l":"     |                    ^                                                   ^"}
+{"t":1793393678.5337434,"s":"e","l":"     |"}
+{"t":1793393678.5337439,"s":"e","l":"     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5337446,"s":"e","l":"help: remove these parentheses"}
+{"t":1793393678.5337448,"s":"e","l":"     |"}
+{"t":1793393678.5337453,"s":"e","l":"2558 -             if let (OperandKind::Copy(place) | OperandKind::Move(place)) = &operand.kind"}
+{"t":1793393678.533746,"s":"e","l":"2558 +             if let OperandKind::Copy(place) | OperandKind::Move(place) = &operand.kind"}
+{"t":1793393678.5337465,"s":"e","l":"     |"}
+{"t":1793393678.533747,"s":"e","l":"warning: hidden lifetime parameters in types are deprecated"}
+{"t":1793393678.5337477,"s":"e","l":"    --> crates/hir-ty/src/mir/lower.rs:5158:33"}
+{"t":1793393678.533748,"s":"e","l":"     |"}
+{"t":1793393678.5337484,"s":"e","l":"5158 | pub fn is_builtin_index(infer: &InferenceResult, base: ExprId, index: ExprId) -> bool {"}
+{"t":1793393678.533749,"s":"e","l":"     |                                 ^^^^^^^^^^^^^^^ expected lifetime parameter"}
+{"t":1793393678.5337496,"s":"e","l":"     |"}
+{"t":1793393678.5337498,"s":"e","l":"     = note: requested on the command line with `-W elided-lifetimes-in-paths`"}
+{"t":1793393678.5337505,"s":"e","l":"help: indicate the anonymous lifetime"}
+{"t":1793393678.5337508,"s":"e","l":"     |"}
+{"t":1793393678.5337512,"s":"e","l":"5158 | pub fn is_builtin_index(infer: &InferenceResult<'_>, base: ExprId, index: ExprId) -> bool {"}
+{"t":1793393678.533752,"s":"e","l":"     |                                                ++++"}
+{"t":1793393678.533753,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5337534,"s":"e","l":"   --> crates/hir-ty/src/solver_errors.rs:130:66"}
+{"t":1793393678.5337539,"s":"e","l":"    |"}
+{"t":1793393678.533763,"s":"e","l":"130 |             args.as_closure().sig().map_bound(|sig| sig.inputs().as_slice()[0])"}
+{"t":1793393678.5337634,"s":"e","l":"    |                                                                  ^^^^^^^^"}
+{"t":1793393678.533764,"s":"e","l":"    |"}
+{"t":1793393678.5337646,"s":"e","l":"    = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5337653,"s":"e","l":"    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.533766,"s":"e","l":"    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5337682,"s":"e","l":"    = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default"}
+{"t":1793393678.533769,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5337696,"s":"e","l":"   --> crates/hir-ty/src/lib.rs:14:1"}
+{"t":1793393678.53377,"s":"e","l":"    |"}
+{"t":1793393678.5337703,"s":"e","l":" 14 + #![feature(str_as_str)]"}
+{"t":1793393678.5337708,"s":"e","l":"    |"}
+{"t":1793393678.5337713,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793393678.5337718,"s":"e","l":"   --> crates/hir-ty/src/next_solver/solver.rs:140:13"}
+{"t":1793393678.533772,"s":"e","l":"    |"}
+{"t":1793393678.5337725,"s":"e","l":"140 |         let mut constraints = inner.unwrap_region_constraints();"}
+{"t":1793393678.533773,"s":"e","l":"    |             ----^^^^^^^^^^^"}
+{"t":1793393678.5337791,"s":"e","l":"    |             |"}
+{"t":1793393678.5337796,"s":"e","l":"    |             help: remove this `mut`"}
+{"t":1793393678.53378,"s":"e","l":"    |"}
+{"t":1793393678.5337806,"s":"e","l":"    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.533781,"s":"e","l":"warning: method `resolve_mir_span` is never used"}
+{"t":1793393678.5337815,"s":"e","l":"   --> crates/hir-ty/src/mir/eval.rs:678:8"}
+{"t":1793393678.533782,"s":"e","l":"    |"}
+{"t":1793393678.5337825,"s":"e","l":"589 | impl<'db> Evaluator<'db> {"}
+{"t":1793393678.533783,"s":"e","l":"    | ------------------------ method in this implementation"}
+{"t":1793393678.5337834,"s":"e","l":"..."}
+{"t":1793393678.533784,"s":"e","l":"678 |     fn resolve_mir_span("}
+{"t":1793393678.5337842,"s":"e","l":"    |        ^^^^^^^^^^^^^^^^"}
+{"t":1793393678.5337877,"s":"e","l":"    |"}
+{"t":1793393678.5337882,"s":"e","l":"    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5338361,"s":"e","l":"       Fresh profile v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/profile)"}
+{"t":1793393678.53389,"s":"e","l":"       Fresh ra-ap-rustc_pattern_analysis v0.166.0"}
+{"t":1793393678.5338907,"s":"e","l":"       Fresh typed-arena v2.0.2"}
+{"t":1793393678.5339425,"s":"e","l":"warning: `hir-ty` (lib) generated 6 warnings (run `cargo fix --lib -p hir-ty` to apply 3 suggestions)"}
+{"t":1793393678.5339437,"s":"e","l":"       Fresh hir-ty-wfcheck v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir-ty-wfcheck)"}
+{"t":1793393678.5339444,"s":"e","l":"warning: unused import: `rustc_type_ir::inherent::Clause`"}
+{"t":1793393678.5339448,"s":"e","l":"   --> crates/hir-ty-wfcheck/src/outlives.rs:333:9"}
+{"t":1793393678.5339456,"s":"e","l":"    |"}
+{"t":1793393678.5339458,"s":"e","l":"333 |     use rustc_type_ir::inherent::Clause as _;"}
+{"t":1793393678.5339463,"s":"e","l":"    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793393678.5339468,"s":"e","l":"    |"}
+{"t":1793393678.5339472,"s":"e","l":"    = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5339983,"s":"e","l":"warning: value assigned to `self_ty` is never read"}
+{"t":1793393678.5339987,"s":"e","l":"   --> crates/hir-ty-wfcheck/src/lib.rs:477:31"}
+{"t":1793393678.5339992,"s":"e","l":"    |"}
+{"t":1793393678.5339997,"s":"e","l":"477 |             let mut self_ty = None;"}
+{"t":1793393678.534001,"s":"e","l":"    |                               ^^^^ this value is reassigned later and never used"}
+{"t":1793393678.5340018,"s":"e","l":"..."}
+{"t":1793393678.5340023,"s":"e","l":"482 |                     self_ty = Some(trait_ref.self_ty());"}
+{"t":1793393678.534003,"s":"e","l":"    |                     ----------------------------------- `self_ty` is overwritten here before the previous value is read"}
+{"t":1793393678.5340035,"s":"e","l":"    |"}
+{"t":1793393678.534004,"s":"e","l":"    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.534006,"s":"e","l":"       Fresh zmij v1.0.21"}
+{"t":1793393678.5340068,"s":"e","l":"       Fresh test-utils v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/test-utils)"}
+{"t":1793393678.5340078,"s":"e","l":"       Fresh hir-ide v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir-ide)"}
+{"t":1793393678.534066,"s":"e","l":"       Fresh expect-test v1.5.1"}
+{"t":1793393678.534067,"s":"e","l":"warning: `hir-ty-wfcheck` (lib) generated 2 warnings"}
+{"t":1793393678.5340674,"s":"e","l":"       Fresh serde_json v1.0.150"}
+{"t":1793393678.534068,"s":"e","l":"       Fresh hir-ty-borrowck v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir-ty-borrowck)"}
+{"t":1793393678.5340915,"s":"e","l":"warning: unused import: `rustc_type_ir::inherent::GenericArgs as _`"}
+{"t":1793393678.5340922,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:2349:13"}
+{"t":1793393678.5340927,"s":"e","l":"     |"}
+{"t":1793393678.5340931,"s":"e","l":"2349 |         use rustc_type_ir::inherent::GenericArgs as _;"}
+{"t":1793393678.5340939,"s":"e","l":"     |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793393678.5340943,"s":"e","l":"     |"}
+{"t":1793393678.5340948,"s":"e","l":"     = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5340955,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5340962,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:1776:52"}
+{"t":1793393678.5340967,"s":"e","l":"     |"}
+{"t":1793393678.5340972,"s":"e","l":"1776 |         let &[tupled] = sig.skip_binder().inputs().as_slice() else { return false };"}
+{"t":1793393678.5340977,"s":"e","l":"     |                                                    ^^^^^^^^"}
+{"t":1793393678.5340981,"s":"e","l":"     |"}
+{"t":1793393678.5340986,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5340993,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5341,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341008,"s":"e","l":"     = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default"}
+{"t":1793393678.5341015,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5341022,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341027,"s":"e","l":"     |"}
+{"t":1793393678.5341032,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5341034,"s":"e","l":"     |"}
+{"t":1793393678.534104,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5341046,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:1803:38"}
+{"t":1793393678.534105,"s":"e","l":"     |"}
+{"t":1793393678.5341055,"s":"e","l":"1803 |         let &[tupled] = sig.inputs().as_slice() else { return false };"}
+{"t":1793393678.534106,"s":"e","l":"     |                                      ^^^^^^^^"}
+{"t":1793393678.5341065,"s":"e","l":"     |"}
+{"t":1793393678.534107,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5341077,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5341084,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341105,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5341113,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341115,"s":"e","l":"     |"}
+{"t":1793393678.534112,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5341122,"s":"e","l":"     |"}
+{"t":1793393678.5341213,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.534122,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:4887:75"}
+{"t":1793393678.5341222,"s":"e","l":"     |"}
+{"t":1793393678.534123,"s":"e","l":"4887 | ...                   && let &[tupled] = sig.skip_binder().inputs().as_slice()"}
+{"t":1793393678.5341234,"s":"e","l":"     |                                                                     ^^^^^^^^"}
+{"t":1793393678.534124,"s":"e","l":"     |"}
+{"t":1793393678.5341246,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5341253,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.534126,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341268,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5341272,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341275,"s":"e","l":"     |"}
+{"t":1793393678.534128,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5341282,"s":"e","l":"     |"}
+{"t":1793393678.5341287,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5341294,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:4899:61"}
+{"t":1793393678.5341296,"s":"e","l":"     |"}
+{"t":1793393678.53413,"s":"e","l":"4899 | ...                   && let &[tupled] = sig.inputs().as_slice()"}
+{"t":1793393678.5341306,"s":"e","l":"     |                                                       ^^^^^^^^"}
+{"t":1793393678.5341365,"s":"e","l":"     |"}
+{"t":1793393678.5341372,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.534138,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5341387,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341394,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5341399,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341403,"s":"e","l":"     |"}
+{"t":1793393678.5341406,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5341408,"s":"e","l":"     |"}
+{"t":1793393678.5341482,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5341487,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:5146:67"}
+{"t":1793393678.534149,"s":"e","l":"     |"}
+{"t":1793393678.5341494,"s":"e","l":"5146 |                         lifetimes(args.as_closure().parent_args().as_slice()),"}
+{"t":1793393678.5341501,"s":"e","l":"     |                                                                   ^^^^^^^^"}
+{"t":1793393678.5341506,"s":"e","l":"     |"}
+{"t":1793393678.534151,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5341518,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5341537,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341544,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.534155,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341554,"s":"e","l":"     |"}
+{"t":1793393678.5341558,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5341601,"s":"e","l":"     |"}
+{"t":1793393678.5341609,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5341613,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:5153:77"}
+{"t":1793393678.5341618,"s":"e","l":"     |"}
+{"t":1793393678.5341623,"s":"e","l":"5153 |                         lifetimes(args.as_coroutine_closure().parent_args().as_slice()),"}
+{"t":1793393678.5341682,"s":"e","l":"     |                                                                             ^^^^^^^^"}
+{"t":1793393678.5341687,"s":"e","l":"     |"}
+{"t":1793393678.5341694,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5341702,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5341709,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341713,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.534172,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341723,"s":"e","l":"     |"}
+{"t":1793393678.5341728,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.534173,"s":"e","l":"     |"}
+{"t":1793393678.534179,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5341825,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:5168:73"}
+{"t":1793393678.534183,"s":"e","l":"     |"}
+{"t":1793393678.5341833,"s":"e","l":"5168 | ...                   lifetimes(args.as_coroutine().parent_args().as_slice()),"}
+{"t":1793393678.5341887,"s":"e","l":"     |                                                                   ^^^^^^^^"}
+{"t":1793393678.5341892,"s":"e","l":"     |"}
+{"t":1793393678.5341897,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5341904,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5341911,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5341918,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5341954,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5341957,"s":"e","l":"     |"}
+{"t":1793393678.5341961,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5341964,"s":"e","l":"     |"}
+{"t":1793393678.5342002,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5342047,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:5558:53"}
+{"t":1793393678.5342052,"s":"e","l":"     |"}
+{"t":1793393678.5342057,"s":"e","l":"5558 |                     if let &[tupled] = sig.inputs().as_slice()"}
+{"t":1793393678.5342062,"s":"e","l":"     |                                                     ^^^^^^^^"}
+{"t":1793393678.5342114,"s":"e","l":"     |"}
+{"t":1793393678.5342119,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5342143,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.534215,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5342155,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5342162,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.5342164,"s":"e","l":"     |"}
+{"t":1793393678.5342193,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5342197,"s":"e","l":"     |"}
+{"t":1793393678.5342233,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793393678.5342238,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:6070:52"}
+{"t":1793393678.534224,"s":"e","l":"     |"}
+{"t":1793393678.5342293,"s":"e","l":"6070 |         let &[inputs] = sig.skip_binder().inputs().as_slice() else { return };"}
+{"t":1793393678.5342298,"s":"e","l":"     |                                                    ^^^^^^^^"}
+{"t":1793393678.5342302,"s":"e","l":"     |"}
+{"t":1793393678.5342307,"s":"e","l":"     = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793393678.5342317,"s":"e","l":"     = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793393678.5342364,"s":"e","l":"     = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793393678.5342371,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793393678.5342376,"s":"e","l":"    -->  crates/hir-ty-borrowck/src/lib.rs:8:1"}
+{"t":1793393678.534238,"s":"e","l":"     |"}
+{"t":1793393678.5342383,"s":"e","l":"   8 + #![feature(str_as_str)]"}
+{"t":1793393678.5342386,"s":"e","l":"     |"}
+{"t":1793393678.534245,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793393678.5342455,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:3435:13"}
+{"t":1793393678.534246,"s":"e","l":"     |"}
+{"t":1793393678.5342693,"s":"e","l":"3435 |         let mut rv = |this: &mut Self, region: Region<'db>| match region.kind() {"}
+{"t":1793393678.53427,"s":"e","l":"     |             ----^^"}
+{"t":1793393678.5342705,"s":"e","l":"     |             |"}
+{"t":1793393678.5342708,"s":"e","l":"     |             help: remove this `mut`"}
+{"t":1793393678.5342712,"s":"e","l":"     |"}
+{"t":1793393678.5342717,"s":"e","l":"     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5342724,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793393678.5342727,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:3548:21"}
+{"t":1793393678.5342731,"s":"e","l":"     |"}
+{"t":1793393678.5342736,"s":"e","l":"3548 |                 let mut pass = |this: &mut Self, general_is_b: bool| {"}
+{"t":1793393678.534274,"s":"e","l":"     |                     ----^^^^"}
+{"t":1793393678.5342746,"s":"e","l":"     |                     |"}
+{"t":1793393678.534275,"s":"e","l":"     |                     help: remove this `mut`"}
+{"t":1793393678.5342798,"s":"e","l":"warning: unused variable: `projection`"}
+{"t":1793393678.5342803,"s":"e","l":"    --> crates/hir-ty-borrowck/src/regions.rs:4063:13"}
+{"t":1793393678.5342808,"s":"e","l":"     |"}
+{"t":1793393678.534281,"s":"e","l":"4063 |         let projection = place.projection.as_slice();"}
+{"t":1793393678.5342817,"s":"e","l":"     |             ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_projection`"}
+{"t":1793393678.5342822,"s":"e","l":"     |"}
+{"t":1793393678.5342853,"s":"e","l":"     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5342882,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793393678.5342932,"s":"e","l":"   --> crates/hir-ty-borrowck/src/lib.rs:109:9"}
+{"t":1793393678.5342937,"s":"e","l":"    |"}
+{"t":1793393678.5342941,"s":"e","l":"109 |     let mut result = BorrowckResult::default();"}
+{"t":1793393678.5342946,"s":"e","l":"    |         ----^^^^^^"}
+{"t":1793393678.534298,"s":"e","l":"    |         |"}
+{"t":1793393678.5342984,"s":"e","l":"    |         help: remove this `mut`"}
+{"t":1793393678.5343118,"s":"e","l":"warning: method `is_empty` is never used"}
+{"t":1793393678.5343122,"s":"e","l":"  --> crates/hir-ty-borrowck/src/bitset.rs:64:19"}
+{"t":1793393678.5343127,"s":"e","l":"   |"}
+{"t":1793393678.5343173,"s":"e","l":" 8 | impl BitSet {"}
+{"t":1793393678.5343177,"s":"e","l":"   | ----------- method in this implementation"}
+{"t":1793393678.5343182,"s":"e","l":"..."}
+{"t":1793393678.5343187,"s":"e","l":"64 |     pub(super) fn is_empty(&self) -> bool {"}
+{"t":1793393678.534319,"s":"e","l":"   |                   ^^^^^^^^"}
+{"t":1793393678.5343223,"s":"e","l":"   |"}
+{"t":1793393678.5343227,"s":"e","l":"   = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793393678.5343316,"s":"e","l":"warning: variant `ExceptUpvars` is never constructed"}
+{"t":1793393678.5343354,"s":"e","l":"   --> crates/hir-ty-borrowck/src/check.rs:605:5"}
+{"t":1793393678.5343359,"s":"e","l":"    |"}
+{"t":1793393678.5343363,"s":"e","l":"603 | enum Allowed {"}
+{"t":1793393678.5343366,"s":"e","l":"    |      ------- variant in this enum"}
+{"t":1793393678.534341,"s":"e","l":"604 |     Yes,"}
+{"t":1793393678.5343416,"s":"e","l":"605 |     ExceptUpvars,"}
+{"t":1793393678.534342,"s":"e","l":"    |     ^^^^^^^^^^^^"}
+{"t":1793393678.5343425,"s":"e","l":"    |"}
+{"t":1793393678.534343,"s":"e","l":"    = note: `Allowed` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis"}
+{"t":1793393678.5343504,"s":"e","l":"warning: method `contains_point` is never used"}
+{"t":1793393678.5343509,"s":"e","l":"  --> crates/hir-ty-borrowck/src/inference.rs:22:19"}
+{"t":1793393678.5343547,"s":"e","l":"   |"}
+{"t":1793393678.534355,"s":"e","l":"21 | impl RegionValues {"}
+{"t":1793393678.5343554,"s":"e","l":"   | ----------------- method in this implementation"}
+{"t":1793393678.5343587,"s":"e","l":"22 |     pub(super) fn contains_point(&self, rv: Rv, point: usize) -> bool {"}
+{"t":1793393678.5343595,"s":"e","l":"   |                   ^^^^^^^^^^^^^^"}
+{"t":1793393678.534366,"s":"e","l":"warning: method `insert` is never used"}
+{"t":1793393678.5343695,"s":"e","l":"  --> crates/hir-ty-borrowck/src/intervals.rs:29:19"}
+{"t":1793393678.53437,"s":"e","l":"   |"}
+{"t":1793393678.5343704,"s":"e","l":"13 | impl IntervalSet {"}
+{"t":1793393678.5343745,"s":"e","l":"   | ---------------- method in this implementation"}
+{"t":1793393678.5343747,"s":"e","l":"..."}
+{"t":1793393678.5343752,"s":"e","l":"29 |     pub(super) fn insert(&mut self, point: usize) -> bool {"}
+{"t":1793393678.5343757,"s":"e","l":"   |                   ^^^^^^"}
+{"t":1793393678.534574,"s":"e","l":"warning: method `is_ancestor_or_self` is never used"}
+{"t":1793393678.5345757,"s":"e","l":"   --> crates/hir-ty-borrowck/src/moves.rs:375:19"}
+{"t":1793393678.5345762,"s":"e","l":"    |"}
+{"t":1793393678.5345771,"s":"e","l":" 90 | impl MoveData {"}
+{"t":1793393678.5345778,"s":"e","l":"    | ------------- method in this implementation"}
+{"t":1793393678.5345788,"s":"e","l":"..."}
+{"t":1793393678.5345793,"s":"e","l":"375 |     pub(super) fn is_ancestor_or_self(&self, ancestor: Mpi, mut path: Mpi) -> bool {"}
+{"t":1793393678.53458,"s":"e","l":"    |                   ^^^^^^^^^^^^^^^^^^^"}
+{"t":1793393678.5345807,"s":"e","l":"warning: variant `Internal` is never constructed"}
+{"t":1793393678.5345814,"s":"e","l":"  --> crates/hir-ty-borrowck/src/regions.rs:87:5"}
+{"t":1793393678.534582,"s":"e","l":"   |"}
+{"t":1793393678.5345824,"s":"e","l":"74 | pub(super) enum Category {"}
+{"t":1793393678.5345829,"s":"e","l":"   |                 -------- variant in this enum"}
+{"t":1793393678.5345871,"s":"e","l":"..."}
+{"t":1793393678.5345876,"s":"e","l":"87 |     Internal,"}
+{"t":1793393678.534588,"s":"e","l":"   |     ^^^^^^^^"}
+{"t":1793393678.5345883,"s":"e","l":"   |"}
+{"t":1793393678.5345893,"s":"e","l":"   = note: `Category` has derived impls for the traits `Debug` and `Clone`, but these are intentionally ignored during dead code analysis"}
+{"t":1793393678.5345905,"s":"e","l":"       Fresh test-fixture v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/test-fixture)"}
+{"t":1793393678.534657,"s":"e","l":"warning: `hir-ty-borrowck` (lib) generated 20 warnings (run `cargo fix --lib -p hir-ty-borrowck` to apply 5 suggestions)"}
+{"t":1793393678.5346582,"s":"e","l":"   Compiling hir v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/vendor/rust-analyzer/crates/hir)"}
+{"t":1793393678.5349472,"s":"e","l":"     Running `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v26-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir --edition=2024 crates/hir/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values(\"in-rust-tree\"))' -C metadata=372a3a8a455c0e30 -C extra-filename=-4fb16347be4d63f6 --out-dir /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir/4fb16347be4d63f6/out -C strip=debuginfo -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/arrayvec/ce3fe1c53cae4abe/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/base-db/e6f70570025314ec/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/bitflags/062b893a0c348981/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/boxcar/6416f0335712d63e/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/camino/57e53b6efb878894/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/cfg-if/d2e636d86701c50e/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/cfg/5d7ce1c036690eb2/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/countme/cc564b39b3fdd350/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/cov-mark/38e1041af0478bcb/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/crossbeam-channel/d03a0e3e9019ecd4/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/crossbeam-deque/570baa45e4d72b86/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/crossbeam-epoch/64a90095b3fdcc19/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/crossbeam-queue/0ba86060c6871e16/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/crossbeam-utils/ff16969f042622b0/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/dashmap/4ac479ae32847362/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/deranged/1df873c04746d567/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/derive-where/7062924042b951e5/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/dissimilar/7c01d40505f3788c/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/drop_bomb/dc9a05492b2c1dd0/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/edition/61de9dea22b3a727/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/either/8cc06277adcab734/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ena/b964307eb5428e0a/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/fst/43c6016642512eb8/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hashbrown/12445d99555ebbe3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hashbrown/1e6422516dd6a9cf/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hashlink/bd97744afee78559/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-def/c1fba797f10b16d0/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-expand/872637a30907f318/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-wfcheck/28ad13a2368f2f46/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty/1f60308daeb6d05a/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/indexmap/dc85e3873f37dc6a/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/intern/37dea3bed654627d/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/intrusive-collections/12850b6aea270bc3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/inventory/37f1f67adaa54ac7/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/itertools/22207fc2295b6738/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/jod-thread/0208963be00555bf/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/la-arena/13c4416e37bb9eb9/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/lazy_static/7733bdc5d6350bbf/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/libc/6d9563547d1a9db4/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/lock_api/d04ffa0ad44bd378/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/log/f3ce3c78967cb1b6/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/macros/7716938b7f1ae19d/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/mbe/6339bb354a961efe/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/memoffset/f3a259544539dc60/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/nohash-hasher/f4e2af75766347ee/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/nu-ansi-term/4770e7fe4d94a2c3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/num-conv/6e43d18ebe6fe2e3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/num_threads/75c721aa3dfe1c31/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/once_cell/2127f27033a1cb3a/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/oorandom/334b074e4edb5773/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/parking_lot/d24494dffd4fd9f7/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/parking_lot_core/82ebabfd75151024/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/parser/d125f0383704b72d/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/paths/d9c485d4535aab0e/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/perf-event-open-sys/d6ddfa80ab2c2a97/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/perf-event/194cbc7dc65fe6b7/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/pin-project-lite/c7fff26b062085d8/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/portable-atomic/38f39ce790b8cda5/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/powerfmt/d39277bc2a3045fc/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/profile/0de644d38d394209/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/psm/980011d0267e3d0c/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_abi/71b2360b523473a3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_ast_ir/8404a7ac2943f314/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_hashes/dd444a21576cd407/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_index/d64b76e0c2834b53/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_index_macros/b4319934df2010ec/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_lexer/176748f9504cfbb1/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_next_trait_solver/061265310db923c2/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_parse_format/a4483c19640ad22e/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_pattern_analysis/ae59e1ac52028c26/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_type_ir/64a5e39d63060105/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_type_ir_macros/5ae35e3e63e1bc54/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rayon-core/ba7909d621a91bf2/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rayon/f01eae916c3f2671/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rowan/660b7840f4acf4d0/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc-hash/c06122de976ac865/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc-literal-escaper/f596973b5c8aa8b2/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc-stable-hash/6874bee61158a2c4/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc_apfloat/cf129307e897f917/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/salsa-macro-rules/91cf44ff526516cc/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/salsa-macros/b5ec59b595d67907/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/salsa/4fc92e365d5bde5c/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/scopeguard/6db82b174221e1c9/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/sharded-slab/20a39fef36d8efff/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/smallvec/e6acbb5144f56c6f/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/smol_str/6ae5bbb1453c0f5d/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/span/4ec077d321dac545/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/stacker/bb9140d3862aacbb/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/stdx/6443e8f1a436d246/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/syntax-bridge/2703068ba22c4282/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/syntax/eb2218d5e4a07edd/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/test-utils/629ffcb6508e9d54/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/text-size/8f4da477493558af/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/thin-vec/fa2f8cdbf623abf9/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/thread_local/95cd45ff93e5cb92/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/time-core/a4699965def34aef/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/time/92b128e64d5d12c5/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-attributes/4f7cbfee6cc5b21b/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-core/9c9c948efee29944/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-log/370c2c0f1e867354/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-subscriber/79c64704aad1aee2/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-tree/012d581d40f8bf88/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing/1cb60300be9ff4af/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/triomphe/43d5192b3caf0dc6/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tt/acb54d40c1e81ffe/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/typed-arena/9660a5ecc33c64fa/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/unicode-properties/7172e88ce24bd4c3/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/vfs/2e45d79047ec2ccb/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/winnow/b9b979e74a5ef1d5/out -L dependency=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern arrayvec=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/arrayvec/ce3fe1c53cae4abe/out/libarrayvec-ce3fe1c53cae4abe.rlib --extern arrayvec=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/arrayvec/ce3fe1c53cae4abe/out/libarrayvec-ce3fe1c53cae4abe.rmeta --extern base_db=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/base-db/e6f70570025314ec/out/libbase_db-e6f70570025314ec.rlib --extern base_db=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/base-db/e6f70570025314ec/out/libbase_db-e6f70570025314ec.rmeta --extern cfg=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/cfg/5d7ce1c036690eb2/out/libcfg-5d7ce1c036690eb2.rlib --extern cfg=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/cfg/5d7ce1c036690eb2/out/libcfg-5d7ce1c036690eb2.rmeta --extern either=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/either/8cc06277adcab734/out/libeither-8cc06277adcab734.rlib --extern either=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/either/8cc06277adcab734/out/libeither-8cc06277adcab734.rmeta --extern expect_test=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/expect-test/8f183c55b7f969d9/out/libexpect_test-8f183c55b7f969d9.rlib --extern expect_test=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/expect-test/8f183c55b7f969d9/out/libexpect_test-8f183c55b7f969d9.rmeta --extern hir_def=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-def/c1fba797f10b16d0/out/libhir_def-c1fba797f10b16d0.rlib --extern hir_def=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-def/c1fba797f10b16d0/out/libhir_def-c1fba797f10b16d0.rmeta --extern hir_expand=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-expand/872637a30907f318/out/libhir_expand-872637a30907f318.rlib --extern hir_expand=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-expand/872637a30907f318/out/libhir_expand-872637a30907f318.rmeta --extern hir_ide=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ide/b2559a1f3a823c25/out/libhir_ide-b2559a1f3a823c25.rlib --extern hir_ide=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ide/b2559a1f3a823c25/out/libhir_ide-b2559a1f3a823c25.rmeta --extern hir_ty_borrowck=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-borrowck/0006e9fa53743394/out/libhir_ty_borrowck-0006e9fa53743394.rlib --extern hir_ty_borrowck=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-borrowck/0006e9fa53743394/out/libhir_ty_borrowck-0006e9fa53743394.rmeta --extern hir_ty_wfcheck=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-wfcheck/28ad13a2368f2f46/out/libhir_ty_wfcheck-28ad13a2368f2f46.rlib --extern hir_ty_wfcheck=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-wfcheck/28ad13a2368f2f46/out/libhir_ty_wfcheck-28ad13a2368f2f46.rmeta --extern intern=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/intern/37dea3bed654627d/out/libintern-37dea3bed654627d.rlib --extern intern=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/intern/37dea3bed654627d/out/libintern-37dea3bed654627d.rmeta --extern itertools=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/itertools/22207fc2295b6738/out/libitertools-22207fc2295b6738.rlib --extern itertools=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/itertools/22207fc2295b6738/out/libitertools-22207fc2295b6738.rmeta --extern la_arena=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/la-arena/13c4416e37bb9eb9/out/libla_arena-13c4416e37bb9eb9.rlib --extern la_arena=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/la-arena/13c4416e37bb9eb9/out/libla_arena-13c4416e37bb9eb9.rmeta --extern ra_ap_rustc_type_ir=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_type_ir/64a5e39d63060105/out/libra_ap_rustc_type_ir-64a5e39d63060105.rlib --extern ra_ap_rustc_type_ir=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-ap-rustc_type_ir/64a5e39d63060105/out/libra_ap_rustc_type_ir-64a5e39d63060105.rmeta --extern rustc_hash=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern salsa=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/salsa/4fc92e365d5bde5c/out/libsalsa-4fc92e365d5bde5c.rlib --extern salsa=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/salsa/4fc92e365d5bde5c/out/libsalsa-4fc92e365d5bde5c.rmeta --extern serde_json=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/serde_json/c9d45df2179e07e9/out/libserde_json-c9d45df2179e07e9.rlib --extern serde_json=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/serde_json/c9d45df2179e07e9/out/libserde_json-c9d45df2179e07e9.rmeta --extern smallvec=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/smallvec/e6acbb5144f56c6f/out/libsmallvec-e6acbb5144f56c6f.rlib --extern smallvec=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/smallvec/e6acbb5144f56c6f/out/libsmallvec-e6acbb5144f56c6f.rmeta --extern span=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/span/4ec077d321dac545/out/libspan-4ec077d321dac545.rlib --extern span=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/span/4ec077d321dac545/out/libspan-4ec077d321dac545.rmeta --extern stdx=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/stdx/6443e8f1a436d246/out/libstdx-6443e8f1a436d246.rlib --extern stdx=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/stdx/6443e8f1a436d246/out/libstdx-6443e8f1a436d246.rmeta --extern syntax=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/syntax/eb2218d5e4a07edd/out/libsyntax-eb2218d5e4a07edd.rlib --extern syntax=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/syntax/eb2218d5e4a07edd/out/libsyntax-eb2218d5e4a07edd.rmeta --extern syntax_bridge=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/syntax-bridge/2703068ba22c4282/out/libsyntax_bridge-2703068ba22c4282.rlib --extern syntax_bridge=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/syntax-bridge/2703068ba22c4282/out/libsyntax_bridge-2703068ba22c4282.rmeta --extern test_fixture=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/test-fixture/b78d7a1796ce01ad/out/libtest_fixture-b78d7a1796ce01ad.rlib --extern test_fixture=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/test-fixture/b78d7a1796ce01ad/out/libtest_fixture-b78d7a1796ce01ad.rmeta --extern test_utils=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/test-utils/629ffcb6508e9d54/out/libtest_utils-629ffcb6508e9d54.rlib --extern test_utils=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/test-utils/629ffcb6508e9d54/out/libtest_utils-629ffcb6508e9d54.rmeta --extern tracing=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing/1cb60300be9ff4af/out/libtracing-1cb60300be9ff4af.rlib --extern tracing=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing/1cb60300be9ff4af/out/libtracing-1cb60300be9ff4af.rmeta --extern tracing_subscriber=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-subscriber/79c64704aad1aee2/out/libtracing_subscriber-79c64704aad1aee2.rlib --extern tracing_subscriber=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-subscriber/79c64704aad1aee2/out/libtracing_subscriber-79c64704aad1aee2.rmeta --extern tracing_tree=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-tree/012d581d40f8bf88/out/libtracing_tree-012d581d40f8bf88.rlib --extern tracing_tree=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tracing-tree/012d581d40f8bf88/out/libtracing_tree-012d581d40f8bf88.rmeta --extern triomphe=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/triomphe/43d5192b3caf0dc6/out/libtriomphe-43d5192b3caf0dc6.rlib --extern triomphe=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/triomphe/43d5192b3caf0dc6/out/libtriomphe-43d5192b3caf0dc6.rmeta --extern tt=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tt/acb54d40c1e81ffe/out/libtt-acb54d40c1e81ffe.rlib --extern tt=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/tt/acb54d40c1e81ffe/out/libtt-acb54d40c1e81ffe.rmeta --force-warn=unused_crate_dependencies -L native=/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/psm/3564fc351d108b1a/out`"}
+{"t":1793393681.253266,"s":"e","l":"    Finished `release` profile [optimized] target(s) in 2.83s"}
+{"t":1793393681.2646632,"s":"e","l":"     Running `/home/jeremy/.cargo/bin/justrust __test-runner /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir/4fb16347be4d63f6/out/hir-4fb16347be4d63f6 resident_collector_subphases --nocapture`"}
+{"t":1793393681.2674708,"s":"o","l":"running 2 tests"}
+{"t":1793393681.2676694,"s":"o","l":"test diagnostics::resident_collector_subphases_tests::resident_collector_subphases_disabled_no_clock_helper ... ok <0.000s>"}
+{"t":1793393681.2679899,"s":"o","l":"test diagnostics::resident_collector_subphases_tests::resident_collector_subphases_actual_scopes_bounded_inventory ... ok <0.000s>"}
+{"t":1793393681.267992,"s":"o","l":"test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"}

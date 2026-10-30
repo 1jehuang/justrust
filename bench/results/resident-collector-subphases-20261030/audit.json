@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "source_commit": "3b13e250b",
+  "baseline_source_commit": "90164925c",
+  "scope": "offline admission of frozen v26 evidence, not native re-execution",
+  "native_gate_counts": [6, 2, 5, 2, 3, 1, 1, 3],
+  "raw_full_native_tests": 351,
+  "root_bench_regression_tests": 700,
+  "private_snapshot_files": 2444,
+  "private_snapshot_only_delta": "Cargo.lock",
+  "positive_profile_rows": 6,
+  "normal_edit_selected_bodies": 373,
+  "extra_first_row_collection_selected_bodies": 231,
+  "mutation_controls": {
+    "tests": 9,
+    "passed": 9,
+    "kinds": ["complete positive admission", "payload corruption", "failed gate with rehash", "private snapshot drift with rehash", "nonlock source delta with rehash", "invented inventory with rehash", "transport accounting mutation with rehash", "native count mutation with rehash", "disabled runtime telemetry with rehash"]
+  },
+  "limitations": [
+    "Root-owned native execution is verified through retained artifacts, not rerun by this worker.",
+    "Inventory durations are inclusive and may recursively overlap. No additive critical path or trace-thread association is inferred.",
+    "Disabled scoped timing is descriptive and uncontrolled. No statistical significance, general performance or speedup claim.",
+    "Checksums establish artifact continuity, not independent compiler correctness."
+  ]
+}

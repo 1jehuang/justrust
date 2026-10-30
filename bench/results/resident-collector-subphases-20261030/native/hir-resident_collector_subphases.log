@@ -1,0 +1,41 @@
+warning: missing `[lints]` to inherit `[workspace.lints]`
+  --> lib/rowan/Cargo.toml
+   = note: `cargo::missing_lints_inheritance` is set to `warn` by default
+help: to inherit `workspace.lints, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+29 + workspace = true
+   |
+help: to clarify your intent to not inherit, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+   |
+warning: function `is_range_pat_op` is never used
+    --> crates/syntax/src/ast/node_ext.rs:1066:4
+     |
+1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {
+     |    ^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `span`
+   --> crates/hir-expand/src/builtin/derive_macro.rs:134:27
+    |
+134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {
+    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+
+justrust: ok: 2 tests passed in 2.9s
+  time    startup 0.12s | compile 2.71s | after 0.02s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 140 fresh
+          hir (test)                         2.71s  cpu   2.9s    546 MB
+  tests   2 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 0.00s
+  cpu     3.4s total, avg 1.2/peak 1.1 of 16 cores; others used 3.8 cores
+  memory  peak 593 MB build, 546 MB largest rustc, 33.1 GB free; stalls cpu 0.03s mem 0.00s io 0.03s
+  output  3 warnings shown, 30 hidden; 146 progress and 2 passing-test lines hidden
+  waste   none detected
+  more    `justrust log 20261030-135438404-3757691` full output, `justrust show 20261030-135438404-3757691` full profile

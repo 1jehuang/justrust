@@ -1,0 +1,53 @@
+{
+  "verdict": "passed",
+  "native_test_rows": [
+    {
+      "package": "ide-diagnostics",
+      "filter": "resident_collector_subphases",
+      "passed": 6,
+      "run_id": "20261030-135302965-3745000"
+    },
+    {
+      "package": "hir",
+      "filter": "resident_collector_subphases",
+      "passed": 2,
+      "run_id": "20261030-135438404-3757691"
+    },
+    {
+      "package": "ide-diagnostics",
+      "filter": "resident_semantic_subphases",
+      "passed": 5,
+      "run_id": "20261030-135441284-3758161"
+    },
+    {
+      "package": "ra-jit",
+      "filter": "diagnostic_hash::tests",
+      "passed": 2,
+      "run_id": "20261030-135441415-3758213"
+    },
+    {
+      "package": "ra-jit",
+      "filter": "diagnostics_timing_tests",
+      "passed": 3,
+      "run_id": "20261030-135441731-3758262"
+    },
+    {
+      "package": "ra-jit",
+      "filter": "resident_graph_reuse",
+      "passed": 1,
+      "run_id": "20261030-135441991-3758329"
+    },
+    {
+      "package": "ra-jit",
+      "filter": "the_roots_of_a_listed_crate",
+      "passed": 1,
+      "run_id": "20261030-135442299-3758425"
+    },
+    {
+      "package": "ra-jit",
+      "filter": "telemetry",
+      "passed": 3,
+      "run_id": "20261030-135442511-3758472"
+    }
+  ]
+}

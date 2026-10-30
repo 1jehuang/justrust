@@ -1,0 +1,814 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index 153343b67..ff1560604 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -7005,6 +7005,7 @@ fn errors_of(
+     let semantic_phase = DiagnosticsPhase::new("diagnostics.semantic_inclusive_asked");
+     let diagnostics = if diagnostics_telemetry_enabled() {
+         let mut intervals = Vec::with_capacity(5);
++        let mut collector_timings = Vec::new();
+         let diagnostics = ide_diagnostics::semantic_diagnostics_of_bodies_with_timings(
+             db,
+             config,
+@@ -7013,7 +7014,16 @@ fn errors_of(
+             within,
+             &asked,
+             Some(&mut intervals),
++            Some(&mut collector_timings),
+         );
++        // Actual elapsed category totals, not timeline spans. Categories nest and
++        // must not be summed as a critical path. No per-body trace transport cost.
++        for row in collector_timings {
++            eprintln!(
++                "diagnostics collector: label={} calls={} cumulative_ns={} inclusive=true",
++                row.label, row.calls, row.cumulative_ns,
++            );
++        }
+         // Convert on the same caller thread as the actual measured intervals.
+         let mut details = DIAGNOSTICS_DETAILS.lock().unwrap_or_else(|it| it.into_inner());
+         for (name, start, end) in intervals {
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir/src/diagnostics.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir/src/diagnostics.rs
+index c04779f86..e090ec705 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir/src/diagnostics.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir/src/diagnostics.rs
+@@ -753,7 +753,122 @@ pub struct ReturnOutsideFunction {
+     pub kind: ReturnKind,
+ }
+ 
+-pub(crate) struct DiagnosticsCollector<'a, 'db> {
++/// Actual elapsed collector work, aggregated without manufacturing timeline intervals.
++/// Categories are inclusive and can nest, including recursively within the same category.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub struct CollectorTiming {
++    pub label: &'static str,
++    pub calls: u64,
++    pub cumulative_ns: u128,
++}
++
++const COLLECTOR_LABELS: [&str; 16] = [
++    "hir.collect.module_inclusive",
++    "hir.collect.item_case",
++    "hir.collect.signature_generic_inclusive",
++    "hir.collect.signature_fields_inclusive",
++    "hir.collect.wellformed",
++    "hir.collect.impl_inclusive",
++    "hir.collect.selected_body_inclusive",
++    "hir.collect.body_expr_inclusive",
++    "hir.collect.body_inference_inclusive",
++    "hir.collect.missing_unsafe",
++    "hir.collect.body_validation",
++    "hir.collect.body_borrowck",
++    "hir.collect.signature_anon_inference_inclusive",
++    "hir.collect.signature_setup_inclusive",
++    "hir.collect.impl_checks_inclusive",
++    "hir.collect.signature_anon_borrowck",
++];
++
++struct CollectorInventory {
++    totals: [std::cell::Cell<(u64, u128)>; COLLECTOR_LABELS.len()],
++}
++
++impl CollectorInventory {
++    fn new() -> Self {
++        Self { totals: std::array::from_fn(|_| std::cell::Cell::new((0, 0))) }
++    }
++
++    fn append(&self, output: &mut Vec<CollectorTiming>) {
++        for (label, total) in COLLECTOR_LABELS.into_iter().zip(&self.totals) {
++            let (calls, cumulative_ns) = total.get();
++            if calls == 0 {
++                continue;
++            }
++            if let Some(row) = output.iter_mut().find(|row| row.label == label) {
++                row.calls = row.calls.saturating_add(calls);
++                row.cumulative_ns = row.cumulative_ns.saturating_add(cumulative_ns);
++            } else {
++                output.push(CollectorTiming { label, calls, cumulative_ns });
++            }
++        }
++    }
++}
++
++/// Not Send: start, finish and accumulation stay on the actual collector thread.
++struct CollectorInterval<'a> {
++    target: Option<(&'a std::cell::Cell<(u64, u128)>, std::time::Instant)>,
++}
++
++impl<'a> CollectorInterval<'a> {
++    fn enter(inventory: Option<&'a CollectorInventory>, category: usize) -> Self {
++        Self::with_clock(inventory, category, std::time::Instant::now)
++    }
++
++    fn with_clock(
++        inventory: Option<&'a CollectorInventory>,
++        category: usize,
++        clock: impl FnOnce() -> std::time::Instant,
++    ) -> Self {
++        Self { target: inventory.map(|inventory| (&inventory.totals[category], clock())) }
++    }
++}
++
++impl Drop for CollectorInterval<'_> {
++    fn drop(&mut self) {
++        if let Some((total, started)) = self.target {
++            let elapsed = started.elapsed().as_nanos();
++            let (calls, ns) = total.get();
++            total.set((calls.saturating_add(1), ns.saturating_add(elapsed)));
++        }
++    }
++}
++
++#[cfg(test)]
++mod resident_collector_subphases_tests {
++    use super::*;
++
++    #[test]
++    fn resident_collector_subphases_disabled_no_clock_helper() {
++        let interval = CollectorInterval::with_clock(None, 0, || {
++            panic!("disabled collector must not read the clock")
++        });
++        assert!(interval.target.is_none());
++        drop(interval);
++    }
++
++    #[test]
++    fn resident_collector_subphases_actual_scopes_bounded_inventory() {
++        let inventory = CollectorInventory::new();
++        for _ in 0..4096 {
++            let _outer = CollectorInterval::enter(Some(&inventory), 0);
++            let _inner = CollectorInterval::enter(Some(&inventory), 1);
++        }
++        let mut rows = Vec::new();
++        inventory.append(&mut rows);
++        assert_eq!(rows.len(), 2);
++        assert_eq!(rows[0].label, "hir.collect.module_inclusive");
++        assert_eq!(rows[1].label, "hir.collect.item_case");
++        assert!(rows.iter().all(|row| row.calls == 4096 && row.cumulative_ns > 0));
++        assert!(rows[0].cumulative_ns >= rows[1].cumulative_ns);
++        inventory.append(&mut rows);
++        assert_eq!(rows.len(), 2);
++        assert!(rows.iter().all(|row| row.calls == 8192));
++    }
++}
++
++pub(crate) struct DiagnosticsCollector<'a, 'db, 'timing> {
+     db: &'db dyn HirDatabase,
+     krate: base_db::Crate,
+     edition: Edition,
+@@ -761,6 +876,7 @@ pub(crate) struct DiagnosticsCollector<'a, 'db> {
+     acc: &'a mut Vec<AnyDiagnostic<'db>>,
+     /// The bodies whose diagnostics are asked for, when not all of them are.
+     bodies: Option<&'a dyn Fn(crate::DefWithBody) -> bool>,
++    timings: Option<&'timing CollectorInventory>,
+ }
+ 
+ fn precise_macro_call_location(
+@@ -793,18 +909,31 @@ fn precise_macro_call_location(
+     }
+ }
+ 
+-impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
++impl<'a, 'db> DiagnosticsCollector<'a, 'db, '_> {
+     pub(crate) fn collect(
+         db: &'db dyn HirDatabase,
+         module: ModuleId,
+         acc: &'a mut Vec<AnyDiagnostic<'db>>,
+         style_lints: bool,
+         bodies: Option<&'a dyn Fn(crate::DefWithBody) -> bool>,
++        timings: Option<&mut Vec<CollectorTiming>>,
+     ) {
++        let inventory = timings.as_ref().map(|_| CollectorInventory::new());
+         let krate = module.krate(db);
+         let edition = krate.data(db).edition;
+-        DiagnosticsCollector { db, krate, edition, style_lints, acc, bodies }
+-            .collect_module(module);
++        DiagnosticsCollector {
++            db,
++            krate,
++            edition,
++            style_lints,
++            acc,
++            bodies,
++            timings: inventory.as_ref(),
++        }
++        .collect_module(module);
++        if let (Some(inventory), Some(output)) = (inventory, timings) {
++            inventory.append(output);
++        }
+     }
+ 
+     fn emit_def_diagnostic(&mut self, diag: &DefDiagnosticKind) {
+@@ -912,6 +1041,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn emit_case_diagnostics(&mut self, def: ModuleDefId) {
++        let _timing = CollectorInterval::enter(self.timings, 1);
+         self.acc
+             .extend(hir_ide::diagnostics::incorrect_case(self.db, def).into_iter().map(Into::into));
+     }
+@@ -953,10 +1083,12 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn collect_trait(&mut self, def: TraitId, def_map: &DefMap) {
++        let signature_timing = CollectorInterval::enter(self.timings, 13);
+         let (signature, source_map) = TraitSignature::with_source_map(self.db, def);
+         let items = TraitItems::query_with_diagnostics(self.db, def);
+ 
+         self.collect_generic_def(&signature.store, source_map, def.into());
++        drop(signature_timing);
+         self.collect_wfcheck(def.into());
+         self.emit_def_diagnostics(&items.1);
+         items.0.macro_calls().for_each(|(_, call)| self.collect_macro_call(call));
+@@ -970,6 +1102,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         def_map: &'db DefMap,
+         impl_assoc_items_scratch: &mut Vec<(Name, AssocItemId)>,
+     ) {
++        let _timing = CollectorInterval::enter(self.timings, 5);
+         let (impl_signature, source_map) = ImplSignature::with_source_map(self.db, def);
+         let impl_items = ImplItems::of(self.db, def);
+ 
+@@ -978,6 +1111,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         impl_items.0.macro_calls().for_each(|(_, call)| self.collect_macro_call(call));
+         self.collect_assoc_items(&impl_items.0.items, def_map);
+ 
++        let _checks_timing = CollectorInterval::enter(self.timings, 14);
+         let loc = def.lookup(self.db);
+ 
+         let file_id = loc.id.file_id;
+@@ -1167,6 +1301,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn collect_module(&mut self, def: ModuleId) {
++        let _timing = CollectorInterval::enter(self.timings, 0);
+         let _p = tracing::info_span!("diagnostics", name = ?def.name(self.db)).entered();
+ 
+         let def_map = def.def_map(self.db);
+@@ -1218,11 +1353,14 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn collect_anon_const(&mut self, source_map: &ExpressionStoreSourceMap, def: AnonConstId<'db>) {
+-        self.emit_inference_errors(
+-            def.into(),
+-            source_map,
+-            TypeOwnerId::from_anon_const(def, self.db),
+-        );
++        {
++            let _timing = CollectorInterval::enter(self.timings, 12);
++            self.emit_inference_errors(
++                def.into(),
++                source_map,
++                TypeOwnerId::from_anon_const(def, self.db),
++            );
++        }
+         self.collect_anon_const_borrowck(source_map, def);
+     }
+ 
+@@ -1231,6 +1369,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         source_map: &ExpressionStoreSourceMap,
+         def: AnonConstId<'db>,
+     ) {
++        let _timing = CollectorInterval::enter(self.timings, 15);
+         use hir_ide::mir::MirSpan;
+         let result = hir_ty_borrowck::borrowck_anon_const(self.db, def);
+         for diagnostic in &result.diagnostics {
+@@ -1305,6 +1444,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         source_map: &ExpressionStoreSourceMap,
+         def: GenericDefId,
+     ) {
++        let _timing = CollectorInterval::enter(self.timings, 2);
+         self.collect_expr_store(store, source_map);
+         for (anon_consts, diagnostics) in signature_anon_consts_and_diagnostics(self.db, def) {
+             self.collect_anon_consts_and_ty_diagnostics(source_map, anon_consts, diagnostics);
+@@ -1315,12 +1455,20 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         if self.bodies.is_some_and(|asked| !asked(def.into())) {
+             return;
+         }
++        let _timing = CollectorInterval::enter(self.timings, 6);
+         let (body, source_map) = Body::with_source_map(self.db, def);
+ 
+-        self.collect_expr_store(body, source_map);
+-        self.emit_inference_errors(def.into(), source_map, type_owner);
++        {
++            let _timing = CollectorInterval::enter(self.timings, 7);
++            self.collect_expr_store(body, source_map);
++        }
++        {
++            let _timing = CollectorInterval::enter(self.timings, 8);
++            self.emit_inference_errors(def.into(), source_map, type_owner);
++        }
+ 
+         // FIXME: Missing unsafe and body validation should be defined for any `InferBodyId`.
++        let unsafe_timing = CollectorInterval::enter(self.timings, 9);
+         let missing_unsafe = hir_ide::diagnostics::missing_unsafe(self.db, def);
+         for (node, reason) in missing_unsafe.unsafe_exprs {
+             match source_map.expr_or_pat_syntax(node) {
+@@ -1356,10 +1504,13 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+             }
+         }
+ 
++        drop(unsafe_timing);
++        let validation_timing = CollectorInterval::enter(self.timings, 10);
+         for diagnostic in BodyValidationDiagnostic::collect(self.db, def, self.style_lints) {
+             self.acc
+                 .extend(AnyDiagnostic::body_validation_diagnostic(self.db, diagnostic, source_map));
+         }
++        drop(validation_timing);
+         self.collect_borrowck(def, body, source_map);
+     }
+ 
+@@ -1369,6 +1520,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         body: &Body,
+         source_map: &hir_def::expr_store::BodySourceMap,
+     ) {
++        let _timing = CollectorInterval::enter(self.timings, 11);
+         use hir_ide::mir::MirSpan;
+         let result = hir_ty_borrowck::borrowck(self.db, def);
+         // An `async fn`'s body is the future it makes, which rustc points at as its block.
+@@ -1506,6 +1658,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn collect_variant(&mut self, def: VariantId) {
++        let _timing = CollectorInterval::enter(self.timings, 3);
+         let (fields, source_map) = def.fields_with_source_map(self.db);
+         self.collect_expr_store(&fields.store, source_map);
+ 
+@@ -1521,10 +1674,12 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+         &mut self,
+         def: impl Into<GenericDefId> + Into<DefWithBodyId> + Copy,
+     ) {
++        let signature_timing = CollectorInterval::enter(self.timings, 13);
+         let generic_def: GenericDefId = def.into();
+         let (signature_store, signature_source_map) =
+             ExpressionStore::with_source_map(self.db, generic_def.into());
+         self.collect_generic_def(signature_store, signature_source_map, generic_def);
++        drop(signature_timing);
+ 
+         let def_with_body: DefWithBodyId = def.into();
+         self.collect_def_with_body(def_with_body, generic_def.into());
+@@ -1534,15 +1689,18 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn collect_generic_variant(&mut self, def: impl Into<GenericDefId> + Into<VariantId> + Copy) {
++        let signature_timing = CollectorInterval::enter(self.timings, 13);
+         let generic_def: GenericDefId = def.into();
+         let (store, source_map) = ExpressionStore::with_source_map(self.db, generic_def.into());
+         self.collect_generic_def(store, source_map, generic_def);
++        drop(signature_timing);
+         self.collect_variant(def.into());
+         self.collect_wfcheck(generic_def);
+     }
+ 
+     /// rustc's well-formedness errors of an ADT or an impl, reported as the borrow checker's.
+     fn collect_wfcheck(&mut self, def: GenericDefId) {
++        let _timing = CollectorInterval::enter(self.timings, 4);
+         use hir_ty_wfcheck::Site;
+         let db = self.db;
+         for diagnostic in &hir_ty_wfcheck::wfcheck(db, def).diagnostics {
+@@ -1662,6 +1820,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+     }
+ 
+     fn collect_only_generic_def(&mut self, def: impl Into<GenericDefId>) {
++        let _timing = CollectorInterval::enter(self.timings, 13);
+         let generic_def: GenericDefId = def.into();
+         let (store, source_map) = ExpressionStore::with_source_map(self.db, generic_def.into());
+         self.collect_generic_def(store, source_map, generic_def);
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir/src/lib.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir/src/lib.rs
+index 63a082bc6..cfe430cdf 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir/src/lib.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir/src/lib.rs
+@@ -708,7 +708,14 @@ impl Module {
+         acc: &mut Vec<AnyDiagnostic<'db>>,
+         style_lints: bool,
+     ) {
+-        crate::diagnostics::DiagnosticsCollector::collect(db, self.id, acc, style_lints, None);
++        crate::diagnostics::DiagnosticsCollector::collect(
++            db,
++            self.id,
++            acc,
++            style_lints,
++            None,
++            None,
++        );
+     }
+ 
+     /// Fills `acc` with the module's diagnostics, of the bodies only those `bodies` asks for:
+@@ -721,7 +728,35 @@ impl Module {
+         bodies: &dyn Fn(DefWithBody) -> bool,
+     ) {
+         let bodies = Some(bodies);
+-        crate::diagnostics::DiagnosticsCollector::collect(db, self.id, acc, style_lints, bodies);
++        crate::diagnostics::DiagnosticsCollector::collect(
++            db,
++            self.id,
++            acc,
++            style_lints,
++            bodies,
++            None,
++        );
++    }
++
++    /// The same diagnostic walk with optional caller-owned, bounded category totals.
++    /// `None` reads no collector clock. Counts and cumulative nanoseconds are inclusive,
++    /// not timeline events or a critical-path sum. Existing rows are accumulated by label.
++    pub fn diagnostics_with_collector_timings<'db>(
++        self,
++        db: &'db dyn HirDatabase,
++        acc: &mut Vec<AnyDiagnostic<'db>>,
++        style_lints: bool,
++        bodies: Option<&dyn Fn(DefWithBody) -> bool>,
++        timings: Option<&mut Vec<diagnostics::CollectorTiming>>,
++    ) {
++        crate::diagnostics::DiagnosticsCollector::collect(
++            db,
++            self.id,
++            acc,
++            style_lints,
++            bodies,
++            timings,
++        );
+     }
+ 
+     pub fn declarations(self, db: &dyn HirDatabase) -> Vec<ModuleDef> {
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs b/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+index 56c56f7b3..a191fdad3 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+@@ -393,7 +393,7 @@ pub fn semantic_diagnostics_within(
+     file_id: FileId,
+     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
+ ) -> Vec<Diagnostic> {
+-    semantic_diagnostics_asked(db, config, resolve, file_id, within, None, None)
++    semantic_diagnostics_asked(db, config, resolve, file_id, within, None, None, None)
+ }
+ 
+ /// [`semantic_diagnostics_within`], of the bodies only those `bodies` asks for, for a caller
+@@ -407,12 +407,14 @@ pub fn semantic_diagnostics_of_bodies(
+     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
+     bodies: &dyn Fn(hir::DefWithBody) -> bool,
+ ) -> Vec<Diagnostic> {
+-    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), None)
++    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), None, None)
+ }
+ 
+ /// [`semantic_diagnostics_of_bodies`] with optional actual caller-thread phase intervals.
+-/// Passing `None` reads no clock. Intervals include body-selection callbacks and append
+-/// to rather than replace the output. An early return records only phases reached.
++/// Passing `None` for both outputs reads no instrumentation clock. Intervals include
++/// body-selection callbacks and append to rather than replace the output. An early
++/// return records only phases reached.
++/// Optional HIR totals are inclusive category inventories, never synthetic intervals.
+ pub fn semantic_diagnostics_of_bodies_with_timings(
+     db: &RootDatabase,
+     config: &DiagnosticsConfig,
+@@ -421,8 +423,18 @@ pub fn semantic_diagnostics_of_bodies_with_timings(
+     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
+     bodies: &dyn Fn(hir::DefWithBody) -> bool,
+     timings: Option<&mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
++    collector_timings: Option<&mut Vec<hir::diagnostics::CollectorTiming>>,
+ ) -> Vec<Diagnostic> {
+-    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), timings)
++    semantic_diagnostics_asked(
++        db,
++        config,
++        resolve,
++        file_id,
++        within,
++        Some(bodies),
++        timings,
++        collector_timings,
++    )
+ }
+ 
+ /// Caller-local recorder, including the active phase on an early return.
+@@ -467,6 +479,7 @@ fn semantic_diagnostics_asked(
+     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
+     bodies: Option<&dyn Fn(hir::DefWithBody) -> bool>,
+     timings: Option<&mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
++    collector_timings: Option<&mut Vec<hir::diagnostics::CollectorTiming>>,
+ ) -> Vec<Diagnostic> {
+     let _p = tracing::info_span!("semantic_diagnostics").entered();
+     let mut phases = SemanticDiagnosticPhases::new(timings);
+@@ -526,12 +539,13 @@ fn semantic_diagnostics_asked(
+         // file, so we skip semantic diagnostics so we can show these faster.
+         Some(m) => {
+             if editioned_file_id.parse_errors(db).is_none_or(|es| es.len() < 16) {
+-                match bodies {
+-                    Some(bodies) => {
+-                        m.diagnostics_of_bodies(db, &mut diags, config.style_lints, bodies)
+-                    }
+-                    None => m.diagnostics(db, &mut diags, config.style_lints),
+-                }
++                m.diagnostics_with_collector_timings(
++                    db,
++                    &mut diags,
++                    config.style_lints,
++                    bodies,
++                    collector_timings,
++                );
+             }
+         }
+         None => handlers::unlinked_file::unlinked_file(&ctx, &mut res, editioned_file_id),
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs b/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+index f7ebb1b01..3f170feb3 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+@@ -19,6 +19,10 @@ use crate::{DiagnosticsConfig, Severity};
+ /// Compare every Debug-visible diagnostic field, including fixes and main-node pointers.
+ /// Diagnostic deliberately has no PartialEq implementation.
+ fn resident_semantic_subphases_compare(selection: usize, disabled: bool) {
++    resident_collector_subphases_compare(selection, disabled, false);
++}
++
++fn resident_collector_subphases_compare(selection: usize, disabled: bool, collector: bool) {
+     use std::{cell::RefCell, time::Instant};
+ 
+     let (db, file_id) = RootDatabase::with_single_file(
+@@ -54,6 +58,7 @@ fn second() { let _: bool = 42; }
+         let callback_intervals = RefCell::new(Vec::new());
+         let before = Instant::now();
+         let mut intervals = vec![("sentinel", before, before)];
++        let mut inventory = Vec::new();
+         let new = super::semantic_diagnostics_of_bodies_with_timings(
+             &db,
+             &config,
+@@ -73,11 +78,43 @@ fn second() { let _: bool = 42; }
+                 selected
+             },
+             Some(&mut intervals),
++            collector.then_some(&mut inventory),
+         );
+         let after = Instant::now();
+         assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
+         assert_eq!(*old_calls.borrow(), *new_calls.borrow());
+         assert!(!new_calls.borrow().is_empty());
++        if collector {
++            assert!(inventory.len() <= 16);
++            for row in &inventory {
++                assert!(row.calls > 0, "{row:?}");
++                assert!(row.cumulative_ns > 0, "{row:?}");
++            }
++            let calls =
++                |label| inventory.iter().find(|row| row.label == label).map_or(0, |row| row.calls);
++            assert!(calls("hir.collect.module_inclusive") > 0);
++            assert!(calls("hir.collect.item_case") > 0);
++            assert!(calls("hir.collect.signature_generic_inclusive") > 0);
++            assert!(calls("hir.collect.signature_setup_inclusive") > 0);
++            let visited = new_calls.borrow().len() as u64;
++            let selected = match selection {
++                0 => 0,
++                1 => visited,
++                _ => visited.div_ceil(2),
++            };
++            for label in [
++                "hir.collect.selected_body_inclusive",
++                "hir.collect.body_expr_inclusive",
++                "hir.collect.body_inference_inclusive",
++                "hir.collect.missing_unsafe",
++                "hir.collect.body_validation",
++                "hir.collect.body_borrowck",
++            ] {
++                assert_eq!(calls(label), selected, "{label}");
++            }
++        } else {
++            assert!(inventory.is_empty());
++        }
+         if selection == 1 && !disabled {
+             assert!(new.iter().any(|diag| diag.code.as_str() == "E0308"));
+         }
+@@ -110,6 +147,116 @@ fn second() { let _: bool = 42; }
+     });
+ }
+ 
++#[test]
++fn resident_collector_subphases_all_bodies_exact() {
++    resident_collector_subphases_compare(1, false, true);
++}
++
++#[test]
++fn resident_collector_subphases_no_bodies_exact() {
++    resident_collector_subphases_compare(0, false, true);
++}
++
++#[test]
++fn resident_collector_subphases_selective_bodies_exact() {
++    resident_collector_subphases_compare(2, false, true);
++}
++
++#[test]
++fn resident_collector_subphases_disabled_diagnostic_exact() {
++    resident_collector_subphases_compare(1, true, true);
++}
++
++#[test]
++fn resident_collector_subphases_disabled_clockfree_api_exact() {
++    resident_semantic_subphases_disabled_clockfree_api_exact();
++}
++
++#[test]
++fn resident_collector_subphases_hir_api_complete_debug_and_visitation() {
++    use std::cell::RefCell;
++
++    let (db, file_id) = RootDatabase::with_single_file(
++        r#"
++struct Bad_name { field: [u8; 1 + 1] }
++trait Tr { fn method(&self); }
++impl Tr for Bad_name { fn method(&self) { let _: u8 = "bad"; } }
++fn first() { let _: bool = 42; }
++mod nested { pub fn other() { let _: u32 = "nested"; } }
++"#,
++    );
++    let file_id = file_id.file_id(&db);
++    hir::attach_db(&db, || {
++        let sema = hir::Semantics::new(&db);
++        let module = sema.file_to_module_def(file_id).expect("fixture module");
++        for selection in 0..3 {
++            for enabled in [false, true] {
++                let old_calls = RefCell::new(Vec::new());
++                let new_calls = RefCell::new(Vec::new());
++                let select = |calls: &RefCell<Vec<hir::DefWithBody>>, body| {
++                    let mut calls = calls.borrow_mut();
++                    calls.push(body);
++                    match selection {
++                        0 => false,
++                        1 => true,
++                        _ => calls.len() % 2 == 1,
++                    }
++                };
++                let mut old = Vec::new();
++                module.diagnostics_of_bodies(&db, &mut old, true, &|body| select(&old_calls, body));
++                let mut new = Vec::new();
++                let mut inventory = Vec::new();
++                module.diagnostics_with_collector_timings(
++                    &db,
++                    &mut new,
++                    true,
++                    Some(&|body| select(&new_calls, body)),
++                    enabled.then_some(&mut inventory),
++                );
++                assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
++                assert_eq!(*old_calls.borrow(), *new_calls.borrow());
++                assert!(!old_calls.borrow().is_empty());
++                if enabled {
++                    assert!(inventory.len() <= 16);
++                    for label in [
++                        "hir.collect.item_case",
++                        "hir.collect.signature_generic_inclusive",
++                        "hir.collect.signature_fields_inclusive",
++                        "hir.collect.signature_anon_inference_inclusive",
++                        "hir.collect.signature_anon_borrowck",
++                        "hir.collect.wellformed",
++                        "hir.collect.impl_inclusive",
++                        "hir.collect.impl_checks_inclusive",
++                    ] {
++                        assert!(
++                            inventory.iter().any(|row| {
++                                row.label == label && row.calls > 0 && row.cumulative_ns > 0
++                            }),
++                            "missing actual work for {label}: {inventory:?}"
++                        );
++                    }
++                    if selection == 0 {
++                        assert!(
++                            !inventory
++                                .iter()
++                                .any(|row| row.label == "hir.collect.selected_body_inclusive")
++                        );
++                    }
++                } else {
++                    assert!(inventory.is_empty());
++                }
++            }
++        }
++        let mut old = Vec::new();
++        module.diagnostics(&db, &mut old, true);
++        let mut new = Vec::new();
++        let mut inventory = Vec::new();
++        module.diagnostics_with_collector_timings(&db, &mut new, true, None, Some(&mut inventory));
++        assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
++        assert!(!inventory.is_empty());
++    });
++}
++
+ #[test]
+ fn resident_semantic_subphases_all_bodies_exact() {
+     resident_semantic_subphases_compare(1, false);
+@@ -152,6 +299,7 @@ fn resident_semantic_subphases_disabled_clockfree_api_exact() {
+             None,
+             &|_| true,
+             None,
++            None,
+         );
+         assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
+         assert!(new.iter().any(|diag| diag.code.as_str() == "E0308"));
+diff --git a/docs/resident-collector-subphases.md b/docs/resident-collector-subphases.md
+new file mode 100644
+index 000000000..11df6afe5
+--- /dev/null
++++ b/docs/resident-collector-subphases.md
+@@ -0,0 +1,106 @@
++# Resident collector subphases (v26)
++
++Source-only attribution against accepted `90164925ce021dbb56a735a7d99efacab261d732`.
++No cache, semantic, scheduling or diagnostic selection optimization is included.
++Native builds, tests and representative timing gates belong to the root coordinator.
++
++## Output and API
++
++`hir::Module::diagnostics_with_collector_timings` is the new optional HIR entry point.
++It accepts the same optional body predicate used by the existing collector and an
++optional caller-owned `Vec<hir::diagnostics::CollectorTiming>`. Each row has a static
++`label`, `calls: u64`, and `cumulative_ns: u128`. Existing diagnostic APIs explicitly
++pass `None`. The existing optional timed IDE entry point
++`semantic_diagnostics_of_bodies_with_timings` gains a separate optional inventory
++argument. Its five outer actual `(static label, Instant, Instant)` intervals remain
++unchanged, including callback time inside collection. Untimed IDE APIs pass `None`
++for both outputs.
++
++The existing startup-only `RA_JIT_DIAGNOSTICS_STATS=1` gate requests both outputs.
++Main emits one stderr line per observed category:
++
++```text
++diagnostics collector: label=hir.collect.item_case calls=42 cumulative_ns=12345 inclusive=true
++```
++
++The example numbers illustrate format only, not measurements. Inventory rows never
++become trace events. Main transports the five outer actual intervals through its
++existing bounded details collector on the same caller thread as before. No new
++per-body spans consume the 4000-event transport cap. Disabled main takes its old
++untimed branch and does not lock the details collector for this instrumentation.
++
++## Bounded and clock-free implementation
++
++An enabled top-level HIR walk creates a local fixed array of 16 `Cell` counters.
++Each RAII guard reads an actual start clock, then measures elapsed nanoseconds at
++scope exit and increments its category. A shared reference to non-`Sync` `Cell`
++storage prevents guards from crossing threads. Nested guards never hold dynamic
++borrows or locks. Only nonzero counters are merged into the caller's vector once
++the walk returns. A fresh vector contains at most 16 rows regardless of module,
++item or body count. Reusing that vector accumulates the same labels, not more rows.
++Unrelated preexisting caller rows are retained. Counts and durations saturate at
++their integer maxima. No event cap, record loss, or dropped-event timeline is
++involved in the inventory.
++
++With `None`, no counter array is initialized, no inventory allocation occurs, no
++collector mutex is used, and neither entering nor dropping a guard reads a clock.
++The disabled helper test supplies a panicking clock closure to verify that the
++entry helper does not call it. The guard's absent target also bypasses its exit
++clock. These are source invariants pending root-owned native execution.
++
++## Category boundaries
++
++All categories are **inclusive**. They may nest or recursively include themselves.
++Do not sum them as wall time, derive a critical path from their sum, or subtract
++nested totals without accounting for recursive and cross-category overlap.
++
++| Label suffix (`hir.collect.`) | Actual scoped work |
++| --- | --- |
++| `module_inclusive` | Entire `collect_module`, including nested modules, definitions, macros, impls and selected bodies |
++| `item_case` | Case/naming query and appending its diagnostics |
++| `signature_setup_inclusive` | Generic signature store/source acquisition and generic checks for functions, consts, statics, ADTs, aliases and traits, ending before their selected-body/field/wellformed/associated-item work |
++| `signature_generic_inclusive` | Signature expression store diagnostics, generic lowering diagnostics and anonymous-const checking |
++| `signature_fields_inclusive` | Variant field store/source acquisition, expression diagnostics, lowering and anonymous-const checking |
++| `wellformed` | Wellformed query and mapping/appending its diagnostics |
++| `impl_inclusive` | Entire impl collection, including signature, associated items, selected bodies and impl checks |
++| `impl_checks_inclusive` | Work after associated-item collection: impl source/trait metadata, coherence, orphan, safety, missing/redundant associated items, and the impl wellformed check |
++| `selected_body_inclusive` | Only accepted bodies, beginning **after** the body predicate, including body/source acquisition through borrowck diagnostic mapping |
++| `body_expr_inclusive` | Selected-body expression store diagnostics, including block-module recursion |
++| `body_inference_inclusive` | Selected-body inference query and diagnostic mapping/appending |
++| `missing_unsafe` | Selected-body missing-unsafe query and all its diagnostic mapping/appending |
++| `body_validation` | Selected-body validation query and diagnostic mapping/appending |
++| `body_borrowck` | Selected-body borrowck query and diagnostic mapping/appending |
++| `signature_anon_inference_inclusive` | Anonymous-const type-owner acquisition, inference query and mapping/appending from signature/field lowering |
++| `signature_anon_borrowck` | Anonymous-const borrowck query and diagnostic mapping/appending from signature/field lowering |
++
++`signature_setup_inclusive` is not a partition covering every signature read.
++For example impl signature acquisition is included in `impl_inclusive`, before
++`impl_checks_inclusive`. Generic checks themselves have their own category.
++`body_inference_inclusive` measures the collector's inference request, not all
++possible inference induced by downstream checks. Query dependencies and cache hits
++remain part of whichever actual operation invokes them. Block-module recursion can
++cause body expression work to include nested signatures and bodies.
++
++Start by comparing item/signature/wellformed totals with selected-body inference,
++unsafe, validation and borrowck totals, using counts to explain repeated work.
++Use the actual outer collection interval as the wall-time denominator. These
++observations guide further profiling, not an automatic caching prescription.
++
++## Correctness gates to run outside this lane
++
++The distinct `resident_collector_subphases` filter includes:
++
++- Actual IDE API old/new complete Debug comparison and exact callback visitation
++  for all, none and selective body selection, plus disabled diagnostic filtering.
++- Actual HIR API old/new complete Debug comparison and exact callback visitation
++  on naming, generic/anonymous-const, impl and nested-module fixtures, with inventory
++  enabled and disabled. It also compares the unfiltered old/new HIR APIs.
++- Positive observed category/counter evidence and selected-body phase counts.
++- Disabled API comparison and the HIR disabled clock-helper assertion.
++- A helper-only repeated-scope test showing inventory cardinality remains bounded
++  and repeated append merges counts rather than appending duplicate labels.
++
++The existing five `resident_semantic_subphases` tests remain, including exact outer
++labels, contiguous actual intervals, sentinel preservation, and callback containment.
++No build, test or benchmark was executed for this source-only handoff. No speedup
++or new measured category dominance is claimed.

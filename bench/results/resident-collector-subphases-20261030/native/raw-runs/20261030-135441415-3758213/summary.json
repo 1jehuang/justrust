@@ -1,0 +1,132 @@
+{
+  "id": "20261030-135441415-3758213",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6",
+    "--",
+    "diagnostic_hash::tests",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "3dffe2be0a60",
+    "dirty_files": 7
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793393681.4344113,
+  "wall": 0.28256893157958984,
+  "exit": 0,
+  "cpu_secs": 0.540999,
+  "measurement_coverage": {
+    "samples": 3,
+    "processes": 1,
+    "sample_span_secs": 0.28179168701171875,
+    "max_sample_gap_secs": 0.21173334121704102
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.26758670806884766,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 0.007087230682373047,
+    "tail": 0.00789499282836914
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 429,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "jr_engine-93ff5023e9192f9b",
+        "start": 0.26758670806884766,
+        "wall": 0.007087230682373047,
+        "passed": 2,
+        "failed": 0,
+        "filtered_out": 349
+      }
+    ],
+    "passed": 2,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 349,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "diagnostic_hash::tests::flat_hash_matches_old_hash_and_source_substrings",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "diagnostic_hash::tests::green_hash_matches_old_hash_and_source_substrings",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 2
+  },
+  "resources": {
+    "avg_build_cores": 1.9145735413152434,
+    "peak_build_cores": 1.0390427824708302,
+    "peak_build_rss_mb": 112.70703125,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 34160,
+    "avg_other_cores": 3.7102649514541532,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.001993,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.0
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 254,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-135441415-3758213.scope",
+    "final_weight": 1000,
+    "setup_secs": 0.018076318,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

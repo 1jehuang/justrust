@@ -1,0 +1,14 @@
+test_accepts_complete_copied_bundle (__main__.AdmissionControls.test_accepts_complete_copied_bundle) ... ok
+test_rejects_changed_native_count_even_after_rehash (__main__.AdmissionControls.test_rejects_changed_native_count_even_after_rehash) ... ok
+test_rejects_changed_private_snapshot_even_after_rehash (__main__.AdmissionControls.test_rejects_changed_private_snapshot_even_after_rehash) ... ok
+test_rejects_disabled_runtime_with_telemetry_even_after_rehash (__main__.AdmissionControls.test_rejects_disabled_runtime_with_telemetry_even_after_rehash) ... ok
+test_rejects_drops_even_after_rehash (__main__.AdmissionControls.test_rejects_drops_even_after_rehash) ... ok
+test_rejects_failed_gate_even_after_rehash (__main__.AdmissionControls.test_rejects_failed_gate_even_after_rehash) ... ok
+test_rejects_invented_inventory_even_after_rehash (__main__.AdmissionControls.test_rejects_invented_inventory_even_after_rehash) ... ok
+test_rejects_nonlock_source_delta_even_after_rehash (__main__.AdmissionControls.test_rejects_nonlock_source_delta_even_after_rehash) ... ok
+test_rejects_payload_corruption (__main__.AdmissionControls.test_rejects_payload_corruption) ... ok
+
+----------------------------------------------------------------------
+Ran 9 tests in 0.768s
+
+OK
