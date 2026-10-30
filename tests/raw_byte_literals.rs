@@ -71,6 +71,57 @@ fn differential(name: &str, source: &str, valid: bool) {
 }
 
 #[test]
+fn byte_string_temporary_dereference_copies_exact_arrays() {
+    let mut source = String::from(
+        r###"fn relay(x:[u8;9])->[u8;9]{x}
+        fn returned()->[u8;9]{*b"abcdefghi"}
+        fn empty()->[u8;0]{*b""}
+        fn main(){
+            let mut a=relay(*b"abcdefghi");let copy=a;
+            a[8]=b'!';assert_eq!(copy[8],b'i');
+            assert_eq!(b"abcdefghi"[8],b'i');assert_eq!(returned()[8],b'i');
+            let z=empty();assert_eq!(z.len(),0usize);
+            let mut binary=*b"\0\x80\xff";binary[1]=7u8;
+            assert_eq!(binary[1],7u8);assert_eq!(b"\0\x80\xff"[1],128u8);
+            let raw=*br#"\n!"#;assert_eq!(raw[0],92u8);assert_eq!(raw[1],b'n');
+            macro_rules! forward { ($x:literal)=>{$x}; }
+            let forwarded=*forward!(b"macro");assert_eq!(forwarded[4],b'o');
+        "###,
+    );
+    for len in [1usize, 7, 8, 9, 15, 16, 17, 65] {
+        let literal: String = (0..len)
+            .map(|i| format!("\\x{:02x}", (i * 37 + 11) % 256))
+            .collect();
+        source.push_str(&format!(
+            "let mut a{len}:[u8;{len}]=*b\"{literal}\";let b{len}=a{len};a{len}[{}]=255u8;assert_eq!(b{len}[{}],{}u8);",
+            len - 1, len - 1, ((len - 1) * 37 + 11) % 256,
+        ));
+    }
+    source.push_str("println!(\"literal copies ok\");}");
+    differential("temporary-array-copies", &source, true);
+}
+
+#[test]
+fn byte_string_temporary_dereference_rejects_invalid_authority() {
+    for (name, source) in [
+        ("copy-extent", "fn main(){let a:[u8;3]=*b\"ok\";}"),
+        ("copy-element", "fn main(){let a:[u16;2]=*b\"ok\";}"),
+        ("literal-mut", "fn main(){let a:&mut[u8;2]=&mut *b\"ok\";}"),
+        (
+            "owned-static-escape",
+            "fn leak()->&'static[u8;2]{let a=*b\"ok\";&a}fn main(){}",
+        ),
+        ("double-deref", "fn main(){let a=**b\"ok\";}"),
+        (
+            "unused-copy-extent",
+            "fn bad(){let a:[u8;3]=*b\"ok\";}fn main(){}",
+        ),
+    ] {
+        differential(name, source, false);
+    }
+}
+
+#[test]
 fn raw_text_delimiters_unicode_crlf_and_macro_values() {
     differential(
         "raw-text",

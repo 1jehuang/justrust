@@ -11805,7 +11805,21 @@ impl<'a> Checker<'a> {
                         ),
                         _ => false,
                     };
+                    // Literal references are immutable data values, not local-rooted
+                    // places. Authenticate the authored payload and its exact carrier
+                    // before ordinary Deref lowering copies the array into owned storage.
+                    let literal_carrier = if let Expr::ByteStr(bytes) = root {
+                        if let Some(plan) = &self.signatures.plan {
+                            plan.budget.charge_work(bytes.len())?;
+                        }
+                        matches!(&self.exprs[carrier.0].kind, ir::ExprKind::ByteStr(actual) if actual == bytes)
+                            && self.exprs[carrier.0].ty == ir::Ty::byte_string_ty(bytes.len())
+                            && self.exprs[carrier.0].completion == ir::Completion::Returns
+                    } else {
+                        false
+                    };
                     if !matches!(root, Expr::Var(_))
+                        && !literal_carrier
                         && !genuine_call(root)
                         && !slice_carrier
                         && !overloaded_index
@@ -15335,6 +15349,53 @@ mod checked_identity_tests {
         let other = builder("checked-second.rs").finish().unwrap();
         assert!(local.checked_key(&other.names).is_err());
         assert!(local.checked_key(&program.names).is_ok());
+    }
+
+    #[test]
+    fn byte_literal_dereference_rejects_forged_source_authority() {
+        let program = parse("fn bytes()->[u8;9]{*b\"abcdefghi\"}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let publication = match plan.publish_callable_body(declaration, &budget).unwrap() {
+            PublishedCallableBody::Source(publication) => publication,
+            _ => panic!("expected source publication"),
+        };
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+        for mutation in 0..4 {
+            let mut changed = publication.source().as_ref().clone();
+            let literal = changed
+                .exprs
+                .iter_mut()
+                .find(|expr| matches!(expr.kind, ir::ExprKind::ByteStr(_)))
+                .unwrap();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::ByteStr(bytes) = &mut literal.kind else {
+                        unreachable!()
+                    };
+                    bytes[0] = b'z';
+                }
+                1 => literal.ty = ir::Ty::byte_string_ty(8),
+                2 => literal.completion = ir::Completion::Never,
+                _ => {
+                    let deref = changed
+                        .exprs
+                        .iter_mut()
+                        .find(|expr| matches!(expr.kind, ir::ExprKind::Deref { .. }))
+                        .unwrap();
+                    deref.ty = ir::Ty::Bool;
+                }
+            }
+            assert!(
+                publication
+                    .validate_source(&Arc::new(changed), publication.facts(), &budget)
+                    .is_err(),
+                "forged literal mutation {mutation}"
+            );
+        }
     }
 
     #[test]
