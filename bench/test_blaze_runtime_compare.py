@@ -24,6 +24,42 @@ def output(names=(NAME,), marker='', failed=False):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_native_codegen_identity_required_and_tracks_mutation(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rustc = root / 'bin/rustc'
+            rustc.parent.mkdir()
+            rustc.write_bytes(b'not executed')
+            with self.assertRaisesRegex(ValueError, 'installed Cranelift'):
+                h.native_codegen_identities(rustc)
+            backend = root / 'lib/rustlib/test-host/codegen-backends/librustc_codegen_cranelift-test.so'
+            backend.parent.mkdir(parents=True)
+            backend.write_bytes(b'first')
+            before = h.native_codegen_identities(rustc)
+            backend.write_bytes(b'second')
+            self.assertNotEqual(before, h.native_codegen_identities(rustc))
+            self.assertEqual(len(before), 1)
+
+    def test_native_backend_frontier_isolated_flags(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(output=Path(temp), cargo=Path('/mock/cargo'),
+                                      rustc=Path('/mock/rustc'), compiler_nightly=True)
+            stacks = ('owned-off', 'owned-clif', 'owned-threads4', 'owned-clif-threads4')
+            with patch.dict(os.environ, {'RUSTFLAGS': '-Zthreads=99 -Zcodegen-backend=bad',
+                                        'JUSTRUST_CACHE_PROC_MACROS': '1'}, clear=False):
+                envs = {s: h.environment(args, s) for s in stacks}
+            for stack, env in envs.items():
+                self.assertEqual(env['JUSTRUST_CACHE_PROC_MACROS'], '0')
+                self.assertNotIn('threads=99', env['RUSTFLAGS'])
+                self.assertNotIn('backend=bad', env['RUSTFLAGS'])
+                self.assertEqual('-Zcodegen-backend=cranelift' in env['RUSTFLAGS'], 'clif' in stack)
+                self.assertEqual('-Zthreads=4' in env['RUSTFLAGS'], 'threads4' in stack)
+                for flag in h.base.FLAGS:
+                    self.assertIn(f'-Z{flag}=no', env['RUSTFLAGS'])
+                self.assertNotIn('JUSTRUST_HOTPATCH', env)
+            for key in ('JUSTRUST_HOME', 'CARGO_TARGET_DIR'):
+                self.assertEqual(len({e[key] for e in envs.values()}), 4)
+
     def test_demand_only_stack(self):
         with tempfile.TemporaryDirectory() as temp:
             args = argparse.Namespace(output=Path(temp), cargo=Path('/mock/cargo'),
@@ -211,7 +247,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False, frontier=False):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -221,6 +257,7 @@ class HarnessTests(unittest.TestCase):
             blaze_llvm=True, command='test', test_filter='summary::tests::', timeout=1,
             binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
             owned_experiments=experiments, native_macro_cache=macro, demand_query_cache=demand,
+            native_backend_frontier=frontier,
             cargo=Path('/fake/cargo'), rustc=Path('/fake/rustc'),
             blaze_seed_cache=root / 'seed' if seeded else None,
             wild=root / 'fake-wild' if experiments or macro else None)
@@ -274,6 +311,7 @@ class HarnessTests(unittest.TestCase):
             prefix.with_suffix('.stderr').write_text('')
             return dict(status=status, error=None, timed_out=False, elapsed_seconds=.001)
         with patch.object(h.base, 'identities', return_value={'fake': 'identity', 'rustc': {'sha256': 'fake'}}), \
+             patch.object(h, 'native_codegen_identities', return_value={'native_codegen:fake': {'sha256': 'fake'}}), \
              patch.object(h, 'classify_compiler', return_value={'nightly': False}), \
              patch.object(h, 'environment', side_effect=synthetic_environment), \
              patch.object(h, 'run_process', side_effect=fake):
@@ -312,6 +350,21 @@ class HarnessTests(unittest.TestCase):
             for rep in range(2):
                 edits = [(name, data) for name, data in rows if name.startswith(f'edit-{rep:03d}')]
                 self.assertEqual(len(edits), 5)
+                self.assertEqual(len({data for _, data in edits}), 1)
+
+    def test_native_frontier_full_gates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            rows = self.exercise(Path(temp), frontier=True)
+            root = Path(temp) / 'out'
+            metadata = json.loads((root / 'metadata.json').read_text())
+            summary = json.loads((root / 'summary.json').read_text())
+            self.assertEqual(metadata['stacks'], ['owned-off', 'all3on', 'blaze', 'blaze-llvm',
+                                                 'owned-clif', 'owned-threads4', 'owned-clif-threads4'])
+            for stack in ('owned-clif', 'owned-threads4', 'owned-clif-threads4'):
+                self.assertIn(stack, summary['medians_seconds'])
+            for rep in range(2):
+                edits = [(name, data) for name, data in rows if name.startswith(f'edit-{rep:03d}')]
+                self.assertEqual(len(edits), 7)
                 self.assertEqual(len({data for _, data in edits}), 1)
 
     def test_owned_experiments_isolation_flags_and_logging(self):

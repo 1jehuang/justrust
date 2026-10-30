@@ -118,8 +118,19 @@ def classify_compiler(args, expected_hash):
     return receipt
 
 
+def native_codegen_identities(rustc):
+    root = Path(rustc).resolve().parent.parent
+    backends = sorted(root.glob('lib/rustlib/*/codegen-backends/librustc_codegen_cranelift*.so'))
+    if not backends:
+        raise ValueError('Native backend frontier requires an installed Cranelift backend')
+    return {'native_codegen:' + str(p.relative_to(root)):
+            {'path': str(p.resolve()), 'sha256': base.digest(p)} for p in backends}
+
+
 def identities(args):
     result = dict(base.identities(args))
+    if getattr(args, 'native_backend_frontier', False):
+        result.update(native_codegen_identities(args.rustc))
     if args.wild:
         result['wild'] = {'path': str(args.wild), 'sha256': base.digest(args.wild)}
     return result
@@ -230,6 +241,10 @@ def environment(args, stack):
         env['RUSTFLAGS'] += ' -Zjr-cache-declarative-macros=yes'
     if stack == 'owned-demand':
         env['RUSTFLAGS'] += ' -Zjr-demand-query-cache=yes'
+    if stack in ('owned-clif', 'owned-clif-threads4'):
+        env['RUSTFLAGS'] += ' -Zcodegen-backend=cranelift'
+    if stack in ('owned-threads4', 'owned-clif-threads4'):
+        env['RUSTFLAGS'] += ' -Zthreads=4'
     if stack in ('all4hotpatch', 'owned-macro-hotpatch'):
         env['JUSTRUST_HOTPATCH'] = '1'
     if stack.startswith('blaze'):
@@ -311,6 +326,8 @@ def execute(args):
         stacks += ['owned-declarative']
     if getattr(args, 'demand_query_cache', False):
         stacks += ['owned-demand']
+    if getattr(args, 'native_backend_frontier', False):
+        stacks += ['owned-clif', 'owned-threads4', 'owned-clif-threads4']
     records, medians, environments = [], {}, {}
     metadata = {'scope': 'scoped filtered tests, not full suite or general speed claim',
                 'source_before': source_hashes(args.source, args.output),
@@ -490,6 +507,8 @@ def main():
                         help='add an isolated literal declarative cache stack, other reuse experiments and proc-macro cache off')
     parser.add_argument('--demand-query-cache', action='store_true',
                         help='add isolated demand-only query persistence, other reuse experiments and proc-macro cache off')
+    parser.add_argument('--native-backend-frontier', action='store_true',
+                        help='add isolated native Cranelift, four-thread frontend, and combined stacks; baseline profiles unchanged')
     parser.add_argument('--blaze-seed-cache', type=lambda s: Path(s).expanduser().absolute(),
                         help='copy a private successful store into each fresh Blaze cache; warm-store scope only')
     parser.add_argument('--timeout', type=float, default=360)
