@@ -18,6 +18,29 @@ impl Checker<'_> {
             .map(|(selection, _)| selection)
     }
 
+    pub(super) fn method_selection_for_hint(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        explicit: &[Type],
+        arguments: &[Expr],
+    ) -> Result<Option<MethodSelection>, String> {
+        let (selection, deferred) = self.method_selection_with_inference_mode(
+            receiver, name, explicit, arguments, None, true,
+        )?;
+        if selection.is_some() || deferred {
+            return Ok(selection);
+        }
+        match array_unsize_carrier(receiver) {
+            Some(carrier) => self
+                .method_selection_with_inference_mode(
+                    &carrier, name, explicit, arguments, None, true,
+                )
+                .map(|(selection, _)| selection),
+            None => Ok(None),
+        }
+    }
+
     /// Preserve an unresolved higher-priority candidate when considering an
     /// unsizing fallback. A deferred candidate is not an absent method.
     pub(super) fn method_selection_with_inference_state(
@@ -27,6 +50,20 @@ impl Checker<'_> {
         explicit: &[Type],
         arguments: &[Expr],
         expected: Option<&ir::Ty>,
+    ) -> Result<(Option<MethodSelection>, bool), String> {
+        self.method_selection_with_inference_mode(
+            receiver, name, explicit, arguments, expected, false,
+        )
+    }
+
+    fn method_selection_with_inference_mode(
+        &self,
+        receiver: &ir::Ty,
+        name: &AstIdent,
+        explicit: &[Type],
+        arguments: &[Expr],
+        expected: Option<&ir::Ty>,
+        hint_only: bool,
     ) -> Result<(Option<MethodSelection>, bool), String> {
         let plan = self.signatures.plan()?;
         let realized_receiver = if self.nominal_inputs.is_some() {
@@ -130,6 +167,13 @@ impl Checker<'_> {
                     // expected result type picks the unique one whose method
                     // result is exactly it.
                     let Some(expected) = expected else {
+                        if hint_only {
+                            // A context-free hint cannot choose among result
+                            // applications. Defer, preserving receiver priority,
+                            // until the actual call receives its field/context.
+                            deferred = true;
+                            return Ok(MethodArguments::Deferred);
+                        }
                         return Err(super::super::trait_selection::trait_application_ambiguity());
                     };
                     let mut fitting = None;
@@ -154,7 +198,9 @@ impl Checker<'_> {
                             &schema.signature.result,
                             &bindings,
                         );
-                        if &result == expected && fitting.replace(*app).is_some() {
+                        let matches = &result == expected
+                            || self.nominal_input_types_equal(&result, expected)?;
+                        if matches && fitting.replace(*app).is_some() {
                             return Err(
                                 super::super::trait_selection::trait_application_ambiguity(),
                             );

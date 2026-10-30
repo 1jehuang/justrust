@@ -10240,6 +10240,17 @@ impl TraitCx for ValidatedTraitWorld {
         }
         let types_match = self.eq_types(&signature.params, &direct.signature.params, 0)?
             && self.eq_ty(&signature.result, &direct.signature.result, 0)?;
+        if types_match && !return_matches && !target.type_args.is_empty() {
+            // Check erased generic result positions before deriving origins from
+            // concrete types. Distinct trait parameters may specialize to the
+            // same reference type while the provider retains one input binder.
+            // The existing erasure proof still requires exact input positions
+            // and only admits original input-free, origin-free result regions.
+            return_matches = self.erased_result_regions_refine(
+                &signature.ref_contract,
+                &direct.signature.ref_contract,
+            )?;
+        }
         if types_match && !return_matches {
             // The required signature may name a graph-realized nominal whose
             // field layout is not visible here, deriving an empty origin set.
@@ -13032,6 +13043,72 @@ mod tests {
                 resolved.signature(),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn erased_generic_result_refinement_keeps_input_and_origin_authority() {
+        let c = case();
+        let world = c.build().unwrap();
+        let input = ir::InputReference {
+            param: 0,
+            position: ir::ReferencePosition { depth: 0 },
+        };
+        let required = RefContract {
+            region_count: 2,
+            input_regions: Arc::from([ir::InputRegion {
+                input,
+                region: ir::RegionParamId(0),
+            }]),
+            results: Arc::from([ir::ResultReference {
+                position: ir::ReferencePosition { depth: 0 },
+                region: ir::RegionParamId(1),
+                returns: ir::ReturnContract::SharedInputEnvelopes(Arc::from([])),
+            }]),
+            outlives: Arc::from([]),
+            static_regions: 0,
+        };
+        let mut provided = required.clone();
+        provided.region_count = 1;
+        Arc::make_mut(&mut provided.results)[0].region = ir::RegionParamId(0);
+        Arc::make_mut(&mut provided.results)[0].returns =
+            ir::ReturnContract::SharedInputEnvelopes(Arc::from([ir::InputEnvelope { input }]));
+        assert!(
+            world
+                .erased_result_regions_refine(&required, &provided)
+                .unwrap()
+        );
+        for mutation in 0..4 {
+            let mut forged = provided.clone();
+            match mutation {
+                0 => Arc::make_mut(&mut forged.input_regions)[0].input.param = 1,
+                1 => Arc::make_mut(&mut forged.results)[0].position.depth = 1,
+                2 => forged.static_regions = 1,
+                _ => {
+                    Arc::make_mut(&mut forged.results)[0].returns =
+                        ir::ReturnContract::MutInputEnvelopes(Arc::from([]));
+                }
+            }
+            assert!(
+                !world
+                    .erased_result_regions_refine(&required, &forged)
+                    .unwrap(),
+                "mutation {mutation}"
+            );
+        }
+        let mut tied = required.clone();
+        Arc::make_mut(&mut tied.results)[0].region = ir::RegionParamId(0);
+        assert!(
+            !world
+                .erased_result_regions_refine(&tied, &provided)
+                .unwrap()
+        );
+        let mut claimed = required.clone();
+        Arc::make_mut(&mut claimed.results)[0].returns = provided.results[0].returns.clone();
+        assert!(
+            !world
+                .erased_result_regions_refine(&claimed, &provided)
+                .unwrap()
+        );
     }
 
     #[test]

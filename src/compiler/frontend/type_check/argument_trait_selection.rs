@@ -1,8 +1,9 @@
 //! `Owner::item(args)` where `Owner` implements one trait several times with
 //! different trait arguments (`u32: From<u8>`, `u32: From<u16>`, ...). Stock
 //! rustc picks the unique application whose instantiated parameter types the
-//! argument types satisfy. This chooses the application only from exactly
-//! known argument types. Ordinary selection then rediscovers it as an explicit
+//! argument types satisfy. This uses exactly known argument types or the
+//! integer-only domain of an unsuffixed literal, never width fallback.
+//! Ordinary selection then rediscovers it as an explicit
 //! trait call and discharges every obligation; this grants no membership.
 use super::*;
 
@@ -21,17 +22,36 @@ impl Checker<'_> {
         if !type_args.is_empty() || args.is_empty() {
             return Ok(None);
         }
-        // Every argument must have an exactly known type. Untyped literals and
-        // unresolved expressions keep the ordinary diagnostic.
+        // Trait-application disambiguation must not bypass a matching inherent
+        // item, including an inherent method whose actuals remain unresolved.
+        if matches!(
+            self.inherent_method_actuals(owner, name, args, type_args, None, None)?,
+            inherent_method_hint::InherentMethodInference::Applicable(_)
+        ) {
+            return Ok(None);
+        }
+        // A bare integer literal rules out non-integer formals, but never
+        // chooses one integer width over another or applies integer fallback.
         self.infer_storage(args.len())?;
         let mut actual = Vec::with_capacity(args.len());
         for arg in args {
-            let Some(ty) = self.scalar_hint(arg)? else {
+            let ty = self.scalar_hint(arg)?;
+            if ty.is_none() && !matches!(arg, Expr::Integer(literal) if literal.suffix.is_none()) {
                 return Ok(None);
-            };
+            }
             actual.push(ty);
         }
-        self.trait_application_for_argument_types(owner, name, &actual)
+        self.trait_application_matching_arguments(owner, name, args.len(), |formals| {
+            let plan = self.signatures.plan()?;
+            for (formal, actual) in formals.iter().zip(&actual) {
+                match actual {
+                    Some(actual) if metered_type_equal(formal, actual, &plan.budget, 0)? => {}
+                    None if matches!(formal, ir::Ty::Int(_)) => {}
+                    _ => return Ok(false),
+                }
+            }
+            Ok(true)
+        })
     }
 
     /// When `owner` has several applications of one trait whose `name` item
@@ -97,7 +117,25 @@ impl Checker<'_> {
         name: &AstIdent,
         actual: &[ir::Ty],
     ) -> Result<Option<ir::TraitRef>, String> {
-        if actual.is_empty() {
+        self.trait_application_matching_arguments(owner, name, actual.len(), |formals| {
+            let plan = self.signatures.plan()?;
+            for (formal, actual) in formals.iter().zip(actual) {
+                if !metered_type_equal(formal, actual, &plan.budget, 0)? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        })
+    }
+
+    fn trait_application_matching_arguments(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        arity: usize,
+        mut fits: impl FnMut(&[ir::Ty]) -> Result<bool, String>,
+    ) -> Result<Option<ir::TraitRef>, String> {
+        if arity == 0 {
             return Ok(None);
         }
         let plan = self.signatures.plan()?;
@@ -142,14 +180,10 @@ impl Checker<'_> {
                 .service()
                 .instantiate_trait_signature(&call, facts)
                 .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
-            if signature.params.len() != actual.len() {
+            if signature.params.len() != arity {
                 continue;
             }
-            let mut fits = true;
-            for (formal, actual) in signature.params.iter().zip(actual) {
-                fits &= metered_type_equal(formal, actual, &plan.budget, 0)?;
-            }
-            if !fits {
+            if !fits(&signature.params)? {
                 continue;
             }
             if selected.replace(application.clone()).is_some() {

@@ -62,6 +62,66 @@ fn differential(name: &str, source: &str, valid: bool) {
 }
 
 #[test]
+fn reflexive_from_preserves_generic_and_noncopy_values() {
+    differential(
+        "reflexive-values",
+        r#"struct Item{value:i32}
+fn same<T>(value:T)->T{T::from(value)}
+fn into_same<T>(value:T)->T{value.into()}
+fn main(){let a=Item{value:7};let b=Item{value:9};let n=11i32;println!("{} {} {} {} {}",same(a).value,into_same(b).value,i32::from(3i32),<bool as From<bool>>::from(true),*same(&n));}"#,
+        true,
+    );
+    differential(
+        "reflexive-field-single-evaluation",
+        r#"struct Item{value:i32}fn make()->Item{println!("once");Item{value:7}}fn main(){println!("{}",Item::from(make()).value);}"#,
+        true,
+    );
+}
+
+#[test]
+fn blanket_from_keeps_inherent_precedence_and_contextual_into_results() {
+    differential(
+        "inherent-and-contextual-conversion",
+        r#"
+        struct Mark { value: i32 }
+        impl Mark { fn from(value:i32)->Self { Self { value:value+1 } } }
+        impl From<i32> for Mark { fn from(value:i32)->Self { Self { value:value+2 } } }
+        impl From<bool> for Mark { fn from(value:bool)->Self { Self { value:if value {3}else{0} } } }
+        struct Record { name: String }
+        struct Pick;
+        trait Take<T> { fn take(value:T)->T; }
+        impl Take<i32> for Pick { fn take(value:i32)->i32 { value+100 } }
+        impl Take<bool> for Pick { fn take(value:bool)->bool { !value } }
+        impl Pick { fn take<T>(value:T)->T { value } }
+        fn main() {
+            let records=vec![Record{name:"hello".into()},Record{name:"world".into()}];
+            println!("{} {} {} {}",Mark::from(7i32).value,
+                <Mark as From<i32>>::from(7i32).value,Pick::take(7i32),
+                String::from("owned"));
+            for record in records { println!("{}",record.name); }
+        }
+        "#,
+        true,
+    );
+}
+
+#[test]
+fn reflexive_from_rejects_duplicate_impls_and_reused_moves() {
+    for (name, source) in [
+        (
+            "reflexive-duplicate",
+            "struct Item;impl From<Item> for Item{fn from(value:Item)->Item{value}}fn main(){}",
+        ),
+        (
+            "reflexive-move",
+            "struct Item{value:i32}fn main(){let a=Item{value:7};let b=Item::from(a);println!(\"{} {}\",a.value,b.value);}",
+        ),
+    ] {
+        differential(name, source, false);
+    }
+}
+
+#[test]
 fn every_byte_is_the_same_unicode_scalar_through_canonical_from() {
     differential(
         "all-bytes",

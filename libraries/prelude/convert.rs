@@ -8,6 +8,12 @@ pub trait From<T>: Sized {
     fn from(value: T) -> Self;
 }
 
+impl<T> From<T> for T {
+    fn from(value: T) -> T {
+        value
+    }
+}
+
 impl From<u8> for char {
     fn from(value: u8) -> char {
         // Every byte is a Unicode scalar, including 0x80..=0xff. This is not

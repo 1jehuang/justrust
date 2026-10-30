@@ -58,6 +58,16 @@ impl type_check::Checker<'_> {
         {
             return Ok(None);
         }
+        // An owned call result is not a returned-reference place. Decline
+        // before lowering it: the caller's owned-field fallback must remain
+        // the only evaluation and the only original call correspondence.
+        if type_check::genuine_call(root)
+            && self
+                .method_receiver_hint(root)?
+                .is_some_and(|ty| !matches!(ty, ir::Ty::Ref { .. } | ir::Ty::Never))
+        {
+            return Ok(None);
+        }
         let evaluated = self.expr(root)?;
         if self.exprs[evaluated.0].completion == ir::Completion::Never {
             return Ok(Some(evaluated));

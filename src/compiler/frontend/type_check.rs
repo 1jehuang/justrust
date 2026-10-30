@@ -5024,19 +5024,8 @@ impl<'a> Checker<'a> {
                 args: call_args,
             } => {
                 if let Some(owner) = self.method_receiver_hint(receiver)? {
-                    match self
-                        .method_selection_with_inference(&owner, name, type_args, call_args, None)?
-                    {
-                        Some(selected) => Some(selected.signature.result),
-                        None => match array_unsize_carrier(&owner) {
-                            Some(carrier) => self
-                                .method_selection_with_inference(
-                                    &carrier, name, type_args, call_args, None,
-                                )?
-                                .map(|selected| selected.signature.result),
-                            None => None,
-                        },
-                    }
+                    self.method_selection_for_hint(&owner, name, type_args, call_args)?
+                        .map(|selected| selected.signature.result)
                 } else {
                     None
                 }

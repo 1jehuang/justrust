@@ -467,10 +467,6 @@ impl PlanCtx {
                 {
                     continue;
                 }
-                if mentions_param(&candidate.trait_ref.self_ty) {
-                    complete = false;
-                    continue;
-                }
                 let mut equal = true;
                 let mut candidate_bindings = super::super::token_session::BudgetVec::new(
                     self.program.names.budget(),
@@ -478,8 +474,9 @@ impl PlanCtx {
                 )
                 .map_err(selection_token_error)?;
                 for (a, b) in candidate.trait_ref.args.iter().zip(&args) {
-                    // A concrete self type makes a structural argument match
-                    // an exact application even for generic impl arguments.
+                    // Argument schemas may fix a generic self type as well
+                    // (`impl<V> From<V> for V`). No unresolved parameter may
+                    // become an enumerated application.
                     if !match_trait_self(
                         a,
                         b,
@@ -493,11 +490,40 @@ impl PlanCtx {
                     }
                 }
                 if equal {
+                    let mut substitution =
+                        self.selection_arguments(candidate.schema_env.total_arity(), budget)?;
+                    for parameter in candidate.schema_env.ordered_params() {
+                        let mut value = None;
+                        for (bound, actual) in candidate_bindings.as_slice() {
+                            budget.charge_work(1)?;
+                            if *bound == parameter {
+                                value = Some((*actual).clone());
+                                break;
+                            }
+                        }
+                        let Some(value) = value else {
+                            complete = false;
+                            break;
+                        };
+                        substitution.push(value);
+                    }
+                    if substitution.len() != candidate.schema_env.total_arity() {
+                        continue;
+                    }
+                    let mut cx = self.clone();
+                    let self_ty = ir::substitute_ty(
+                        &candidate.trait_ref.self_ty,
+                        &candidate.schema_env,
+                        &substitution,
+                        ir::FactsCtx::Validated(facts),
+                        &mut cx,
+                        budget,
+                    )?;
                     matches.push(ir::TraitRef {
                         declaration: implementation.trait_ref.declaration,
                         self_ty: bound_value(&implementation.trait_ref.self_ty)
                             .ok_or("unbound blanket impl self type")?,
-                        args: Arc::from([candidate.trait_ref.self_ty.clone()]),
+                        args: Arc::from([self_ty]),
                     });
                 }
             }
