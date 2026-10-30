@@ -1,0 +1,32 @@
+[
+  {
+    "pid": 3068904,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367551.916041,
+    "last_seen": 1793367552.7568374,
+    "cpu_secs": 0.03,
+    "max_rss_mb": 33.23828125
+  },
+  {
+    "pid": 3068912,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br48/owned-clif/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-016b75c2c8c81993 --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/increment",
+    "kind": "rustc",
+    "first_seen": 1793367552.1263974,
+    "last_seen": 1793367552.7568374,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.765625
+  },
+  {
+    "pid": 3068913,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-016b75c2c8c81993 --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/incremental -C strip=",
+    "kind": "rustc",
+    "first_seen": 1793367552.1263974,
+    "last_seen": 1793367552.7568374,
+    "cpu_secs": 0.82,
+    "max_rss_mb": 409.6015625
+  }
+]

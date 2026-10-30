@@ -1,0 +1,32 @@
+[
+  {
+    "pid": 3080728,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367591.869055,
+    "last_seen": 1793367592.708776,
+    "cpu_secs": 0.02,
+    "max_rss_mb": 32.96484375
+  },
+  {
+    "pid": 3080735,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br48/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br48/owned-off/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-off/target/debug/incremental ",
+    "kind": "rustc",
+    "first_seen": 1793367592.0790458,
+    "last_seen": 1793367592.708776,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.78515625
+  },
+  {
+    "pid": 3080736,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br48/owned-off/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-off/target/debug/incremental -C strip=de",
+    "kind": "rustc",
+    "first_seen": 1793367592.0790458,
+    "last_seen": 1793367592.708776,
+    "cpu_secs": 0.83,
+    "max_rss_mb": 426.7265625
+  }
+]

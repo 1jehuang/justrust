@@ -1,0 +1,170 @@
+{
+  "id": "20261030-063810704-3052658",
+  "args": [
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/.jcode/scratch/ba30/source",
+  "git": {
+    "root": null,
+    "head": null,
+    "dirty_files": null
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793367490.7157528,
+  "wall": 0.9782090187072754,
+  "exit": 101,
+  "cpu_secs": 1.100847,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 6,
+    "processes": 3,
+    "sample_span_secs": 0.9778385162353516,
+    "max_sample_gap_secs": 0.20818066596984863
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.027209043502807617,
+    "lock_wait": 0.0,
+    "compile": 0.943138837814331,
+    "build_gaps": 0.0014693737030029297,
+    "test_run": 0.002475738525390625,
+    "tail": 0.003916025161743164
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 47,
+    "rustc_cpu_secs": 1.06,
+    "rustc_wall_sum": 0.943138837814331,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "justrust (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.027209043502807617,
+      "wall": 0.943138837814331,
+      "wall_share": 0.943138837814331,
+      "cpu": 1.060893,
+      "max_rss_mb": 514.2421875,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "justrust-be688cf0e0173f41",
+        "start": 0.9741415977478027,
+        "wall": 0.002475738525390625,
+        "passed": 3,
+        "failed": 1,
+        "filtered_out": 144
+      }
+    ],
+    "passed": 3,
+    "failed": 1,
+    "ignored": 0,
+    "filtered_out": 144,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "summary::tests::parses_libtest_results",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::shares_overlapping_time",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": false
+      },
+      {
+        "name": "summary::tests::splits_passes_without_double_counting",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::test_failures_are_not_compile_errors",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 4
+  },
+  "resources": {
+    "avg_build_cores": 1.1253699147599285,
+    "peak_build_cores": 1.2049744543246081,
+    "peak_build_rss_mb": 527.59375,
+    "peak_unit_rss_mb": 514.2421875,
+    "min_mem_available_mb": 42764,
+    "avg_other_cores": 3.2982439233422567,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.009742,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.00001
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 0,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "justrust",
+      "reason": "the file `src/summary.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-063810704-3052658.scope",
+    "final_weight": 991,
+    "setup_secs": 0.010635143,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

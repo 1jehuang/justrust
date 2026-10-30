@@ -1,0 +1,554 @@
+{
+  "scope": "scoped filtered tests, not full suite or general speed claim",
+  "source_before": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "identities_before": {
+    "rustc": {
+      "path": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc",
+      "sha256": "64689a080e88a1aece4307ee5012a59bc0e89d54d3ec208dd16cb3102c60156d"
+    },
+    "cargo": {
+      "path": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+      "sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+    },
+    "blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "rustc_driver_0": {
+      "path": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/librustc_driver-d42c0c5f95053cd3.so",
+      "sha256": "961a7344a71a7b1997557fa4167cc44305daa341ea2aee920ff88ee1e709ea43"
+    },
+    "blaze_companion:blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "blaze_companion:blaze-proc-macro-srv": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze-proc-macro-srv",
+      "sha256": "66676f4baa898bccc0551d343f392c72b73d07a98ab87918d083dde877c8a79b"
+    },
+    "blaze_companion:ra-jit": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit",
+      "sha256": "04e84de57aad8a19102edd454e2cdd8ac2e4b58461a4070479919207f3a5590e"
+    },
+    "blaze_companion:ra-jit-rustc": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc",
+      "sha256": "c20dfcb986324ac357d568501f977d0232cc4bbf8e1e8bbb5f2744d4dd1fa8bd"
+    },
+    "blaze_companion:ra-jit-rustc-first": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc-first",
+      "sha256": "82c2d0b0dde382bf26a6ec4855e052f1a2753380d4b4596aa63a9ab46378117b"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f93c96982673433e3b6c16039aa765aea0397a305ab06aa44e1a9e42ede56dcb"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so",
+      "sha256": "e81ee13275c3e0965051ced606e35fa388cdc3c2ff4ef22e04fa9454edcb431f"
+    },
+    "native_codegen:lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+      "path": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so",
+      "sha256": "97e114ae3dd6fcbbbfbc9553fe2b9ac48dee6a59949317e2474bbf004e26314d"
+    }
+  },
+  "profiles": {
+    "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_INCREMENTAL": "true"
+  },
+  "samples": 5,
+  "stacks": [
+    "owned-off",
+    "all3on",
+    "blaze",
+    "blaze-llvm",
+    "owned-clif",
+    "owned-threads4",
+    "owned-clif-threads4"
+  ],
+  "known_unsafe_external_input_stacks": [],
+  "macro_cache_safety": "derive/attribute cache has confirmed stale env/file outputs including tracked APIs; explicit experiment timings are not correctness-certified optimizations",
+  "store_scope": "warm-store seeded",
+  "blaze_seed_manifests": {
+    "blaze": {
+      "source": "/home/jeremy/.jcode/scratch/br30/blaze/cache/blaze",
+      "destination": "/home/jeremy/.jcode/scratch/br48/blaze/cache/blaze",
+      "files": {
+        "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec.pack": "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec",
+        "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e.pack": "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e",
+        "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6.pack": "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6",
+        "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95.pack": "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95",
+        "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0.pack": "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0",
+        "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7.pack": "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7",
+        "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50.pack": "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50",
+        "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9.pack": "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9",
+        "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039.pack": "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039",
+        "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051.pack": "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051",
+        "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d.pack": "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d",
+        "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3.pack": "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3",
+        "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455.pack": "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455",
+        "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6.pack": "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6",
+        "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b.pack": "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b",
+        "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940.pack": "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940",
+        "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792.pack": "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792",
+        "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb.pack": "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb",
+        "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8.pack": "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8",
+        "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd.pack": "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd",
+        "788232-1793352058961184077.open": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608.pack": "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608",
+        "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657.pack": "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657",
+        "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5.pack": "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5",
+        "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069.pack": "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069",
+        "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490.pack": "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490",
+        "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90.pack": "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90",
+        "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123.pack": "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123",
+        "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1.pack": "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1",
+        "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5.pack": "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5",
+        "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508.pack": "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508",
+        "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b.pack": "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b",
+        "b9a18287da2e34acca06512475ac8546fdcefc0dd0acebf957e24d0a6cd4f94c.pack.zst.tmp": "64edfee5b69bd61f88ea216c412a48aa495af8636196adc92f015eaed61032c2",
+        "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374.pack": "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374",
+        "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5.pack": "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5",
+        "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346.pack": "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346",
+        "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd.pack": "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd",
+        "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d.pack": "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d",
+        "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60.pack": "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60",
+        "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c.pack": "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c",
+        "fetched-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "0c7fcf412c36e9e1cfc3cca37cec9afedcfca86e1943f6827c36e88dfda41642",
+        "fetching-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "making-84cafd682585557b8fd15cd9ec7e8eb9e0216db64fe1e8ca2a17b7ef9418773d": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "making-9fa11f56d37e33d23acf9b3c45de8518017b9fb0b405c627bf62584b85639470": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "scripts-std-59a00e369b12dc06": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "scripts-std-59a00e369b12dc06.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "version": "e95b468f3686e2d66f595cc5f8b1f7d8846f1d93f8891ce82f3e0c4e31b84485"
+      },
+      "scope": "warm-store seeded compatibility diagnostic, not cold-store performance"
+    },
+    "blaze-llvm": {
+      "source": "/home/jeremy/.jcode/scratch/br30/blaze/cache/blaze",
+      "destination": "/home/jeremy/.jcode/scratch/br48/llvm/blaze/cache/blaze",
+      "files": {
+        "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec.pack": "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec",
+        "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e.pack": "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e",
+        "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6.pack": "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6",
+        "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95.pack": "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95",
+        "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0.pack": "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0",
+        "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7.pack": "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7",
+        "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50.pack": "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50",
+        "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9.pack": "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9",
+        "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039.pack": "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039",
+        "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051.pack": "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051",
+        "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d.pack": "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d",
+        "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3.pack": "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3",
+        "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455.pack": "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455",
+        "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6.pack": "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6",
+        "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b.pack": "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b",
+        "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940.pack": "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940",
+        "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792.pack": "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792",
+        "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb.pack": "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb",
+        "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8.pack": "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8",
+        "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd.pack": "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd",
+        "788232-1793352058961184077.open": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608.pack": "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608",
+        "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657.pack": "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657",
+        "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5.pack": "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5",
+        "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069.pack": "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069",
+        "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490.pack": "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490",
+        "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90.pack": "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90",
+        "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123.pack": "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123",
+        "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1.pack": "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1",
+        "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5.pack": "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5",
+        "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508.pack": "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508",
+        "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b.pack": "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b",
+        "b9a18287da2e34acca06512475ac8546fdcefc0dd0acebf957e24d0a6cd4f94c.pack.zst.tmp": "64edfee5b69bd61f88ea216c412a48aa495af8636196adc92f015eaed61032c2",
+        "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374.pack": "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374",
+        "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5.pack": "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5",
+        "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346.pack": "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346",
+        "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd.pack": "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd",
+        "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d.pack": "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d",
+        "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60.pack": "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60",
+        "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c.pack": "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c",
+        "fetched-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "0c7fcf412c36e9e1cfc3cca37cec9afedcfca86e1943f6827c36e88dfda41642",
+        "fetching-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "making-84cafd682585557b8fd15cd9ec7e8eb9e0216db64fe1e8ca2a17b7ef9418773d": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "making-9fa11f56d37e33d23acf9b3c45de8518017b9fb0b405c627bf62584b85639470": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "scripts-std-59a00e369b12dc06": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "scripts-std-59a00e369b12dc06.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "version": "e95b468f3686e2d66f595cc5f8b1f7d8846f1d93f8891ce82f3e0c4e31b84485"
+      },
+      "scope": "warm-store seeded compatibility diagnostic, not cold-store performance"
+    }
+  },
+  "wild_copies": {},
+  "seed_source_before": {
+    "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec.pack": "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec",
+    "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e.pack": "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e",
+    "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6.pack": "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6",
+    "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95.pack": "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95",
+    "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0.pack": "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0",
+    "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7.pack": "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7",
+    "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50.pack": "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50",
+    "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9.pack": "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9",
+    "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039.pack": "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039",
+    "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051.pack": "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051",
+    "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d.pack": "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d",
+    "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3.pack": "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3",
+    "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455.pack": "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455",
+    "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6.pack": "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6",
+    "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b.pack": "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b",
+    "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940.pack": "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940",
+    "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792.pack": "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792",
+    "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb.pack": "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb",
+    "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8.pack": "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8",
+    "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd.pack": "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd",
+    "788232-1793352058961184077.open": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608.pack": "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608",
+    "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657.pack": "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657",
+    "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5.pack": "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5",
+    "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069.pack": "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069",
+    "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490.pack": "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490",
+    "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90.pack": "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90",
+    "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123.pack": "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123",
+    "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1.pack": "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1",
+    "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5.pack": "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5",
+    "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508.pack": "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508",
+    "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b.pack": "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b",
+    "b9a18287da2e34acca06512475ac8546fdcefc0dd0acebf957e24d0a6cd4f94c.pack.zst.tmp": "64edfee5b69bd61f88ea216c412a48aa495af8636196adc92f015eaed61032c2",
+    "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374.pack": "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374",
+    "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5.pack": "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5",
+    "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346.pack": "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346",
+    "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd.pack": "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd",
+    "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d.pack": "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d",
+    "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60.pack": "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60",
+    "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c.pack": "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c",
+    "fetched-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "0c7fcf412c36e9e1cfc3cca37cec9afedcfca86e1943f6827c36e88dfda41642",
+    "fetching-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "making-84cafd682585557b8fd15cd9ec7e8eb9e0216db64fe1e8ca2a17b7ef9418773d": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "making-9fa11f56d37e33d23acf9b3c45de8518017b9fb0b405c627bf62584b85639470": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scripts-std-59a00e369b12dc06": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scripts-std-59a00e369b12dc06.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "version": "e95b468f3686e2d66f595cc5f8b1f7d8846f1d93f8891ce82f3e0c4e31b84485"
+  },
+  "compiler_version": {
+    "process": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc",
+        "-vV"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.008715404997929,
+      "noise": {
+        "before": {
+          "busy_seconds": 354154.95,
+          "loadavg": [
+            3.6826171875,
+            6.1552734375,
+            6.0634765625
+          ]
+        },
+        "after": {
+          "busy_seconds": 354154.97,
+          "loadavg": [
+            3.6826171875,
+            6.1552734375,
+            6.0634765625
+          ]
+        },
+        "child_cpu_seconds": 0.008636,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.011363999960418791
+      },
+      "environment": {
+        "HOME": "/home/jeremy",
+        "XDG_RUNTIME_DIR": "/run/user/1000"
+      }
+    },
+    "stdout": "rustc 1.101.0-nightly (38a07e7de 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 38a07e7de9f57594b2a68ed968a4b8c409923e74\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+    "stderr": "",
+    "sha256_before": "64689a080e88a1aece4307ee5012a59bc0e89d54d3ec208dd16cb3102c60156d",
+    "sha256_after": "64689a080e88a1aece4307ee5012a59bc0e89d54d3ec208dd16cb3102c60156d",
+    "nightly": true
+  },
+  "expected_tests": {
+    "tests": [
+      [
+        "summary::tests::parses_libtest_results",
+        "ok"
+      ],
+      [
+        "summary::tests::shares_overlapping_time",
+        "ok"
+      ],
+      [
+        "summary::tests::splits_passes_without_double_counting",
+        "ok"
+      ],
+      [
+        "summary::tests::test_failures_are_not_compile_errors",
+        "ok"
+      ]
+    ],
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "filtered": 144
+  },
+  "native_daemon_cleanup": [],
+  "source_after": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "source_restored": true,
+  "identities_after": {
+    "rustc": {
+      "path": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc",
+      "sha256": "64689a080e88a1aece4307ee5012a59bc0e89d54d3ec208dd16cb3102c60156d"
+    },
+    "cargo": {
+      "path": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+      "sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+    },
+    "blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "rustc_driver_0": {
+      "path": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/librustc_driver-d42c0c5f95053cd3.so",
+      "sha256": "961a7344a71a7b1997557fa4167cc44305daa341ea2aee920ff88ee1e709ea43"
+    },
+    "blaze_companion:blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "blaze_companion:blaze-proc-macro-srv": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze-proc-macro-srv",
+      "sha256": "66676f4baa898bccc0551d343f392c72b73d07a98ab87918d083dde877c8a79b"
+    },
+    "blaze_companion:ra-jit": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit",
+      "sha256": "04e84de57aad8a19102edd454e2cdd8ac2e4b58461a4070479919207f3a5590e"
+    },
+    "blaze_companion:ra-jit-rustc": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc",
+      "sha256": "c20dfcb986324ac357d568501f977d0232cc4bbf8e1e8bbb5f2744d4dd1fa8bd"
+    },
+    "blaze_companion:ra-jit-rustc-first": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc-first",
+      "sha256": "82c2d0b0dde382bf26a6ec4855e052f1a2753380d4b4596aa63a9ab46378117b"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f93c96982673433e3b6c16039aa765aea0397a305ab06aa44e1a9e42ede56dcb"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so",
+      "sha256": "e81ee13275c3e0965051ced606e35fa388cdc3c2ff4ef22e04fa9454edcb431f"
+    },
+    "native_codegen:lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so": {
+      "path": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/codegen-backends/librustc_codegen_cranelift-1.101.0-nightly.so",
+      "sha256": "97e114ae3dd6fcbbbfbc9553fe2b9ac48dee6a59949317e2474bbf004e26314d"
+    }
+  },
+  "wild_copy_hashes_after": {},
+  "seed_source_after": {
+    "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec.pack": "0724f6920e4c9c51b0a98009ecd67c91a213116bbecdcea6e8cf6b0c4c0916ec",
+    "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e.pack": "078a309c31f60affb099730257395faed9b6ff6868969ffd2c15821c63748c1e",
+    "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6.pack": "0fed26b32cc35aeb11e4716e3afad021d35bc886a1f3e1ea4afce243dd3d2bb6",
+    "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95.pack": "141527f97ec71d6176248e9ddd5755817ba9b1f5075136251c33c698836fcf95",
+    "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0.pack": "18124850a8112e9a78ea55224629e742ad444689c0950e218f944914d4e47cc0",
+    "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7.pack": "1fe3ceb7f033808336a566a7e062e27a212123570ad445780a4205ede1e17ee7",
+    "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50.pack": "3566745bf55cfdc8ca34f9891453c979eb6e95f4dfd515e74361a6fbfad5fe50",
+    "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9.pack": "3dcf6dd4999cdd1ef94771714a58778acbaa955f8c27c0342d86bd09817933f9",
+    "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039.pack": "46c8d1a4b49b1248991ac29ee8c2f4d244ad02de6e76be7d6eb6c504c8092039",
+    "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051.pack": "4a1fe2fe411728e93c046b5e21a0116e966f9e7722250d5b89f8dd791f043051",
+    "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d.pack": "4aa5fc5cd8040a172559fc4222839e13e724526ac5b69ad2c2828c2a071dea1d",
+    "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3.pack": "5228129844cf31f151750502d4014699edb3e87ee3a9cd140229c165eac2caa3",
+    "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455.pack": "534d9624531aab745595eafaf7d2a7675a30c35d23047529fdece72b04000455",
+    "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6.pack": "5958b3110229c89e0326d0d2e825b4f1dc9c45acffb930f7fbeb65841d66f5b6",
+    "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b.pack": "5a3792e61e3167461b759693652649729e014c2932f10045a42bce3eee4a1f3b",
+    "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940.pack": "5c2ab120a923c02a104357e60c24bc186ec355313d7a84f6a15361325e91d940",
+    "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792.pack": "5d96e53554ef13ca065c37384caa18130ce42599cc0d14d3b32a9c3c8136b792",
+    "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb.pack": "5e7cb16f069606a123888e9251032cd93adb4473dbf152a645fe157bc85e75fb",
+    "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8.pack": "648cc5acbe3e62020590d8fefd28781a56aeeb9f4e5abff7d4798b92b856edf8",
+    "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd.pack": "74b27a58d17894231fbb3814b61b3d0b80c392428a64448b91b7e7be417d07fd",
+    "788232-1793352058961184077.open": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608.pack": "79e7828b37122a8bcada3126288922005e923bb2036af6403e03d5e229f82608",
+    "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657.pack": "803edf99d8c5f3e0ad1044434ff409b95279d12fd20c2d98c0af5c7b32cfa657",
+    "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5.pack": "848545e1ca4ccd4ba73348e33c536567153464fdaf871733f94159510fddfbf5",
+    "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069.pack": "84c9b0e05861fdf69f050e35e30ba9261aff5a88309f29b245d6c5c5aa706069",
+    "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490.pack": "86c1ead13d779dffdd6afa542588bcb95120b23fb6272126a3823c10a591f490",
+    "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90.pack": "88ac59fcfc51eb2fdf40fcf6788a9083928fd9c4513a159f7841086124088d90",
+    "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123.pack": "8d52e48f2eeb659898ffd1417ec03ba433e8d738f52831cb50f0ea796cb62123",
+    "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1.pack": "8dfc6dbda92b1b08babbf131a6261adbe615e967532b65803e21f8e46d2d71f1",
+    "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5.pack": "9f8782ea3d8cca96b41e850c01b37d7845f3fcaad7581864e9db65de6f8bb6c5",
+    "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508.pack": "b207c6b2b9fe5085de79ce8735fa0b4c1496569b2cab5a133eb67cd9896d9508",
+    "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b.pack": "b7eb612dc7db9259e4ab00a107a8493d71e6a8a98195c874981cad2eff002a9b",
+    "b9a18287da2e34acca06512475ac8546fdcefc0dd0acebf957e24d0a6cd4f94c.pack.zst.tmp": "64edfee5b69bd61f88ea216c412a48aa495af8636196adc92f015eaed61032c2",
+    "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374.pack": "bc93a450db2b2e817ee43c7a898cc5946b5c5b9d2a466d86a3217db6e970f374",
+    "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5.pack": "bf4f7e874272f2632288ec9b959338fe43038b60c372bba1edf914d65f122cf5",
+    "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346.pack": "c339af1367a373a7d440653b7923b79b2fff3aa77ca33bb891a66231546cd346",
+    "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd.pack": "dffba55871866a98befcccbb19693b195ae3ac30ecac89323d994d3053f841bd",
+    "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d.pack": "e6384799de7e51cbed404342a0b2ce54196ab9e16f0fb99e79df05cb674b471d",
+    "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60.pack": "f15df782f715c64d21251ee019e4e5822d5329b1bff8518d11c237efe7551f60",
+    "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c.pack": "f9c701090ac769513173eb96441185e9c4e4fad870ca18acc1271e6d600e2a2c",
+    "fetched-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "0c7fcf412c36e9e1cfc3cca37cec9afedcfca86e1943f6827c36e88dfda41642",
+    "fetching-std-x86_64-unknown-linux-gnu-41c86301a401f14e": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "making-84cafd682585557b8fd15cd9ec7e8eb9e0216db64fe1e8ca2a17b7ef9418773d": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "making-9fa11f56d37e33d23acf9b3c45de8518017b9fb0b405c627bf62584b85639470": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scripts-std-59a00e369b12dc06": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "scripts-std-59a00e369b12dc06.lock": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "version": "e95b468f3686e2d66f595cc5f8b1f7d8846f1d93f8891ce82f3e0c4e31b84485"
+  },
+  "unchanged": true
+}

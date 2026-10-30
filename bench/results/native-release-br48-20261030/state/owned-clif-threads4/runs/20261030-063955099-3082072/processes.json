@@ -1,0 +1,32 @@
+[
+  {
+    "pid": 3082080,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367595.1085613,
+    "last_seen": 1793367595.9500463,
+    "cpu_secs": 0.02,
+    "max_rss_mb": 32.91796875
+  },
+  {
+    "pid": 3082089,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-c914540acc9ff55e --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/inc",
+    "kind": "rustc",
+    "first_seen": 1793367595.3183744,
+    "last_seen": 1793367595.9500463,
+    "cpu_secs": 0.9,
+    "max_rss_mb": 444.953125
+  },
+  {
+    "pid": 3082088,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br48/owned-clif-threads4/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-c914540acc9ff55e --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif-thre",
+    "kind": "rustc",
+    "first_seen": 1793367595.3183744,
+    "last_seen": 1793367595.9500463,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.98828125
+  }
+]

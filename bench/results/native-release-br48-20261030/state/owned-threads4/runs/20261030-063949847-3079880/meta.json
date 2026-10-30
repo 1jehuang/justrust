@@ -1,0 +1,32 @@
+{
+  "id": "20261030-063949847-3079880",
+  "args": [
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/.jcode/scratch/ba30/source",
+  "start": 1793367589.847209,
+  "pid": 3079880,
+  "real_cargo": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+  "real_rustc": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc",
+  "rustc_wrapper": null,
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "tty": false,
+  "ncpu": 16,
+  "mem_total_mb": 63795,
+  "env": {
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/br48/owned-threads4/target",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zthreads=4",
+    "JCODE_SESSION_ID": "session_skunk_1793325801268_bca6e773d45c6a0a",
+    "JCODE_SCRATCH_DIR": "/home/jeremy/.jcode/scratch"
+  },
+  "slot": null,
+  "route": "JUSTRUST_REMOTE=off",
+  "place": "local"
+}

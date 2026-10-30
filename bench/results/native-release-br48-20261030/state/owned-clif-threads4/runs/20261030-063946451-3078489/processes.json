@@ -1,0 +1,62 @@
+[
+  {
+    "pid": 3078499,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367586.4633706,
+    "last_seen": 1793367587.3071437,
+    "cpu_secs": 0.02,
+    "max_rss_mb": 33.2578125
+  },
+  {
+    "pid": 3078529,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br48/owned-clif-threads4/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-c914540acc9ff55e --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif-thre",
+    "kind": "rustc",
+    "first_seen": 1793367586.6739259,
+    "last_seen": 1793367587.3071437,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.8828125
+  },
+  {
+    "pid": 3078530,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-c914540acc9ff55e --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/inc",
+    "kind": "rustc",
+    "first_seen": 1793367586.6739259,
+    "last_seen": 1793367587.3071437,
+    "cpu_secs": 0.99,
+    "max_rss_mb": 477.6015625
+  },
+  {
+    "pid": 3078805,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccAUVLgW.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out/justrust-c914540acc9ff55e /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../",
+    "kind": "other",
+    "first_seen": 1793367587.3071437,
+    "last_seen": 1793367587.3071437,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 88.74609375
+  },
+  {
+    "pid": 3078804,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccAUVLgW.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out/justrust-c914540acc9ff55e /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o",
+    "kind": "linker",
+    "first_seen": 1793367587.3071437,
+    "last_seen": 1793367587.3071437,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.1875
+  },
+  {
+    "pid": 3078803,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out/rustcjSC86n/symbols.o /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out/justrust-c914540acc9ff55e.04ugs9yp27bnxfqc35r8zetco.1g41x46.rcgu.o /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out/justrust-c914540acc9ff55e.0agnmxmf9r9r5hnnqdq3n8ror.1g41x46.rcgu.o /home/jeremy/.jcode/scratch/br48/owned-clif-threads4/target/debug/build/justrust/c914540acc9ff55e/out/justrust-c914540acc9ff55e.0d",
+    "kind": "linker",
+    "first_seen": 1793367587.3071437,
+    "last_seen": 1793367587.3071437,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.859375
+  }
+]

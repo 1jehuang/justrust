@@ -1,0 +1,62 @@
+[
+  {
+    "pid": 3077019,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\",\"--pool=env\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367582.88384,
+    "last_seen": 1793367583.9317312,
+    "cpu_secs": 0.03,
+    "max_rss_mb": 33.18359375
+  },
+  {
+    "pid": 3077026,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br48/owned-on/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-a220f34bf251eaf7 --out-dir /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-on/target/debug/incremental -C ",
+    "kind": "rustc",
+    "first_seen": 1793367583.0936418,
+    "last_seen": 1793367583.9317312,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.76953125
+  },
+  {
+    "pid": 3077027,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-a220f34bf251eaf7 --out-dir /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-on/target/debug/incremental -C strip=debu",
+    "kind": "rustc",
+    "first_seen": 1793367583.0936418,
+    "last_seen": 1793367583.9317312,
+    "cpu_secs": 1.01,
+    "max_rss_mb": 416.328125
+  },
+  {
+    "pid": 3077337,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccOE2ChM.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out/justrust-a220f34bf251eaf7 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt",
+    "kind": "other",
+    "first_seen": 1793367583.9317312,
+    "last_seen": 1793367583.9317312,
+    "cpu_secs": 0.04,
+    "max_rss_mb": 130.06640625
+  },
+  {
+    "pid": 3077335,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out/rustcjYtTjL/symbols.o /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out/justrust-a220f34bf251eaf7.04ugs9yp27bnxfqc35r8zetco.12gla13.rcgu.o /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out/justrust-a220f34bf251eaf7.0agnmxmf9r9r5hnnqdq3n8ror.12gla13.rcgu.o /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out/justrust-a220f34bf251eaf7.0bp5455mk7tb3m2688gptayz1.12gla13.rcgu.o /home",
+    "kind": "linker",
+    "first_seen": 1793367583.9317312,
+    "last_seen": 1793367583.9317312,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 3.09765625
+  },
+  {
+    "pid": 3077336,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccOE2ChM.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/br48/owned-on/target/debug/build/justrust/a220f34bf251eaf7/out/justrust-a220f34bf251eaf7 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/g",
+    "kind": "linker",
+    "first_seen": 1793367583.9317312,
+    "last_seen": 1793367583.9317312,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.28125
+  }
+]

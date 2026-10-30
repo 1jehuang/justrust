@@ -1,0 +1,62 @@
+[
+  {
+    "pid": 3077666,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367584.2782128,
+    "last_seen": 1793367585.3272638,
+    "cpu_secs": 0.03,
+    "max_rss_mb": 33.20703125
+  },
+  {
+    "pid": 3077674,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-016b75c2c8c81993 --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/incremental -C strip=",
+    "kind": "rustc",
+    "first_seen": 1793367584.4878223,
+    "last_seen": 1793367585.3272638,
+    "cpu_secs": 0.99,
+    "max_rss_mb": 420.3203125
+  },
+  {
+    "pid": 3077673,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/br48/owned-clif/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-016b75c2c8c81993 --out-dir /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out -C incremental=/home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/increment",
+    "kind": "rustc",
+    "first_seen": 1793367584.4878223,
+    "last_seen": 1793367585.3272638,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.75390625
+  },
+  {
+    "pid": 3077977,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.jcode/scratch/native-release-frontier-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccbyk5Vi.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out/justrust-016b75c2c8c81993 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Sc",
+    "kind": "other",
+    "first_seen": 1793367585.3272638,
+    "last_seen": 1793367585.3272638,
+    "cpu_secs": 0.08,
+    "max_rss_mb": 149.69140625
+  },
+  {
+    "pid": 3077975,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out/rustc6vd7DS/symbols.o /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out/justrust-016b75c2c8c81993.04ugs9yp27bnxfqc35r8zetco.1ypg872.rcgu.o /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out/justrust-016b75c2c8c81993.0agnmxmf9r9r5hnnqdq3n8ror.1ypg872.rcgu.o /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out/justrust-016b75c2c8c81993.0d0z44v8vq0u9ilidcechipqc.1ypg872.rcgu",
+    "kind": "linker",
+    "first_seen": 1793367585.3272638,
+    "last_seen": 1793367585.3272638,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 3.09765625
+  },
+  {
+    "pid": 3077976,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccbyk5Vi.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/br48/owned-clif/target/debug/build/justrust/016b75c2c8c81993/out/justrust-016b75c2c8c81993 /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib",
+    "kind": "linker",
+    "first_seen": 1793367585.3272638,
+    "last_seen": 1793367585.3272638,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.28125
+  }
+]
