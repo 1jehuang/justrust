@@ -1,0 +1,292 @@
+[
+  {
+    "family": "derive",
+    "kind": "constant",
+    "query": "derive_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/derive-constant/warm.mm_profdata.gz",
+        "uncompressed_sha256": "3638453d0c112f3c14e3fa11aae58d4ba8b8a81b847aebddadaedba74e523812",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/derive-constant/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "c5dbb1597096c44360d5e5eb56e57f61c3fbefb91bb53eb4b91ce3e8dcfba24d",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/derive-constant/analysis.json"
+  },
+  {
+    "family": "derive",
+    "kind": "env",
+    "query": "derive_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/derive-env/warm.mm_profdata.gz",
+        "uncompressed_sha256": "fff5eadf8e7e3c3967c91fa9e395ae6af8a188975df2dbe198cc93ac2e9b79c5",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/derive-env/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "5d33d404d6d7efbb294dbc932cc2a7e8e38249f11f12d4c7965cd1d9a8ca9564",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/derive-env/analysis.json"
+  },
+  {
+    "family": "derive",
+    "kind": "tracked_env",
+    "query": "derive_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/derive-tracked_env/warm.mm_profdata.gz",
+        "uncompressed_sha256": "6919da6a1b4c3f0808e8faa09a2a5a4cfc21f3196c64bf8f90361e1472c8bd45",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/derive-tracked_env/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "28ded12d6f5636ec6b171790e0dbbfbb371fa10afa89a2bffea82b6912c813be",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/derive-tracked_env/analysis.json"
+  },
+  {
+    "family": "derive",
+    "kind": "file",
+    "query": "derive_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/derive-file/warm.mm_profdata.gz",
+        "uncompressed_sha256": "12b99e5548df184fca1fda4b52c467de93252b9e7fc5048d3a231138dbe57f74",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/derive-file/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "9be15f427553abb9a4c80905dddf9491a7fa43f6e03920a4e8c29af37ba4783b",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/derive-file/analysis.json"
+  },
+  {
+    "family": "derive",
+    "kind": "tracked_path",
+    "query": "derive_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/derive-tracked_path/warm.mm_profdata.gz",
+        "uncompressed_sha256": "f786f0570c12ec21b4ab3daf1c271f72b3c73d567ba781ae0bc8265997079b82",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/derive-tracked_path/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "ec68a1451a7ef2f0dc9039f79cfa81891877551bfd74add610a8e46d8ce0de07",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/derive-tracked_path/analysis.json"
+  },
+  {
+    "family": "attribute",
+    "kind": "constant",
+    "query": "attr_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/attribute-constant/warm.mm_profdata.gz",
+        "uncompressed_sha256": "3f0a30bb9baedaa6a89d8e0c61e4dd3a7a33a9bedbb9cb9763fd6e1a8b54c5a3",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/attribute-constant/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "51a92de5f435c2238554ae867278256286645b550eb5e191934131777bdd33b8",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/attribute-constant/analysis.json"
+  },
+  {
+    "family": "attribute",
+    "kind": "env",
+    "query": "attr_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/attribute-env/warm.mm_profdata.gz",
+        "uncompressed_sha256": "49494f24e7b00c917e4c7ffe0d189f37fc044c05de51b53e3867c785642b3f28",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/attribute-env/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "85c73fe6dafc68728acd1ebf343587e76608bf52fa1b52f3c3ef9f4e04516bcf",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/attribute-env/analysis.json"
+  },
+  {
+    "family": "attribute",
+    "kind": "tracked_env",
+    "query": "attr_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/attribute-tracked_env/warm.mm_profdata.gz",
+        "uncompressed_sha256": "83e9a00d97a8774c1219ca016228b18cc482ea9f8adfd9c48578c145e91f2ba2",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/attribute-tracked_env/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "8f4f3a117ffb9b56f26de7785cde3d176af5104fb879eb21151670cc79685107",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/attribute-tracked_env/analysis.json"
+  },
+  {
+    "family": "attribute",
+    "kind": "file",
+    "query": "attr_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/attribute-file/warm.mm_profdata.gz",
+        "uncompressed_sha256": "14d8b3494c9e5da5f3f9b11340b5f87a260e740f98e0c59eb3d3fc5b2db1c0ee",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/attribute-file/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "a08a7d7fdb0b5f6951b66570b3e9e07ae6ab34afdede745215d58331f42c40c1",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/attribute-file/analysis.json"
+  },
+  {
+    "family": "attribute",
+    "kind": "tracked_path",
+    "query": "attr_macro_expansion",
+    "hit": true,
+    "profiles": [
+      {
+        "phase": "warm",
+        "artifact": "probes/attribute-tracked_path/warm.mm_profdata.gz",
+        "uncompressed_sha256": "db471b601c3b013a6208b76aadaec04025c94c711568954a1d427dc107fdcae8",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      },
+      {
+        "phase": "body-edit",
+        "artifact": "probes/attribute-tracked_path/body-edit.mm_profdata.gz",
+        "uncompressed_sha256": "2528ecc9ba131a17af051dfdcd09dbb210ad2b00738ea34cfd5feb7170121548",
+        "compile": {
+          "status": 0,
+          "stdout": "",
+          "stderr": ""
+        }
+      }
+    ],
+    "analysis": "probes/attribute-tracked_path/analysis.json"
+  }
+]

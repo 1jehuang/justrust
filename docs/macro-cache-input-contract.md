@@ -67,6 +67,18 @@ unless a functional failure already makes it fail. Both exit nonzero.
 
 ## Native findings, October 30, 2026
 
+Permanent evidence is committed in
+[`bench/results/macro-input-families-20261030/`](../bench/results/macro-input-families-20261030/README.md):
+the [complete byte-identical v2 report](../bench/results/macro-input-families-20261030/report.json),
+ten named-load probe analyses and twenty compressed raw profiles, launcher and
+driver identities, and an offline portable validator. Validate from any working
+directory with `python3 /path/to/bundle/validate.py`, using only Python's standard
+library. `evidence-valid` means the eight **failures** and ten load probes are
+intact, not that the frozen compiler is safe. No new native workloads were run
+to retain this bundle. The later safe-default client repair `e5bc943e9` keeps
+unsafe proc-macro expansion caching explicit opt-in, and is not tested by this
+frozen-compiler failure report.
+
 The old root report
 `/home/jeremy/.jcode/scratch/macro-input-root-20261030.json` is explicitly limited
 negative coverage: its PASS covers only uncached functionlike macros. It is not

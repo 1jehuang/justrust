@@ -1,0 +1,23 @@
+{
+  "schema": 2,
+  "rustc": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+  "rustc_sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "driver_libraries": [
+    {
+      "path": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e"
+    }
+  ],
+  "version": {
+    "status": 0,
+    "stdout": "rustc 1.101.0-nightly (b7b7efc99 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: b7b7efc9982df709b8326b46c5a672cd5177a70a\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+    "stderr": ""
+  },
+  "prior_report": {
+    "path": "/home/jeremy/.jcode/scratch/macro-input-root-20261030.json",
+    "scope": "Functionlike uncached control only. PASS is not cached-family safety proof."
+  },
+  "work_dir": "/home/jeremy/.jcode/scratch/macro-input-families-v2-20261030",
+  "report_sha256": "a5aa0c43d1d13d7506c11a4005955e3e396167046cac645b49885442ff628dfd",
+  "scope": "Frozen experimental compiler only, before safe-default fix e5bc943e9. No new native execution during retention."
+}
