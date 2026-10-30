@@ -97,3 +97,28 @@ Inspect errors and sample coverage even if a harness exits zero. Record a
 blocked aggregate as blocked, not as a speedup. Supplement with real workloads,
 negative controls and output-equivalence checks. Publish remaining unobserved
 work and memory cost alongside any claimed gain.
+
+## Observed frontier, 2026-10-30
+
+| Boundary | What is established | What remains unestablished |
+| --- | --- | --- |
+| Proven-green value acquisition | Native named markers distinguish acquisition from provider recomputation; real warm application reports retain per-thread unions | Whole-compiler coverage, removable critical-path time, and a universal reusable-IR percentage |
+| Three scalar query values | Default-off tracked retention; 22-case native edit/error/cross-crate gate; selected fixture recomputations decrease; observed extra query-cache storage is 316 bytes in that fixture | Real-workload benefit, general memory/storage cost, exhaustive correctness, and shared-cache flag transitions |
+| Empty lint-owner setup | Default-off tracked fast path; 22-case native diagnostic gate, 88 invocations with incremental fingerprint verification | Performance, arbitrary macro/custom-lint/query-cycle behavior, broader Rust regressions |
+| End-to-end scalar workload | Exact blocked comprehensive baseline and failed named diagnostic retained, including all failure output | A passing matched before/after comparison and default promotion |
+| Resident arena-owned state | Lifetime and diagnostic-generation requirements identified | A bounded, cancellation-safe implementation and measured benefit |
+
+The scalar experiment persists disk-serializable values. It does **not** retain
+a live compiler context, HIR arenas, or arbitrary references across processes.
+The lint experiment avoids setup on a particular empty-input branch. It does
+**not** cache an entire lint map or remove an existing HIR traversal. These are
+different mechanisms and must be measured independently with the other flag
+held fixed. Neither establishes that the maximum possible reuse has been reached.
+
+The broad baseline failed before enabling either candidate. Runtime isolation
+repairs some credential/Git-context failures, but other pinned-source assertions
+and state-sensitive tests remain. Do not turn their failures into a compiler
+speed claim, silently omit them, or compare inherited-context baseline samples
+against isolated-context candidate samples. See
+`query-retention-benchmark-20261030.md` and `../bench/RUNTIME-CONTEXT.md` for the
+retained evidence and limitations.
