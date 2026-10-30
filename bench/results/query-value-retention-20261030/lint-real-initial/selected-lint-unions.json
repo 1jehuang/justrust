@@ -1,0 +1,28 @@
+{
+  "no": {
+    "profile_sha256": "0d44516e855dacc650c80e971d4ef0efb0670bd4d50342d93efbcc497fc4d316",
+    "selected_query": "shallow_lint_levels_on",
+    "per_thread": [
+      {
+        "thread": 3,
+        "interval_records": 3292,
+        "union_elapsed_ns": 19077911
+      }
+    ],
+    "time_saved_ns": null,
+    "scope": "Provider elapsed unions for one instrumented forced-unchanged invocation. Not CPU, critical path, or removable time."
+  },
+  "yes": {
+    "profile_sha256": "1cd8dcb4cd31753e55f14a771828c71f40bf54a5d6de42b63de531d18f383ffa",
+    "selected_query": "shallow_lint_levels_on",
+    "per_thread": [
+      {
+        "thread": 3,
+        "interval_records": 3292,
+        "union_elapsed_ns": 16242189
+      }
+    ],
+    "time_saved_ns": null,
+    "scope": "Provider elapsed unions for one instrumented forced-unchanged invocation. Not CPU, critical path, or removable time."
+  }
+}

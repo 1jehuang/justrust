@@ -1,0 +1,13 @@
+
+justrust: ok: check succeeded, tests not run in 16.0s
+  time    startup 0.09s | compile 15.86s
+  units   57 compiled (1 local, 47 deps, 9 build scripts), 0 fresh
+          justrust                           5.78s  cpu   5.8s    493 MB
+          serde_derive                       1.71s  cpu   2.9s    348 MB
+          syn                                1.40s  cpu   5.8s    384 MB
+          clap_derive                        0.69s  cpu   1.7s    291 MB
+  cpu     55.4s total, avg 3.5/peak 8.9 of 16 cores; others used 5.9 cores
+  memory  peak 2356 MB build, 493 MB largest rustc, 42.6 GB free; stalls cpu 1.21s mem 0.00s io 0.00s
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  7.4s  rebuilt 47 registry dependencies and 9 build scripts (7.4s)
+  more    `justrust log 20261029-221752602-3364852` full output, `justrust show 20261029-221752602-3364852` full profile

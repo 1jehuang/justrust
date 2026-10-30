@@ -118,3 +118,35 @@ Safe during the measurement window:
 ```sh
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bench -p test_reuse_lint_accept.py -v
 ```
+
+## Initial real-source mechanism capture
+
+A later mutable stage1 build had changed its driver, so the initial compiler
+was not silently reused by path. A new complete sysroot was frozen privately,
+its driver SHA-256 was checked before/after copying, and the full 22-case native
+acceptance gate passed again. That capture's driver is
+`c684752b72cdf8bad2dda3235e225bb48ba7ad509a526db008a3b8bf50a170b5`.
+Its executable still has the same hash as the earlier compiler: this is another
+concrete reason to record driver identity, not just the rustc launcher.
+
+The real fixture is an unchanged archive of justrust commit `f97fcc2`. Off/on
+each use independent targets, a preparation `justrust check --lib`, then an
+identical-content source retouch to force a second native invocation. Scalar and
+associated-item retention are explicitly disabled. Only lint fast-path mode
+changes; both captures enable self-profile function arguments and fingerprint
+verification. The private sysroot lacked Clippy, so `jr-install --no-default`
+correctly refused it. No fake component or shipping default was installed.
+The diagnostic instead uses the client's supported explicit `RUSTC` override,
+system-toolchain selection, and a pinned official Cargo executable. Exact
+commands, identities, diagnostics and reports are retained in
+`bench/results/query-value-retention-20261030/lint-real-initial/`.
+
+Both forced-unchanged captures record 34,123 green acquisition scopes and
+20,707 provider-recompute scopes. Both record 3,292
+`shallow_lint_levels_on` recomputations. This candidate is not intended to
+remove those provider calls. For that query's recompute scopes, thread 3 elapsed
+unions are 19,077,911 ns off and 16,242,189 ns on. These are two instrumented
+invocations under contention, **not time saved, CPU work, causal speedup, or a
+promotion result**. The initial capture has no explicit shortcut-branch marker,
+so it does not directly count how many owners take that return. A native optional
+branch marker and separate inventory are being added to close that evidence gap.
