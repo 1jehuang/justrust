@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_RUNTIME_TYPE_ERROR";
+     |        ---   ^^^^^^^^^^^^^^^^^^^^^^^ expected `u64`, found `&str`
+     |        |
+     |        expected due to this
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib test) due to 1 previous error
+
+
+justrust: FAILED to compile (1 error) in 1.8s
+  time    startup 0.07s | compile 1.70s | after 0.01s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/summary.rs (justrust)
+          justrust (test)                    1.70s  cpu   1.5s    358 MB
+  cpu     1.6s total, avg 0.9/peak 0.9 of 16 cores; others used 15.3 cores (3 other rustc), priority weight 1000 -> 976
+  memory  peak 349 MB build, 358 MB largest rustc, 25.6 GB free; stalls cpu 0.71s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261030-033306403-1427610` full output, `justrust show 20261030-033306403-1427610` full profile

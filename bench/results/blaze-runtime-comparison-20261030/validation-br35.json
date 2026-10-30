@@ -1,0 +1,12 @@
+{
+  "verdict": "passed",
+  "scope": "final seeded warm workflow only, not cold support or significance",
+  "case": "br35",
+  "accepted_stacks": 6,
+  "matched_edits": 30,
+  "correctness_gate_stacks": 6,
+  "exported_runtime_calls": 40,
+  "exported_suite_calls": 16,
+  "patched_timed_edits": 5,
+  "defaults_promoted": false
+}

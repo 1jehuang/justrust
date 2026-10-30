@@ -9025,3 +9025,13 @@ All calls exported. Full methodology, failed attempts, artifact identities and
 portable acceptance audits: `docs/blaze-runtime-results-20261030.md`.
 All 570 benchmark Python tests pass. Comprehensive session-weighted gate and
 the maximum reusable fraction remain unresolved. Experimental defaults stay off.
+
+Follow-up `br35` passes six stacks and 30 matching edits, including explicitly
+selected Blaze LLVM from an identical warm-store seed. LLVM median 0.401728s
+and owned-off 3.503743s are descriptive only: load was about 42.9 on 16 logical
+CPUs. Existing hotpatch really patched all five edits, yet its median was
+3.862631s, slower than all-four-on 3.633667s. Do not omit that counterexample
+or mix absolute times with br34. Earlier fresh-store LLVM failures remain.
+All 40 additional owned calls are exported under xps14-runtime-br35 directories;
+the portable `validate-complete.py --case br35` audit passes all 60 records.
+See the follow-up section of `docs/blaze-runtime-results-20261030.md`.

@@ -1,0 +1,11 @@
+
+justrust: ok: 4 tests passed in 3.8s
+  time    startup 0.06s | compile 3.69s | gaps 0.01s | after 0.02s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/summary.rs (justrust)
+          justrust (test)                    3.69s  cpu   2.5s    439 MB
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, 1 binary in 0.01s
+  cpu     2.6s total, avg 0.7/peak 0.9 of 16 cores; others used 15.4 cores (2 other rustc), priority weight 1000 -> 957
+  memory  peak 457 MB build, 439 MB largest rustc, 13.5 GB free; stalls cpu 1.93s mem 0.01s io 0.09s
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  1.8s  machine was busy: other processes used 15 of 16 cores on average (up to 2 rustc from other builds) and tasks stalled 1.9s waiting for CPU
+  more    `justrust log 20261030-033818102-1491024` full output, `justrust show 20261030-033818102-1491024` full profile

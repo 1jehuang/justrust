@@ -2,6 +2,11 @@
 
 ## Final accepted warm workflow
 
+`br35` additionally passes all six stacks, including explicit Blaze LLVM with
+the same seed. Run `validate-complete.py --case br35`. Heavy contention and
+the slower hotpatch median are retained, not filtered out. It is a stronger
+backend-family acceptance check, not a controlled speed estimate.
+
 `br34` now contains a complete accepted five-stack seeded warm-store comparison.
 Run `validate-complete.py` for its raw-log, matched-edit and export audit.
 See `docs/blaze-runtime-results-20261030.md` for interpretation and limits.

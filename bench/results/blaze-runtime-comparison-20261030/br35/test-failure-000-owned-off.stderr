@@ -1,0 +1,17 @@
+thread 'summary::tests::shares_overlapping_time' (1429467) panicked at src/summary.rs:1100:1:
+assertion `left == right` failed: JR_RUNTIME_FAILURE
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `--lib`
+
+justrust: FAILED: 1 of 4 tests failed in 3.3s
+  time    startup 0.07s | compile 3.16s | after 0.01s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/summary.rs (justrust)
+          justrust (test)                    3.16s  cpu   2.4s    443 MB
+  tests   3 passed, 1 failed, 0 ignored, 144 filtered out, 1 binary in 0.00s
+  cpu     2.5s total, avg 0.8/peak 1.0 of 16 cores; others used 15.3 cores (3 other rustc), priority weight 1000 -> 957
+  memory  peak 480 MB build, 443 MB largest rustc, 24.3 GB free; stalls cpu 1.53s mem 0.01s io 0.01s
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  1.5s  machine was busy: other processes used 15 of 16 cores on average (up to 3 rustc from other builds) and tasks stalled 1.5s waiting for CPU
+  more    `justrust log 20261030-033311294-1428704` full output, `justrust show 20261030-033311294-1428704` full profile

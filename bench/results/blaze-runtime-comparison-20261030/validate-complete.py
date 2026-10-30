@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Replay final warm-workflow acceptance, not statistical or universal claims."""
 import hashlib
+import argparse
 import json
 from pathlib import Path
 import statistics
@@ -22,7 +23,11 @@ def exported(machine):
 
 
 def main():
-    directory = ROOT / 'br34'
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--case', choices=('br34', 'br35'), default='br34')
+    case = parser.parse_args().case
+    stack_count = 6 if case == 'br35' else 5
+    directory = ROOT / case
     meta = load(directory / 'metadata.json')
     summary = load(directory / 'summary.json')
     rows = load(directory / 'records.json')
@@ -38,8 +43,8 @@ def main():
                for v in meta['blaze_seed_manifests'].values())
     assert meta['compiler_version']['nightly']
     assert meta['compiler_version']['sha256_before'] == meta['compiler_version']['sha256_after']
-    assert summary['excluded'] == [] and len(rows) == 50
-    assert len(summary['medians_seconds']) == 5
+    assert summary['excluded'] == [] and len(rows) == stack_count * 10
+    assert len(summary['medians_seconds']) == stack_count
     expected = {**meta['expected_tests'],
                 'tests': [tuple(x) for x in meta['expected_tests']['tests']]}
     exports = 0
@@ -52,7 +57,9 @@ def main():
         for row in group:
             assert not row['error'] and not row['timed_out']
             prefix = f"{row['phase']}-{row['replicate']:03d}-{stack}"
-            if stack == 'blaze':
+            if stack.startswith('blaze'):
+                assert row['environment']['BLAZE_BACKEND'] == ('llvm' if stack == 'blaze-llvm' else 'cranelift')
+                assert row['environment']['BLAZE_OPT'] == '0'
                 output = ''.join((directory / (prefix + '.' + s)).read_text() for s in ('stdout', 'stderr'))
             else:
                 receipt = row['raw_output']
@@ -70,9 +77,9 @@ def main():
                 assert harness.accepted(row, output, expected, marker)
             if row['phase'] == 'edit':
                 assert row['accepted']
-        if stack != 'blaze':
+        if not stack.startswith('blaze'):
             name = 'owned-on' if stack == 'all3on' else stack
-            records = exported(f'xps14-runtime-br34-{name}-20261030')
+            records = exported(f'xps14-runtime-{case}-{name}-20261030')
             assert len(records) == 10
             assert {r['raw_output']['run_id'] for r in group} == {r['id'] for r in records}
             exports += len(records)
@@ -97,10 +104,12 @@ def main():
     for name, sha in load(ROOT / 'complete-evidence-sha256.json').items():
         assert hashlib.sha256((REPO / name).read_bytes()).hexdigest() == sha, name
     result = {'verdict': 'passed', 'scope': 'final seeded warm workflow only, not cold support or significance',
-              'accepted_stacks': 5, 'matched_edits': 25, 'correctness_gate_stacks': 5,
+              'case': case, 'accepted_stacks': stack_count, 'matched_edits': stack_count * 5,
+              'correctness_gate_stacks': stack_count,
               'exported_runtime_calls': exports, 'exported_suite_calls': len(suite_exports),
               'patched_timed_edits': 5, 'defaults_promoted': False}
-    (ROOT / 'validation-complete.json').write_text(json.dumps(result, indent=2) + '\n')
+    output = 'validation-complete.json' if case == 'br34' else 'validation-br35.json'
+    (ROOT / output).write_text(json.dumps(result, indent=2) + '\n')
     print(json.dumps(result, indent=2))
 
 

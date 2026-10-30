@@ -1,5 +1,47 @@
 # Matched Blaze runtime results, 2026-10-30
 
+## Follow-up: seeded LLVM also passes the runtime contract
+
+The prospective `br35` run adds an explicit `BLAZE_BACKEND=llvm`, `BLAZE_OPT=0`
+stack alongside explicit Cranelift and the same four owned configurations.
+Both Blaze stacks receive byte-identical copies of the same retained seed.
+All six stacks pass compile-error/recovery and test-failure/recovery gates,
+then five identical executed edits each. This is 60 command records and 30
+matched edits. It removes the *backend family* difference for the LLVM pair,
+not the different frontend, LLVM version, compiler implementation or coverage.
+
+| br35 stack | Median wall seconds, 5 edits |
+|---|---:|
+| Owned, earlier experiments off | 3.503743 |
+| Owned, earlier three on | 3.340807 |
+| Blaze Cranelift | 0.307640 |
+| Blaze LLVM | 0.401728 |
+| Owned, all four on | 3.633667 |
+| Owned, all four plus hotpatch | 3.862631 |
+
+**This was heavily contended:** load averages during the first timed edits
+were about 42.9 on this 16-logical-CPU machine. Do not compare these absolute
+times to `br34`, claim controlled ratios, or conceal the hotpatch configuration's
+slower median here. All five hotpatch edits actually patched, but that does not
+guarantee a wall-time improvement. The observed gap persists with Blaze's LLVM
+backend in this scoped workflow, so choosing Cranelift alone is not a sufficient
+explanation. This does not isolate the causal share of frontend retention.
+
+The earlier fresh-store LLVM failures remain failures. The successful seeded
+LLVM gate does not retroactively establish cold-store reliability.
+Raw logs, copied-store manifests, backend environment pins and identities are
+in `bench/results/blaze-runtime-comparison-20261030/br35/`; forty owned calls
+are exported in `data/runs/xps14-runtime-br35-*-20261030/`. Replay with:
+
+```text
+python3 bench/results/blaze-runtime-comparison-20261030/validate-complete.py --case br35
+```
+
+The portable audit passes six gate stacks, 30 matching edits, exact raw-output
+hashes, fresh runtime markers, five actual patch receipts and all forty exports.
+No default was changed. The earlier `br34` observations below remain a separate
+five-stack run, not samples pooled with this follow-up.
+
 ## Outcome and scope
 
 The final `br34` comparison completed all five stacks, all correctness gates,
