@@ -1,0 +1,248 @@
+{
+ "started": "2026-10-29T18:25:00-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "justrust": "justrust 0.1.0-alpha.19",
+  "justrust_rev": "a237096f6cd1",
+  "benchmark_repo_rev": "a237096f6cd1",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "cff1a234f4866595a15153fafbd0611baba78affb7e0162d1c54d7827e42fe57",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)",
+  "toolchain": "nightly-2026-10-08",
+  "optimization_env": {
+   "JUSTRUST_FRONTEND_THREADS": "8"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   },
+   "rewrite": {
+    "justrust-clean-room": "7bc3f6e5f"
+   }
+  },
+  "execution": "remote",
+  "hosted_early": false,
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "rewrite-frontend-check": {
+   "what": "Pinned compiler library check after a crate item edit, opt-level=1, debug=2, incremental=False",
+   "cmd": [
+    "check",
+    "--lib",
+    "--config",
+    "profile.dev.incremental=false"
+   ],
+   "samples": [
+    {
+     "id": "20261029-182506995-1175411388",
+     "wall": 6.07,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.336,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 47.76838,
+      "client_wall": 6.067455414,
+      "host_wall": 5.335958957672119,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 23.09,
+     "startup": 0.017,
+     "compile": 5.301,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 9,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.07,
+     "foreign_rustc_before": 0,
+     "load_before": 4.0,
+     "noisy": false,
+     "top_unit": "justrust_engine",
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261029-182513086-1175411580",
+     "wall": 5.967,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.35,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 72.26047,
+      "client_wall": 5.964426676,
+      "host_wall": 5.349557876586914,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 23.21,
+     "startup": 0.018,
+     "compile": 5.314,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 9,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.08,
+     "foreign_rustc_before": 0,
+     "load_before": 3.92,
+     "noisy": false,
+     "top_unit": "justrust_engine",
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261029-182519073-1175411741",
+     "wall": 6.035,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 5.346,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 48.45834,
+      "client_wall": 6.031927198,
+      "host_wall": 5.346043586730957,
+      "toolchain": "nightly-2026-10-08",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 23.22,
+     "startup": 0.018,
+     "compile": 5.311,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 9,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 0.09,
+     "foreign_rustc_before": 0,
+     "load_before": 3.93,
+     "noisy": false,
+     "top_unit": "justrust_engine",
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 6.035,
+    "min": 5.967,
+    "max": 6.07,
+    "quiet_n": 3,
+    "quiet_median": 6.035,
+    "phases": {
+     "startup": 0.018,
+     "compile": 5.311,
+     "test_run": 0.0,
+     "cpu": 23.21,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 1
+   }
+  }
+ },
+ "finished": "2026-10-29T18:25:25-0700"
+}

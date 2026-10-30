@@ -7,12 +7,15 @@ layer is the clean-room compiler's frontend: recent hosted check
 `20261029-175257566-943851` averaged one of 96 CPUs, whereas the full library
 test run `20261029-175106375-937110` averaged 29.2 and peaked at 73.1 CPUs.
 
-Pinned hosted nightly frontend diagnostics (three samples per side) observed
-full nonincremental library recheck medians of 13.33s at one thread and 6.11s
-at eight. Warm incremental filtered test edits stayed flat (7.73s vs 7.76s).
-The suite comparison labels these uncontrolled because some samples are noisy,
-not a proven general speedup or a reason to disable incremental compilation.
-Exact result files and limitations: `docs/parallelism-audit-20261030.md`.
+Deployed native jr-cargo workspace-only threading locally and on hosted.
+Quiet pinned hosted full rechecks measured 13.43s at one thread versus 6.04s
+at eight: `bench/suite.py compare` reports -55%, faster. All six recordings
+verified the actual requested compiler count. Warm incremental test edits
+remained within noise (7.67s vs 7.79s). Clean-room `main` commit `a0cb0e435`
+enables eight threads through Cargo's normal `[env]` config. The comprehensive
+40-point gate was interrupted twice by server reload, so no global default
+promotion or general speedup is claimed. Exact files and acceptance run IDs:
+`docs/parallelism-audit-20261030.md`.
 
 Fixed hosted transport dropping explicit Cargo/frontend/libtest/pool limits and
 opt-outs. Thread telemetry now recognizes native and split flag spellings.
