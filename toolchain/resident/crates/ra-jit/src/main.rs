@@ -11,6 +11,7 @@ mod check;
 mod content;
 mod dep_info;
 mod deps;
+mod diagnostic_hash;
 mod doctest;
 mod errors;
 mod frozen;
@@ -6992,8 +6993,8 @@ fn errors_of(
     let asked = |body: hir::DefWithBody| {
         let _interval = asked_timing.enter(telemetry);
         let hir::DefWithBody::Function(func) = body else { return was.is_none() };
-        let written = hir::HasSource::source(func, db)
-            .map(|it| rustc_hash::FxBuildHasher.hash_one(it.value.syntax().text().to_string()));
+        let written =
+            hir::HasSource::source(func, db).map(|it| diagnostic_hash::of(it.value.syntax()));
         let Some(written) = written else { return true };
         functions.borrow_mut().insert(func, written);
         let asked = was.as_ref().is_none_or(|was| was.functions.get(&func) != Some(&written));
