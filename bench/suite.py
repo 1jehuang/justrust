@@ -553,7 +553,7 @@ def restore(root: Path, edit: Edit | None) -> None:
         shutil.copy2(pristine(root, edit.file), root / edit.file)
 
 
-FOREIGN_RUSTC_POLICY = "proc-stat-live-excluding-Z-X-x-fail-closed-v1"
+FOREIGN_RUSTC_POLICY = "proc-stat-live-excluding-Z-X-x-conservative-exit-v2"
 
 
 def rustc_process_is_live(pid: int, proc: Path = Path("/proc")) -> bool:
@@ -568,6 +568,10 @@ def rustc_process_is_live(pid: int, proc: Path = Path("/proc")) -> bool:
                 or not fields[1].isdigit()):
             raise ValueError("malformed or changed rustc process identity/state")
         return fields[0] not in ("Z", "X", "x")
+    except FileNotFoundError:
+        # pgrep and /proc are not an atomic snapshot. Keep an exited compiler
+        # conservatively noisy, never silently classify unobserved work as absent.
+        return True
     except (OSError, ValueError) as error:
         raise RuntimeError("bench: foreign rustc state unknown for pid " + str(pid)) from error
 

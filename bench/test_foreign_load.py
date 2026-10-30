@@ -72,9 +72,10 @@ class ForeignLoadTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'discovery unknown'):
             self.load('11\n', stderr='discovery warning')
 
-    def test_missing_unreadable_malformed_or_reused_process_aborts(self):
-        with self.assertRaisesRegex(RuntimeError, 'state unknown'):
-            self.load('11\n')
+    def test_compiler_exiting_after_discovery_is_conservatively_live(self):
+        self.assertEqual(self.load('11\n'), (0.25, 1))
+
+    def test_unreadable_malformed_or_reused_process_aborts(self):
         for record in ('11 rustc S 1', '11 (rustc) Q 1', '11 (rustc) S',
                        '12 (rustc) S 1', '11 (other) S 1', '11 (rustc) S bad'):
             self.process(11, record=record)
