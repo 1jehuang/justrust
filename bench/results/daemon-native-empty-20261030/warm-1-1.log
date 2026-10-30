@@ -1,0 +1,10 @@
+
+justrust: ok: check succeeded, tests not run in 0.0s
+  time    startup 0.03s | compile 0.00s
+  target  slot 2 (sticky) /home/jeremy/justrust/target/justrust-slots/2
+  rustc   pinned toolchain nightly-2026-10-08
+  units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+  cpu     0.1s total, avg 2.1/peak 0.0 of 16 cores; others used 7.2 cores (2 other rustc), priority weight 1000 -> 1000
+  memory  peak 0 MB build, 0 MB largest rustc, 23.9 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261029-225300603-3660040` full output, `justrust show 20261029-225300603-3660040` full profile

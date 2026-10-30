@@ -1,0 +1,6 @@
+[2026-10-29 22:55:52.338] [3683658] build daemon up, build 15336008-1793339185
+[2026-10-29 22:55:52.350] [3683658] start check in /home/jeremy/.jcode/scratch/daemon-stamp/cancellation (1.0 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:55:53.361] [3683658] no clients left, stopping pid 3683666
+[2026-10-29 22:55:53.361] [3683658] client: client went away
+[2026-10-29 22:55:53.374] [3683658] pid 3683666 exit Some(143) after 1.02s, shared by 1
+[2026-10-29 22:55:53.382] [3683658] shutdown requested, draining

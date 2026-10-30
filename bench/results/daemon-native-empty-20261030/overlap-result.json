@@ -1,0 +1,23 @@
+{
+  "refusals": [
+    {
+      "prebuild": false,
+      "kind": "F",
+      "body": "native freshness build already owns this request"
+    },
+    {
+      "prebuild": true,
+      "kind": "F",
+      "body": "native freshness build already owns this request"
+    }
+  ],
+  "status_while_owner_running": {
+    "build": "15336008-1793339185",
+    "pid": 3683658,
+    "running": 1,
+    "served": 1,
+    "coalesced": 0,
+    "attached": false
+  },
+  "owner_script_exited_after_disconnect": true
+}

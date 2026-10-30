@@ -1,0 +1,57 @@
+[2026-10-29 22:48:22.698] [3588476] build daemon up, build 15336008-1793339185
+[2026-10-29 22:48:23.155] [3588476] start check --lib in /home/jeremy/justrust (446.9 ms lookup, 445.7 ms source validation, 0.0 ms prebuild coordination, stamp 665bc404)
+[2026-10-29 22:48:44.170] [3588476] pid 3588493 exit Some(0) after 21.02s, shared by 1
+[2026-10-29 22:48:44.283] [3588476] start check --lib in /home/jeremy/justrust (1.2 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:48:44.496] [3588476] pid 3595459 exit Some(0) after 0.21s, shared by 1
+[2026-10-29 22:52:35.377] [3588476] start check --lib in /home/jeremy/justrust (575.1 ms lookup, 573.5 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:00.487] [3588476] pid 3653836 exit Some(0) after 25.11s, shared by 1
+[2026-10-29 22:53:00.602] [3588476] start check --lib in /home/jeremy/justrust (1.2 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:00.738] [3588476] pid 3660040 exit Some(0) after 0.14s, shared by 1
+[2026-10-29 22:53:01.527] [3588476] start check --lib in /home/jeremy/justrust (621.1 ms lookup, 619.2 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:01.754] [3588476] pid 3660218 exit Some(0) after 0.23s, shared by 1
+[2026-10-29 22:53:01.882] [3588476] start check --lib in /home/jeremy/justrust (1.8 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:02.131] [3588476] pid 3660357 exit Some(0) after 0.25s, shared by 1
+[2026-10-29 22:53:02.248] [3588476] start check --lib in /home/jeremy/justrust (1.5 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:02.456] [3588476] pid 3660446 exit Some(0) after 0.21s, shared by 1
+[2026-10-29 22:53:03.222] [3588476] start check --lib in /home/jeremy/justrust (654.9 ms lookup, 653.1 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:03.398] [3588476] pid 3660587 exit Some(0) after 0.18s, shared by 1
+[2026-10-29 22:53:04.096] [3588476] start check --lib in /home/jeremy/justrust (580.9 ms lookup, 579.4 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:04.303] [3588476] pid 3660858 exit Some(0) after 0.21s, shared by 1
+[2026-10-29 22:53:04.417] [3588476] start check --lib in /home/jeremy/justrust (1.5 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:04.612] [3588476] pid 3660922 exit Some(0) after 0.20s, shared by 1
+[2026-10-29 22:53:04.726] [3588476] start check --lib in /home/jeremy/justrust (2.0 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:04.891] [3588476] pid 3661045 exit Some(0) after 0.17s, shared by 1
+[2026-10-29 22:53:05.585] [3588476] start check --lib in /home/jeremy/justrust (582.4 ms lookup, 580.7 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:05.759] [3588476] pid 3661207 exit Some(0) after 0.17s, shared by 1
+[2026-10-29 22:53:06.394] [3588476] start check --lib in /home/jeremy/justrust (525.2 ms lookup, 524.1 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:06.532] [3588476] pid 3661309 exit Some(0) after 0.14s, shared by 1
+[2026-10-29 22:53:06.642] [3588476] start check --lib in /home/jeremy/justrust (1.1 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:06.770] [3588476] pid 3661380 exit Some(0) after 0.13s, shared by 1
+[2026-10-29 22:53:06.881] [3588476] start check --lib in /home/jeremy/justrust (1.1 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:07.007] [3588476] pid 3661444 exit Some(0) after 0.13s, shared by 1
+[2026-10-29 22:53:07.642] [3588476] start check --lib in /home/jeremy/justrust (525.9 ms lookup, 524.8 ms source validation, 0.0 ms prebuild coordination, stamp 86766959)
+[2026-10-29 22:53:07.815] [3588476] pid 3661601 exit Some(0) after 0.17s, shared by 1
+[2026-10-29 22:53:24.716] [3588476] start check --lib in /home/jeremy/justrust (541.9 ms lookup, 540.5 ms source validation, 0.0 ms prebuild coordination, stamp 6c9f61f6)
+[2026-10-29 22:53:27.022] [3588476] pid 3663930 exit Some(101) after 2.31s, shared by 1
+[2026-10-29 22:53:27.133] [3588476] start check --lib in /home/jeremy/justrust (1.1 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:29.472] [3588476] pid 3664274 exit Some(101) after 2.34s, shared by 1
+[2026-10-29 22:53:30.297] [3588476] start check --lib in /home/jeremy/justrust (655.7 ms lookup, 654.4 ms source validation, 0.0 ms prebuild coordination, stamp 13a1c6d6)
+[2026-10-29 22:53:32.873] [3588476] pid 3664853 exit Some(0) after 2.58s, shared by 1
+[2026-10-29 22:53:32.985] [3588476] start check --lib in /home/jeremy/justrust (1.1 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:53:33.123] [3588476] pid 3665248 exit Some(0) after 0.14s, shared by 1
+[2026-10-29 22:53:52.482] [3588476] start clippy --lib in /home/jeremy/justrust (536.3 ms lookup, 535.1 ms source validation, 0.0 ms prebuild coordination, stamp 13a1c6d6)
+[2026-10-29 22:54:03.706] [3588476] pid 3667587 exit Some(0) after 11.22s, shared by 1
+[2026-10-29 22:54:03.821] [3588476] start clippy --lib in /home/jeremy/justrust (1.4 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:54:04.013] [3588476] pid 3668975 exit Some(0) after 0.19s, shared by 1
+[2026-10-29 22:54:04.732] [3588476] start clippy --lib in /home/jeremy/justrust (541.7 ms lookup, 540.2 ms source validation, 0.0 ms prebuild coordination, stamp 13a1c6d6)
+[2026-10-29 22:54:04.940] [3588476] pid 3669161 exit Some(0) after 0.21s, shared by 1
+[2026-10-29 22:54:05.055] [3588476] start clippy --lib in /home/jeremy/justrust (1.3 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:54:05.263] [3588476] pid 3669330 exit Some(0) after 0.21s, shared by 1
+[2026-10-29 22:54:05.971] [3588476] start clippy --lib in /home/jeremy/justrust (596.3 ms lookup, 595.0 ms source validation, 0.0 ms prebuild coordination, stamp 13a1c6d6)
+[2026-10-29 22:54:06.151] [3588476] pid 3669452 exit Some(0) after 0.18s, shared by 1
+[2026-10-29 22:54:06.261] [3588476] start clippy --lib in /home/jeremy/justrust (1.2 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:54:06.432] [3588476] pid 3669557 exit Some(0) after 0.17s, shared by 1
+[2026-10-29 22:54:07.113] [3588476] start clippy --lib in /home/jeremy/justrust (573.0 ms lookup, 571.8 ms source validation, 0.0 ms prebuild coordination, stamp 13a1c6d6)
+[2026-10-29 22:54:07.240] [3588476] pid 3669716 exit Some(0) after 0.13s, shared by 1
+[2026-10-29 22:54:07.351] [3588476] start clippy --lib in /home/jeremy/justrust (1.3 ms lookup, 0.0 ms source validation, 0.0 ms prebuild coordination, stamp native)
+[2026-10-29 22:54:07.481] [3588476] pid 3669806 exit Some(0) after 0.13s, shared by 1

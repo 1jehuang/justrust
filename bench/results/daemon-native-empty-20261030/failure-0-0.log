@@ -1,0 +1,19 @@
+error: daemon_native_empty_controlled_edit
+   --> src/buildd.rs:710:1
+    |
+710 | compile_error!("daemon_native_empty_controlled_edit");
+    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error: could not compile `justrust` (lib) due to 1 previous error
+
+
+justrust: FAILED to compile (1 error) in 2.3s
+  time    startup 0.06s | compile 2.20s
+  target  slot 2 (sticky) /home/jeremy/justrust/target/justrust-slots/2
+  rustc   pinned toolchain nightly-2026-10-08
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 61 fresh, localcache 0 hit/1 miss. Rebuilt because: edited src/buildd.rs (justrust)
+          justrust                           2.20s  cpu   2.2s    564 MB
+  cpu     2.5s total, avg 1.1/peak 1.0 of 16 cores; others used 5.2 cores
+  memory  peak 654 MB build, 564 MB largest rustc, 21.9 GB free; stalls cpu 0.02s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261029-225324718-3663930` full output, `justrust show 20261029-225324718-3663930` full profile

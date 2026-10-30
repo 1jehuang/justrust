@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "scope": "Controlled local diagnostics only, not a session-weighted benchmark or default promotion",
+  "date_utc": "2026-10-30",
+  "implementation_commit": "75e009bb0",
+  "machine": "xps14",
+  "binary_sha256": "18b3dd42286c5df75d90fa238e1fcd409f27ac4941c24b02101d8e6bc2bed116",
+  "saved_installed_baseline_sha256": "08fd9cc630cc44e4029ed92b7090d5994e007c805da97b48df10f42593042ebf",
+  "comparison": "same candidate binary with JUSTRUST_BUILDD_NATIVE_EMPTY=0 versus 1",
+  "restored_buildd_source_sha256": "778dfa516e679009a5f62dc682fc9635256a17d49acbc0ba6153af71f2033cf6",
+  "edited_buildd_source_sha256": "f523a84425b5d8dc588150586c50ed44d4e86372fe6c601d958d795aebd98ec0",
+  "environment": {
+    "JUSTRUST_REMOTE": "off",
+    "JUSTRUST_BUILDD": "1",
+    "JUSTRUST_BUILDD_PREBUILD": "0",
+    "JUSTRUST_TOOLCHAIN": "nightly-2026-10-08",
+    "JUSTRUST_NO_TELEMETRY": "1",
+    "JUSTRUST_HOME": "$HOME/.jcode/scratch/daemon-stamp/native-empty/home",
+    "installed_toolchains_shared_by_symlink": true,
+    "target_slot": 2
+  },
+  "source_freeze": "Coordinator confirmed source/build freeze before final pinned warmup, no-op, failure/restore and Clippy samples. Only deliberate compile_error insertion and byte-backup restoration changed production source.",
+  "limitations": [
+    "Other independent machine workloads remained active. Warmup reported 9.6 other CPU cores average and up to 30 other rustc processes. Absolute timings are contention-dependent.",
+    "Check and Clippy warmups are excluded from no-op medians. Every no-op reported zero compiled units and 62 fresh units with the same pinned toolchain.",
+    "Restore off compiled one local unit, while following restore on found 62 fresh units. Restore timings are correctness evidence, not a matched performance comparison.",
+    "The comprehensive bench/suite.py before/after gate was not run. No broad speedup or default-promotion claim is made.",
+    "Local prebuilds were disabled for timing. Active/prebuild overlap correctness was separately exercised through real daemon sockets and retained unit tests."
+  ],
+  "check_lib": {
+    "order": [0, 1, 1, 0, 0, 1, 1, 0, 0, 1, 1, 0],
+    "off_median_ms": 777.552123,
+    "on_median_ms": 184.918300,
+    "off_source_validation_ms": [619.2, 653.1, 579.4, 580.7, 524.1, 524.8],
+    "on_source_validation_ms": [0, 0, 0, 0, 0, 0],
+    "on_lookup_ms": [1.8, 1.5, 1.5, 2.0, 1.1, 1.1],
+    "samples": [
+      {"mode": 0, "wall_ms": 852.556620, "run": "20261029-225301528-3660218"},
+      {"mode": 1, "wall_ms": 253.320778, "run": "20261029-225301885-3660357"},
+      {"mode": 1, "wall_ms": 212.313526, "run": "20261029-225302250-3660446"},
+      {"mode": 0, "wall_ms": 833.010918, "run": "20261029-225303224-3660587"},
+      {"mode": 0, "wall_ms": 796.363651, "run": "20261029-225304097-3660858"},
+      {"mode": 1, "wall_ms": 199.841788, "run": "20261029-225304418-3660922"},
+      {"mode": 1, "wall_ms": 169.994812, "run": "20261029-225304727-3661045"},
+      {"mode": 0, "wall_ms": 758.740595, "run": "20261029-225305587-3661207"},
+      {"mode": 0, "wall_ms": 664.764403, "run": "20261029-225306395-3661309"},
+      {"mode": 1, "wall_ms": 131.200421, "run": "20261029-225306643-3661380"},
+      {"mode": 1, "wall_ms": 129.979344, "run": "20261029-225306883-3661444"},
+      {"mode": 0, "wall_ms": 699.789411, "run": "20261029-225307644-3661601"}
+    ]
+  },
+  "clippy_lib": {
+    "order": [0, 1, 0, 1, 0, 1],
+    "off_median_ms": 751.822847,
+    "on_median_ms": 173.682398,
+    "off_source_validation_ms": [540.2, 595.0, 571.8],
+    "on_source_validation_ms": [0, 0, 0],
+    "on_lookup_ms": [1.3, 1.2, 1.3],
+    "samples": [
+      {"mode": 0, "wall_ms": 751.822847, "run": "20261029-225404733-3669161"},
+      {"mode": 1, "wall_ms": 211.043790, "run": "20261029-225405057-3669330"},
+      {"mode": 0, "wall_ms": 778.287890, "run": "20261029-225405972-3669452"},
+      {"mode": 1, "wall_ms": 173.682398, "run": "20261029-225406262-3669557"},
+      {"mode": 0, "wall_ms": 702.064932, "run": "20261029-225407115-3669716"},
+      {"mode": 1, "wall_ms": 133.026412, "run": "20261029-225407353-3669806"}
+    ]
+  },
+  "failure_restore": [
+    {"phase": "failure", "mode": 0, "exit": 101, "wall_ms": 2849.717507, "run": "20261029-225324718-3663930"},
+    {"phase": "failure", "mode": 1, "exit": 101, "wall_ms": 2342.258320, "run": "20261029-225327134-3664274"},
+    {"phase": "restore", "mode": 0, "exit": 0, "wall_ms": 3233.442000, "run": "20261029-225330299-3664853"},
+    {"phase": "restore", "mode": 1, "exit": 0, "wall_ms": 141.328707, "run": "20261029-225332986-3665248"}
+  ],
+  "warmup_runs_excluded": ["20261029-225235379-3653836", "20261029-225300603-3660040", "20261029-225352483-3667587", "20261029-225403822-3668975"],
+  "disconnect_acceptance": {
+    "fixture": "Actual Cargo build.rs writes its PID then sleeps 30 seconds",
+    "killed": "Only the requesting CLI process",
+    "script_exit_after_disconnect_ms": 454.478229,
+    "daemon_logged_no_clients_group_termination": true,
+    "native_stamp_absent": true
+  },
+  "overlap_acceptance": {
+    "fixture": "Real Unix sockets to daemon running same candidate and sleeping Cargo build.rs",
+    "agent_request_response": "F: native freshness build already owns this request",
+    "explicit_prebuild_response": "F: native freshness build already owns this request",
+    "status_while_owner_running": {"running": 1, "served": 1, "coalesced": 0},
+    "owner_script_exited_after_disconnect": true
+  },
+  "hosted_gates": {
+    "check": "20261029-224423427-3561944",
+    "daemon_tests": {"run": "20261029-224739534-3583896", "passed": 13, "ignored": 2},
+    "clippy_deny_warnings": "20261029-224747316-3583840",
+    "release_build_uninstalled": "20261029-224502624-3566464",
+    "full_test": {"run": "20261029-225215761-3651818", "passed": 843, "ignored": 12}
+  }
+}

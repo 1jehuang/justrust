@@ -1,0 +1,13 @@
+
+justrust: ok: lint succeeded, tests not run in 11.2s
+  time    startup 0.21s | compile 10.92s | gaps 0.04s
+  target  slot 2 (sticky) /home/jeremy/justrust/target/justrust-slots/2
+  rustc   pinned toolchain nightly-2026-10-08
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 61 fresh
+          justrust                          10.92s  cpu  11.0s   1079 MB
+  cpu     11.3s total, avg 1.0/peak 1.0 of 16 cores; others used 5.9 cores (2 other rustc), priority weight 1000 -> 840
+  memory  peak 1201 MB build, 1079 MB largest rustc, 18.9 GB free; stalls cpu 0.16s mem 0.03s io 0.01s
+  waste   2 issues (estimated cost each; they can overlap):
+          ~  8.4s  10.9s went to recompiling oversized crates: justrust (85k lines, 10.9s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  3.3s  build averaged 1.0 of 16 cores: justrust ran 10.9s mostly alone (single-threaded frontend)
+  more    `justrust log 20261029-225352483-3667587` full output, `justrust show 20261029-225352483-3667587` full profile

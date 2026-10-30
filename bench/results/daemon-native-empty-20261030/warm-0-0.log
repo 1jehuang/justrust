@@ -1,0 +1,19 @@
+
+justrust: ok: check succeeded, tests not run in 25.1s
+  time    startup 1.13s | compile 23.70s | gaps 0.22s
+  target  slot 2 (sticky) /home/jeremy/justrust/target/justrust-slots/2
+  rustc   pinned toolchain nightly-2026-10-08
+  avoided estimated task time avoided -5.84s (6.36s original - 12.20s measured hit overhead). Not CPU time, wall-clock savings, or a stock comparison.
+  units   74 compiled (1 local, 61 deps, 12 build scripts), 0 fresh, depcache 4 hit (4 prebuilt)/69 miss (original ~6.4s of rustc), localcache 0 hit/1 miss. Rebuilt because: the toolchain changed (59 crates)
+          justrust                          13.63s  cpu  13.4s   1060 MB
+          syn                                2.53s  cpu   0.0s      0 MB
+          serde_derive                       2.12s  cpu   3.2s    300 MB
+          clap_derive                        0.87s  cpu   1.7s    252 MB
+  cpu     43.0s total, avg 1.7/peak 6.3 of 16 cores; others used 9.6 cores (30 other rustc), priority weight 1000 -> 576
+  memory  peak 1945 MB build, 1060 MB largest rustc, 22.9 GB free; stalls cpu 3.13s mem 0.04s io 0.34s
+  waste   4 issues (estimated cost each; they can overlap):
+          ~ 10.4s  13.6s went to recompiling oversized crates: justrust (85k lines, 13.6s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  8.2s  rebuilt 61 registry dependencies and 12 build scripts (8.2s): the toolchain changed (x59)
+          ~  7.5s  machine was busy: other processes used 10 of 16 cores on average (up to 30 rustc from other builds) and tasks stalled 3.1s waiting for CPU
+          ~  1.8s  69 dependency units missed the shared dependency cache and compiled (28.3s of rustc); they are cached now, so other target dirs, slots, and checkouts reuse them
+  more    `justrust log 20261029-225235379-3653836` full output, `justrust show 20261029-225235379-3653836` full profile
