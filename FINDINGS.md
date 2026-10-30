@@ -1,5 +1,35 @@
 # Findings: where agent build time goes
 
+## 2026-10-30: measuring incremental reuse opportunity, not a claimed ceiling
+
+Native self-profile markers now distinguish proven-green query value acquisition
+from providers rerun because no disk value was available. This is a concrete
+resident-value-cache opportunity, not all avoidable frontend work. The compiler
+and matching std built successfully. Five real compiler cases (cold, unchanged,
+body edit, revert, type error) preserve exact diagnostics/status, successful
+binary bytes and runtime output with profiling on/off and verify-ich enabled.
+Evidence: `bench/results/reuse-native-acceptance-20261030.json`; methodology and
+remaining ownership/invalidation work: `docs/incremental-reuse-roadmap.md`.
+
+Real justrust checks with the local-only newly built compiler, self-profiling,
+verify-ich, artifact caches off and explicit proc-macro caching enabled passed:
+`20261029-192127135-1482189` (35.9s initial compilation) and
+`20261029-192203045-1482188` (3.2s forced unchanged-source warm compilation).
+These describe one diagnostic's states, not a before/after speedup, production
+latency, or the general reuse ceiling. Profiles are retained in private scratch.
+
+The comprehensive hosted baseline first failed source-activity protection for
+benchmark roots (`bench/results/versus-synth1-20261029-191138-4bfa081ce4fc-dirty.json`).
+Commit `33900e534` fixes receipt enrollment without making private/cache roots
+eligible for GC; full hosted tests passed 830 tests (6 ignored), clippy passed,
+and the exact failed justrust prebuild and filtered test passed
+(`20261029-191801203-1462638`, `20261029-191850292-1467868`). The broad retry
+still failed the pinned Desktop integration test because
+`CARGO_BIN_EXE_jcode-desktop` was unavailable at compile time
+(`20261029-192227259-1470257381`). It was stopped, and the benchmark backup
+journal recovered under its lock. Comprehensive baseline remains blocked;
+no aggregate performance improvement or default promotion is claimed.
+
 ## 2026-10-30: parallelism configuration audit
 
 Hosted crate scheduling and test parallelism are already active. The missing
