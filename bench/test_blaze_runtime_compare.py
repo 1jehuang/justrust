@@ -47,6 +47,24 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(h.accepted(row, output(marker=marker), expected,
                                        'JR_RUNTIME_EXECUTED_2'))
 
+    def test_native_test_duration_suffix(self):
+        for suffix in (' <0.000s>', ' <1s>', ' <12.345s>'):
+            for state in ('ok', 'FAILED', 'ignored'):
+                passed, failed, ignored = [int(state == s) for s in ('ok', 'FAILED', 'ignored')]
+                result = 'FAILED' if failed else 'ok'
+                text = (f'test {NAME} ... {state}{suffix}\n'
+                        f'test result: {result}. {passed} passed; {failed} failed; '
+                        f'{ignored} ignored; 0 measured; 2 filtered out\n')
+                parsed = h.test_results(text)
+                self.assertIsNotNone(parsed, text)
+                self.assertEqual(parsed['tests'], [(NAME, state)])
+        for suffix in (' garbage', ' <0.000s> garbage', ' <nans>', ' <-1s>',
+                       ' <1.2 s>', ' <.2s>', ' <1s> <2s>'):
+            self.assertIsNone(h.test_results(output().replace('... ok', '... ok' + suffix)))
+        text = output(marker='JR_RUNTIME_EXECUTED_1').replace('\nok\n', '\nok <0.000s>\n')
+        self.assertTrue(h.accepted(dict(status=0, timed_out=False, error=None), text,
+                                   marker='JR_RUNTIME_EXECUTED_1'))
+
     def test_failure_output(self):
         parsed = h.test_results(output(marker='panic: JR_RUNTIME_FAILURE', failed=True))
         self.assertEqual(parsed['failed'], 1)
