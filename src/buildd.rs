@@ -31,6 +31,9 @@
 //! build runs in the client as before. On by default for non-terminal
 //! agent builds on Linux; `JUSTRUST_BUILDD=0` disables the daemon,
 //! `JUSTRUST_BUILDD_PREBUILD=0` only prebuilds (FINDINGS.md, build daemon).
+//! Experimental `JUSTRUST_BUILDD_NATIVE_EMPTY=1` skips source validation only
+//! when no active or finished candidate exists. Native Cargo still runs, and
+//! the unvalidated execution can never be attached to or replayed.
 //!
 //! Wire format, both directions: `[u8 kind][u32 len, big endian][payload]`.
 //! Client to daemon: `R` request JSON, `P` ping, `S` shutdown. Daemon to
@@ -705,7 +708,8 @@ struct Log {
 }
 
 struct Build {
-    stamp: String,
+    /// None means native Cargo must validate freshness. Never authorize reuse.
+    stamp: Option<String>,
     /// A `test` prebuilt as `test --no-run`: requests wait for it, then run
     /// for real (on Fresh units), never take its output.
     compile_only: Mutex<bool>,
@@ -931,6 +935,27 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let cwd = PathBuf::from(&req.cwd);
     let key = request_key(&req);
     let roots = source_roots(&cwd);
+    // Eligibility and reservation share the lock with both normal requests and
+    // the watcher. No scan result, synthetic stamp, or cached Cargo verdict is
+    // involved: the child must run Cargo's complete freshness path.
+    let native = {
+        let mut st = dm.state.lock().unwrap();
+        if native_empty_eligible(&st, &req) {
+            let b = start(&req, None, &cwd)?;
+            st.served += 1;
+            st.last_request = Some(Instant::now());
+            remember_request(&mut st, &req, &key, &roots);
+            st.builds.insert(key.clone(), b.clone());
+            let (dm2, key2, b2) = (dm.clone(), key.clone(), b.clone());
+            std::thread::spawn(move || reap(&dm2, &key2, &b2));
+            Some(b)
+        } else {
+            None
+        }
+    };
+    if let Some(build) = native {
+        return serve_build(dm, &req, &roots, &mut s, build, false, false, t0, 0.0, 0.0);
+    }
     let (stamp, _files) = source_stamp(&roots, &cwd, &req.env);
     let scan_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let wait_start = Instant::now();
@@ -942,13 +967,23 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let waited_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
     let (build, attached, replayed) = {
         let mut st = dm.state.lock().unwrap();
+        // A native request can have arrived while this request scanned. Never
+        // attach to an unstamped build or overwrite its active reservation.
+        if native_key_occupied(&st, &key) {
+            write_msg(
+                &mut s,
+                b'F',
+                b"native freshness build already owns this request",
+            )?;
+            return Ok(());
+        }
         st.served += 1;
         st.last_request = Some(Instant::now());
         let running = st
             .builds
             .get(&key)
             .filter(|b| {
-                b.stamp == stamp
+                b.stamp.as_deref() == Some(&*stamp)
                     && b.log.lock().unwrap().exit.is_none()
                     && !*b.compile_only.lock().unwrap()
             })
@@ -958,23 +993,12 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
             None
         } else {
             st.finished.remove(&key).filter(|b| {
-                b.stamp == stamp
+                b.stamp.as_deref() == Some(&*stamp)
                     && b.started.elapsed() < FINISHED_MAX_AGE
                     && !*b.compile_only.lock().unwrap()
             })
         };
-        if !req.prebuild && wants_prebuild(&req) {
-            st.recent.insert(
-                key.clone(),
-                Recent {
-                    req: req.clone(),
-                    roots: roots.clone(),
-                    used: Instant::now(),
-                    budget: PREBUILDS_PER_REQUEST,
-                },
-            );
-            prune_recent(&mut st.recent);
-        }
+        remember_request(&mut st, &req, &key, &roots);
         if done.is_some() {
             st.prebuilt += 1;
         }
@@ -987,7 +1011,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
                 (b, true, replayed)
             }
             _ => {
-                let b = start(&req, stamp, &cwd)?;
+                let b = start(&req, Some(stamp), &cwd)?;
                 st.builds.insert(key.clone(), b.clone());
                 let (dm2, key2, b2) = (dm.clone(), key.clone(), b.clone());
                 std::thread::spawn(move || reap(&dm2, &key2, &b2));
@@ -995,9 +1019,56 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
             }
         }
     };
+    serve_build(
+        dm, &req, &roots, &mut s, build, attached, replayed, t0, scan_ms, waited_ms,
+    )
+}
+
+fn native_empty_eligible(st: &State, req: &Request) -> bool {
+    !req.prebuild
+        && req
+            .env
+            .iter()
+            .any(|(k, v)| k == "JUSTRUST_BUILDD_NATIVE_EMPTY" && v == "1")
+        && st.builds.is_empty()
+        && st.finished.is_empty()
+}
+
+fn native_key_occupied(st: &State, key: &str) -> bool {
+    st.builds.get(key).is_some_and(|b| b.stamp.is_none())
+}
+
+fn remember_request(st: &mut State, req: &Request, key: &str, roots: &[PathBuf]) {
+    if !req.prebuild && wants_prebuild(req) {
+        st.recent.insert(
+            key.to_owned(),
+            Recent {
+                req: req.clone(),
+                roots: roots.to_vec(),
+                used: Instant::now(),
+                budget: PREBUILDS_PER_REQUEST,
+            },
+        );
+        prune_recent(&mut st.recent);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn serve_build(
+    dm: &Arc<Daemon>,
+    req: &Request,
+    roots: &[PathBuf],
+    s: &mut UnixStream,
+    build: Arc<Build>,
+    attached: bool,
+    replayed: bool,
+    t0: Instant,
+    scan_ms: f64,
+    waited_ms: f64,
+) -> Result<()> {
     let lookup_ms = t0.elapsed().as_secs_f64() * 1000.0;
-    if !req.prebuild && wants_prebuild(&req) {
-        watch_roots(dm, &roots);
+    if !req.prebuild && wants_prebuild(req) {
+        watch_roots(dm, roots);
     }
     let joined_after = match *build.finished.lock().unwrap() {
         // Negative: seconds since the replayed prebuild finished.
@@ -1015,7 +1086,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     }
     if req.prebuild {
         *build.prebuild.lock().unwrap() = true;
-        write_msg(&mut s, b'I', &serde_json::to_vec(&info(dm, attached))?)?;
+        write_msg(s, b'I', &serde_json::to_vec(&info(dm, attached))?)?;
         return Ok(());
     }
     log(&format!(
@@ -1032,9 +1103,9 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         lookup_ms,
         scan_ms,
         waited_ms,
-        &build.stamp[..8]
+        build.stamp.as_deref().map(|s| &s[..8]).unwrap_or("native")
     ));
-    let res = stream(&build, &mut s, attached, replayed, joined_after, lookup_ms);
+    let res = stream(&build, s, attached, replayed, joined_after, lookup_ms);
     let mut l = build.log.lock().unwrap();
     l.clients -= 1;
     let orphaned =
@@ -1169,7 +1240,7 @@ fn peer_closed(s: &UnixStream) -> bool {
     n == 0 || err.is_some_and(|e| e != WSAEWOULDBLOCK)
 }
 
-fn start(req: &Request, stamp: String, cwd: &Path) -> Result<Arc<Build>> {
+fn start(req: &Request, stamp: Option<String>, cwd: &Path) -> Result<Arc<Build>> {
     let mut c = Command::new(std::env::current_exe()?);
     c.args(&req.argv)
         .current_dir(cwd)
@@ -1290,7 +1361,7 @@ fn cancel_stale_prebuild(dm: &Daemon, key: &str, stamp: &str) {
                 // A build that already answered early is as stale as an
                 // unclaimed prebuild: nobody waits for it, and it holds the
                 // target dir the new request needs.
-                b.stamp != stamp
+                b.stamp.as_deref() != Some(&*stamp)
                     && l.exit.is_none()
                     && ((*b.prebuild.lock().unwrap() && !l.claimed) || l.early_served)
             })
@@ -1349,7 +1420,7 @@ fn settle_compile_only(dm: &Daemon, key: &str, stamp: &str) {
         }
         st.builds
             .get(key)
-            .filter(|b| b.stamp == stamp && *b.compile_only.lock().unwrap())
+            .filter(|b| b.stamp.as_deref() == Some(&*stamp) && *b.compile_only.lock().unwrap())
             .cloned()
     };
     let Some(b) = b else { return };
@@ -1502,12 +1573,16 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             cancel_stale_prebuild(dm, &key, &stamp);
             let mut st = dm.state.lock().unwrap();
             if let Some(b) = st.builds.get(&key) {
-                if b.stamp != stamp {
+                if b.stamp.as_deref() != Some(&*stamp) {
                     retry.push(key);
                 }
                 continue;
             }
-            if st.finished.get(&key).is_some_and(|b| b.stamp == stamp) {
+            if st
+                .finished
+                .get(&key)
+                .is_some_and(|b| b.stamp.as_deref() == Some(&*stamp))
+            {
                 continue;
             }
             req.prebuild = true;
@@ -1526,14 +1601,14 @@ fn prebuild_loop(dm: &Arc<Daemon>, rx: std::sync::mpsc::Receiver<PathBuf>) {
             // Nobody waits for it: not an agent build in history and trend
             // statistics. The slot stays the agent's (JUSTRUST_SLOT_SESSION).
             req.env.retain(|(k, _)| k != "JCODE_SESSION_ID");
-            match start(&req, stamp, &cwd) {
+            match start(&req, Some(stamp), &cwd) {
                 Ok(b) => {
                     *b.compile_only.lock().unwrap() = compile_only;
                     log(&format!(
                         "prebuild {} in {} (stamp {})",
                         req.argv.join(" "),
                         req.cwd,
-                        &b.stamp[..8]
+                        b.stamp.as_deref().map(|s| &s[..8]).unwrap_or("native")
                     ));
                     if let Some(r) = st.recent.get_mut(&key) {
                         r.budget = r.budget.saturating_sub(1);
@@ -1565,7 +1640,7 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
     let l = b.log.lock().unwrap();
     let (claimed, early_served) = (l.claimed, l.early_served);
     drop(l);
-    if (!claimed && *b.prebuild.lock().unwrap()) || early_served {
+    if b.stamp.is_some() && ((!claimed && *b.prebuild.lock().unwrap()) || early_served) {
         st.finished.insert(key.to_owned(), b.clone());
     }
     st.last_request = Some(Instant::now());
@@ -1776,9 +1851,117 @@ mod tests {
         assert!(is_test(&v(&["t"])) && !is_test(&v(&["check"])));
     }
 
+    #[test]
+    fn native_empty_requires_opt_in_and_no_candidates() {
+        let mut st = State::default();
+        let mut r = req(&[], &["check"]);
+        assert!(!native_empty_eligible(&st, &r));
+        r.env
+            .push(("JUSTRUST_BUILDD_NATIVE_EMPTY".into(), "0".into()));
+        assert!(!native_empty_eligible(&st, &r));
+        r.env[0].1 = "1".into();
+        assert!(native_empty_eligible(&st, &r));
+        r.prebuild = true;
+        assert!(!native_empty_eligible(&st, &r));
+        r.prebuild = false;
+        let b = Arc::new(fake_build());
+        st.builds.insert("other-key".into(), b.clone());
+        assert!(!native_empty_eligible(&st, &r));
+        st.builds.clear();
+        st.finished.insert("other-key".into(), b);
+        assert!(!native_empty_eligible(&st, &r));
+    }
+
+    #[test]
+    fn unstamped_execution_is_reserved_but_never_replayed() {
+        let dm = Daemon {
+            state: Mutex::default(),
+            watcher: None,
+            watched: Mutex::default(),
+            sock: (PathBuf::new(), (0, 0)),
+            draining: std::sync::atomic::AtomicBool::new(false),
+        };
+        let mut b = fake_build();
+        b.stamp = None;
+        // Even early output and prebuild flags cannot turn an unvalidated
+        // execution into a replayable result.
+        *b.prebuild.lock().unwrap() = true;
+        b.log.lock().unwrap().early_served = true;
+        b.log.lock().unwrap().exit = Some(101);
+        let b = Arc::new(b);
+        dm.state
+            .lock()
+            .unwrap()
+            .builds
+            .insert("key".into(), b.clone());
+        assert!(native_key_occupied(&dm.state.lock().unwrap(), "key"));
+        reap(&dm, "key", &b);
+        let st = dm.state.lock().unwrap();
+        assert!(st.builds.is_empty());
+        assert!(st.finished.is_empty());
+    }
+
+    #[test]
+    fn native_owner_refuses_racing_requests_without_overwrite() {
+        let dm = Arc::new(Daemon {
+            state: Mutex::default(),
+            watcher: None,
+            watched: Mutex::default(),
+            sock: (PathBuf::new(), (0, 0)),
+            draining: std::sync::atomic::AtomicBool::new(false),
+        });
+        let mut owner = fake_build();
+        owner.stamp = None;
+        let owner = Arc::new(owner);
+        for prebuild in [false, true] {
+            let mut r = req(&[], &["check"]);
+            r.prebuild = prebuild;
+            let key = request_key(&r);
+            dm.state
+                .lock()
+                .unwrap()
+                .builds
+                .insert(key.clone(), owner.clone());
+            let (server, mut client) = UnixStream::pair().unwrap();
+            run(&dm, r, server).unwrap();
+            let (kind, body) = read_msg(&mut client).unwrap().unwrap();
+            assert_eq!(kind, b'F');
+            assert_eq!(body, b"native freshness build already owns this request");
+            let st = dm.state.lock().unwrap();
+            assert!(Arc::ptr_eq(st.builds.get(&key).unwrap(), &owner));
+            assert!(st.finished.is_empty());
+            assert_eq!(st.served, 0);
+            assert_eq!(st.coalesced, 0);
+        }
+    }
+
+    #[test]
+    fn native_reaper_preserves_another_active_reservation() {
+        let dm = Daemon {
+            state: Mutex::default(),
+            watcher: None,
+            watched: Mutex::default(),
+            sock: (PathBuf::new(), (0, 0)),
+            draining: std::sync::atomic::AtomicBool::new(false),
+        };
+        let mut old = fake_build();
+        old.stamp = None;
+        old.log.lock().unwrap().exit = Some(0);
+        let active = Arc::new(fake_build());
+        dm.state
+            .lock()
+            .unwrap()
+            .builds
+            .insert("key".into(), active.clone());
+        reap(&dm, "key", &Arc::new(old));
+        let st = dm.state.lock().unwrap();
+        assert!(Arc::ptr_eq(st.builds.get("key").unwrap(), &active));
+        assert!(st.finished.is_empty());
+    }
+
     fn fake_build() -> Build {
         Build {
-            stamp: "s".into(),
+            stamp: Some("s".into()),
             compile_only: Mutex::default(),
             session: String::new(),
             run_id: None,
