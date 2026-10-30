@@ -3792,7 +3792,7 @@ fn is_generic_function(db: &RootDatabase, func: FunctionId) -> bool {
     }
 }
 
-fn is_bodiless_intrinsic(db: &RootDatabase, id: FunctionId) -> bool {
+fn is_bodiless_intrinsic(db: &dyn HirDatabase, id: FunctionId) -> bool {
     let signature = hir_def::signatures::FunctionSignature::of(db, id);
     signature.flags.contains(hir_def::signatures::FnFlags::RUSTC_INTRINSIC) && !signature.has_body()
 }
@@ -4211,8 +4211,7 @@ fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
     // The first thing asked of a crate after an edit: name resolution is redone here.
     hir_def::nameres::crate_def_map(db, krate.into());
     let resolved = start.elapsed();
-    let mut declared = Declared::default();
-    declared.in_modules(db, krate);
+    let mut declared = module_declarations(db, krate.into()).clone();
     let scopes = start.elapsed();
     let count = declared.bodies.len();
     // A body's blocks include those of the blocks in it, but not those of the items in them.
@@ -4222,13 +4221,8 @@ fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
                 true => std::mem::take(&mut declared.provided),
                 false => std::mem::take(&mut declared.bodies),
             };
-            declared.under_provided = under_provided;
             for body in lower(db, bodies) {
-                for (_, def_map) in Body::of(db, body).blocks(db) {
-                    for (_, module) in def_map.modules(db) {
-                        declared.in_scope(db, module.scope(db));
-                    }
-                }
+                declared.extend(body_declarations(db, body, under_provided));
             }
         }
     }
@@ -4534,7 +4528,7 @@ fn none_linked(
     })
 }
 
-#[derive(Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 struct Declared {
     functions: Vec<FunctionId>,
     statics: Vec<StaticId>,
@@ -4551,7 +4545,15 @@ struct Declared {
 }
 
 impl Declared {
-    fn in_modules(&mut self, db: &RootDatabase, krate: Crate) {
+    fn extend(&mut self, other: &Declared) {
+        self.functions.extend_from_slice(&other.functions);
+        self.statics.extend_from_slice(&other.statics);
+        self.bodies.extend_from_slice(&other.bodies);
+        self.in_provided.extend_from_slice(&other.in_provided);
+        self.provided.extend_from_slice(&other.provided);
+    }
+
+    fn in_modules(&mut self, db: &dyn HirDatabase, krate: Crate) {
         let mut modules: Vec<Module> = vec![krate.root_module(db)];
         while let Some(module) = modules.pop() {
             modules.extend(module.children(db));
@@ -4560,7 +4562,7 @@ impl Declared {
         }
     }
 
-    fn in_scope(&mut self, db: &RootDatabase, scope: &ItemScope) {
+    fn in_scope(&mut self, db: &dyn HirDatabase, scope: &ItemScope) {
         for def in scope.declarations() {
             match def {
                 // A function declared in an `extern` block has no body to compile, nor has an
@@ -4616,6 +4618,27 @@ impl Declared {
             false => self.bodies.push(id),
         }
     }
+}
+
+/// Declaration graph nodes, separate from the bodies' executable code. These queries
+/// retain all name-resolution, macro-expansion and body dependencies through Salsa.
+/// In particular, a body is not assumed to preserve its nested items after an edit.
+#[salsa::tracked(returns(ref))]
+fn module_declarations(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> Declared {
+    let mut declared = Declared::default();
+    declared.in_modules(db, krate.into());
+    declared
+}
+
+#[salsa::tracked(returns(ref))]
+fn body_declarations(db: &dyn HirDatabase, body: DefWithBodyId, under_provided: bool) -> Declared {
+    let mut declared = Declared { under_provided, ..Declared::default() };
+    for (_, def_map) in Body::of(db, body).blocks(db) {
+        for (_, module) in def_map.modules(db) {
+            declared.in_scope(db, module.scope(db));
+        }
+    }
+    declared
 }
 
 /// Lowers the bodies on all threads and hands them back. An edit to a file has every body in
@@ -11742,6 +11765,71 @@ extern "C" fn exported() {}
                 assert!(!hir_ty_codegen::compile_time_only(&db, it));
             }
         });
+    }
+
+    /// Compare with the uncached traversal after each real database revision, not
+    /// just with a hand-written list of top-level declarations.
+    #[test]
+    fn resident_graph_reuse_tracks_nested_items_and_macro_edits() {
+        use test_fixture::WithFixture;
+        let source = r#"
+macro_rules! nested { () => { fn expanded() {} }; }
+fn main() { fn inner() {} nested!(); let _ = 1; }
+trait Tr { fn default() { fn provided_inner() {} } }
+static VALUE: usize = { fn static_inner() {} 1 };
+"#;
+        let (mut db, file) = RootDatabase::with_single_file(source);
+        let file = file.file_id(&db);
+        let variants = [
+            source.to_owned(),
+            source.replace("let _ = 1", "let _ = 2"),
+            source.replace("fn inner() {}", "fn replacement() { fn deeper() {} }"),
+            source.replace("fn expanded() {}", "fn changed_expansion() {}"),
+            source.replace("fn provided_inner() {}", "fn changed_provided() {}"),
+            source.replace("fn static_inner() {}", "fn changed_static() {}"),
+            source.replace("fn inner() {}", ""),
+            source.to_owned(),
+        ];
+        for source in variants {
+            db.set_file_text_with_durability(
+                file,
+                &source,
+                ide_db::base_db::salsa::Durability::LOW,
+            );
+            hir::attach_db(&db, || {
+                let krate =
+                    hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
+                let actual = declared_in(&db, krate);
+                let mut expected = Declared::default();
+                expected.in_modules(&db, krate);
+                while !expected.bodies.is_empty() || !expected.provided.is_empty() {
+                    for under_provided in [false, true] {
+                        let bodies = if under_provided {
+                            std::mem::take(&mut expected.provided)
+                        } else {
+                            std::mem::take(&mut expected.bodies)
+                        };
+                        expected.under_provided = under_provided;
+                        for body in bodies {
+                            for (_, def_map) in Body::of(&db, body).blocks(&db) {
+                                for (_, module) in def_map.modules(&db) {
+                                    expected.in_scope(&db, module.scope(&db));
+                                }
+                            }
+                        }
+                    }
+                }
+                // This flag is traversal state, not part of the declaration graph.
+                expected.under_provided = actual.under_provided;
+                assert!(actual == expected, "tracked declaration graph differs from full walk");
+                let names: Vec<_> = actual
+                    .in_provided
+                    .iter()
+                    .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
+                    .collect();
+                assert!(names.iter().any(|it| it.ends_with("provided") || it == "provided_inner"));
+            });
+        }
     }
 
     /// The symbols of the standard library's object are read once for as long as the file is the
