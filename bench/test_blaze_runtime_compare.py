@@ -88,6 +88,58 @@ class HarnessTests(unittest.TestCase):
         self.assertEqual(logged['CARGO_PROFILE_TEST_OPT_LEVEL'], '0')
         self.assertEqual(logged['BLAZE_BACKEND'], 'llvm')
 
+    def test_explicit_compiler_nightly_detection_and_pin(self):
+        for text in ('rustc 1.101.0-nightly (abc 2026-10-27)\n',
+                     'rustc custom (abc)\nrelease: 1.101.0-nightly\n'):
+            self.assertTrue(h.nightly_version(text))
+        for text in ('rustc 1.101.0 (abc)\nrelease: 1.101.0\n',
+                     'rustc 1.101.0-beta\nrelease: 1.101.0-beta\n',
+                     'rustc stable\nnotes: nightly\n', 'not rustc nightly',
+                     'rustc 1.101.0-nightly-fake\nrelease: 1.101.0\n'):
+            self.assertFalse(h.nightly_version(text))
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for nightly in (False, True):
+                args = argparse.Namespace(output=root / str(nightly), cargo=Path('/fake/cargo'),
+                                          rustc=Path('/fake/rustc'), compiler_nightly=nightly)
+                with patch.dict(os.environ, {'JUSTRUST_TOOLCHAIN_NIGHTLY': 'unverified'}):
+                    for stack in ('owned-off', 'all3on', 'all4on', 'all4hotpatch'):
+                        env = h.environment(args, stack)
+                        self.assertEqual(env.get('JUSTRUST_TOOLCHAIN_NIGHTLY'), '1' if nightly else None)
+                        self.assertEqual(h.logged_environment(env).get('JUSTRUST_TOOLCHAIN_NIGHTLY'),
+                                         '1' if nightly else None)
+
+    def test_version_query_once_identity_verified(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rustc = root / 'compiler'
+            rustc.write_bytes(b'fake compiler, never loaded')
+            args = argparse.Namespace(rustc=rustc, source=root, output=root, timeout=1)
+            def fake(command, cwd, env, prefix, timeout):
+                self.assertEqual(command, [str(rustc), '-vV'])
+                prefix.with_suffix('.stdout').write_text('rustc 1.101.0-nightly (abc)\nrelease: 1.101.0-nightly\n')
+                prefix.with_suffix('.stderr').write_text('')
+                return dict(status=0, timed_out=False, error=None, elapsed_seconds=.001)
+            with patch.object(h, 'run_process', side_effect=fake) as run:
+                receipt = h.classify_compiler(args, h.base.digest(rustc))
+                self.assertEqual(run.call_count, 1)
+            self.assertTrue(receipt['nightly'])
+            self.assertEqual(receipt['sha256_before'], receipt['sha256_after'])
+            self.assertTrue((root / 'rustc-version.json').is_file())
+            with patch.object(h, 'run_process') as run:
+                with self.assertRaises(ValueError):
+                    h.classify_compiler(args, 'wrong-hash')
+                run.assert_not_called()
+            args.output = root / 'mutation'
+            args.output.mkdir()
+            def changed(*a, **kw):
+                row = fake(*a, **kw)
+                rustc.write_bytes(b'compiler replaced during version query')
+                return row
+            with patch.object(h, 'run_process', side_effect=changed):
+                with self.assertRaises(ValueError):
+                    h.classify_compiler(args, h.base.digest(rustc))
+
     def test_blaze_backend_and_opt_pinned_and_logged(self):
         # No compiler or daemon is loaded. Exercise real isolation/environment
         # setup with an empty fake installed toolchain directory.
@@ -180,7 +232,8 @@ class HarnessTests(unittest.TestCase):
             prefix.with_suffix('.stdout').write_text(text)
             prefix.with_suffix('.stderr').write_text('')
             return dict(status=status, error=None, timed_out=False, elapsed_seconds=.001)
-        with patch.object(h.base, 'identities', return_value={'fake': 'identity'}), \
+        with patch.object(h.base, 'identities', return_value={'fake': 'identity', 'rustc': {'sha256': 'fake'}}), \
+             patch.object(h, 'classify_compiler', return_value={'nightly': False}), \
              patch.object(h, 'environment', side_effect=lambda a, s: {
                  'HOME': str(a.output / s), 'JUSTRUST_HOME': str(a.output / s / '.justrust'),
                  'BLAZE_CACHE': str(a.output / s / 'cache')}), \

@@ -92,6 +92,32 @@ def run_process(command, cwd, env, prefix, timeout):
                 environment=logged_environment(env))
 
 
+def nightly_version(text):
+    release = re.search(r'^release: ([^\s]+)$', text, re.M)
+    first = text.splitlines()[0] if text.splitlines() else ''
+    return bool((release and release.group(1).endswith('-nightly')) or
+                re.match(r'^rustc [^\s]+-nightly(?:\s|$)', first))
+
+
+def classify_compiler(args, expected_hash):
+    """One version-only invocation, before all preparation and timed builds."""
+    before = base.digest(args.rustc)
+    if before != expected_hash:
+        raise ValueError('compiler changed before version classification')
+    prefix = args.output / 'rustc-version'
+    row = run_process([str(args.rustc), '-vV'], args.source, os.environ.copy(), prefix, args.timeout)
+    stdout = prefix.with_suffix('.stdout').read_text(errors='replace')
+    stderr = prefix.with_suffix('.stderr').read_text(errors='replace')
+    after = base.digest(args.rustc)
+    receipt = {'process': row, 'stdout': stdout, 'stderr': stderr,
+               'sha256_before': before, 'sha256_after': after,
+               'nightly': nightly_version(stdout)}
+    (args.output / 'rustc-version.json').write_text(json.dumps(receipt, indent=2) + '\n')
+    if before != after or not base.succeeded(row) or not stdout.startswith('rustc '):
+        raise ValueError('compiler version classification failed or identity changed')
+    return receipt
+
+
 def identities(args):
     result = dict(base.identities(args))
     if args.wild:
@@ -193,6 +219,8 @@ def environment(args, stack):
     # base uses stack-named isolation. Move LLVM's base directory separately by
     # supplying a nested output root rather than sharing the Blaze target.
     env.update(PROFILES)
+    if not stack.startswith('blaze') and getattr(args, 'compiler_nightly', False):
+        env['JUSTRUST_TOOLCHAIN_NIGHTLY'] = '1'
     if stack in ('all4on', 'all4hotpatch'):
         env['RUSTFLAGS'] = ' '.join(f'-Z{flag}=yes' for flag in
                                   (*base.FLAGS, 'jr-cache-dead-code-items'))
@@ -326,6 +354,9 @@ def execute(args):
             return base.succeeded(row) and row.get('runtime_ok', False)
         return accepted(row, output, expected, marker)
     try:
+        save()
+        metadata['compiler_version'] = classify_compiler(args, metadata['identities_before']['rustc']['sha256'])
+        args.compiler_nightly = metadata['compiler_version']['nightly']
         save()
         active, environments = [], {}
         for stack in stacks:
