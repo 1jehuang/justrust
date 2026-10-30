@@ -99,3 +99,18 @@ Validation on 2026-10-30:
 
 No broad benchmark, hosted workload, compiler/source-snapshot change, client
 change, or performance claim was made by this lane.
+
+### Current real-capture compiler revalidation
+
+The same matrix was rerun on 2026-10-30 against
+`/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc`,
+whose driver SHA-256 is
+`8cfb723e9ffb482bdd9518251f281c5169aae7211804e9d12ff5bbb29f321569`.
+All **66/66 transitions** passed, covering the same 22 cases and 264 compiler
+fixture invocations. This is the frozen compiler used for the real scalar and
+associated-item captures, not a newly rebuilt compiler. The complete receipt is
+`bench/results/real-scalar-retention-20261030/current-mode-transitions.json`.
+Private raw evidence remains in
+`/home/jeremy/.jcode/scratch/current-retention-transition-20261030/`.
+This closes the scalar shared-cache transition gate for that compiler only.
+It does not extend the scalar transition matrix to associated-item retention.

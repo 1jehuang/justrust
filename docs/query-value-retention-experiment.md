@@ -6,6 +6,19 @@ change to the default retention policy. The native tracked flag
 `hir_owner_parent_q`, `constness`, and `coroutine_kind`. It does not authorize
 broader value retention or bypass dependency tracking.
 
+Real-project follow-up: `docs/real-scalar-retention-20261030.md` records the
+current-compiler 22-case revalidation and actual pinned unchanged/edit captures.
+The edited candidate loads thousands of selected scalar results instead of
+running their providers, but still records 106 proven-green constness fallbacks.
+The measured post-edit query-cache delta is 147,755 logical bytes. These are
+mechanism/storage observations, not a speedup, global maximum or default change.
+
+The current real-capture compiler also passes all 66 shared-cache no/yes/no
+transitions in `docs/query-retention-transitions.md`. The separate
+`docs/real-associated-retention-20261030.md` records 34 associated-item native
+acceptance cases and 641 unchanged / 757 edited named disk-load records in place
+of the corresponding green recomputations. Neither experiment is promoted.
+
 ## Run
 
 Use the owned compiler containing that flag. No Cargo invocation is involved:
