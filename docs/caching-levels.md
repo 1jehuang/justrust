@@ -143,14 +143,19 @@ The investigation now has concrete native implementations, not only proposals:
   checks rebuilt correctly. See `cargo-subtree-cache.md`. The regression and
   missing comprehensive gate prohibit default promotion. Forwarding the flag
   does not install a new Cargo binary on hosted machines.
-* **Module-local Clippy queries:** the final opt-in subset is `NegMultiply`
-  and `NeedlessQuestionMark`, with acceptance testing in progress. Switching
-  cfg without source edits exposed stale green lint queries and missing
-  diagnostics, requiring a versioned incremental-cache namespace. The initial
-  four-pass subset also reordered two official UI diagnostics, so
-  `NeedlessBool` and `BoolComparison` remain crate-wide rather than changing
-  expected output. Stateful and cross-module passes remain crate-wide too.
-  See `clippy-module-cache-experiment.md` for final acceptance status.
+* **Module-local Clippy queries:** `a29b1e69a` adds the opt-in subset
+  `NegMultiply` and `NeedlessQuestionMark`. All 48 actual-driver invocations
+  passed, including ordered edits, errors/recovery, diagnostic replay and
+  four same-directory cfg switches. Official UI passed 1,877 main cases
+  (five ignored), 194 secondary cases, and the other groups without changing
+  snapshots. Self-profile recorded `lint_mod` executions at three cold, zero
+  unchanged, and two after an edit confined to one module, preserving replayed
+  warnings from the other module. Switching cfg alone had exposed stale green
+  queries, so the driver uses a versioned incremental-cache namespace. The
+  initial four-pass subset reordered two UI diagnostics, so `NeedlessBool`
+  and `BoolComparison` remain crate-wide. Stateful and cross-module passes
+  remain crate-wide too. See `clippy-module-cache-experiment.md`. Default off,
+  with no end-to-end speed claim.
 
 The comprehensive baseline was unavailable because another measurement held
 its shared snapshot lock, including a ten-minute timed-out wait. These
