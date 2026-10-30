@@ -1,0 +1,133 @@
+symbols: 0 in 146.3µs
+load workspace: 3.2s
+resolve: 69 crates in 2.5s
+frozen, of 68 crates: def maps of 0, impls of 0, lang items of 0 from the store, 204 written in 375.6ms
+proc macros: 111 expanded in 0.16s, 0 from the store in 0.00s, 0.01s to key them (111 derives in 0.16s); 111 kept
+standard library: 17 crates, compiled 25924 of 25960 fns (+16200 instances) in 9.8s (+81.5µs emit)
+      3  unsupported: a call of `_mm512_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm512_mask_fmsubadd_ph)
+      3  unsupported: a call of `_mm256_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm256_mask_fmsubadd_ph)
+      3  unsupported: a call of `_mm_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm_mask_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tilezero.internal`  (e.g. core::core_arch::x86_64::amx::__tile_zero)
+      1  unsupported: LLVM intrinsic `x86.tdpbf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbf8ps)
+      1  unsupported: LLVM intrinsic `x86.tilestored64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stored)
+      1  unsupported: LLVM intrinsic `x86.tdpbssd.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbssd)
+      1  unsupported: LLVM intrinsic `x86.tdphbf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dphbf8ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2bf16h.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2bf16h)
+      1  unsupported: a call of `_mm256_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm256_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tcmmrlfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cmmrlfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tilemovrow.internal`  (e.g. core::core_arch::x86_64::amx::__tile_movrow)
+      1  unsupported: LLVM intrinsic `x86.tdphf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dphf8ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbsud.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbsud)
+      1  unsupported: LLVM intrinsic `x86.tileloaddt164.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stream_loadd)
+      1  unsupported: LLVM intrinsic `x86.tileloaddrst164.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stream_loaddrs)
+      1  unsupported: LLVM intrinsic `x86.tcmmimfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cmmimfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tdpfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowd2ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowd2ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbf16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbf16ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2phl.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2phl)
+      1  unsupported: a call of `_mm_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tileloadd64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_loadd)
+      1  unsupported: LLVM intrinsic `x86.tdpbhf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbhf8ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbuud.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbuud)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2bf16l.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2bf16l)
+      1  unsupported: a call of `_mm512_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm512_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tileloaddrs64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_loaddrs)
+      1  unsupported: LLVM intrinsic `x86.tdpbusd.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbusd)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2phh.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2phh)
+standard library: 17 parts in 122.0ms
+store: 0 functions found, 42131 compiled and added
+entries: 0 found, 41682 added, 0 as stored, 0 not as stored, 0 instances and 434 requests without a stable name
+not kept: [("call of no instance", 434)]
+not found: [("no entry", 16192)]
+manifest: none used, the store has none of this build (35.0ms)
+cold: compiled 3990 of 3990 fns (+40606 instances) in 5.2s (+1.9µs emit)
+proc macros: 113 expanded in 0.18s, 111 from the store in 0.04s, 0.01s to key them (113 derives in 0.18s); 113 kept
+store: 25800 functions found, 17950 compiled and added
+entries: 0 found, 44573 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+not found: [("no entry", 40583)]
+check: 31 files in 1.3s
+stats: 43723 of 44574 functions compiled, 851 reused
+phases: compile 43.4ms, resolve 563.1ms, define 101.4ms, fallback 35.9µs, object 155.5ms, 1 rounds
+link: 139.7ms (exit status: 0; not spliced: no executable to add to)
+manifest: kept, 2 files, 38940200 bytes (87.4ms)
+watching 49 files
+tier: off (RA_JIT_TIER=off, blaze built without `--features llvm`, or not macOS on AArch64)
+request: sync at_us=1793372494239796
+change: 0 files
+request: sync at_us=1793372494260348
+request: sync at_us=1793372494301084
+change: 1 files
+edit (apply 28.0ms): not built: no patch, and the source does not compile; the next edit is a patch of the last build
+stats: 0 of 44574 functions compiled, 44574 reused
+no patch: a root of the base no longer compiles
+phases: compile 0.0ns, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 0.0ns, 0 rounds
+refused: error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_RUNTIME_TYPE_ERROR";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^
+edit-to-binary: 168.5ms
+request: sync at_us=1793372494509426
+change: 1 files
+edit (apply 27.4ms): compiled 3990 of 3990 fns (+40583 instances) in 50.5ms (+1.2µs emit)
+stats: 3 of 44574 functions compiled, 44571 reused
+patch: 0 functions
+phases: compile 188.1µs, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 185.2µs, 1 rounds
+link: 942.4µs (spliced: 0 functions redirected, 2097160 bytes, 0 copied)
+edit-to-binary: 96.5ms
+request: sync at_us=1793372494648920
+change: 1 files
+edit (apply 26.1ms): compiled 3990 of 3990 fns (+40583 instances) in 47.3ms (+1.0µs emit)
+stats: 3 of 44574 functions compiled, 44571 reused
+patch: 7 functions
+phases: compile 889.6µs, resolve 825.0µs, define 22.5µs, fallback 0.0ns, object 541.9µs, 1 rounds
+link: 1.0ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 96.1ms
+request: sync at_us=1793372494786161
+change: 1 files
+edit (apply 26.5ms): compiled 3990 of 3990 fns (+40583 instances) in 43.3ms (+867.0ns emit)
+stats: 2 of 44574 functions compiled, 44572 reused
+patch: 0 functions
+phases: compile 178.4µs, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 184.2µs, 1 rounds
+link: 788.7µs (spliced: 0 functions redirected, 2097160 bytes, 0 copied)
+edit-to-binary: 90.8ms
+request: sync at_us=1793372527489917
+change: 1 files
+edit (apply 28.3ms): compiled 3990 of 3990 fns (+40583 instances) in 54.7ms (+952.0ns emit)
+stats: 2 of 44574 functions compiled, 44572 reused
+patch: 7 functions
+phases: compile 454.4µs, resolve 743.1µs, define 14.4µs, fallback 0.0ns, object 411.8µs, 1 rounds
+link: 1.4ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 98.1ms
+request: sync at_us=1793372527888152
+change: 1 files
+edit (apply 10.8ms): compiled 3990 of 3990 fns (+40583 instances) in 43.6ms (+951.0ns emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 421.8µs, resolve 894.8µs, define 24.0µs, fallback 0.0ns, object 696.1µs, 1 rounds
+link: 1.1ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 70.7ms
+request: sync at_us=1793372528005442
+change: 1 files
+edit (apply 10.8ms): compiled 3990 of 3990 fns (+40583 instances) in 34.7ms (+1.1µs emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 447.7µs, resolve 899.4µs, define 20.4µs, fallback 0.0ns, object 587.3µs, 1 rounds
+link: 1.3ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 72.5ms
+request: sync at_us=1793372528350930
+change: 1 files
+edit (apply 10.2ms): compiled 3990 of 3990 fns (+40583 instances) in 32.1ms (+1.1µs emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 447.8µs, resolve 909.3µs, define 17.3µs, fallback 0.0ns, object 655.6µs, 1 rounds
+link: 986.3µs (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 71.3ms
+request: sync at_us=1793372528465873
+change: 1 files
+edit (apply 10.5ms): compiled 3990 of 3990 fns (+40583 instances) in 33.5ms (+1.1µs emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 473.1µs, resolve 900.9µs, define 19.8µs, fallback 0.0ns, object 582.4µs, 1 rounds
+link: 1.3ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 73.2ms

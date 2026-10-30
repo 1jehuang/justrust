@@ -1,0 +1,71 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index be57fd8ab..16d4a2e6a 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -4221,7 +4221,10 @@ fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
+                 true => std::mem::take(&mut declared.provided),
+                 false => std::mem::take(&mut declared.bodies),
+             };
+-            for body in lower(db, bodies) {
++            // The tracked query owns its Body::of dependency. Prewarming every
++            // body here would ask even unchanged nodes and spawn lowering threads
++            // before Salsa has a chance to validate the declaration graph.
++            for body in bodies {
+                 declared.extend(body_declarations(db, body, under_provided));
+             }
+         }
+@@ -4632,6 +4635,8 @@ fn module_declarations(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> D
+ 
+ #[salsa::tracked(returns(ref))]
+ fn body_declarations(db: &dyn HirDatabase, body: DefWithBodyId, under_provided: bool) -> Declared {
++    #[cfg(test)]
++    BODY_DECLARATION_EXECUTIONS.with(|count| count.set(count.get() + 1));
+     let mut declared = Declared { under_provided, ..Declared::default() };
+     for (_, def_map) in Body::of(db, body).blocks(db) {
+         for (_, module) in def_map.modules(db) {
+@@ -4677,6 +4682,12 @@ fn lower(db: &RootDatabase, bodies: Vec<DefWithBodyId>) -> Vec<DefWithBodyId> {
+     bodies
+ }
+ 
++#[cfg(test)]
++thread_local! {
++    // Count native Salsa query executions, not calls at the query boundary.
++    static BODY_DECLARATION_EXECUTIONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++}
++
+ struct Build {
+     compiled: usize,
+     skipped: Vec<(String, CodegenError)>,
+@@ -11790,7 +11801,7 @@ static VALUE: usize = { fn static_inner() {} 1 };
+             source.replace("fn inner() {}", ""),
+             source.to_owned(),
+         ];
+-        for source in variants {
++        for (revision, source) in variants.into_iter().enumerate() {
+             db.set_file_text_with_durability(
+                 file,
+                 &source,
+@@ -11799,7 +11810,23 @@ static VALUE: usize = { fn static_inner() {} 1 };
+             hir::attach_db(&db, || {
+                 let krate =
+                     hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++                let before = BODY_DECLARATION_EXECUTIONS.with(|count| count.get());
+                 let actual = declared_in(&db, krate);
++                let after = BODY_DECLARATION_EXECUTIONS.with(|count| count.get());
++                if revision == 0 {
++                    assert!(after > before, "cold traversal did not execute tracked body queries");
++                }
++                let repeated = declared_in(&db, krate);
++                assert!(actual == repeated, "same-revision declaration graph changed");
++                assert_eq!(
++                    BODY_DECLARATION_EXECUTIONS.with(|count| count.get()),
++                    after,
++                    "same-revision traversal recomputed tracked body declarations"
++                );
++                eprintln!(
++                    "resident_graph_reuse revision {revision}: {} body declaration query executions",
++                    after - before
++                );
+                 let mut expected = Declared::default();
+                 expected.in_modules(&db, krate);
+                 while !expected.bodies.is_empty() || !expected.provided.is_empty() {
