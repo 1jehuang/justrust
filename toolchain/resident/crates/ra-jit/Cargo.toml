@@ -21,6 +21,11 @@ categories = ["development-tools::cargo-plugins", "development-tools::build-util
 name = "ra-jit"
 path = "src/main.rs"
 
+# Experimental owned entry, compiled from the same native engine, not a launcher.
+[[bin]]
+name = "jr-engine"
+path = "src/main.rs"
+
 # These make a sandbox with a view, whose seccomp listener the kernel refuses inside the test
 # sandbox's own (one listener to a process): `cargo blaze test` runs them outside.
 [package.metadata.blaze.sandbox]

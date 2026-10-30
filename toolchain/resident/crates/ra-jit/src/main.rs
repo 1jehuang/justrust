@@ -15,6 +15,7 @@ mod doctest;
 mod errors;
 mod frozen;
 mod inputs;
+mod jr_engine;
 mod link;
 mod live;
 mod macro_list;
@@ -8106,6 +8107,9 @@ fn take_blaze_names() {
 /// docs/harness.md "CI"), and the commit, which build.rs takes from `RA_JIT_GIT_SHA` (the
 /// release workflow and the flake set it) or the checkout's HEAD.
 pub(crate) fn version() -> String {
+    if jr_engine::is_engine() {
+        return jr_engine::version();
+    }
     let version = env!("CARGO_PKG_VERSION");
     match option_env!("RA_JIT_GIT_SHA") {
         Some(sha) if !sha.is_empty() => format!("blaze {version} ({sha})"),
@@ -8114,6 +8118,14 @@ pub(crate) fn version() -> String {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Compile-time identity survives worker self-exec and build-script `rustc` symlinks.
+    // Initialize before sandbox dispatch, alias translation, caches, or threads.
+    if jr_engine::is_engine() {
+        if jr_engine::reader_command() {
+            return Ok(());
+        }
+        jr_engine::initialize()?;
+    }
     // Before anything that could start a thread: the sandbox forks.
     if std::env::args_os().nth(1).is_some_and(|it| it == sandbox::COMMAND) {
         sandbox::command(std::env::args_os().skip(2));
@@ -8139,6 +8151,12 @@ fn main() -> anyhow::Result<()> {
     #[cfg(windows)]
     if let Some(script) = cargo::script::stood_in_front_of() {
         return cargo::script::run_as_cargo_does(script, std::env::args_os().skip(1));
+    }
+    if jr_engine::is_engine()
+        && !stands_in_for_rustc
+        && matches!(std::env::args().nth(1).as_deref(), Some("build" | "test" | "check" | "run"))
+    {
+        return cargo::command(std::env::args().skip(1));
     }
     match std::env::args().nth(1).as_deref() {
         _ if stands_in_for_rustc => {}
