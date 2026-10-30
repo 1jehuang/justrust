@@ -32,6 +32,16 @@ fn genuine() -> Program {
 
 #[test]
 fn ord_max_default_signature_sized_and_member_world_replay() {
+    ord_default_signature_replay("max", 2);
+}
+
+#[test]
+fn ord_min_clamp_default_signature_sized_and_member_world_replay() {
+    ord_default_signature_replay("min", 2);
+    ord_default_signature_replay("clamp", 3);
+}
+
+fn ord_default_signature_replay(method: &str, arity: usize) {
     let program = genuine();
     let budget = ir::PlanBudget::default();
     let plan = PlanCtx::from_program(&program, &budget).unwrap();
@@ -53,7 +63,7 @@ fn ord_max_default_signature_sized_and_member_world_replay() {
     let item = program.traits[ord]
         .items
         .iter()
-        .position(|item| program.names.spelling(item.signature.name).unwrap() == "max")
+        .position(|item| program.names.spelling(item.signature.name).unwrap() == method)
         .unwrap();
     let name = program.traits[ord].items[item].signature.name;
     let default = plan.registry.trait_default_callables[&(ord, item)];
@@ -102,10 +112,13 @@ fn ord_max_default_signature_sized_and_member_world_replay() {
         .unwrap()
         .unwrap();
     assert!(matches!(receiver, ReceiverKind::Value { .. }));
-    assert!(matches!(
-        signature.params.as_slice(),
-        [ir::Ty::Int(ir::IntTy::I32), ir::Ty::Int(ir::IntTy::I32)]
-    ));
+    assert_eq!(signature.params.len(), arity);
+    assert!(
+        signature
+            .params
+            .iter()
+            .all(|ty| matches!(ty, ir::Ty::Int(ir::IntTy::I32)))
+    );
     assert!(matches!(signature.result, ir::Ty::Int(ir::IntTy::I32)));
     facts
         .validate_signature(ir::SignatureSubject::Call(&callee), &signature)

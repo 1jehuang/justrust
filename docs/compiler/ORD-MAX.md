@@ -18,8 +18,12 @@ Direct method calls, `i32::max(a, b)`, alias-qualified calls, explicit
 Function-item values such as `let f = i32::max` are NOT part of this milestone.
 They require the separate FIRST-CLASS-FUNCTION-ITEMS.md contract and cannot be
 implemented by synthesizing an unchecked closure or changing constant lookup.
-`Ord::min`, `Ord::clamp`, explicit function pointers and full comparison-library
-compatibility remain open.
+`Ord::min` and `Ord::clamp` now also use ordinary source defaults with
+`Self: Sized`. `min` chooses the receiver on equality. `clamp` first asserts
+that its inclusive bounds are ordered, then returns the lower bound, upper
+bound or original receiver. Canonical user overrides still take priority.
+Explicit function pointers and full comparison-library compatibility remain
+open. The existing Ord acceptance suite covers all three defaults.
 
 ## Source and graph shape
 

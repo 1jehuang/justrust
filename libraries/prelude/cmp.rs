@@ -105,7 +105,6 @@ pub trait PartialOrd: PartialEq {
     }
 }
 
-// TODO(Sized defaults): min and clamp remain separate source-library slices.
 pub trait Ord: Eq + PartialOrd {
     fn cmp(&self, other: &Self) -> Ordering;
 
@@ -115,6 +114,29 @@ pub trait Ord: Eq + PartialOrd {
         Self: Sized,
     {
         if other < self { self } else { other }
+    }
+
+    /// Return the smaller value, choosing `self` when the values are equal.
+    fn min(self, other: Self) -> Self
+    where
+        Self: Sized,
+    {
+        if other < self { other } else { self }
+    }
+
+    /// Restrict a value to an inclusive, ordered pair of bounds.
+    fn clamp(self, min: Self, max: Self) -> Self
+    where
+        Self: Sized,
+    {
+        assert!(min <= max);
+        if self < min {
+            min
+        } else if self > max {
+            max
+        } else {
+            self
+        }
     }
 }
 
