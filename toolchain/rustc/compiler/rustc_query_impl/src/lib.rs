@@ -32,15 +32,17 @@ pub fn query_system<'tcx>(
     extern_providers: ExternProviders,
     on_disk_cache: Option<OnDiskCache>,
     incremental: bool,
+    cache_small_query_values: bool,
     observer: Option<&rustc_session::query_admission::QueryAdmissionObserver>,
 ) -> QuerySystem<'tcx> {
     let jobs = rustc_session::query_admission::QueryJobAllocator::new(observer);
     QuerySystem {
         arenas: Default::default(),
-        dep_kind_vtables: dep_kind_vtables::make_dep_kind_vtables(arena),
+        dep_kind_vtables: dep_kind_vtables::make_dep_kind_vtables(arena, cache_small_query_values),
         query_vtables: query_vtables::make_query_vtables(
             incremental,
             observer.is_some_and(|observer| observer.dispatch_resolutions_enabled()),
+            cache_small_query_values,
         ),
         side_effects: Default::default(),
         used_features: Default::default(),

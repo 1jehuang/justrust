@@ -275,6 +275,7 @@ rustc_queries! {
     /// Avoid calling this query directly.
     query hir_owner_parent_q(key: hir::OwnerId) -> hir::HirId {
         desc { "getting HIR parent of `{}`", tcx.def_path_str(key) }
+        cache_on_disk
     }
 
     /// Gives access to the HIR attributes inside the HIR owner `key`.
@@ -988,6 +989,7 @@ rustc_queries! {
     /// [^1]: Tuple struct/variant constructors, closures and free, associated and foreign functions.
     query constness(key: DefId) -> hir::Constness {
         desc { "checking if item is const: `{}`", tcx.def_path_str(key) }
+        cache_on_disk
         separate_provide_extern
         feedable
     }
@@ -1022,6 +1024,7 @@ rustc_queries! {
     /// Returns `Some(coroutine_kind)` if the node pointed to by `def_id` is a coroutine.
     query coroutine_kind(def_id: DefId) -> Option<hir::CoroutineKind> {
         desc { "looking up coroutine kind of `{}`", tcx.def_path_str(def_id) }
+        cache_on_disk
         separate_provide_extern
         feedable
     }

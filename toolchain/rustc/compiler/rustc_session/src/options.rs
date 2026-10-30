@@ -2602,6 +2602,8 @@ options! {
         "a default MIR inlining threshold (default: 50)"),
     input_stats: bool = (false, parse_bool, [UNTRACKED],
         "print some statistics about AST and HIR (default: no)"),
+    jr_cache_small_query_values: bool = (false, parse_bool, [TRACKED],
+        "justrust: experimentally persist small proven-green query values (default: no)"),
     jr_query_graph: Option<PathBuf> = (None, parse_opt_pathbuf, [UNTRACKED],
         "justrust: private anonymous query-job admission lifecycle diagnostics (default: none)"),
     jr_iface_hash: bool = (false, parse_bool, [UNTRACKED],

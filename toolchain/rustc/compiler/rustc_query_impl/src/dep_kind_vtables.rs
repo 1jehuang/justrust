@@ -1,5 +1,5 @@
 use rustc_middle::arena::Arena;
-use rustc_middle::dep_graph::{DepKindVTable, DepNodeKey, KeyFingerprintStyle};
+use rustc_middle::dep_graph::{DepKind, DepKindVTable, DepNodeKey, KeyFingerprintStyle};
 use rustc_middle::query::QueryCache;
 use rustc_span::bug;
 
@@ -183,9 +183,20 @@ macro_rules! define_dep_kind_vtables {
 }
 
 // Create an array of vtables, one for each dep kind (non-query and query).
-pub(crate) fn make_dep_kind_vtables<'tcx>(arena: &'tcx Arena<'tcx>) -> &'tcx [DepKindVTable<'tcx>] {
-    let (nq_vtables, q_vtables) =
+pub(crate) fn make_dep_kind_vtables<'tcx>(
+    arena: &'tcx Arena<'tcx>,
+    cache_small_query_values: bool,
+) -> &'tcx [DepKindVTable<'tcx>] {
+    let (nq_vtables, mut q_vtables) =
         rustc_middle::queries::rustc_with_all_queries! { define_dep_kind_vtables! };
+
+    // The codec exists in both modes, but the default must not acquire
+    // promotion callbacks for values that it does not persist.
+    if !cache_small_query_values {
+        for kind in [DepKind::hir_owner_parent_q, DepKind::constness, DepKind::coroutine_kind] {
+            q_vtables[kind.as_usize() - nq_vtables.len()].promote_from_disk_fn = None;
+        }
+    }
 
     // Non-query vtables must come before query vtables, to match the order of `DepKind`.
     arena.alloc_from_iter(nq_vtables.into_iter().chain(q_vtables.into_iter()))
