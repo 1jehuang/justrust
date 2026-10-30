@@ -253,6 +253,30 @@ pub struct AssocItems {
     items: SortedIndexMultiMap<u32, Option<Symbol>, ty::AssocItem>,
 }
 
+// Persist semantic definition order, not the process-local symbol-sorted index.
+// Symbol indices can change between sessions, so rebuild that index after the
+// ordinary DefId/Symbol decoders have translated the item descriptors.
+impl<E: rustc_serialize::Encoder> rustc_serialize::Encodable<E> for AssocItems
+where
+    ty::AssocItem: rustc_serialize::Encodable<E>,
+{
+    fn encode(&self, encoder: &mut E) {
+        encoder.emit_usize(self.len());
+        for item in self.in_definition_order() {
+            item.encode(encoder);
+        }
+    }
+}
+
+impl<D: rustc_serialize::Decoder> rustc_serialize::Decodable<D> for AssocItems
+where
+    ty::AssocItem: rustc_serialize::Decodable<D>,
+{
+    fn decode(decoder: &mut D) -> Self {
+        Self::new(<Vec<ty::AssocItem> as rustc_serialize::Decodable<D>>::decode(decoder))
+    }
+}
+
 impl AssocItems {
     /// Constructs an `AssociatedItems` map from a series of `ty::AssocItem`s in definition order.
     pub fn new(items_in_def_order: impl IntoIterator<Item = ty::AssocItem>) -> Self {

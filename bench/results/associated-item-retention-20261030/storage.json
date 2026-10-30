@@ -1,0 +1,11 @@
+{
+  "schema": 1,
+  "scope": "observed-final-profile-fixture-cache-bytes-not-general-overhead",
+  "epoch": "counts-v2/body-edit",
+  "compiler_driver_sha256": "beadc87fdfb8921e1c24a5f86a21ea43b0f2b36f8e407847b3cd6bcab54ebe71",
+  "off": {"query-cache.bin": 43441, "dep-graph.bin": 170610, "work-products.bin": 667},
+  "on": {"query-cache.bin": 44963, "dep-graph.bin": 170610, "work-products.bin": 667},
+  "query_cache_delta_bytes": 1522,
+  "resident_memory_cost_bytes": null,
+  "time_saved_ns": null
+}

@@ -1,0 +1,3536 @@
+{
+  "schema": 1,
+  "scope": "query-value-retention-correctness-only-no-speedup-claim",
+  "flag": "-Zjr-cache-associated-items",
+  "verify_ich": true,
+  "verdict": "passed",
+  "planned_cases": 34,
+  "completed_cases": 34,
+  "observations": [
+    {
+      "name": "initial",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "unchanged",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "body-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 8 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "01c1bc40d5df04483781a9f483acde576fea35e5bbfaba85968e5dff88cae366",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "9379321c029c861fc22798d049303043ef9d6073890f181745c9f77be0823ebf",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "body-revert",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "nonconst",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nfn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "const-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-from-async",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nfn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "async-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "async-closure",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let unused = async || 9u32; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": "warning: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:4:28\n  |\n4 | fn ordinary() -> u32 { let unused = async || 9u32; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\n  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+          },
+          "artifact_sha256": "10383b259adfe2000c23d323c3faa0534f866d385c65ab3360b9d9588002e19a",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": "warning: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:4:28\n  |\n4 | fn ordinary() -> u32 { let unused = async || 9u32; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\n  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+          },
+          "artifact_sha256": "b70bbd24e7bbeed6f984b9df73eabee1445c8a02a0b8d1ef0ce3c5605fb34ebb",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "nested-owner-add",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } fn extra() -> u32 { 1 } nested() + extra() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "4c0b40a930307daea94d92436d56605463f7c14ef171e87e1f6d06b2ac591b31",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "d8bcb511fc56d3bc3e418b30ca816ee1d9c711ff06c0cf36668d48ce7001005f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "owner-remove",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "3e36d98bee48c8c8e4158b8eb534d36811dc2c526c2a6c778c29a5790fdb7b05",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cc7a7c724323c1bed21c97af0d5247cc14b090f1547559bb8e38deb363b1e46d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "owner-add",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n\nmod added { pub const fn item() -> u32 { 12 } }\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "owner-reorder",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nasync fn asynchronous() -> u32 { 3 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nconst fn value() -> u32 { 7 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "macro-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 5u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "3875b7d07abd6d9f9d234a72d535d4e55899743a438547fed560b0f89209a7d6",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "fa303a3a26af3ad0a375430007b5c2c4412703e8609f9da438245b40e209b449",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "macro-revert",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "lint-error",
+      "expected_stdout": null,
+      "source": "#![deny(unused_variables)]\n#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let unused = 0; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:5:28\n  |\n5 | fn ordinary() -> u32 { let unused = 0; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\nnote: the lint level is defined here\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:1:9\n  |\n1 | #![deny(unused_variables)]\n  |         ^^^^^^^^^^^^^^^^\n\nerror: aborting due to 1 previous error\n\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:5:28\n  |\n5 | fn ordinary() -> u32 { let unused = 0; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\nnote: the lint level is defined here\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:1:9\n  |\n1 | #![deny(unused_variables)]\n  |         ^^^^^^^^^^^^^^^^\n\nerror: aborting due to 1 previous error\n\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "lint-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "type-error",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { \"wrong\" }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:3:27\n  |\n3 | const fn value() -> u32 { \"wrong\" }\n  |                     ---   ^^^^^^^ expected `u32`, found `&str`\n  |                     |\n  |                     expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:3:27\n  |\n3 | const fn value() -> u32 { \"wrong\" }\n  |                     ---   ^^^^^^^ expected `u32`, found `&str`\n  |                     |\n  |                     expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "type-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "dependency-signature",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u64) as u32); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u64) -> u64 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "85fb0972b1b48b645fde6b95ad6e6f37f43c6d087430d1e7bc099c51cf42bdf7",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ac7f52c0322b227b0630f6f579b59c4817ed2dad3633eba43ef3a097d920e988",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "dependency-mismatch",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u64) -> u64 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:7:138\n  |\n7 | ... Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                      --------------------- ^^^^ expected `u64`, found `u32`\n  |                                      |\n  |                                      arguments to this function are incorrect\n  |\nnote: function defined here\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs:1:8\n  |\n1 | pub fn number(x: u64) -> u64 { x + 1 }\n  |        ^^^^^^\nhelp: change the type of the numeric literal from `u32` to `u64`\n  |\n7 - fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u64)); }\n  |\n\nerror[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:7:116\n  |\n7 | ...2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `u64`\n\nerror[E0277]: cannot add `u64` to `u32`\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:7:114\n  |\n7 | ...(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                                   ^ no implementation for `u32 + u64`\n  |\n  = help: the trait `Add<u64>` is not implemented for `u32`\nhelp: the following other types implement trait `Add<Rhs>`\n --> library/core/src/ops/arith.rs:98:8\n  |\n  = note: `u32` implements `Add`\n ::: library/core/src/ops/arith.rs:113:0\n  |\n  = note: in this macro invocation\n --> library/core/src/internal_macros.rs:22:8\n  |\n  = note: `&u32` implements `Add<u32>`\n ::: library/core/src/internal_macros.rs:33:8\n  |\n  = note: `u32` implements `Add<&u32>`\n ::: library/core/src/internal_macros.rs:44:8\n  |\n  = note: `&u32` implements `Add`\n  = note: this error originates in the macro `add_impl` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 3 previous errors\n\nSome errors have detailed explanations: E0277, E0308.\nFor more information about an error, try `rustc --explain E0277`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:7:138\n  |\n7 | ... Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                      --------------------- ^^^^ expected `u64`, found `u32`\n  |                                      |\n  |                                      arguments to this function are incorrect\n  |\nnote: function defined here\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs:1:8\n  |\n1 | pub fn number(x: u64) -> u64 { x + 1 }\n  |        ^^^^^^\nhelp: change the type of the numeric literal from `u32` to `u64`\n  |\n7 - fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u64)); }\n  |\n\nerror[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:7:116\n  |\n7 | ...2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `u64`\n\nerror[E0277]: cannot add `u64` to `u32`\n --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:7:114\n  |\n7 | ...(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                                   ^ no implementation for `u32 + u64`\n  |\n  = help: the trait `Add<u64>` is not implemented for `u32`\nhelp: the following other types implement trait `Add<Rhs>`\n --> library/core/src/ops/arith.rs:98:8\n  |\n  = note: `u32` implements `Add`\n ::: library/core/src/ops/arith.rs:113:0\n  |\n  = note: in this macro invocation\n --> library/core/src/internal_macros.rs:22:8\n  |\n  = note: `&u32` implements `Add<u32>`\n ::: library/core/src/internal_macros.rs:33:8\n  |\n  = note: `u32` implements `Add<&u32>`\n ::: library/core/src/internal_macros.rs:44:8\n  |\n  = note: `&u32` implements `Add`\n  = note: this error originates in the macro `add_impl` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 3 previous errors\n\nSome errors have detailed explanations: E0277, E0308.\nFor more information about an error, try `rustc --explain E0277`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "dependency-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "trait-method-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 3 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "25fd236f81a8ca7d79f7c7eadd97fef00d6adce53f476a882b49c933860f794a",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ce8b5170027ed1bfe5cba294f42ca95c8d214cf5bd5ff1c97b3d42838ef0f4dc",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "trait-method-revert",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-type-edit",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u64;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-const-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 1;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "25fd236f81a8ca7d79f7c7eadd97fef00d6adce53f476a882b49c933860f794a",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ce8b5170027ed1bfe5cba294f42ca95c8d214cf5bd5ff1c97b3d42838ef0f4dc",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-add",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output; fn added(&self) -> u8 { 4 }\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-reorder",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    const BIAS: u32;\n    type Output;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "rpitit-edit",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u16 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "symbol-churn",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\n#[allow(dead_code)] mod churn { struct Zebra; struct Alpha; }\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "40e83bb49eaf11737eb87167a59d38f585f64baf2573badae502e68a397904cf",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ed9e321c0811eeb73d33cb06908a10b2a1867d79753fa9714e3945b6cda72eed",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "missing-associated-item",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    \n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0046]: not all trait items implemented, missing: `Output`\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:16:1\n   |\n10 |     type Output;\n   |     ----------- `Output` from trait\n...\n16 | impl Dispatch for Widget {\n   | ^^^^^^^^^^^^^^^^^^^^^^^^ missing `Output` in implementation\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0046`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0046]: not all trait items implemented, missing: `Output`\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:16:1\n   |\n10 |     type Output;\n   |     ----------- `Output` from trait\n...\n16 | impl Dispatch for Widget {\n   | ^^^^^^^^^^^^^^^^^^^^^^^^ missing `Output` in implementation\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0046`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate-associated-item",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32; type Output = u64;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0201]: duplicate definitions with name `Output`:\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:17:24\n   |\n 9 | trait Dispatch {\n10 |     type Output;\n   |     ------------ item in trait\n...\n16 | impl Dispatch for Widget {\n17 |     type Output = u32; type Output = u64;\n   |     ------------------ ^^^^^^^^^^^^^^^^^^ duplicate definition\n   |     |\n   |     previous definition here\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0201`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0201]: duplicate definitions with name `Output`:\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:17:24\n   |\n 9 | trait Dispatch {\n10 |     type Output;\n   |     ------------ item in trait\n...\n16 | impl Dispatch for Widget {\n17 |     type Output = u32; type Output = u64;\n   |     ------------------ ^^^^^^^^^^^^^^^^^^ duplicate definition\n   |     |\n   |     previous definition here\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0201`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "ambiguous-method",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0034]: multiple applicable items in scope\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:7:58\n   |\n 7 | fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |                                                          ^^^^^^ multiple `number` found\n   |\nnote: candidate #1 is defined in an impl of the trait `Dispatch` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:19:5\n   |\n19 |     fn number(&self) -> u32 { 2 + Self::BIAS }\n   |     ^^^^^^^^^^^^^^^^^^^^^^^\nnote: candidate #2 is defined in an impl of the trait `Other` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs:22:25\n   |\n22 | impl Other for Widget { fn number(&self) -> u32 { 90 } }\n   |                         ^^^^^^^^^^^^^^^^^^^^^^^\nhelp: disambiguate the method for candidate #1\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\nhelp: disambiguate the method for candidate #2\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Other::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0034`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0034]: multiple applicable items in scope\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:7:58\n   |\n 7 | fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |                                                          ^^^^^^ multiple `number` found\n   |\nnote: candidate #1 is defined in an impl of the trait `Dispatch` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:19:5\n   |\n19 |     fn number(&self) -> u32 { 2 + Self::BIAS }\n   |     ^^^^^^^^^^^^^^^^^^^^^^^\nnote: candidate #2 is defined in an impl of the trait `Other` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs:22:25\n   |\n22 | impl Other for Widget { fn number(&self) -> u32 { 90 } }\n   |                         ^^^^^^^^^^^^^^^^^^^^^^^\nhelp: disambiguate the method for candidate #1\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\nhelp: disambiguate the method for candidate #2\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Other::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0034`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2189d8237b04e0d1845dd45c5e8f8a72694c5c1d8ab984ec7c8bd7be3a26ad6f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "57181376bc83c921a1b4bc080f73ecfe56dfbc131e1d7acdae5854f9409b310d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/associated-retention-20261030/acceptance-v2/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    }
+  ],
+  "compiler": {
+    "path": "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+    "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "version": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+        "-vV"
+      ],
+      "status": 0,
+      "stdout": "rustc 1.101.0-nightly (2967f9451 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 2967f9451c86c4d2193ba6c55cec7e8fd42e8329\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "stderr": ""
+    }
+  },
+  "sysroot_query": {
+    "command": [
+      "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/bin/rustc",
+      "--print",
+      "sysroot"
+    ],
+    "status": 0,
+    "stdout": "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot\n",
+    "stderr": ""
+  },
+  "drivers": [
+    {
+      "path": "/home/jeremy/.jcode/scratch/associated-retention-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "beadc87fdfb8921e1c24a5f86a21ea43b0f2b36f8e407847b3cd6bcab54ebe71"
+    }
+  ]
+}

@@ -186,6 +186,7 @@ macro_rules! define_dep_kind_vtables {
 pub(crate) fn make_dep_kind_vtables<'tcx>(
     arena: &'tcx Arena<'tcx>,
     cache_small_query_values: bool,
+    cache_associated_items: bool,
 ) -> &'tcx [DepKindVTable<'tcx>] {
     let (nq_vtables, mut q_vtables) =
         rustc_middle::queries::rustc_with_all_queries! { define_dep_kind_vtables! };
@@ -196,6 +197,11 @@ pub(crate) fn make_dep_kind_vtables<'tcx>(
         for kind in [DepKind::hir_owner_parent_q, DepKind::constness, DepKind::coroutine_kind] {
             q_vtables[kind.as_usize() - nq_vtables.len()].promote_from_disk_fn = None;
         }
+    }
+
+    if !cache_associated_items {
+        q_vtables[DepKind::associated_items.as_usize() - nq_vtables.len()].promote_from_disk_fn =
+            None;
     }
 
     // Non-query vtables must come before query vtables, to match the order of `DepKind`.

@@ -156,7 +156,7 @@ macro_rules! define_queries {
                     }
                 }
 
-                pub(crate) fn make_query_vtable<'tcx>(incremental: bool, dispatch_resolutions: bool, cache_small_query_values: bool)
+                pub(crate) fn make_query_vtable<'tcx>(incremental: bool, dispatch_resolutions: bool, cache_small_query_values: bool, cache_associated_items: bool)
                     -> QueryVTable<'tcx, rustc_middle::queries::$name::Cache<'tcx>>
                 {
                     use rustc_middle::queries::$name::Value;
@@ -173,7 +173,7 @@ macro_rules! define_queries {
                         cache_on_disk_local: $cache_on_disk && (
                             cache_small_query_values || !matches!(stringify!($name),
                                 "hir_owner_parent_q" | "constness" | "coroutine_kind")
-                        ),
+                        ) && (cache_associated_items || stringify!($name) != "associated_items"),
                         separate_provide_extern: $separate_provide_extern,
 
                         invoke_provider_fn: self::invoke_provider_fn::__rust_begin_short_backtrace,
@@ -241,12 +241,12 @@ macro_rules! define_queries {
             }
         )*
 
-        pub(crate) fn make_query_vtables<'tcx>(incremental: bool, dispatch_resolutions: bool, cache_small_query_values: bool)
+        pub(crate) fn make_query_vtables<'tcx>(incremental: bool, dispatch_resolutions: bool, cache_small_query_values: bool, cache_associated_items: bool)
             -> rustc_middle::queries::QueryVTables<'tcx>
         {
             rustc_middle::queries::QueryVTables {
                 $(
-                    $name: crate::query_vtables::$name::make_query_vtable(incremental, dispatch_resolutions, cache_small_query_values),
+                    $name: crate::query_vtables::$name::make_query_vtable(incremental, dispatch_resolutions, cache_small_query_values, cache_associated_items),
                 )*
             }
         }

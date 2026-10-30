@@ -1097,6 +1097,7 @@ rustc_queries! {
     /// Collects the associated items defined on a trait or impl.
     query associated_items(key: DefId) -> &'tcx ty::AssocItems {
         arena_cache
+        cache_on_disk
         desc { "collecting associated items of `{}`", tcx.def_path_str(key) }
     }
 

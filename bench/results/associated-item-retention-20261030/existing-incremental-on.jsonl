@@ -1,0 +1,12 @@
+{"event":"started","test_count":5,"type":"suite"}
+{"event":"started","name":"[incremental] tests/incremental/explicit_supertraits_containing_assoc_item.rs","type":"test"}
+{"event":"started","name":"[incremental] tests/incremental/hashes/inherent_impls.rs","type":"test"}
+{"event":"started","name":"[incremental] tests/incremental/hashes/trait_defs.rs","type":"test"}
+{"event":"started","name":"[incremental] tests/incremental/hashes/trait_impls.rs","type":"test"}
+{"event":"started","name":"[incremental] tests/incremental/issue-100521-change-struct-name-assocty.rs","type":"test"}
+{"event":"ok","message":null,"name":"[incremental] tests/incremental/explicit_supertraits_containing_assoc_item.rs","stdout":"","type":"test"}
+{"event":"ok","message":null,"name":"[incremental] tests/incremental/issue-100521-change-struct-name-assocty.rs","stdout":"","type":"test"}
+{"event":"ok","message":null,"name":"[incremental] tests/incremental/hashes/trait_impls.rs","stdout":"","type":"test"}
+{"event":"ok","message":null,"name":"[incremental] tests/incremental/hashes/trait_defs.rs","stdout":"","type":"test"}
+{"event":"ok","message":null,"name":"[incremental] tests/incremental/hashes/inherent_impls.rs","stdout":"","type":"test"}
+{"event":"ok","exec_time":3.366811648,"failed":0,"filtered_out":175,"ignored":0,"measured":0,"passed":5,"type":"suite"}

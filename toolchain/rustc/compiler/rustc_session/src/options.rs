@@ -2602,6 +2602,8 @@ options! {
         "a default MIR inlining threshold (default: 50)"),
     input_stats: bool = (false, parse_bool, [UNTRACKED],
         "print some statistics about AST and HIR (default: no)"),
+    jr_cache_associated_items: bool = (false, parse_bool, [TRACKED],
+        "justrust: experimentally persist associated-item lookup values (default: no)"),
     jr_cache_small_query_values: bool = (false, parse_bool, [TRACKED],
         "justrust: experimentally persist small proven-green query values (default: no)"),
     jr_empty_lint_level_fast_path: bool = (false, parse_bool, [TRACKED],

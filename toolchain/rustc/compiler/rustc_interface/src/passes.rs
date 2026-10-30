@@ -1018,6 +1018,7 @@ pub fn create_and_enter_global_ctxt<T, F: for<'tcx> FnOnce(TyCtxt<'tcx>) -> T>(
             query_result_on_disk_cache,
             incremental,
             sess.opts.unstable_opts.jr_cache_small_query_values,
+            sess.opts.unstable_opts.jr_cache_associated_items,
             sess.query_admission.as_ref(),
         ),
         providers.hooks,
