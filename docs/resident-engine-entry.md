@@ -114,3 +114,14 @@ These results validate entry identity and fail-closed namespace handling only.
 They do not establish Rust language correctness, successful real build/test
 execution, restricted child-environment propagation, or a performance improvement.
 The unseeded runtime comparison is a separate coordinator-owned gate.
+
+The coordinator's subsequent `re01` comparison passed both source-built stacks'
+filtered libtest gates with five edit iterations each. Receipts are in
+`/home/jeremy/re01/{metadata,records,summary}.json`. Both used unseeded private
+cold stores, the same `nightly-2026-10-27` toolchain, and the compatibility control
+of rustc-built proc macros with both proc-macro-server variables explicitly zero.
+The coordinator verified unchanged project sources and tool binaries. Observed
+edit medians were 0.108226630 s for pristine Blaze and 0.121279609 s for jr-engine.
+The candidate was slower in this narrow comparison. This is bounded runtime
+parity evidence only, not independent optimization proof, a general speed claim,
+or validation of every internal dispatch path or supported Rust feature.
