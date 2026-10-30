@@ -810,6 +810,12 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
 
     debug_assert!(dep_graph_data.is_index_green(prev_index));
 
+    // A green dependency node does not imply that its value was retained:
+    // some query values cannot be serialized, and disk loading can miss.
+    // Keep that distinction observable without treating ordinary query cache
+    // hits (which can be within this session) as cross-session value reuse.
+    let _reuse_timer = tcx.prof.generic_activity_with_arg("jr_incremental_green_query", query.name);
+
     // First try to load the result from the on-disk cache. Some things are never cached on disk.
     let try_value = if query.will_cache_on_disk_for_key(key) {
         let prof_timer = tcx.prof.incr_cache_loading();
@@ -832,6 +838,11 @@ fn load_from_disk_or_invoke_provider_green<'tcx, C: QueryCache>(
         None => {
             // We could not load a result from the on-disk cache, so recompute. The dep-graph for
             // this computation is already in-place, so we can just call the query provider.
+            // This is a candidate for a resident value cache, not proof that
+            // its elapsed time can all be removed: nested work, verification,
+            // relocation and invalidation still need separate accounting.
+            let _reuse_timer =
+                tcx.prof.generic_activity_with_arg("jr_incremental_green_recompute", query.name);
             let prof_timer = tcx.prof.query_provider();
             let value = tcx.dep_graph.with_ignore(|| (query.invoke_provider_fn)(tcx, key));
             prof_timer.finish_with_query_invocation_id(dep_node_index.into());

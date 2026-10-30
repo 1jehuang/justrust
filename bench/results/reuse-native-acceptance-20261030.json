@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "scope": "native-profiling-correctness-not-reuse-ceiling",
+  "acceptance_sha256": "899c4180ad302e221e4c84dfe4a8308e918764efcb3751b4b9adcea9b2927c6a",
+  "compiler_source_file_sha256": "13befd8528381cd12ecc0f2850ef7ca26ab0f72109aad31d5d9ce5cc6411b00f",
+  "compiler_build": "./x build --stage 1 compiler/rustc; ./x build --stage 1 library",
+  "capture_command": "python3 bench/reuse-native-accept.py --rustc toolchain/rustc/build/host/stage1/bin/rustc --output PRIVATE_NEW_DIRECTORY",
+  "incremental_verify_ich": true,
+  "cases": [
+    {"name": "initial", "status": 0, "same_diagnostics": true, "same_binary": true, "output": "13\n"},
+    {"name": "unchanged", "status": 0, "same_diagnostics": true, "same_binary": true, "output": "13\n"},
+    {"name": "body-edit", "status": 0, "same_diagnostics": true, "same_binary": true, "output": "14\n"},
+    {"name": "revert", "status": 0, "same_diagnostics": true, "same_binary": true, "output": "13\n"},
+    {"name": "type-error", "status": 1, "same_diagnostics": true, "same_binary": null, "output": null}
+  ],
+  "limitations": [
+    "Small real compiler fixture, not comprehensive language correctness coverage.",
+    "Profiling changes overhead; this establishes neither speedup nor maximum reuse.",
+    "Compiler version metadata describes the imported base; the source-file hash identifies this instrumentation patch."
+  ]
+}
