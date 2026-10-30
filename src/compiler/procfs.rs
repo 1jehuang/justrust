@@ -190,7 +190,8 @@ fn read_mappings() -> io::Result<Vec<ExecutableMapping>> {
 fn capture_runtime() -> io::Result<CompilerImage> {
     let process = current_process_identity()?;
     let mappings = read_mappings()?;
-    let executable = capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)?;
+    let mut pinned = RuntimeFiles::default();
+    let executable = pinned.capture(File::open("/proc/self/exe")?)?;
     let mut bytes = executable.bytes;
     let mut hash = blake3::Hasher::new();
     hash.update(b"justrust-running-compiler-runtime-v6");
@@ -216,8 +217,7 @@ fn capture_runtime() -> io::Result<CompilerImage> {
             continue;
         }
         let file = open_mapping(mapping)?;
-        let metadata = file.metadata()?;
-        let image = capture(file.try_clone()?, MAX_IMAGE_BYTES)?;
+        let image = pinned.capture(file)?;
         bytes = bytes
             .checked_add(image.bytes)
             .filter(|n| *n <= 1024 * 1024 * 1024)
@@ -232,14 +232,11 @@ fn capture_runtime() -> io::Result<CompilerImage> {
             .ok_or_else(|| invalid("executable memory byte limit exceeded"))?;
         let code = mapped_code_identity(&memory, mapping)?;
         hash.update(&code);
-        files.push((file, stamp(&metadata), image, mapping, code));
+        files.push((mapping, code));
     }
     // Recheck every pinned file after all reads, as well as mapping membership.
-    for (file, before, image, mapping, code) in files {
-        if stamp(&file.metadata()?) != before
-            || capture(file, MAX_IMAGE_BYTES)? != image
-            || mapped_code_identity(&memory, mapping)? != code
-        {
+    for (mapping, code) in files {
+        if mapped_code_identity(&memory, mapping)? != code {
             return Err(invalid(
                 "runtime file or mapped code changed during capture",
             ));
@@ -250,8 +247,11 @@ fn capture_runtime() -> io::Result<CompilerImage> {
             return Err(invalid("kernel executable mapping changed during capture"));
         }
     }
+    // Hash each pinned backing file again, including the running executable.
+    // Reopening exe still verifies that the kernel alias names that same file.
+    pinned.recheck()?;
     if read_mappings()? != mappings
-        || capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)? != executable
+        || pinned.capture(File::open("/proc/self/exe")?)? != executable
         || current_process_identity()? != process
     {
         return Err(invalid("runtime mappings changed during capture"));
@@ -263,6 +263,48 @@ fn capture_runtime() -> io::Result<CompilerImage> {
         digest: *hash.finalize().as_bytes(),
         implementation_digest,
     })
+}
+
+/// Scratch local to one capture, never a cache across observations. Keeping an
+/// open descriptor prevents inode reuse. Equal device/inode is sufficient to
+/// share bytes only while the complete mutation stamp still agrees.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+struct RuntimeFiles {
+    files: Vec<(File, Metadata, CompilerImage)>,
+}
+
+#[cfg(target_os = "linux")]
+impl RuntimeFiles {
+    fn capture(&mut self, file: File) -> io::Result<CompilerImage> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = file.metadata()?;
+        for (_, before, image) in &self.files {
+            if metadata.dev() == before.dev() && metadata.ino() == before.ino() {
+                if stamp(&metadata) != stamp(before) {
+                    return Err(invalid("runtime file changed during capture"));
+                }
+                return Ok(image.clone());
+            }
+        }
+        let image = capture(file.try_clone()?, MAX_IMAGE_BYTES)?;
+        if stamp(&file.metadata()?) != stamp(&metadata) {
+            return Err(invalid("runtime file changed during capture"));
+        }
+        self.files.push((file, metadata, image.clone()));
+        Ok(image)
+    }
+
+    fn recheck(&self) -> io::Result<()> {
+        for (file, before, image) in &self.files {
+            if stamp(&file.metadata()?) != stamp(before)
+                || capture(file.try_clone()?, MAX_IMAGE_BYTES)? != *image
+            {
+                return Err(invalid("runtime file changed during capture"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// MAP_PRIVATE code can differ from its backing file after a writable mapping
@@ -509,6 +551,39 @@ fn capture(mut file: File, limit: u64) -> io::Result<CompilerImage> {
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_files_deduplicate_pinned_aliases_and_reject_mutation() {
+        use std::io::{Seek, SeekFrom};
+        let directory =
+            std::env::temp_dir().join(format!("jr-runtime-dedup-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("image");
+        let alias = directory.join("alias");
+        std::fs::write(&path, b"first").unwrap();
+        std::fs::hard_link(&path, &alias).unwrap();
+        let mut pinned = RuntimeFiles::default();
+        let first = pinned.capture(File::open(&path).unwrap()).unwrap();
+        let mut file = File::open(&alias).unwrap();
+        file.seek(SeekFrom::Start(2)).unwrap();
+        // capture() hashes via a cloned descriptor with a shared cursor. A
+        // duplicate must not seek or read that cursor at all.
+        assert_eq!(pinned.capture(file.try_clone().unwrap()).unwrap(), first);
+        assert_eq!(file.stream_position().unwrap(), 2);
+        assert_eq!(pinned.files.len(), 1);
+        pinned.recheck().unwrap();
+        std::fs::write(&path, b"other").unwrap();
+        assert!(pinned.capture(File::open(&alias).unwrap()).is_err());
+        assert!(pinned.recheck().is_err());
+        // Even if metadata alone appeared unchanged, final content hashing
+        // must still reject changed bytes. Simulate that condition locally.
+        pinned.files[0].1 = std::fs::metadata(&path).unwrap();
+        assert!(pinned.recheck().is_err());
+        // A fresh observation cannot reuse the earlier capture's identity.
+        let mut fresh = RuntimeFiles::default();
+        assert_ne!(fresh.capture(File::open(&path).unwrap()).unwrap(), first);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn mount_device_uses_longest_mount_prefix() {
         let info = "31 2 0:28 /@ / rw shared:1 - btrfs /dev/nvme0n1p2 rw\n\

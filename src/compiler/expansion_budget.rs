@@ -348,7 +348,20 @@ impl ExpansionBudget {
     pub fn snapshot(&self) -> BudgetSnapshot {
         self.with(|s, _| s.snapshot.clone())
     }
+    #[inline]
     pub fn check(&self) -> Result<(), BudgetFailure> {
+        // Every expansion-ledger failure sets the owning node's sticky flag.
+        // A valid token in a node that has never latched a failure therefore
+        // needs no ledger lookup (and no ledger allocation) just to check it.
+        // Detached callers and failed nodes still inspect this exact token's
+        // ledger, so unrelated failures do not poison a healthy budget.
+        if self.identity.invalid.is_none()
+            && crate::engine::with_current_meter(|meter| {
+                meter.is_some_and(|meter| !meter.has_ledger_failure())
+            })
+        {
+            return Ok(());
+        }
         self.with(|s, _| s.healthy())
     }
     #[inline]
@@ -967,6 +980,45 @@ mod tests {
     }
 
     #[test]
+    fn graph_healthy_checks_do_not_create_budget_ledgers() {
+        use crate::engine::{Context, Engine, Key, Provider, TaskFuture};
+        struct Healthy(ExpansionBudget);
+        impl Provider for Healthy {
+            fn outputs(&self, _: &Key) -> usize {
+                1
+            }
+            fn start(&self, cx: Context, _: Key) -> TaskFuture {
+                let budget = self.0.clone();
+                Box::pin(async move {
+                    for _ in 0..32 {
+                        budget.check().unwrap();
+                        budget.clone().check().unwrap();
+                    }
+                    cx.publish_fact(0, ())
+                })
+            }
+        }
+        for workers in [1, 8] {
+            for limits in [
+                ExpansionLimits::default(),
+                ExpansionLimits {
+                    bytes: 7,
+                    ..ExpansionLimits::default()
+                },
+            ] {
+                let budget = ExpansionBudget::new(limits);
+                let engine = Engine::new(Healthy(budget.clone()));
+                let root = engine.request(crate::compiler::keys::test_key(0, vec![]));
+                assert_eq!(engine.run(workers).unwrap().failures, 0);
+                assert!(root.result(0).is_ok());
+                let mut ledgers = 0;
+                engine.visit_ledgers(budget.identity.id, |_: &State| ledgers += 1);
+                assert_eq!(ledgers, 0, "healthy checks must not allocate a ledger");
+            }
+        }
+    }
+
+    #[test]
     fn graph_default_work_preserves_sticky_budget_failure() {
         use crate::engine::{Context, Engine, Key, Provider, TaskFuture};
         struct Poison;
@@ -978,11 +1030,15 @@ mod tests {
                 Box::pin(async move {
                     for allocation in [false, true] {
                         let budget = ExpansionBudget::default();
+                        budget.check().unwrap();
+                        budget.clone().check().unwrap();
                         let first = if allocation {
                             budget.poison_allocation()
                         } else {
                             budget.charge(Counter::InputTokens, u64::MAX).unwrap_err()
                         };
+                        assert_eq!(budget.check(), Err(first.clone()));
+                        assert_eq!(budget.clone().check(), Err(first.clone()));
                         for amount in [0, 1] {
                             assert_eq!(budget.charge(Counter::Work, amount), Err(first.clone()));
                             assert_eq!(
