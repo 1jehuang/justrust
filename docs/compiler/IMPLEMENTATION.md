@@ -2099,7 +2099,9 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       first instruction while pinned process handles and stdio identities are
       bound. Bounded initial-stack normalization replaces AT_RANDOM bytes,
       clears the stack AT_SYSINFO_EHDR value and replaces the AT_EXECFN string,
-      including erasing its old private-path suffix. Trusted injected munmap
+      including erasing its old private-path suffix. Present auxiliary UID/GID
+      credential value slots are validated and replaced with fixed identities;
+      AT_SECURE and hardware-feature values are not changed. Trusted injected munmap
       operations remove actual vDSO/vvar mappings; exact instruction/register
       restoration and pinned-map readback precede image execution. Failed setup
       kills/reaps the stopped child, never detaches a partially normalized image.
@@ -2112,7 +2114,9 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       Tools cannot reenable direct timestamp reads through prctl. The boundary
       also denies set_tid_address, whose return reveals a kernel thread ID, and
       rseq registration, which would admit asynchronously kernel-written CPU
-      identity fields into child memory.
+      identity fields into child memory. Architecture control admits only the
+      loader's ARCH_SET_FS TLS setup, not feature queries, address queries or
+      unrelated architecture-control changes.
       Hosted acceptance includes real captured GNU ld, stock/native ABI parity
       at workers 1/8, canonical metadata, first-instruction ordering, kernel-map
       removal, deterministic timestamp probes, legacy vsyscall probes, floods
