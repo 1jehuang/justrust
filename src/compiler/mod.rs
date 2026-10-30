@@ -109,8 +109,13 @@ pub(super) fn analysis_diagnostic(
     if std::fmt::write(
         &mut writer,
         format_args!(
-            "{subject} {index}: initialization/move analysis (complete={}): {:?}",
-            analysis.complete, analysis.diagnostics
+            "{subject} {index}: {}initialization/move analysis (complete={}): {:?}",
+            analysis
+                .primary_message()
+                .map(|m| format!("error[{}]: {}\n  ", &m[..5], m[6..].trim_start()))
+                .unwrap_or_default(),
+            analysis.complete,
+            analysis.diagnostics
         ),
     )
     .is_err()

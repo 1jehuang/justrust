@@ -76,6 +76,19 @@ pub struct Analysis {
     pub complete: bool,
 }
 impl Analysis {
+    /// First diagnostic carrying a stock error code, for the user-facing headline.
+    pub fn primary_message(&self) -> Option<&str> {
+        self.diagnostics.iter().find_map(|d| match &d.kind {
+            ErrorKind::BorrowConflict(m)
+            | ErrorKind::InvalidReference(m)
+            | ErrorKind::UnsupportedBorrowing(m)
+                if m.starts_with('E') && m.as_bytes().get(5) == Some(&b':') =>
+            {
+                Some(m.as_str())
+            }
+            _ => None,
+        })
+    }
     pub fn passed(&self) -> bool {
         self.complete && self.diagnostics.is_empty()
     }

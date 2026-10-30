@@ -3974,8 +3974,13 @@ fn seal_concrete_cfg(
     let closed = cfg::close(std::sync::Arc::new(function), facts.clone(), facts.budget())?;
     ownership::analyze_closed(closed).map_err(|analysis| {
         format!(
-            "{name}: initialization/move analysis (complete={}): {:?}",
-            analysis.complete, analysis.diagnostics
+            "{name}: {}initialization/move analysis (complete={}): {:?}",
+            analysis
+                .primary_message()
+                .map(|m| format!("error[{}]: {}\n  ", &m[..5], m[6..].trim_start()))
+                .unwrap_or_default(),
+            analysis.complete,
+            analysis.diagnostics
         )
     })
 }
