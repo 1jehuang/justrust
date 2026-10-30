@@ -1,0 +1,54 @@
+{
+  "verdict": "passed",
+  "source_commit": "bea4cc1dc29dbe65b1c2073c92e43f79e4d735a2",
+  "native_passed": 351,
+  "baseline_restored_passed": 349,
+  "benchmark_regression_passed": 700,
+  "fixed_five_medians_seconds": {
+    "old": {
+      "engine": 0.10832534699875396,
+      "reference": 0.10457567499543075
+    },
+    "new": {
+      "engine": 0.10724747499625664,
+      "reference": 0.12995744300133083
+    }
+  },
+  "interleaved_medians_seconds": {
+    "interleaved": {
+      "old": 0.10624225849460345,
+      "new": 0.09303950199682731,
+      "blaze": 0.09993074250087375
+    },
+    "interleaved-reverse": {
+      "blaze": 0.10597312450408936,
+      "new": 0.10077943499345565,
+      "old": 0.1068687519946252
+    }
+  },
+  "profile_rows": 16,
+  "selected_callback_ns": {
+    "old": [
+      7627533,
+      8829448,
+      8122551,
+      9105572,
+      8681980,
+      8109736,
+      8187926,
+      8128261
+    ],
+    "new": [
+      423153,
+      506480,
+      332482,
+      469708,
+      367140,
+      326941,
+      383566,
+      381607
+    ]
+  },
+  "failed_profile_preserved": true,
+  "claim": "Scoped experimental warm selected-fixture improvement only, not comprehensive/default promotion. Inclusive callbacks are not additive critical-path savings."
+}

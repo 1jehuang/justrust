@@ -1,0 +1,63 @@
+.................................................usage: compare [-h] --source SOURCE --output OUTPUT --blaze BLAZE
+               --justrust JUSTRUST --rustc RUSTC --cargo CARGO
+               [--native-cargo NATIVE_CARGO] [--wild WILD] [--samples SAMPLES]
+               [--command {test,build}] [--binary BINARY]
+               [--test-filter TEST_FILTER] [--edit-test EDIT_TEST]
+               [--edit-file EDIT_FILE] [--edit-anchor EDIT_ANCHOR]
+               [--blaze-llvm] [--owned-experiments] [--native-macro-cache]
+               [--declarative-macro-cache] [--demand-query-cache]
+               [--cgu-inline-traversal] [--native-backend-frontier]
+               [--blaze-seed-cache BLAZE_SEED_CACHE] [--timeout TIMEOUT]
+compare: error: --native-macro-cache requires --wild so hotpatch is not inert
+.................usage: profile [--incremental {on,off}]
+profile: error: expected suite run arguments
+....usage: profile --debug-info {0,1,2} [--lto {off}]
+profile: error: expected suite run arguments after --debug-info
+..................frontend mapping: report output already exists
+frontend mapping: report and graph output paths must differ
+.....................................................................................................FIXTURE /home/jeremy/.jcode/scratch/headless-launch-nt3i0o46
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 3101251, "child": 3101252, "mode": "plain", "probe": {"pid": 3101252, "sid": 3101251, "pgid": 3101252, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [3101252], "reaped": [3101252], "remaining": []}, "stderr": ""}
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3101289, "child": 3101294, "mode": "command", "exit": 87, "cleanup": {"killed": [3101298], "reaped": [3101296, 3101298], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 12:45:28 PM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nFri Oct 30 12:45:28 PM PDT 2026\n'
+.PRIVATE_TMUX_EARLY_KILL {"pid": 3101309, "sid": 3101309, "pgid": 3101309, "start": "13136309", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 3101309, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+.OBSERVED {"supervisor": 3101314, "child": 3101315, "mode": "timeout", "probe": {"pid": 3101316, "sid": 3101314, "pgid": 3101315, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [3101315, 3101316], "reaped": [3101315, 3101316], "remaining": []}, "stderr": ""}
+.PRIVATE_TMUX_NATURAL_EXIT {"pid": 3101325, "sid": 3101325, "pgid": 3101325, "start": "13136353", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 3101325, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3101370, "child": 3101372, "mode": "command", "exit": 23, "cleanup": {"killed": [3101376], "reaped": [3101374, 3101376], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 12:45:29 PM PDT 2026\nEXIT 23\nFri Oct 30 12:45:29 PM PDT 2026\n'
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3101469, "child": 3101470, "mode": "command", "exit": 143, "cleanup": {"killed": [3101474], "reaped": [3101472, 3101474], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 12:45:30 PM PDT 2026\nTerminated                 /usr/bin/python3 /home/jeremy/.jcode/scratch/headless-launch-nt3i0o46/public-status-143/home/payload.py\nEXIT 143\nFri Oct 30 12:45:30 PM PDT 2026\n'
+.CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 3101593, "child": 3101595, "mode": "command", "exit": 0, "cleanup": {"killed": [3101599], "reaped": [3101597, 3101599], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 12:45:30 PM PDT 2026\nEXIT 0\nFri Oct 30 12:45:30 PM PDT 2026\n'
+.OBSERVED {"supervisor": 3101602, "child": 3101603, "mode": "setsid", "probe": {"pid": 3101611, "sid": 3101611, "pgid": 3101611, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+.CHILD_STDERR 'setsid: child 3101630 did not exit normally: Success\n'
+OBSERVED {"supervisor": 3101628, "child": 3101629, "mode": "setsid", "probe": {"pid": 3101630, "sid": 3101630, "pgid": 3101630, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 3101630 did not exit normally: Success\n"}
+.CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 3101631, "child": 3101659, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+.usage: python3 -m unittest [-h] [--repo REPO] [--patch PATCH |
+                           --source-commit SOURCE_COMMIT]
+                           [--allow-file ALLOW_FILE]
+                           [--baseline-result BASELINE_RESULT] --out OUT
+                           [-n N] [--warmup WARMUP] [--mode {hosted,local}]
+                           [--toolchain TOOLCHAIN]
+python3 -m unittest: error: refusing to overwrite an existing result
+......frontend mapping: report output already exists
+frontend mapping: report and graph output paths must differ
+...........................................................................................................................................table
+saved /home/jeremy/.jcode/scratch/tmp4iygidfl/baseline.json
+round 1 remote fresh-check measured=True: failed exit=1 wall=0.000s
+......................................................................................................................................................................................................................................................................bench: desktop-noop-test (1/1)
+.bench: desktop-noop-test (1/1)
+bench: desktop-noop-test (1/1)
+......................................bench: desktop-noop-test (1/1)
+......................................................
+----------------------------------------------------------------------
+Ran 700 tests in 10.583s
+
+OK

@@ -1,0 +1,185 @@
+[package]
+name = "ra-jit"
+description = "blaze: cargo build, test and run from a daemon that keeps your workspace compiled, with live edits"
+# Published as `cargo-blaze` by .github/scripts/publish_crates.py, which publishes the vendored
+# crates it depends on by path as `ra-jit-<name>` and rewrites this manifest to name them.
+publish = false
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories = ["development-tools::cargo-plugins", "development-tools::build-utils", "compilers"]
+
+# The program the other binaries run, named apart from the package, which is published as
+# `cargo-blaze`.
+[[bin]]
+name = "ra-jit"
+path = "src/main.rs"
+
+# Experimental owned entry, compiled from the same native engine, not a launcher.
+[[bin]]
+name = "jr-engine"
+path = "src/main.rs"
+
+# These make a sandbox with a view, whose seccomp listener the kernel refuses inside the test
+# sandbox's own (one listener to a process): `cargo blaze test` runs them outside.
+[package.metadata.blaze.sandbox]
+unsandboxed-tests = [
+    "sandbox::linux::tests::a_view_shows_its_binds_and_nothing_of_the_machine",
+    "sandbox::linux::tests::a_view_binds_a_store_path_from_anywhere",
+]
+
+# `cargo binstall cargo-blaze`: the archive the release workflow makes for each target, named and
+# laid out as `blaze-v<version>-<target>/` in .github/workflows/release.yaml (and install.sh). A
+# target with no archive is built from source; a third party's build is never used.
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/v{ version }/blaze-v{ version }-{ target }{ archive-suffix }"
+bin-dir = "blaze-v{ version }-{ target }/{ bin }{ binary-ext }"
+pkg-fmt = "tgz"
+disabled-strategies = ["quick-install"]
+
+[dependencies]
+# The store of `#[ra_jit::cache]`, which `cargo ra-jit cache` lists and clears; its library is
+# named `ra_jit` too.
+fn-cache = { package = "ra-jit-cache", path = "../ra-jit-cache" }
+memchr = "2"
+anyhow.workspace = true
+serde.workspace = true
+serde_derive.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+cfg.workspace = true
+cargo-platform = "0.3.3"
+toolchain.workspace = true
+intern.workspace = true
+memmap2 = "0.9"
+wasmparser = { version = "0.236", default-features = false, features = ["std"] }
+wasm-encoder = { version = "0.244", default-features = false, features = ["std"] }
+object = { version = "0.37", default-features = false, features = ["read", "write", "std", "archive", "elf", "macho", "coff", "pe", "wasm"] }
+# Writes an rlib again whose objects had statics made linkable (`weaken::shared`): rustc's own
+# archive writer.
+ar_archive_writer = "0.5.3"
+rustc-demangle = "0.1.28"
+# Where rustc's object says a static LLVM split up is (`symbols::whole_in_dwarf`).
+gimli = { version = "0.33", default-features = false, features = ["read", "std"] }
+rustc-hash.workspace = true
+salsa.workspace = true
+same-file = "1"
+dunce = "1"
+pdb = "0.8"
+sha2 = "0.10"
+cargo_metadata.workspace = true
+shlex = "2"
+toml.workspace = true
+thorin-dwp = "0.10"
+typed-arena = "2.0.2"
+
+hir.workspace = true
+hir-def.workspace = true
+hir-ty.workspace = true
+hir-ty-codegen.workspace = true
+hir-ty-borrowck.workspace = true
+ra-jit-expand.workspace = true
+ra-jit-macro-wasm.workspace = true
+ra-jit-store.workspace = true
+blaze-doc.workspace = true
+blaze-fmt.workspace = true
+blaze-lints.workspace = true
+blaze-manifest.workspace = true
+blaze-metadata.workspace = true
+blaze-new.workspace = true
+blaze-tree.workspace = true
+blaze-units.workspace = true
+blaze-resolve = { path = "../blaze-resolve" }
+blaze-registry = { path = "../blaze-registry" }
+blaze-build-script = { path = "../blaze-build-script" }
+cargo-util-schemas = "=0.14.3"
+ide-db.workspace = true
+ide-diagnostics.workspace = true
+pulldown-cmark.workspace = true
+load-cargo.workspace = true
+proc-macro-api.workspace = true
+project-model.workspace = true
+vfs.workspace = true
+triomphe.workspace = true
+paths.workspace = true
+syntax.workspace = true
+# Without the features that bring a second HTTP and TLS stack (`rustls`), a C library built
+# with cmake (`default-https-client`, which is aws-lc) and SigV4A. The client is hyper 1 over
+# rustls with ring, which is in the tree already.
+aws-config = { version = "1.8", default-features = false, features = ["behavior-version-latest", "rt-tokio", "credentials-process", "sso"] }
+aws-sdk-s3 = { version = "1.100", default-features = false, features = ["behavior-version-latest", "rt-tokio", "http-1x"] }
+# The TLS the client above is built on, named to tell a certificate that is refused from a
+# network that is down.
+rustls = { version = "0.23", default-features = false }
+aws-smithy-http-client = { version = "1.1", features = ["rustls-ring"] }
+# A remote over HTTPS, such as a release's assets, on the same client and TLS as S3's.
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"] }
+http-body-util = "0.1"
+tokio = { version = "1.47", features = ["rt-multi-thread", "fs", "io-util", "signal", "sync", "time"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+ed25519-dalek = "2.2"
+getrandom = "0.3"
+url.workspace = true
+semver.workspace = true
+# `cargo remove` edits manifests as cargo's `toml_mut` does, layout and comments kept: the
+# version blaze-manifest and blaze-new read and write with.
+toml_edit = { version = "=0.25.12", default-features = false, features = ["display", "parse"] }
+tar = "0.4.44"
+# The zips build scripts download, unpacked where a crate's variable names a directory
+# (`cargo/fetches.rs`): deflate on flate2, which is in the tree already.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+zstd = "0.13.3"
+# The `.tar.xz` files of blaze's own toolchain (`cargo/toolchain/own.rs`): in Rust, within 1.3x
+# of liblzma's time on rustc's 84 MB.
+lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz", "optimization"] }
+# The keys and signatures of nixpkgs' binary cache (`cargo/closure/narinfo.rs`); already in the
+# graph, by hyper-util.
+base64 = "0.23"
+ra-jit-live = { path = "../ra-jit-live" }
+# blaze's std::process for build scripts compiled for wasm32-wasip1; its runner with the
+# feature `wasi`.
+blaze-wasi = { path = "../blaze-wasi" }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+tikv-jemallocator = "0.5.4"
+tikv-jemalloc-ctl = "0.5.4"
+tikv-jemalloc-sys = "0.5.4"
+
+
+[dev-dependencies]
+# The in-process fake of the cache gateway that `remote/gateway/tests.rs` talks to.
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+tokio = { version = "1.47", features = ["net"] }
+object = { version = "0.37", default-features = false, features = ["write", "elf"] }
+test-fixture.workspace = true
+lzma-rust2 = { version = "0.23", default-features = false, features = ["std", "xz", "encoder"] }
+tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+mimalloc = { version = "0.1.46", default-features = false }
+find-msvc-tools = "0.1"
+uds_windows = "1"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Networking_WinSock", "Win32_Security_Authorization", "Win32_System_SystemServices", "Win32_System_Threading"] }
+
+[features]
+# Profile jemalloc's heap and count its live bytes: see `memory.rs`. Not on Windows.
+heap-profile = ["tikv-jemallocator/profiling"]
+
+# Adds LLVM as a code producer, chosen with `RA_JIT_BACKEND=llvm`.
+llvm = ["hir-ty-codegen/llvm"]
+
+# Runs build scripts compiled for wasm32-wasip1 under Wasmtime when a workspace asks for it
+# (`RA_JIT_BUILD_SCRIPTS=wasi`, docs/cargo.md "Build scripts under WASI"): an experiment.
+wasi = ["blaze-wasi/run"]
+
+[lints]
+workspace = true
