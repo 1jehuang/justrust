@@ -1,0 +1,108 @@
+{
+  "id": "20261030-125716550-3148215",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ide-diagnostics",
+    "--lib",
+    "-j",
+    "6",
+    "--",
+    "resident_selective_traversal",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "1cb15994a5ec",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793390236.5662074,
+  "wall": 0.22974109649658203,
+  "exit": 101,
+  "cpu_secs": 0.518865,
+  "measurement_coverage": {
+    "samples": 3,
+    "processes": 1,
+    "sample_span_secs": 0.22779488563537598,
+    "max_sample_gap_secs": 0.2124168872833252
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.22974109649658203,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 0.0,
+    "tail": 0.0
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 0,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 2.258477076641442,
+    "peak_build_cores": 0.9886219626215428,
+    "peak_build_rss_mb": 0.0,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 40684,
+    "avg_other_cores": 3.4986508955220734,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.0013299999999999998,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.0
+  },
+  "diagnostics": {
+    "compile_errors": 1,
+    "warnings": 46,
+    "first_error": "error: package `ide-diagnostics` cannot be tested because it requires dev-dependencies and is not a member of the workspace",
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-125716550-3148215.scope",
+    "final_weight": 1000,
+    "setup_secs": 0.014489139,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

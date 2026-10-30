@@ -1,0 +1,3 @@
+f81d1eadea08ff3dcab0624254a86d75af1a67ea8bff0b067ca105cae42619cb  toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+ee88c803abfa78f9f894666138fe1f9b0529d001acb2b89f4e5b54d22d1e6f23  toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+788eaa2b329a6a60ff5a091d43a65af4c68e6ed6f583791ef9d629e83314016a  docs/resident-selective-traversal.md

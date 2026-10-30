@@ -1,0 +1,347 @@
+{"t":1793390236.5810804,"s":"e","l":"warning: unused workspace dependency `arrayvec`"}
+{"t":1793390236.5810864,"s":"e","l":"   --> Cargo.toml:154:1"}
+{"t":1793390236.5810895,"s":"e","l":"    |"}
+{"t":1793390236.5810924,"s":"e","l":"154 | arrayvec = \"0.7.6\""}
+{"t":1793390236.5810952,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793390236.581098,"s":"e","l":"    |"}
+{"t":1793390236.581101,"s":"e","l":"    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default"}
+{"t":1793390236.5811038,"s":"e","l":"help: consider removing the workspace dependency `arrayvec`"}
+{"t":1793390236.5811646,"s":"e","l":"warning: unused workspace dependency `bitflags`"}
+{"t":1793390236.5811675,"s":"e","l":"   --> Cargo.toml:155:1"}
+{"t":1793390236.5811718,"s":"e","l":"    |"}
+{"t":1793390236.5811744,"s":"e","l":"155 | bitflags = \"2.9.1\""}
+{"t":1793390236.581177,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793390236.5811794,"s":"e","l":"    |"}
+{"t":1793390236.581182,"s":"e","l":"help: consider removing the workspace dependency `bitflags`"}
+{"t":1793390236.5811849,"s":"e","l":"warning: unused workspace dependency `camino`"}
+{"t":1793390236.5811872,"s":"e","l":"   --> Cargo.toml:157:1"}
+{"t":1793390236.5811906,"s":"e","l":"    |"}
+{"t":1793390236.5811932,"s":"e","l":"157 | camino = \"1.2.2\""}
+{"t":1793390236.5811958,"s":"e","l":"    | ^^^^^^"}
+{"t":1793390236.5811985,"s":"e","l":"    |"}
+{"t":1793390236.581201,"s":"e","l":"help: consider removing the workspace dependency `camino`"}
+{"t":1793390236.5812016,"s":"e","l":"warning: unused workspace dependency `crossbeam-channel`"}
+{"t":1793390236.5812023,"s":"e","l":"   --> Cargo.toml:158:1"}
+{"t":1793390236.5812027,"s":"e","l":"    |"}
+{"t":1793390236.5812032,"s":"e","l":"158 | crossbeam-channel = \"0.5.15\""}
+{"t":1793390236.5812037,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.5812042,"s":"e","l":"    |"}
+{"t":1793390236.5812044,"s":"e","l":"help: consider removing the workspace dependency `crossbeam-channel`"}
+{"t":1793390236.5812051,"s":"e","l":"warning: unused workspace dependency `dashmap`"}
+{"t":1793390236.5812054,"s":"e","l":"   --> Cargo.toml:217:1"}
+{"t":1793390236.5812058,"s":"e","l":"    |"}
+{"t":1793390236.5812063,"s":"e","l":"217 | dashmap = { version = \"=6.2.1\", features = [\"raw-api\", \"inline\"] }"}
+{"t":1793390236.5812073,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793390236.5812078,"s":"e","l":"    |"}
+{"t":1793390236.581208,"s":"e","l":"help: consider removing the workspace dependency `dashmap`"}
+{"t":1793390236.5812085,"s":"e","l":"warning: unused workspace dependency `dissimilar`"}
+{"t":1793390236.5812092,"s":"e","l":"   --> Cargo.toml:159:1"}
+{"t":1793390236.5812094,"s":"e","l":"    |"}
+{"t":1793390236.58121,"s":"e","l":"159 | dissimilar = \"1.0.10\""}
+{"t":1793390236.5812104,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793390236.5812106,"s":"e","l":"    |"}
+{"t":1793390236.581211,"s":"e","l":"help: consider removing the workspace dependency `dissimilar`"}
+{"t":1793390236.5812116,"s":"e","l":"warning: unused workspace dependency `dot`"}
+{"t":1793390236.581212,"s":"e","l":"   --> Cargo.toml:160:1"}
+{"t":1793390236.5812123,"s":"e","l":"    |"}
+{"t":1793390236.5812125,"s":"e","l":"160 | dot = \"0.1.4\""}
+{"t":1793390236.581213,"s":"e","l":"    | ^^^"}
+{"t":1793390236.5812132,"s":"e","l":"    |"}
+{"t":1793390236.5812135,"s":"e","l":"help: consider removing the workspace dependency `dot`"}
+{"t":1793390236.581214,"s":"e","l":"warning: unused workspace dependency `edition`"}
+{"t":1793390236.5812144,"s":"e","l":"   --> Cargo.toml:134:1"}
+{"t":1793390236.5812147,"s":"e","l":"    |"}
+{"t":1793390236.5812151,"s":"e","l":"134 | edition = { path = \"vendor/rust-analyzer/crates/edition\", version = \"0.0.0\" }"}
+{"t":1793390236.5812159,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793390236.581216,"s":"e","l":"    |"}
+{"t":1793390236.5812163,"s":"e","l":"help: consider removing the workspace dependency `edition`"}
+{"t":1793390236.5812168,"s":"e","l":"warning: unused workspace dependency `hashbrown`"}
+{"t":1793390236.5812173,"s":"e","l":"   --> Cargo.toml:212:1"}
+{"t":1793390236.5812178,"s":"e","l":"    |"}
+{"t":1793390236.581218,"s":"e","l":"212 | hashbrown = { version = \"0.17.0\", features = ["}
+{"t":1793390236.5812187,"s":"e","l":"    | ^^^^^^^^^"}
+{"t":1793390236.581219,"s":"e","l":"    |"}
+{"t":1793390236.5812192,"s":"e","l":"help: consider removing the workspace dependency `hashbrown`"}
+{"t":1793390236.5812197,"s":"e","l":"warning: unused workspace dependency `hir-ide`"}
+{"t":1793390236.5812242,"s":"e","l":"   --> Cargo.toml:108:1"}
+{"t":1793390236.5812244,"s":"e","l":"    |"}
+{"t":1793390236.581225,"s":"e","l":"108 | hir-ide = { path = \"vendor/rust-analyzer/crates/hir-ide\", version = \"0.0.0\" }"}
+{"t":1793390236.5812254,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793390236.5812256,"s":"e","l":"    |"}
+{"t":1793390236.581227,"s":"e","l":"help: consider removing the workspace dependency `hir-ide`"}
+{"t":1793390236.5812275,"s":"e","l":"warning: unused workspace dependency `hir-ty-wfcheck`"}
+{"t":1793390236.581228,"s":"e","l":"  --> Cargo.toml:93:1"}
+{"t":1793390236.5812285,"s":"e","l":"   |"}
+{"t":1793390236.581229,"s":"e","l":"93 | hir-ty-wfcheck = { path = \"vendor/rust-analyzer/crates/hir-ty-wfcheck\", version = \"0.0.0\" }"}
+{"t":1793390236.5812297,"s":"e","l":"   | ^^^^^^^^^^^^^^"}
+{"t":1793390236.5812302,"s":"e","l":"   |"}
+{"t":1793390236.5812304,"s":"e","l":"help: consider removing the workspace dependency `hir-ty-wfcheck`"}
+{"t":1793390236.5812428,"s":"e","l":"warning: unused workspace dependency `ide`"}
+{"t":1793390236.5812433,"s":"e","l":"   --> Cargo.toml:109:1"}
+{"t":1793390236.5812438,"s":"e","l":"    |"}
+{"t":1793390236.5812442,"s":"e","l":"109 | ide = { path = \"vendor/rust-analyzer/crates/ide\", version = \"0.0.0\" }"}
+{"t":1793390236.5812447,"s":"e","l":"    | ^^^"}
+{"t":1793390236.5812452,"s":"e","l":"    |"}
+{"t":1793390236.5812454,"s":"e","l":"help: consider removing the workspace dependency `ide`"}
+{"t":1793390236.581246,"s":"e","l":"warning: unused workspace dependency `ide-assists`"}
+{"t":1793390236.5812464,"s":"e","l":"   --> Cargo.toml:110:1"}
+{"t":1793390236.5812469,"s":"e","l":"    |"}
+{"t":1793390236.5812473,"s":"e","l":"110 | ide-assists = { path = \"vendor/rust-analyzer/crates/ide-assists\", version = \"0.0.0\" }"}
+{"t":1793390236.5812478,"s":"e","l":"    | ^^^^^^^^^^^"}
+{"t":1793390236.5812483,"s":"e","l":"    |"}
+{"t":1793390236.5812485,"s":"e","l":"help: consider removing the workspace dependency `ide-assists`"}
+{"t":1793390236.581249,"s":"e","l":"warning: unused workspace dependency `ide-completion`"}
+{"t":1793390236.5812495,"s":"e","l":"   --> Cargo.toml:111:1"}
+{"t":1793390236.5812497,"s":"e","l":"    |"}
+{"t":1793390236.5812502,"s":"e","l":"111 | ide-completion = { path = \"vendor/rust-analyzer/crates/ide-completion\", version = \"0.0.0\" }"}
+{"t":1793390236.5812507,"s":"e","l":"    | ^^^^^^^^^^^^^^"}
+{"t":1793390236.5812511,"s":"e","l":"    |"}
+{"t":1793390236.5812514,"s":"e","l":"help: consider removing the workspace dependency `ide-completion`"}
+{"t":1793390236.5812519,"s":"e","l":"warning: unused workspace dependency `ide-ssr`"}
+{"t":1793390236.5812523,"s":"e","l":"   --> Cargo.toml:114:1"}
+{"t":1793390236.5812526,"s":"e","l":"    |"}
+{"t":1793390236.581253,"s":"e","l":"114 | ide-ssr = { path = \"vendor/rust-analyzer/crates/ide-ssr\", version = \"0.0.0\" }"}
+{"t":1793390236.5812535,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793390236.5812538,"s":"e","l":"    |"}
+{"t":1793390236.5812542,"s":"e","l":"help: consider removing the workspace dependency `ide-ssr`"}
+{"t":1793390236.5812583,"s":"e","l":"warning: unused workspace dependency `line-index`"}
+{"t":1793390236.5812588,"s":"e","l":"   --> Cargo.toml:148:1"}
+{"t":1793390236.581259,"s":"e","l":"    |"}
+{"t":1793390236.5812595,"s":"e","l":"148 | line-index = { version = \"0.1.2\" }"}
+{"t":1793390236.58126,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793390236.5812604,"s":"e","l":"    |"}
+{"t":1793390236.5812607,"s":"e","l":"help: consider removing the workspace dependency `line-index`"}
+{"t":1793390236.581276,"s":"e","l":"warning: unused workspace dependency `lsp-server`"}
+{"t":1793390236.5812764,"s":"e","l":"   --> Cargo.toml:150:1"}
+{"t":1793390236.581277,"s":"e","l":"    |"}
+{"t":1793390236.5812771,"s":"e","l":"150 | lsp-server = { version = \"0.7.9\" }"}
+{"t":1793390236.5812774,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793390236.5812776,"s":"e","l":"    |"}
+{"t":1793390236.581278,"s":"e","l":"help: consider removing the workspace dependency `lsp-server`"}
+{"t":1793390236.5813007,"s":"e","l":"warning: unused workspace dependency `macros`"}
+{"t":1793390236.5813012,"s":"e","l":"  --> Cargo.toml:85:1"}
+{"t":1793390236.5813017,"s":"e","l":"   |"}
+{"t":1793390236.5813022,"s":"e","l":"85 | macros = { path = \"vendor/rust-analyzer/crates/macros\", version = \"0.0.0\" }"}
+{"t":1793390236.5813055,"s":"e","l":"   | ^^^^^^"}
+{"t":1793390236.581307,"s":"e","l":"   |"}
+{"t":1793390236.5813074,"s":"e","l":"help: consider removing the workspace dependency `macros`"}
+{"t":1793390236.5813289,"s":"e","l":"warning: unused workspace dependency `mbe`"}
+{"t":1793390236.5813293,"s":"e","l":"   --> Cargo.toml:117:1"}
+{"t":1793390236.5813355,"s":"e","l":"    |"}
+{"t":1793390236.581336,"s":"e","l":"117 | mbe = { path = \"vendor/rust-analyzer/crates/mbe\", version = \"0.0.0\" }"}
+{"t":1793390236.5813386,"s":"e","l":"    | ^^^"}
+{"t":1793390236.581339,"s":"e","l":"    |"}
+{"t":1793390236.5813394,"s":"e","l":"help: consider removing the workspace dependency `mbe`"}
+{"t":1793390236.5813553,"s":"e","l":"warning: unused workspace dependency `nohash-hasher`"}
+{"t":1793390236.5813558,"s":"e","l":"   --> Cargo.toml:166:1"}
+{"t":1793390236.581356,"s":"e","l":"    |"}
+{"t":1793390236.5813563,"s":"e","l":"166 | nohash-hasher = \"0.2.0\""}
+{"t":1793390236.5813591,"s":"e","l":"    | ^^^^^^^^^^^^^"}
+{"t":1793390236.5813594,"s":"e","l":"    |"}
+{"t":1793390236.5813599,"s":"e","l":"help: consider removing the workspace dependency `nohash-hasher`"}
+{"t":1793390236.5813801,"s":"e","l":"warning: unused workspace dependency `oorandom`"}
+{"t":1793390236.5813806,"s":"e","l":"   --> Cargo.toml:167:1"}
+{"t":1793390236.5813808,"s":"e","l":"    |"}
+{"t":1793390236.581381,"s":"e","l":"167 | oorandom = \"11.1.5\""}
+{"t":1793390236.5813837,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793390236.581384,"s":"e","l":"    |"}
+{"t":1793390236.5813844,"s":"e","l":"help: consider removing the workspace dependency `oorandom`"}
+{"t":1793390236.5814087,"s":"e","l":"warning: unused workspace dependency `proc-macro-srv`"}
+{"t":1793390236.5814092,"s":"e","l":"   --> Cargo.toml:121:1"}
+{"t":1793390236.5814095,"s":"e","l":"    |"}
+{"t":1793390236.5814097,"s":"e","l":"121 | proc-macro-srv = { path = \"vendor/rust-analyzer/crates/proc-macro-srv\", version = \"0.0.0\" }"}
+{"t":1793390236.5814126,"s":"e","l":"    | ^^^^^^^^^^^^^^"}
+{"t":1793390236.581413,"s":"e","l":"    |"}
+{"t":1793390236.5814133,"s":"e","l":"help: consider removing the workspace dependency `proc-macro-srv`"}
+{"t":1793390236.5814307,"s":"e","l":"warning: unused workspace dependency `process-wrap`"}
+{"t":1793390236.5814335,"s":"e","l":"   --> Cargo.toml:169:1"}
+{"t":1793390236.5814338,"s":"e","l":"    |"}
+{"t":1793390236.581434,"s":"e","l":"169 | process-wrap = { version = \"9.1.0\", features = [\"std\"] }"}
+{"t":1793390236.5814366,"s":"e","l":"    | ^^^^^^^^^^^^"}
+{"t":1793390236.581437,"s":"e","l":"    |"}
+{"t":1793390236.5814373,"s":"e","l":"help: consider removing the workspace dependency `process-wrap`"}
+{"t":1793390236.581456,"s":"e","l":"warning: unused workspace dependency `profile`"}
+{"t":1793390236.5814588,"s":"e","l":"   --> Cargo.toml:122:1"}
+{"t":1793390236.581459,"s":"e","l":"    |"}
+{"t":1793390236.5814595,"s":"e","l":"122 | profile = { path = \"vendor/rust-analyzer/crates/profile\", version = \"0.0.0\" }"}
+{"t":1793390236.5814621,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793390236.5814624,"s":"e","l":"    |"}
+{"t":1793390236.5814626,"s":"e","l":"help: consider removing the workspace dependency `profile`"}
+{"t":1793390236.581482,"s":"e","l":"warning: unused workspace dependency `pulldown-cmark-to-cmark`"}
+{"t":1793390236.5814846,"s":"e","l":"   --> Cargo.toml:170:1"}
+{"t":1793390236.5814848,"s":"e","l":"    |"}
+{"t":1793390236.581485,"s":"e","l":"170 | pulldown-cmark-to-cmark = \"10.0.4\""}
+{"t":1793390236.5814877,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.5814881,"s":"e","l":"    |"}
+{"t":1793390236.5814884,"s":"e","l":"help: consider removing the workspace dependency `pulldown-cmark-to-cmark`"}
+{"t":1793390236.5815103,"s":"e","l":"warning: unused workspace dependency `ra-ap-rustc_next_trait_solver`"}
+{"t":1793390236.5815132,"s":"e","l":"   --> Cargo.toml:143:1"}
+{"t":1793390236.5815134,"s":"e","l":"    |"}
+{"t":1793390236.5815136,"s":"e","l":"143 | ra-ap-rustc_next_trait_solver = { version = \"0.166\", default-features = false }"}
+{"t":1793390236.5815165,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.5815167,"s":"e","l":"    |"}
+{"t":1793390236.5815184,"s":"e","l":"help: consider removing the workspace dependency `ra-ap-rustc_next_trait_solver`"}
+{"t":1793390236.581537,"s":"e","l":"warning: unused workspace dependency `ra-ap-rustc_parse_format`"}
+{"t":1793390236.5815399,"s":"e","l":"   --> Cargo.toml:137:1"}
+{"t":1793390236.58154,"s":"e","l":"    |"}
+{"t":1793390236.5815403,"s":"e","l":"137 | ra-ap-rustc_parse_format = { version = \"0.166\", default-features = false }"}
+{"t":1793390236.5815437,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.581544,"s":"e","l":"    |"}
+{"t":1793390236.5815442,"s":"e","l":"help: consider removing the workspace dependency `ra-ap-rustc_parse_format`"}
+{"t":1793390236.581569,"s":"e","l":"warning: unused workspace dependency `ra-ap-rustc_pattern_analysis`"}
+{"t":1793390236.5815694,"s":"e","l":"   --> Cargo.toml:140:1"}
+{"t":1793390236.5815697,"s":"e","l":"    |"}
+{"t":1793390236.5815701,"s":"e","l":"140 | ra-ap-rustc_pattern_analysis = { version = \"0.166\", default-features = false }"}
+{"t":1793390236.581573,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.5815732,"s":"e","l":"    |"}
+{"t":1793390236.5815737,"s":"e","l":"help: consider removing the workspace dependency `ra-ap-rustc_pattern_analysis`"}
+{"t":1793390236.5815961,"s":"e","l":"warning: unused workspace dependency `rowan`"}
+{"t":1793390236.5815966,"s":"e","l":"   --> Cargo.toml:173:1"}
+{"t":1793390236.5815969,"s":"e","l":"    |"}
+{"t":1793390236.5815973,"s":"e","l":"173 | rowan = \"0.17.0\""}
+{"t":1793390236.5816,"s":"e","l":"    | ^^^^^"}
+{"t":1793390236.5816002,"s":"e","l":"    |"}
+{"t":1793390236.5816004,"s":"e","l":"help: consider removing the workspace dependency `rowan`"}
+{"t":1793390236.581623,"s":"e","l":"warning: unused workspace dependency `rustc-literal-escaper`"}
+{"t":1793390236.5816236,"s":"e","l":"   --> Cargo.toml:188:1"}
+{"t":1793390236.5816238,"s":"e","l":"    |"}
+{"t":1793390236.5816243,"s":"e","l":"188 | rustc-literal-escaper = \"0.0.7\""}
+{"t":1793390236.581627,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.5816271,"s":"e","l":"    |"}
+{"t":1793390236.5816274,"s":"e","l":"help: consider removing the workspace dependency `rustc-literal-escaper`"}
+{"t":1793390236.5816493,"s":"e","l":"warning: unused workspace dependency `smallvec`"}
+{"t":1793390236.5816498,"s":"e","l":"   --> Cargo.toml:189:1"}
+{"t":1793390236.58165,"s":"e","l":"    |"}
+{"t":1793390236.5816505,"s":"e","l":"189 | smallvec = { version = \"1.15.1\", features = ["}
+{"t":1793390236.5816529,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793390236.5816534,"s":"e","l":"    |"}
+{"t":1793390236.5816536,"s":"e","l":"help: consider removing the workspace dependency `smallvec`"}
+{"t":1793390236.5816736,"s":"e","l":"warning: unused workspace dependency `smol_str`"}
+{"t":1793390236.581674,"s":"e","l":"   --> Cargo.toml:194:1"}
+{"t":1793390236.5816743,"s":"e","l":"    |"}
+{"t":1793390236.5816748,"s":"e","l":"194 | smol_str = \"0.3.2\""}
+{"t":1793390236.581677,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793390236.5816772,"s":"e","l":"    |"}
+{"t":1793390236.5816777,"s":"e","l":"help: consider removing the workspace dependency `smol_str`"}
+{"t":1793390236.5817018,"s":"e","l":"warning: unused workspace dependency `syntax-bridge`"}
+{"t":1793390236.5817022,"s":"e","l":"   --> Cargo.toml:127:1"}
+{"t":1793390236.5817025,"s":"e","l":"    |"}
+{"t":1793390236.581703,"s":"e","l":"127 | syntax-bridge = { path = \"vendor/rust-analyzer/crates/syntax-bridge\", version = \"0.0.0\" }"}
+{"t":1793390236.5817056,"s":"e","l":"    | ^^^^^^^^^^^^^"}
+{"t":1793390236.5817058,"s":"e","l":"    |"}
+{"t":1793390236.581706,"s":"e","l":"help: consider removing the workspace dependency `syntax-bridge`"}
+{"t":1793390236.5817244,"s":"e","l":"warning: unused workspace dependency `test-utils`"}
+{"t":1793390236.581727,"s":"e","l":"   --> Cargo.toml:129:1"}
+{"t":1793390236.5817273,"s":"e","l":"    |"}
+{"t":1793390236.5817275,"s":"e","l":"129 | test-utils = { path = \"vendor/rust-analyzer/crates/test-utils\", version = \"0.0.0\" }"}
+{"t":1793390236.5817301,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793390236.5817313,"s":"e","l":"    |"}
+{"t":1793390236.5817316,"s":"e","l":"help: consider removing the workspace dependency `test-utils`"}
+{"t":1793390236.5817478,"s":"e","l":"warning: unused workspace dependency `text-size`"}
+{"t":1793390236.5817504,"s":"e","l":"   --> Cargo.toml:195:1"}
+{"t":1793390236.5817506,"s":"e","l":"    |"}
+{"t":1793390236.5817509,"s":"e","l":"195 | text-size = \"1.1.1\""}
+{"t":1793390236.5817533,"s":"e","l":"    | ^^^^^^^^^"}
+{"t":1793390236.5817535,"s":"e","l":"    |"}
+{"t":1793390236.5817537,"s":"e","l":"help: consider removing the workspace dependency `text-size`"}
+{"t":1793390236.5817704,"s":"e","l":"warning: unused workspace dependency `thin-vec`"}
+{"t":1793390236.5817728,"s":"e","l":"   --> Cargo.toml:211:1"}
+{"t":1793390236.581773,"s":"e","l":"    |"}
+{"t":1793390236.5817733,"s":"e","l":"211 | thin-vec = \"0.2.16\""}
+{"t":1793390236.5817754,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793390236.5817757,"s":"e","l":"    |"}
+{"t":1793390236.581776,"s":"e","l":"help: consider removing the workspace dependency `thin-vec`"}
+{"t":1793390236.5817971,"s":"e","l":"warning: unused workspace dependency `tracing-subscriber`"}
+{"t":1793390236.5818,"s":"e","l":"   --> Cargo.toml:199:1"}
+{"t":1793390236.5818002,"s":"e","l":"    |"}
+{"t":1793390236.5818007,"s":"e","l":"199 | tracing-subscriber = { version = \"0.3.20\", default-features = false, features = ["}
+{"t":1793390236.5818067,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^"}
+{"t":1793390236.5818071,"s":"e","l":"    |"}
+{"t":1793390236.5818074,"s":"e","l":"help: consider removing the workspace dependency `tracing-subscriber`"}
+{"t":1793390236.5818212,"s":"e","l":"warning: unused workspace dependency `tracing-tree`"}
+{"t":1793390236.5818214,"s":"e","l":"   --> Cargo.toml:198:1"}
+{"t":1793390236.581822,"s":"e","l":"    |"}
+{"t":1793390236.5818243,"s":"e","l":"198 | tracing-tree = \"0.4.0\""}
+{"t":1793390236.5818245,"s":"e","l":"    | ^^^^^^^^^^^^"}
+{"t":1793390236.581825,"s":"e","l":"    |"}
+{"t":1793390236.581827,"s":"e","l":"help: consider removing the workspace dependency `tracing-tree`"}
+{"t":1793390236.581849,"s":"e","l":"warning: unused workspace dependency `unicode-width`"}
+{"t":1793390236.5818496,"s":"e","l":"   --> Cargo.toml:208:1"}
+{"t":1793390236.5818498,"s":"e","l":"    |"}
+{"t":1793390236.5818503,"s":"e","l":"208 | unicode-width = \"0.2.2\""}
+{"t":1793390236.5818527,"s":"e","l":"    | ^^^^^^^^^^^^^"}
+{"t":1793390236.581853,"s":"e","l":"    |"}
+{"t":1793390236.5818532,"s":"e","l":"help: consider removing the workspace dependency `unicode-width`"}
+{"t":1793390236.5818768,"s":"e","l":"warning: unused workspace dependency `vfs-notify`"}
+{"t":1793390236.5818772,"s":"e","l":"   --> Cargo.toml:132:1"}
+{"t":1793390236.5818775,"s":"e","l":"    |"}
+{"t":1793390236.581878,"s":"e","l":"132 | vfs-notify = { path = \"vendor/rust-analyzer/crates/vfs-notify\", version = \"0.0.0\" }"}
+{"t":1793390236.5818803,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793390236.5818806,"s":"e","l":"    |"}
+{"t":1793390236.5818808,"s":"e","l":"help: consider removing the workspace dependency `vfs-notify`"}
+{"t":1793390236.5819016,"s":"e","l":"warning: unused workspace dependency `xshell`"}
+{"t":1793390236.581902,"s":"e","l":"   --> Cargo.toml:210:1"}
+{"t":1793390236.5819023,"s":"e","l":"    |"}
+{"t":1793390236.5819025,"s":"e","l":"210 | xshell = \"0.2.7\""}
+{"t":1793390236.581905,"s":"e","l":"    | ^^^^^^"}
+{"t":1793390236.5819054,"s":"e","l":"    |"}
+{"t":1793390236.5819056,"s":"e","l":"help: consider removing the workspace dependency `xshell`"}
+{"t":1793390236.5819745,"s":"e","l":"warning: unused field `categories` in `workspace.package`"}
+{"t":1793390236.581975,"s":"e","l":"  --> Cargo.toml:24:1"}
+{"t":1793390236.5819755,"s":"e","l":"   |"}
+{"t":1793390236.581976,"s":"e","l":"24 | categories = [\"development-tools\", \"development-tools::build-utils\"]"}
+{"t":1793390236.581979,"s":"e","l":"   | ^^^^^^^^^^"}
+{"t":1793390236.5819793,"s":"e","l":"   |"}
+{"t":1793390236.5819795,"s":"e","l":"   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default"}
+{"t":1793390236.5819812,"s":"e","l":"help: consider removing the field `workspace.package.categories`"}
+{"t":1793390236.5819836,"s":"e","l":"warning: workspace (manifest) generated 42 warnings"}
+{"t":1793390236.5820384,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793390236.5820389,"s":"e","l":"  --> crates/ra-jit-live/Cargo.toml"}
+{"t":1793390236.5820394,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793390236.5820398,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793390236.5820403,"s":"e","l":"   |"}
+{"t":1793390236.5820434,"s":"e","l":"14 ~ [dependencies]"}
+{"t":1793390236.582044,"s":"e","l":"15 + [lints]"}
+{"t":1793390236.5820441,"s":"e","l":"16 + workspace = true"}
+{"t":1793390236.5820446,"s":"e","l":"   |"}
+{"t":1793390236.5820448,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793390236.5820453,"s":"e","l":"   |"}
+{"t":1793390236.5820456,"s":"e","l":"14 ~ [dependencies]"}
+{"t":1793390236.582048,"s":"e","l":"15 + [lints]"}
+{"t":1793390236.5820482,"s":"e","l":"   |"}
+{"t":1793390236.5820503,"s":"e","l":"warning: `ra-jit-live` (manifest) generated 1 warning"}
+{"t":1793390236.5821452,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793390236.5821457,"s":"e","l":"  --> crates/ra-jit-cache/Cargo.toml"}
+{"t":1793390236.5821462,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793390236.5821466,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793390236.5821471,"s":"e","l":"   |"}
+{"t":1793390236.58215,"s":"e","l":"24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }"}
+{"t":1793390236.5821505,"s":"e","l":"25 + [lints]"}
+{"t":1793390236.582151,"s":"e","l":"26 + workspace = true"}
+{"t":1793390236.5821512,"s":"e","l":"   |"}
+{"t":1793390236.5821514,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793390236.5821517,"s":"e","l":"   |"}
+{"t":1793390236.582154,"s":"e","l":"24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }"}
+{"t":1793390236.5821545,"s":"e","l":"25 + [lints]"}
+{"t":1793390236.5821548,"s":"e","l":"   |"}
+{"t":1793390236.582157,"s":"e","l":"warning: `ra-jit-cache` (manifest) generated 1 warning"}
+{"t":1793390236.582246,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793390236.5822465,"s":"e","l":"  --> crates/ra-jit-cache-macros/Cargo.toml"}
+{"t":1793390236.582247,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793390236.5822473,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793390236.5822475,"s":"e","l":"   |"}
+{"t":1793390236.5822504,"s":"e","l":"14 ~ proc-macro = true"}
+{"t":1793390236.5822508,"s":"e","l":"15 + [lints]"}
+{"t":1793390236.582251,"s":"e","l":"16 + workspace = true"}
+{"t":1793390236.5822515,"s":"e","l":"   |"}
+{"t":1793390236.5822518,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793390236.582252,"s":"e","l":"   |"}
+{"t":1793390236.5822542,"s":"e","l":"14 ~ proc-macro = true"}
+{"t":1793390236.5822544,"s":"e","l":"15 + [lints]"}
+{"t":1793390236.5822546,"s":"e","l":"   |"}
+{"t":1793390236.5822568,"s":"e","l":"warning: `ra-jit-cache-macros` (manifest) generated 1 warning"}
+{"t":1793390236.5823214,"s":"e","l":"warning: crates/ra-jit/Cargo.toml: file `/home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs` found to be present in multiple build targets:"}
+{"t":1793390236.5823221,"s":"e","l":"  * `bin` target `jr-engine`"}
+{"t":1793390236.5823226,"s":"e","l":"  * `bin` target `ra-jit`"}
+{"t":1793390236.5823467,"s":"e","l":"warning: `ra-jit` (manifest) generated 1 warning"}
+{"t":1793390236.7904305,"s":"e","l":"error: package `ide-diagnostics` cannot be tested because it requires dev-dependencies and is not a member of the workspace"}

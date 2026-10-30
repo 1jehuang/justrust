@@ -1,0 +1,49 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: missing `[lints]` to inherit `[workspace.lints]`
+  --> lib/rowan/Cargo.toml
+   = note: `cargo::missing_lints_inheritance` is set to `warn` by default
+help: to inherit `workspace.lints, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+29 + workspace = true
+   |
+help: to clarify your intent to not inherit, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+   |
+warning: function `is_range_pat_op` is never used
+    --> crates/syntax/src/ast/node_ext.rs:1066:4
+     |
+1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {
+     |    ^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unreachable statement
+   --> /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v24-snapshot/vendor/rustc_next_trait_solver/src/solve/normalizes_to/mod.rs:342:21
+    |
+341 |                     ecx.opaque_accesses.rerun_always(RerunReason::FetchEligibleAssocItem)?;
+    |                                                                                          - any code following this expression is unreachable
+342 |                     return Err(NoSolution.into());
+    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement
+    |
+    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+
+justrust: ok: 3 tests passed in 96.1s
+  time    startup 0.17s | compile 95.86s | after 0.02s
+  units   56 compiled (33 local, 20 deps, 3 build scripts), 91 fresh
+          hir_ty                            26.60s  cpu 161.0s   2129 MB
+          hir_ty_borrowck                   11.98s  cpu  59.3s    923 MB
+          hir_def                           11.92s  cpu  83.3s   1319 MB
+          ide_db                             8.26s  cpu  31.6s    651 MB
+  tests   3 passed, 0 failed, 0 ignored, 786 filtered out, 1 binary in 0.01s
+  cpu     522.7s total, avg 5.4/peak 6.3 of 16 cores; others used 3.4 cores
+  memory  peak 3776 MB build, 2129 MB largest rustc, 36.6 GB free; stalls cpu 0.97s mem 0.00s io 0.04s
+  output  3 warnings shown, 30 hidden; 207 progress and 3 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 31.7s  46.8s went to recompiling oversized crates: hir_ty (80k lines, 26.6s), hir_def (52k lines, 11.9s), ide_db (42k lines, 8.3s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  3.0s  compiled a test binary with 789 tests (6.1s) to run 3. Tests in a smaller crate or `justrust check` first would be faster
+  more    `justrust log 20261030-130140108-3164280` full output, `justrust show 20261030-130140108-3164280` full profile

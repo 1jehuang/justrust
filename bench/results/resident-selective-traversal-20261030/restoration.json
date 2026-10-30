@@ -1,0 +1,22 @@
+{
+  "decision": "reject v24 guard, do not promote or commit production code",
+  "restored_at": "2026-10-30T20:10:37Z",
+  "head_at_restoration": "1cb15994a5ecc88bd67605156c42d4cae2e9dbb8",
+  "method": "read frozen original complete source backups and restore via write tool",
+  "preservation_before_restore": "All three candidate SHA256SUMS checked OK before restoration; full candidate, originals, source.patch, READY.txt retained unchanged",
+  "checks": [
+    "cmp lib.rs against frozen original: exit 0",
+    "cmp tests.rs against frozen original: exit 0",
+    "git diff HEAD --exit-code -- both restored Rust paths: exit 0"
+  ],
+  "paths": [
+    "toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs",
+    "toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs"
+  ],
+  "production_ownership": "released immediately after restoration; subsequent coordinator-owned edits are unrelated and must not be reverted",
+  "remaining_ownership": [
+    "docs/resident-selective-traversal.md",
+    "bench/results/resident-selective-traversal-20261030/**"
+  ],
+  "native_tests_at_restoration": "none run by source worker, root gate results retained separately"
+}

@@ -1,0 +1,27 @@
+{
+  "scope": "evidence-only author audit, no native reruns",
+  "decision": "reject v24 latency guard, production restored and ownership released",
+  "checks": [
+    "825 collected artifacts byte-identical to recorded source origins at collection",
+    "validate.py passed frozen source hashes and exact in-memory patch reconstruction",
+    "actual native API 3 and full resident 351 raw names/counts/statuses verified",
+    "all admission filters, original workspace and stale-lock exit-101 failures, unsupported lockfile-path failure retained",
+    "2444-file copy receipts preserve original unchanged and only private Cargo.lock changed",
+    "private lock before/after bytes and workspace Cargo.toml bind copy receipts",
+    "44 fixed-suite rows plus two complete141-row diagnostics verified against raw streams",
+    "exact edited-byte hashes and markers, negative controls, recoveries and all six balanced permutations replayed",
+    "source/toolchain/binary boundary identities, unexcluded median and reference-normalized math recomputed",
+    "relocation and eleven semantic mutation controls passed after collection re-signing",
+    "documentation explicitly distinguishes source-snapshot native acceptance from failed original nested --locked attempts",
+    "no binaries, caches, targets or full30MB source-copy tree retained",
+    "production restoration and clean-diff checks limited to actual20:10:37Z boundary, later coordinator edits left untouched",
+    "commit scope is only new evidence bundle and owned rejection document"
+  ],
+  "replay_receipts": ["validation.json", "mutation-controls.json"],
+  "integrity": "SHA256SUMS is an unauthenticated reproducibility seal, not an authenticity guarantee",
+  "limitations": [
+    "selected build source manifests do not constitute full toolchain source copies",
+    "2444-file copy manifests retain original comparison receipts, not every source byte",
+    "descriptive warm timing diagnostics do not establish machine quietness, causality, significance or a comprehensive gate"
+  ]
+}

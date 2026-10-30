@@ -1,0 +1,17 @@
+{"t":1793390329.4152694,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793390329.4152734,"s":"e","l":"  --> lib/rowan/Cargo.toml"}
+{"t":1793390329.4152753,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793390329.415277,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793390329.4152787,"s":"e","l":"   |"}
+{"t":1793390329.4152806,"s":"e","l":"27 ~ serde1 = [\"serde\", \"text-size/serde\"]"}
+{"t":1793390329.4152822,"s":"e","l":"28 + [lints]"}
+{"t":1793390329.4152837,"s":"e","l":"29 + workspace = true"}
+{"t":1793390329.415285,"s":"e","l":"   |"}
+{"t":1793390329.4152868,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793390329.4152882,"s":"e","l":"   |"}
+{"t":1793390329.4152899,"s":"e","l":"27 ~ serde1 = [\"serde\", \"text-size/serde\"]"}
+{"t":1793390329.4152913,"s":"e","l":"28 + [lints]"}
+{"t":1793390329.4152927,"s":"e","l":"   |"}
+{"t":1793390329.4152935,"s":"e","l":"warning: `rowan` (manifest) generated 1 warning"}
+{"t":1793390329.4777827,"s":"e","l":"error: cannot update the lock file /home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/Cargo.lock because --locked was passed to prevent this"}
+{"t":1793390329.4777884,"s":"e","l":"help: to generate the lock file without accessing the network, remove the --locked flag and use --offline instead."}

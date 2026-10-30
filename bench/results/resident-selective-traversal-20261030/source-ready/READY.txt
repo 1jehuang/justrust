@@ -1,0 +1,37 @@
+Source-only selective traversal v24 freeze
+Date: 2026-10-30
+Baseline commit: 8a04340343a67e0152b8c5b4d7d52d18dd8cf13a
+Branch: stable
+Owned files only:
+  toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+  toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+  docs/resident-selective-traversal.md
+
+Change: outer bodies.is_none() guard around original unfiltered descendants loop.
+The three handler calls retain exact order and arguments. No other production code changes.
+Actual native API test filter: resident_selective_traversal
+Expected positive native test count: 3
+Test names:
+  tests::resident_selective_traversal_full_api_preserves_syntax_warnings
+  tests::resident_selective_traversal_all_bodies_matches_full_semantic_errors
+  tests::resident_selective_traversal_predicate_keeps_only_requested_body_errors
+
+Source-only checks completed:
+  rustfmt --edition 2024 --config skip_children=true on the two owned Rust files
+  git diff --check on the two owned Rust files: exit 0
+  Complete scoped diff inspected: sole lib.rs hunk is bounded loop guard.
+  sha256sum -c SHA256SUMS against candidate copies: all three OK
+Original Rust files reconstructed exactly with git show BASE:path because edits preceded
+receipt creation. Both files were clean at assignment baseline. ORIGINAL_SHA256SUMS
+records these complete original sources. candidate/ holds complete frozen files.
+source.patch contains both Rust changes and the new documentation.
+
+No builds, native compilation, tests, workloads, benchmarks, commits, or pushes executed.
+No changes to the accepted diagnostic_hash.rs helper or any unowned repository files.
+Root owns build/test/count/equivalence/measurement gates before acceptance or commits.
+No speed or native correctness acceptance claimed by this source-only receipt.
+
+SHA-256 candidate identities:
+f81d1eadea08ff3dcab0624254a86d75af1a67ea8bff0b067ca105cae42619cb  toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+ee88c803abfa78f9f894666138fe1f9b0529d001acb2b89f4e5b54d22d1e6f23  toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
+788eaa2b329a6a60ff5a091d43a65af4c68e6ed6f583791ef9d629e83314016a  docs/resident-selective-traversal.md

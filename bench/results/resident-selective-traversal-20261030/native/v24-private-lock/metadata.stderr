@@ -1,0 +1,7 @@
+error: unexpected argument '--lockfile-path' found
+
+  tip: a similar argument exists: '--locked'
+
+Usage: cargo metadata --manifest-path <PATH> --offline -Z <FLAG> --locked
+
+For more information, try '--help'.

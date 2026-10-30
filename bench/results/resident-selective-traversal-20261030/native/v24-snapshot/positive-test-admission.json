@@ -1,0 +1,35 @@
+{
+  "verdict": "passed",
+  "native_test_rows": [
+    {
+      "filter": "resident_selective_traversal",
+      "passed": 3,
+      "run_id": "20261030-130140108-3164280"
+    },
+    {
+      "filter": "diagnostic_hash::tests",
+      "passed": 2,
+      "run_id": "20261030-130316220-3171718"
+    },
+    {
+      "filter": "diagnostics_timing_tests",
+      "passed": 3,
+      "run_id": "20261030-130405474-3174737"
+    },
+    {
+      "filter": "resident_graph_reuse",
+      "passed": 1,
+      "run_id": "20261030-130405720-3174803"
+    },
+    {
+      "filter": "the_roots_of_a_listed_crate",
+      "passed": 1,
+      "run_id": "20261030-130406031-3174851"
+    },
+    {
+      "filter": "telemetry",
+      "passed": 3,
+      "run_id": "20261030-130406330-3174899"
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "verdict": "passed",
+  "decision": "reject, production restored",
+  "artifacts": 825,
+  "native_api_tests": 3,
+  "full_resident_tests": 351,
+  "raw_runtime_rows": 326,
+  "fixed_raw_delta_percent": -5.7480284545606715,
+  "fixed_reference_normalized_delta_percent": 10.767744208035124,
+  "interleaved_medians_seconds": {
+    "old": 0.0970913834971725,
+    "new": 0.09285792049922748,
+    "blaze": 0.10274493550241459
+  },
+  "reverse_medians_seconds": {
+    "old": 0.09629474600660615,
+    "new": 0.09897676100808894,
+    "blaze": 0.10377265200804686
+  },
+  "reverse_candidate_delta_percent": 2.7852142642328603,
+  "limitation": "actual API tests used exact source snapshot with private lock resolution, not original nested --locked acceptance"
+}

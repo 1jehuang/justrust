@@ -1,0 +1,2 @@
+ada7271fc4dac1356e3aeb510778dd86c891ab0834437a70fcf06ad79e8fe72f  ./toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+943ca135d394f70b03f29ad4ac290068a59580a65edccd947e489797070a0c24  ./toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs
