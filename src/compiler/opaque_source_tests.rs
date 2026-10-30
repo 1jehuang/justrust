@@ -98,6 +98,171 @@ fn opaque_native_object_build_matches_stock_workers1_8() {
 }
 
 #[test]
+fn opaque_forwarded_declarations_match_stock_workers1_8() {
+    native_matches_stock(
+        r#"
+        struct V;
+        trait Inspect { fn value(&self) -> i32; }
+        impl Inspect for V { fn value(&self) -> i32 { 42 } }
+        fn make() -> impl Inspect { V }
+        fn forward() -> impl Inspect { make() }
+        fn again() -> impl Inspect { forward() }
+        fn main() { assert!(again().value() == 42); }
+    "#,
+    );
+    native_matches_stock(
+        r#"
+        trait Inspect { type Item; fn value(&self) -> i32; }
+        struct V;
+        impl Inspect for V { type Item = i32; fn value(&self) -> i32 { 42 } }
+        fn make<T: Copy, U: Copy>(_t: T, _u: U) -> impl Inspect<Item = i32> { V }
+        fn forward<A: Copy, B: Copy>(a: A, b: B) -> impl Inspect<Item = i32> { make::<B, A>(b, a) }
+        fn main() {
+            assert!(forward::<u8, u16>(1u8, 2u16).value() == 42);
+            assert!(forward::<u16, u8>(1u16, 2u8).value() == 42);
+        }
+    "#,
+    );
+    native_matches_stock_with_dispatch(
+        "fn one() -> impl Sized { 1 } fn two() -> impl Sized { one() } fn main() {}",
+        false,
+    );
+}
+
+#[test]
+fn opaque_projection_normalization_preserves_supported_equality_headers() {
+    native_matches_stock_with_dispatch(
+        "trait Has{type Out;}fn hide<T:Has<Out=i32>>(x:T::Out)->impl Sized{x}fn main(){}",
+        false,
+    );
+}
+
+#[test]
+fn opaque_forwarding_declaration_validation_keeps_body_boundaries() {
+    struct Probe(CompilerProvider);
+    impl Provider for Probe {
+        fn outputs(&self, key: &Key) -> usize {
+            self.0.outputs(key)
+        }
+        fn start(&self, cx: Context, key: Key) -> TaskFuture {
+            if key.kind != 9006 {
+                return self.0.start(cx, key);
+            }
+            Box::pin(async move {
+                let facts = Facts { cx: &cx };
+                let types = facts.types().await?;
+                let owner = types
+                    .callable_decl(key.params[0] as usize)
+                    .map_err(Error::new)?;
+                let admission: Arc<opaque_declarations::Admission> = cx
+                    .read_item(
+                        &keys::opaque_declaration::OpaqueDeclaration::Validate(owner),
+                        0,
+                    )
+                    .await?;
+                admission.validate_owner(owner)?;
+                assert!(
+                    admission
+                        .validate_owner(types.callable_decl(0).unwrap())
+                        .is_err()
+                );
+                cx.publish_fact(0, ())
+            })
+        }
+    }
+    for workers in [1, 8] {
+        let source = "trait Inspect {} struct V; impl Inspect for V {} fn make()->impl Inspect{V} fn forward()->impl Inspect{make()} fn unrelated()->bool{1} fn main(){}";
+        let snapshot = || {
+            Arc::new(Snapshot {
+                input: Input::Text(source.into()),
+                source_options: source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            })
+        };
+        let engine = Engine::new(CompilerProvider(snapshot()));
+        let body_key = keys::item(TEMPLATE_BODY, 1);
+        let body = engine.request(body_key.clone());
+        let report = engine.run(workers).unwrap();
+        body.completion().unwrap();
+        assert!(
+            !report
+                .node_evaluations
+                .iter()
+                .any(|(key, _)| key.kind == TEMPLATE_BODY && key.params == vec![0]),
+            "public source checking read the defining callee body"
+        );
+        let engine = Engine::new(Probe(CompilerProvider(snapshot())));
+        let declaration = engine.request(keys::test_key(9006, vec![1]));
+        let report = engine.run(workers).unwrap();
+        declaration.completion().unwrap();
+        assert_eq!(
+            report
+                .node_evaluations
+                .iter()
+                .filter(
+                    |(key, _)| keys::opaque_declaration::OpaqueDeclaration::recognizes(key)
+                        && key.params.get(2) == Some(&0)
+                )
+                .count(),
+            2
+        );
+        assert_eq!(
+            report
+                .node_evaluations
+                .iter()
+                .filter(
+                    |(key, _)| keys::opaque_declaration::OpaqueDeclaration::recognizes(key)
+                        && key.params.get(2) == Some(&1)
+                )
+                .count(),
+            1
+        );
+        assert!(
+            !report
+                .node_evaluations
+                .iter()
+                .any(|(key, _)| key.kind == TEMPLATE_BODY && key.params == vec![2]),
+            "declaration validation demanded an unrelated body"
+        );
+        assert!(
+            !report.node_evaluations.iter().any(|(key, _)| matches!(
+                key.kind,
+                BUILD | OBJECT | OPAQUE_REPRESENTATION | OPAQUE_CALL_DISPATCH | INSTANCE
+            )),
+            "source declaration validation demanded physical facts"
+        );
+        assert!(
+            source_check(source, workers).is_err(),
+            "CHECK omitted the unrelated invalid unused body"
+        );
+        for cycle in [
+            "fn first()->impl Sized{second()} fn second()->impl Sized{first()} fn main(){}",
+            "fn first<T:Copy>(v:T)->impl Sized{second(v)} fn second<U:Copy>(v:U)->impl Sized{first(v)} fn main(){}",
+            "fn growing<T:Copy>(v:T)->impl Sized{growing((v,v))} fn main(){}",
+            "fn first()->impl FnOnce()->i32{second()}fn second()->impl FnOnce()->i32{first()}fn main(){}",
+        ] {
+            let snapshot = Arc::new(Snapshot {
+                input: Input::Text(cycle.into()),
+                source_options: source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let engine = Engine::new(Probe(CompilerProvider(snapshot)));
+            let requested = engine.request(keys::test_key(9006, vec![0]));
+            let report = engine.run(workers).unwrap();
+            let error = requested.completion().unwrap_err().to_string();
+            assert!(
+                error.contains("unsupported: recursive opaque declaration"),
+                "declaration cycle protocol did not reject its own cycle: {error}"
+            );
+            assert!(!report.node_evaluations.iter().any(|(key, _)| matches!(
+                key.kind,
+                BUILD | OBJECT | OPAQUE_REPRESENTATION | OPAQUE_CALL_DISPATCH | INSTANCE
+            )));
+        }
+    }
+}
+
+#[test]
 fn opaque_closed_generic_producers_match_stock_workers1_8() {
     native_matches_stock(
         r#"
@@ -151,6 +316,15 @@ fn opaque_generic_results_do_not_merge_distinct_owner_arguments() {
     for tail in [
         "fn main(){let mut value=make(1u8,2u16);value=make(2u16,1u8);}",
         "fn other<A:Copy,B:Copy>(a:A,b:B)->impl Read {Number{value:42}} fn main(){let mut value=make(1u8,2u16);value=other(1u8,2u16);}",
+        "fn forward<A:Copy,B:Copy>(a:A,b:B)->impl Read{make(a,b)} fn main(){let mut value=forward(1u8,2u16);value=forward(2u16,1u8);}",
+        "fn forward()->impl Read{make(1u8,2u16)} fn main(){let mut value=make(1u8,2u16);value=forward();}",
+        "fn forward()->impl Read{make(1u8,2u16)} fn main(){let _n=forward().value;}",
+        "fn forward()->impl Read{make(1u8,2u16)} fn main(){let _n:Number=forward();}",
+        "fn first()->impl Read{second()} fn second()->impl Read{first()} fn main(){}",
+        "fn first<T:Copy>(v:T)->impl Read{second(v)} fn second<U:Copy>(v:U)->impl Read{first(v)} fn main(){}",
+        "fn growing<T:Copy>(v:T)->impl Sized{growing((v,v))} fn main(){}",
+        "fn first()->impl FnOnce()->i32{second()}fn second()->impl FnOnce()->i32{first()}fn main(){}",
+        "trait Has{type Out;} impl Has for Number{type Out=i32;} fn inner()->impl Has<Out=i32>{Number{value:42}} fn forward()->impl Has<Out=bool>{inner()} fn main(){}",
     ] {
         let source = format!("{prefix}{tail}");
         let directory = std::env::temp_dir().join(format!(
@@ -339,7 +513,9 @@ fn opaque_definitions_require_a_concrete_nonrecursive_hidden_type() {
         "fn unused() -> impl Sized { unused() } fn main() {}",
         "fn first() -> impl Sized { second() } fn second() -> impl Sized { first() } fn main() {}",
         "fn unused() -> impl Sized { loop {} } fn main() {}",
-        "fn one() -> impl Sized { 1 } fn two() -> impl Sized { one() } fn main() {}",
+        "fn first<T:Copy>(v:T)->impl Sized{second(v)} fn second<U:Copy>(v:U)->impl Sized{first(v)} fn main(){}",
+        "fn growing<T:Copy>(v:T)->impl Sized{growing((v,v))} fn main(){}",
+        "fn first()->impl FnOnce()->i32{second()}fn second()->impl FnOnce()->i32{first()}fn main(){}",
     ];
     for workers in [1, 8] {
         for source in sources {

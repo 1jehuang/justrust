@@ -9,6 +9,7 @@ pub(crate) use crate::engine::{BuildRoot, CheckRoot, ResolveDebtRoot, Signatures
 use crate::engine::{ItemKey, Key};
 pub(in crate::compiler) mod alignment_domain;
 pub(in crate::compiler) mod closed_domain;
+pub(in crate::compiler) mod opaque_declaration;
 
 /// One file's canonical position in the source forest. Roots distinguish the
 /// input crate, embedded prelude, and dependency crates. Descendants retain the

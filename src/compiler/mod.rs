@@ -38,6 +38,7 @@ mod nominal_realization;
 mod object_codec;
 #[cfg(test)]
 mod opaque_authority_tests;
+mod opaque_declarations;
 mod opaque_dispatch;
 #[cfg(test)]
 mod opaque_dispatch_tests;
@@ -1046,6 +1047,7 @@ impl Provider for CompilerProvider {
             UNIVERSAL_EFFECTS_READY => 2,
             TEMPLATE_BODY => 3,
             SOURCE_ADMISSION if key.params.first() == Some(&(u64::MAX - 2)) => 1,
+            SOURCE_ADMISSION if keys::opaque_declaration::OpaqueDeclaration::recognizes(key) => 1,
             SOURCE_ADMISSION => 6,
             ADMIT => 2,
             BUILD | OBJECT => 2,
@@ -1056,6 +1058,26 @@ impl Provider for CompilerProvider {
     }
     fn start(&self, cx: Context, key: Key) -> TaskFuture {
         let this = self.clone();
+        if keys::opaque_declaration::OpaqueDeclaration::recognizes(&key) {
+            return Box::pin(async move {
+                let facts = Facts { cx: &cx };
+                this.0
+                    .budget
+                    .charge_work(key.params.len())
+                    .map_err(Error::new)?;
+                this.0
+                    .budget
+                    .retain_bytes(
+                        key.params
+                            .len()
+                            .saturating_mul(2 * std::mem::size_of::<u64>()),
+                    )
+                    .map_err(Error::new)?;
+                let request = keys::opaque_declaration::OpaqueDeclaration::decode(&key)
+                    .map_err(Error::new)?;
+                opaque_declarations::produce(&this, request, &facts, &cx, &this.0.budget).await
+            });
+        }
         if key.kind == nominal_realization::KIND {
             return Box::pin(async move { nominal_realization::run(&cx, key).await });
         }
@@ -2897,9 +2919,23 @@ impl Provider for CompilerProvider {
                 }
                 SOURCE_ADMISSION => {
                     let index = item_index(&key, "missing source admission declaration")?;
-                    let types = facts.types().await?;
-                    let template = facts.template(index).await?;
+                    let types_handle = cx.request(keys::SignaturesDebtRoot.key()).get(0);
+                    let template_handle =
+                        cx.request_item(&keys::Item::<TEMPLATE_BODY>(index)).get(0);
+                    let types: Arc<frontend::PlanCtx> = cx.read_fact(types_handle).await?;
                     let declaration = types.callable_decl(index).map_err(Error::new)?;
+                    let defines_opaque = types.sema_schema(declaration).is_some_and(|schema| {
+                        matches!(&schema.signature.result, ir::Ty::Opaque(opaque) if opaque.owner() == declaration)
+                    });
+                    let opaque_admission = if defines_opaque {
+                        let request =
+                            keys::opaque_declaration::OpaqueDeclaration::Validate(declaration);
+                        request.charge_key(&this.0.budget).map_err(Error::new)?;
+                        Some(cx.request_item(&request).get(0))
+                    } else {
+                        None
+                    };
+                    let template: Arc<TemplateBodyFact> = cx.read_fact(template_handle).await?;
                     let abstract_source =
                         template.publication.as_ref().is_some_and(|publication| {
                             publication.facts().phase() == traits::FactsPhase::Universal
@@ -3048,6 +3084,11 @@ impl Provider for CompilerProvider {
                                 return Err(Error::new(message));
                             }
                         }
+                    }
+                    if let Some(handle) = opaque_admission {
+                        let admission: Arc<opaque_declarations::Admission> =
+                            cx.read_fact(handle).await?;
+                        admission.validate_owner(declaration)?;
                     }
                     cx.publish(0, 1)
                 }

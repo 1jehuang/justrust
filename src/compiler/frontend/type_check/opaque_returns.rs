@@ -27,36 +27,6 @@ fn opaque_bound_diagnostic(owner: Option<ir::DeclId>, goal: &ir::Predicate) -> S
     )
 }
 
-fn hidden_contains_opaque(
-    ty: &ir::Ty,
-    budget: &ir::PlanBudget,
-    depth: usize,
-) -> Result<bool, String> {
-    budget.check_depth(depth)?;
-    budget.charge_work(1)?;
-    let children: Box<dyn Iterator<Item = &ir::Ty> + '_> = match ty {
-        ir::Ty::Opaque(_) => return Ok(true),
-        ir::Ty::Ref { referent, .. } => Box::new(std::iter::once(referent.as_ref())),
-        ir::Ty::RawPtr { pointee, .. } => Box::new(std::iter::once(pointee.as_ref())),
-        ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => {
-            Box::new(std::iter::once(element.as_ref()))
-        }
-        ir::Ty::Tuple(fields) => Box::new(fields.iter()),
-        ir::Ty::Struct(value) => Box::new(value.def().type_args.iter()),
-        ir::Ty::Enum(value) => Box::new(value.def().type_args.iter()),
-        ir::Ty::Closure(value) => Box::new(value.types()),
-        ir::Ty::Dyn(value) => Box::new(value.types()),
-        ir::Ty::AssociatedType(value) => Box::new(value.trait_ref.args.iter()),
-        _ => return Ok(false),
-    };
-    for child in children {
-        if hidden_contains_opaque(child, budget, depth + 1)? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 impl Checker<'_> {
     pub(super) fn finalize_opaque_returns(&self) -> Result<(), String> {
         if let ir::Ty::Opaque(opaque) = &self.result {
@@ -71,13 +41,10 @@ impl Checker<'_> {
                 return Err("unsupported: recursive or diverging-only opaque return has no concrete hidden type".into());
             }
         }
-        let budget = &self.signatures.plan()?.budget;
+        // Source declaration admission separately validates hidden-type cycles.
         for record in &self.opaque_hidden {
             if self.declaration != Some(record.opaque().owner()) {
                 return Err("contract: hidden opaque record has a foreign defining owner".into());
-            }
-            if hidden_contains_opaque(record.hidden(), budget, 0)? {
-                return Err("unsupported: nested opaque hidden types require a cycle-safe declaration protocol".into());
             }
         }
         Ok(())

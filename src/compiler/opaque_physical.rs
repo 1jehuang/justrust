@@ -448,16 +448,24 @@ pub(super) fn normalize(
                     };
                     let record = representations.get(&opaque)?;
                     for source in proof.captured_sources() {
-                        let ir::CarrierChannel::ParamTail {
-                            parameter,
-                            prefix: 0,
-                        } = &source.channel
-                        else {
-                            return Err(Error::new(
-                                "physical pack has an unsupported original capture channel",
-                            ));
+                        let source_family = match &source.channel {
+                            ir::CarrierChannel::ParamTail {
+                                parameter,
+                                prefix: 0,
+                            } => ir::Ty::Param(*parameter),
+                            ir::CarrierChannel::OpaqueTail { opaque, prefix: 0 }
+                                if source.path == ir::CarrierPath::default()
+                                    && proof.hidden() == &ir::Ty::Opaque(opaque.clone()) =>
+                            {
+                                ir::Ty::Opaque(opaque.clone())
+                            }
+                            _ => {
+                                return Err(Error::new(
+                                    "physical pack has an unsupported original capture channel",
+                                ));
+                            }
                         };
-                        let actual_family = specialization.ty(&ir::Ty::Param(*parameter))?;
+                        let actual_family = specialization.ty(&source_family)?;
                         let physical_family = representations.normalize(&actual_family, budget)?;
                         require_empty_physical_capture(&physical_family, budget)?;
                     }

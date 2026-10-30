@@ -204,6 +204,22 @@ fn pack_capture_sources(
     if locations.is_empty() {
         return Ok(locations);
     }
+    if let Ty::Opaque(source) = hidden {
+        // Preserve the entire incoming abstract family. The original wrapper
+        // proof authenticates both descriptors and the exact source operand.
+        // No concrete representation or additional public capability is read.
+        if locations.len() != 1
+            || locations[0].path != CarrierPath::default()
+            || locations[0].channel
+                != (CarrierChannel::OpaqueTail {
+                    opaque: source.clone(),
+                    prefix: 0,
+                })
+        {
+            return Err("opaque forwarding changed its complete source carrier family".into());
+        }
+        return Ok(locations);
+    }
     let Ty::Closure(closure) = hidden else {
         return Err("unsupported: opaque pack requires explicit captured carrier mapping for non-closure hidden types".into());
     };
@@ -387,6 +403,12 @@ pub struct OpaqueDefinitionProof {
     occurrences: Arc<[ExprId]>,
 }
 impl OpaqueDefinitionProof {
+    /// Original authenticated source descriptor for declaration cycle checking.
+    /// This is not physical normalization or public source equality authority.
+    pub(in crate::compiler) fn declaration_record(&self) -> &OpaqueHiddenType {
+        &self.record
+    }
+
     pub(in crate::compiler) fn seal(
         publication: Arc<super::super::source_replay::CanonicalSourcePublication>,
         record: &OpaqueHiddenType,
@@ -571,6 +593,130 @@ pub(super) fn validate_wrap(
 mod captured_pack_tests {
     use super::*;
     use crate::compiler as c;
+
+    #[test]
+    fn forwarded_pack_preserves_exact_opaque_source_family_and_rejects_forgery() {
+        for workers in [1, 8] {
+            let snapshot = Arc::new(c::Snapshot {
+                input: c::Input::Text("trait Marker{} struct V; impl Marker for V{} fn make<A:Copy,B:Copy>(a:A,b:B)->impl Marker{V} fn forward<A:Copy,B:Copy>(a:A,b:B)->impl Marker{make::<B,A>(b,a)} fn other()->impl Marker{V} fn main(){}".into()),
+                source_options: c::source::SourceOptions::default(),
+                budget: PlanBudget::default(),
+            });
+            let budget = snapshot.budget.clone();
+            let engine = c::Engine::new(c::CompilerProvider(snapshot));
+            let key = c::keys::item(c::TEMPLATE_BODY, 1);
+            let requested = engine.request(key.clone());
+            engine.run(workers).unwrap();
+            requested.completion().unwrap();
+            let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
+            let publication = body.publication.as_ref().unwrap();
+            let occurrence = body
+                .checked
+                .exprs
+                .iter()
+                .position(|expr| matches!(expr.kind, ExprKind::OpaqueWrap { .. }))
+                .unwrap();
+            let occurrence = ExprId(occurrence);
+            let proof = OpaquePackProof::seal(publication.clone(), occurrence, &budget).unwrap();
+            let Ty::Opaque(inner) = &proof.hidden else {
+                panic!("forwarded hidden type was flattened")
+            };
+            assert_ne!(inner.owner(), proof.opaque.owner());
+            assert_eq!(
+                proof.sources.as_ref(),
+                &[CarrierLocation {
+                    path: CarrierPath::default(),
+                    channel: CarrierChannel::OpaqueTail {
+                        opaque: inner.clone(),
+                        prefix: 0
+                    }
+                }]
+            );
+            assert_eq!(
+                proof.captured_destination().channel,
+                CarrierChannel::OpaqueTail {
+                    opaque: proof.opaque.clone(),
+                    prefix: 0
+                }
+            );
+            proof
+                .validate_occurrence(publication, Some(occurrence), &budget)
+                .unwrap();
+            let facts = FactsCtx::from_validated(publication.facts());
+            let mut omitted = proof.clone();
+            omitted.sources = Arc::from([]);
+            assert!(
+                omitted
+                    .validate_shape(&proof.hidden, facts, &budget)
+                    .is_err()
+            );
+            let changed_actuals = inner.owner_args().iter().cloned().rev().collect::<Vec<_>>();
+            for changed_inner in [
+                OpaqueTy::new(
+                    proof.opaque.owner(),
+                    inner.owner_args().into(),
+                    inner.site(),
+                    inner.bounds().into(),
+                    inner.captured_regions().into(),
+                ),
+                OpaqueTy::new(
+                    inner.owner(),
+                    changed_actuals.into(),
+                    inner.site(),
+                    inner.bounds().into(),
+                    inner.captured_regions().into(),
+                ),
+                OpaqueTy::new(
+                    inner.owner(),
+                    inner.owner_args().into(),
+                    inner.site() + 1,
+                    inner.bounds().into(),
+                    inner.captured_regions().into(),
+                ),
+                OpaqueTy::new(
+                    inner.owner(),
+                    inner.owner_args().into(),
+                    inner.site(),
+                    Arc::from([]),
+                    inner.captured_regions().into(),
+                ),
+                OpaqueTy::new(
+                    inner.owner(),
+                    inner.owner_args().into(),
+                    inner.site(),
+                    inner.bounds().into(),
+                    Arc::from([SourceRegionId {
+                        declaration: inner.owner(),
+                        index: u16::MAX,
+                    }]),
+                ),
+            ] {
+                let mut changed = proof.clone();
+                let changed_inner = Arc::new(changed_inner);
+                changed.hidden = Ty::Opaque(changed_inner.clone());
+                changed.sources = Arc::from([CarrierLocation {
+                    path: CarrierPath::default(),
+                    channel: CarrierChannel::OpaqueTail {
+                        opaque: changed_inner,
+                        prefix: 0,
+                    },
+                }]);
+                assert!(
+                    changed
+                        .validate_occurrence(publication, Some(occurrence), &budget)
+                        .is_err()
+                );
+                let replacement =
+                    OpaqueHiddenType::new(proof.opaque.clone(), changed.hidden.clone());
+                assert!(
+                    OpaqueDefinitionProof::seal(publication.clone(), &replacement, &budget)
+                        .is_err()
+                );
+            }
+            let template = c::cfg::lower_source_template(publication, &budget).unwrap();
+            c::ownership::verify_template(template).unwrap();
+        }
+    }
 
     #[test]
     fn captured_pack_rejects_order_omission_foreign_occurrence_and_family() {

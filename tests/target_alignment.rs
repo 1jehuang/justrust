@@ -596,25 +596,9 @@ fn alignment_domain_dispatch_projection_and_cleanup_match_stock() {
 }
 
 #[test]
-fn alignment_domain_nested_opaque_keeps_explicit_declaration_boundary() {
-    let source = "struct V;trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn make()->impl Inspect{V}fn forward()->impl Inspect{make()}fn main(){let _n=forward().width();}";
-    let (root, compiled) = stock(source, "nested-opaque-domain-boundary");
-    assert!(
-        compiled.status.success(),
-        "{}",
-        String::from_utf8_lossy(&compiled.stderr)
-    );
-    for workers in [1, 8] {
-        let error = compiler::compile(source.into(), workers, true)
-            .err()
-            .expect("nested opaque declaration support must not be approximated by layout domains")
-            .to_string();
-        assert!(
-            error.contains("nested opaque hidden types require a cycle-safe declaration protocol"),
-            "{error}"
-        );
-    }
-    fs::remove_dir_all(root).unwrap();
+fn alignment_domain_forwarded_opaque_uses_source_declaration_protocol() {
+    let source = "struct V;trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn make()->impl Inspect{V}fn forward()->impl Inspect{make()}fn main(){assert!(forward().width()==2usize);}";
+    physical_matches_stock(source, "forwarded-opaque-domain-declaration");
 }
 
 #[test]
