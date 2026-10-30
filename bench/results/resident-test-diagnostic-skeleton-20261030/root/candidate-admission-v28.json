@@ -1,0 +1,15 @@
+{
+  "verdict": "passed",
+  "rows": [
+    {
+      "filter": "resident_diagnostic_skeleton",
+      "run_id": "20261030-143016482-4189483",
+      "passed": 8
+    },
+    {
+      "filter": null,
+      "run_id": "20261030-143103071-1087",
+      "passed": 359
+    }
+  ]
+}

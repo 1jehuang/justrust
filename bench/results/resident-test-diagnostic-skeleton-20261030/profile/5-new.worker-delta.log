@@ -1,0 +1,24 @@
+request: sync at_us=1793396019271080
+change: 1 files
+diagnostics collector: label=hir.collect.module_inclusive calls=3 cumulative_ns=23208184 inclusive=true
+diagnostics collector: label=hir.collect.item_case calls=107 cumulative_ns=270394 inclusive=true
+diagnostics collector: label=hir.collect.signature_generic_inclusive calls=151 cumulative_ns=309332 inclusive=true
+diagnostics collector: label=hir.collect.signature_fields_inclusive calls=14 cumulative_ns=4801 inclusive=true
+diagnostics collector: label=hir.collect.wellformed calls=79 cumulative_ns=3896712 inclusive=true
+diagnostics collector: label=hir.collect.impl_inclusive calls=45 cumulative_ns=504622 inclusive=true
+diagnostics collector: label=hir.collect.selected_body_inclusive calls=1 cumulative_ns=4884769 inclusive=true
+diagnostics collector: label=hir.collect.body_expr_inclusive calls=1 cumulative_ns=57231 inclusive=true
+diagnostics collector: label=hir.collect.body_inference_inclusive calls=1 cumulative_ns=2950180 inclusive=true
+diagnostics collector: label=hir.collect.missing_unsafe calls=1 cumulative_ns=81059 inclusive=true
+diagnostics collector: label=hir.collect.body_validation calls=1 cumulative_ns=50166 inclusive=true
+diagnostics collector: label=hir.collect.body_borrowck calls=1 cumulative_ns=1694079 inclusive=true
+diagnostics collector: label=hir.collect.signature_setup_inclusive calls=106 cumulative_ns=278123 inclusive=true
+diagnostics collector: label=hir.collect.impl_checks_inclusive calls=45 cumulative_ns=7438 inclusive=true
+check timing: FileId(254): asked_callback_calls=92 asked_callback_cumulative_ns=133141 (source/hash/selective predicate, included in semantic)
+edit (apply 12.2ms): compiled 3990 of 3990 fns (+120 instances) in 75.3ms (+938.0ns emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 465.1µs, resolve 2.0ms, define 21.0µs, fallback 0.0ns, object 622.4µs, 1 rounds
+link: 1.0ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 92.3ms
+diagnostics transport: retained=9 stale=0 dropped=0 cap=4000

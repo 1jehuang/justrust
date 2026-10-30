@@ -1,0 +1,3 @@
+f20477d485c0e7272d2986d410931439cb62fe72a105bbddbab7f8fae99e9362  toolchain/resident/crates/ra-jit/src/outline.rs
+a76b2fb21419ff9f7dfdf173dbc1c4be64111566220f2b02d7dd282bf9ae510e  toolchain/resident/crates/ra-jit/src/main.rs
+6d772334b097587c18cf4421109891e8f09bd6c64311b628923ab933f951089b  docs/resident-test-diagnostic-skeleton.md

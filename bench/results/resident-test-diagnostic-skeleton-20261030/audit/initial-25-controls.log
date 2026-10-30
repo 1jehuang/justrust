@@ -1,0 +1,30 @@
+test_checksum_corruption (__main__.EvidenceControls.test_checksum_corruption) ... ok
+test_compiled_source_identity (__main__.EvidenceControls.test_compiled_source_identity) ... ok
+test_manifest_path_escape (__main__.EvidenceControls.test_manifest_path_escape) ... ok
+test_missing_profile_payload (__main__.EvidenceControls.test_missing_profile_payload) ... ok
+test_positive_complete_frozen_bundle (__main__.EvidenceControls.test_positive_complete_frozen_bundle) ... ok
+test_rehashed_coherent_transport_drops (__main__.EvidenceControls.test_rehashed_coherent_transport_drops) ... ok
+test_rehashed_coherent_wrong_selected_count (__main__.EvidenceControls.test_rehashed_coherent_wrong_selected_count) ... ok
+test_rehashed_extra_payload_not_manifested (__main__.EvidenceControls.test_rehashed_extra_payload_not_manifested) ... ok
+test_rehashed_failed_gate (__main__.EvidenceControls.test_rehashed_failed_gate) ... ok
+test_rehashed_invented_inventory (__main__.EvidenceControls.test_rehashed_invented_inventory) ... ok
+test_rehashed_native_count (__main__.EvidenceControls.test_rehashed_native_count) ... ok
+test_rehashed_native_raw_result (__main__.EvidenceControls.test_rehashed_native_raw_result) ... ok
+test_rehashed_profile_row_loss (__main__.EvidenceControls.test_rehashed_profile_row_loss) ... ok
+test_rehashed_profile_synthetic_events (__main__.EvidenceControls.test_rehashed_profile_synthetic_events) ... ok
+test_rehashed_profile_tool_change (__main__.EvidenceControls.test_rehashed_profile_tool_change) ... ok
+test_rehashed_regression_gate (__main__.EvidenceControls.test_rehashed_regression_gate) ... ok
+test_rehashed_suite_edit_status (__main__.EvidenceControls.test_rehashed_suite_edit_status) ... ok
+test_rehashed_suite_row_loss (__main__.EvidenceControls.test_rehashed_suite_row_loss) ... ok
+test_rehashed_suite_source_change (__main__.EvidenceControls.test_rehashed_suite_source_change) ... ok
+test_rehashed_v27_failure_erasure (__main__.EvidenceControls.test_rehashed_v27_failure_erasure) ... ok
+test_rehashed_warm_median (__main__.EvidenceControls.test_rehashed_warm_median) ... ok
+test_rehashed_warm_row_loss (__main__.EvidenceControls.test_rehashed_warm_row_loss) ... ok
+test_rehashed_warm_runtime_marker_loss (__main__.EvidenceControls.test_rehashed_warm_runtime_marker_loss) ... ok
+test_relocation_without_repo_or_original_scratch_access (__main__.EvidenceControls.test_relocation_without_repo_or_original_scratch_access) ... ok
+test_symlink_escape (__main__.EvidenceControls.test_symlink_escape) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 9.537s
+
+OK

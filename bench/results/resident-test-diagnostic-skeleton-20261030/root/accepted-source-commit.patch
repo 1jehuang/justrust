@@ -1,0 +1,697 @@
+commit fe8df07f3d4fc2610516a2ab3d6d79996c59ead7
+Author:     Jeremy Huang <94247773+1jehuang@users.noreply.github.com>
+AuthorDate: Fri Oct 30 14:48:53 2026 -0700
+Commit:     Jeremy Huang <94247773+1jehuang@users.noreply.github.com>
+CommitDate: Fri Oct 30 14:48:53 2026 -0700
+
+    resident: selectively diagnose resolved builtin test body edits
+
+diff --git a/docs/resident-test-diagnostic-skeleton.md b/docs/resident-test-diagnostic-skeleton.md
+new file mode 100644
+index 000000000..067eb219d
+--- /dev/null
++++ b/docs/resident-test-diagnostic-skeleton.md
+@@ -0,0 +1,223 @@
++# Resident diagnostic test-body skeleton (v28)
++
++## Scope and status
++
++This is a diagnostic-cache-only candidate. It does not change global `INERT`,
++`outline::skeleton`, executable outlines, function-list reuse or codepatch policy.
++`errors_of` alone uses `outline::diagnostic_skeleton(db, file, within.as_deref())`.
++This worker prepared source and native unit fixtures without running builds,
++tests, native workloads or commits. Root then validated the frozen Rust sources
++and measured the scoped workload described below. Those observations are not a
++general speedup claim or a default-promotion gate.
++
++### Actual v27 gate and v28 repair
++
++Root's v27 native check/build passed, but only three of eight new tests passed.
++The five failures are retained in
++`candidate-unit-v27/resident_diagnostic_skeleton.log`, run
++`20261030-142404178-4153131`, under the scratch root. Positive builtin-body
++eligibility and actual body visitation failed, so no performance candidate was
++admitted. The v27 fixtures incorrectly declared `macro_rules! test` as a
++rustc builtin. `collect_macro_rules` only looks up bang/eager builtins and marks
++this spelling `UnimplementedBuiltIn`. Attribute builtins are registered by
++`collect_macro_def` for macro2 definitions. The actual core declaration is
++`#[rustc_builtin_macro] pub macro test($item:item) {}`.
++
++The proc-shadow fixture also listed `deps:proc_macros` explicitly. The fixture
++builder resolves explicit crate dependencies before adding the synthetic proc
++macro crate, which caused a missing-key panic. `proc_macros: identity` already
++installs that server and adds its dependency to every fixture crate. V28 removes
++only the premature explicit dependency and retains the actual identity macro
++imported as `test`.
++
++The shared-file fixture explicitly imports `super::test` inside its cfg(test)
++child module. Macro2 definitions have module scope rather than macro_rules'
++textual scope, and this fixture has no core prelude to import it implicitly.
++
++V28 corrects those fixture definitions and imports only, without changing
++production provenance, eligibility, positive body counts or any of the eight
++test assertions.
++All eight tests remained mandatory and unexecuted by this worker. Root's repeated
++v28 native gate passed all eight. Exact frozen v27 originals are retained under
++the distinct `test-diagnostic-skeleton-v28/originals/` handoff directory.
++
++## Why test-body edits invalidated the old key
++
++The old diagnostic key called `outline::skeleton`, which calls `skeleton_of`,
++`hash_outside_bodies` and `is_unseen_body`. The latter requires `is_inert` on the
++function. `INERT` intentionally omits `test`, so `#[test]` bodies contribute their
++full tokens to the old key. Changing a token changes that key and prevents reuse
++of the previous clean function map. The existing
++`bodies_others_see_into_are_kept` assertion for `#[test]` remains unchanged.
++Root's v26 observation of all 373 bodies accepted per edit is consistent with
++this source path. The actual v28 profile below confirms reduced selection on
++this workload. Other syntax or resolver hazards may still prevent reuse.
++
++## Bounded semantic proof
++
++The diagnostic-only candidate accepts an argument-free, unqualified `#[test]`
++only when its actual attribute path resolves to a macro whose **resolved
++expander** is `hir_def::MacroExpander::BuiltInAttr(expander)` with
++`expander.is_test()`. The proof path is:
++
++1. `Semantics::parse` registers the source syntax with that semantic context.
++2. `Semantics::resolve_path(attr.path())` uses attribute-namespace resolution
++   (`source_analyzer.rs`, `resolve_hir_path_as_attr_macro`). It must return
++   `PathResolution::Def(ModuleDef::Macro(mac))`, not a syntactic builtin label.
++3. Public `From<hir::Macro> for hir_def::MacroId` exposes the resolved identity.
++4. Lookup of `Macro2Id` or `MacroRulesId` supplies its actual expander. Proc-macro
++   IDs, declarative expanders, other builtins and unresolved paths do not qualify.
++
++`Function::is_test` is deliberately not used: it reads the syntactic IS_TEST
++attribute flag, not macro provenance. `test` is not an inert builtin attribute
++in the resolver's inert attribute table, so its path must resolve as an actual
++macro. The exact built-in Test expander adds `cfg(test)` and preserves its input,
++unlike a user-defined attribute macro that may rewrite the complete function.
++
++The check uses every relevant crate selected by `errors_of`'s `within` set.
++Each context needs one module for the file, from that exact crate, in the same
++edition. `Semantics::new_within` can fall back outside its preferred set, so the
++returned module's crate identity is checked explicitly. No selected crate,
++multiple module contexts or edition disagreement returns `None`. Proven source
++function ranges are intersected across contexts. An unresolved or shadowed
++attribute in any selected context therefore prevents hiding that body. This is
++intentionally bounded and may reject optimizable files rather than guess.
++
++## Preserved skeleton contract
++
++The original skeleton walk, item-ID restrictions and hashing are shared through
++policy-parameterized private helpers. Only the function's attribute predicate may
++recognize the proven builtin test. Ancestor attribute checks keep the original
++policy. Const, async/gen, return-position impl Trait, inline(always), body inner
++attributes and macro definitions still keep the body visible. Nested declarations
++in a would-be hidden body still return `None`, including constants and statics.
++The original item-position macro restrictions are unchanged. Expression-position
++macro calls retain the original behavior, not an additional blanket rejection.
++Signatures, attributes, outer items and visible bodies are still hashed.
++
++Changing macro resolution, crate graphs or other files must continue to obey the
++existing diagnostic-cache invalidation contract. This candidate does not create
++an independent persistent resolver proof or reuse proof across database changes:
++it resolves the test attributes again for every requested diagnostic key.
++
++## Native fixtures for root's gate
++
++Filter `resident_diagnostic_skeleton` selects **eight** new native tests:
++seven in `outline::tests` and one in `main.rs`'s `tests` module.
++
++- Builtin-resolved test bodies hash identically across unequal-length edits,
++  while the global skeleton still differs.
++- Signature and attribute edits change the diagnostic key.
++- Nested declarations and item-position macros return `None`.
++- Unresolved, declarative and proc-macro-shadowed `test` bodies remain visible.
++  The proc fixture imports the predefined identity attribute as `test`.
++- Existing const/async/impl Trait/body-attribute/inline(always)/ancestor-attribute
++  and unknown-attribute guards remain conservative.
++- A file used under multiple modules is refused.
++- A shared file is resolved in its selected cfg(test) crate rather than the first
++  relevant crate. An empty selected context is refused.
++- The real `errors_of` oracle compares exact `(FileRange, code, message)` vectors
++  after cold, unchanged, body-only, type-error/recovery, signature,
++  attribute and nested-item/recovery revisions. Test-only thread-local counts
++  require positive cold/full, unchanged/zero and body-only/one selection.
++
++The oracle removes only its exact `(FileId, within fingerprint, rules)` CLEAN
++key for a fresh check and uses RAII to restore the selective sequence's cache,
++including on panic. Its outer guard restores any previous value for that same
++key. It never clears unrelated keys. A nested-item revision has a `None`
++skeleton and retains the older clean entry under existing production behavior,
++so exact-source nested recovery legitimately asks zero bodies. Recovery after
++an erroneous `Some` key asks all bodies because that revision consumed the old
++clean entry. No production eviction behavior was changed to fit the test.
++
++Minimal positive fixture, derived from native resolver sources:
++
++```rust
++//- /main.rs crate:main cfg:test
++#[rustc_builtin_macro]
++pub macro test($item:item) {}
++#[test]
++fn example() { let _: u8 = 1; }
++```
++
++A plain `#[test]` fixture without core/prelude/builtin definitions is unresolved
++and must not demonstrate eligibility.
++
++## Root validation and scoped observations (2026-10-30)
++
++The exact frozen v28 Rust sources passed native check/build, all eight new
++fixtures, existing outline/prior focused gates and the full **359-test** native
++suite. The new fixture run is `20261030-143016482-4189483`, the full native run
++is `20261030-143103071-1087`; admission is recorded in the scratch root's
++`candidate-admission-v28.json`. Root also reported all **700** benchmark regression
++tests passing in **9.624 s**, retained in `bench-v28-regression.log`.
++The strict five-edit runtime, error and recovery gates passed on candidate RSA24.
++
++### End-to-end scoped medians
++
++These are observations for the protected resident one-line test-body edit
++workload, not the comprehensive session-weighted synthetic workload. Old is the
++v26 engine, new is v28; the Blaze reference is a separate control.
++
++| Run | Old engine (ms) | New engine (ms) | Blaze reference (ms) |
++| --- | ---: | ---: | ---: |
++| Fixed five-edit comparison | 107.675 | 86.353 | See reference-normalized comparison |
++| Counterbalanced 42-edit run | 99.509 | 83.863 | 111.151 |
++| Reverse-order 42-edit run | 104.264 | 82.007 | 103.373 |
++| Independent fresh candidate-first five-edit run | 102.349298 | 82.189889 | Old 110.293067 / new 110.002826 |
++
++The fixed five-edit comparison reported a raw median delta of **-19.80%**, but
++the reference-normalized delta was only **-5.84%**, below the requested 10%
++floor. Its comparison explicitly labels noise unknown and gives no significance
++or speedup verdict. The counterbalanced and reverse runs are additional scoped
++observations, not evidence of a general/default improvement. Exact evidence:
++
++- Scratch root `suite-v28-compare.log` and its before/after result files.
++- Scratch root `suite-v28-repeat-compare.log`, `suite-v28-repeat.exit` (0) and
++  its independent candidate/baseline result files.
++- `/home/jeremy/.jcode/scratch/resident-interleaved-v28-20261030/state.json`.
++- `/home/jeremy/.jcode/scratch/resident-interleaved-v28-reverse-20261030/state.json`.
++
++The independent fresh candidate-first replication (RSA25 new, then RSB19 old)
++passed all gates. Its raw engine median delta was **-19.6967%** and its
++reference-normalized delta was **-19.4848%**, exceeding the requested 10% floor
++on this scoped fixture. This does not erase the first fixed five-edit run's
++below-floor normalized result. The two 42-edit runs above provide additional
++warm, counterbalanced/reverse-order observations. All comparisons remain
++descriptive, with machine noise unknown and no statistical significance verdict.
++No general/default promotion is inferred from these measurements.
++
++### Actual native collector evidence
++
++`/home/jeremy/.jcode/scratch/resident-test-skeleton-v28-profile-20261030/state.json`
++contains **12 actual rows**, six old/new pairs, with passing runtime gates and
++unchanged source/tool identities. Replicates 1 through 5 show **373 selected
++bodies before and one after** for each test-body edit. Replicate 0 additionally
++contains a second file's 231 selected bodies on each engine. Those inventories
++must not be summed into a per-edit improvement or assigned to trace thread IDs
++as an invented file/thread bijection. All observed transport drop counts were
++zero.
++
++For replicates 2 through 5, the observed `diagnostics.semantic.collect` spans
++were **87.795 / 78.284 / 81.348 / 77.439 ms** before and
++**17.282 / 15.482 / 14.672 / 19.239 ms** after. The diagnostic skeleton phase
++was approximately **1.0 ms before versus 1.4 ms after**, so the semantic resolver
++proof has a measured cost as well as enabling selective collection. These are
++nested/inclusive phase observations, not additive critical-path savings or a
++substitute for end-to-end timings. The profile marks machine contamination
++unknown. It establishes actual selection reduction on this workload, not a
++general performance conclusion.
++
++## Handoff artifacts
++
++Initial originals, frozen candidate copies, exact source patches, SHA-256 hashes
++and readiness are under
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/`.
++The documentation path was absent before v27. V27's original main.rs was saved
++after root expanded ownership following collector commit `3b13e250b`. V28's
++three originals are exact v27 frozen candidates, with their original hashes.
++Root ran native gates and the scoped observations above against those exact
++frozen Rust sources. The frozen candidate documentation remains preserved as
++part of the readiness artifacts; this later documentation-only update records
++root's outcomes without changing the Rust candidates. Commits and further
++measurement remain root-owned. Ownership is released in the readiness record.
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index ff1560604..057891ae2 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -6749,7 +6749,7 @@ fn broken_in(
+     Some(errors::Said(said))
+ }
+ 
+-/// What the last check of a file found nothing wrong in: the file's [`outline::skeleton`] then,
++/// What the last check of a file found nothing wrong in: its [`outline::diagnostic_skeleton`],
+ /// and a hash of how each of its functions was written. An edit that leaves the skeleton as it
+ /// was changed no more than bodies nothing else sees into, and a body's errors are its own:
+ /// the next check asks only for the bodies whose functions are written otherwise.
+@@ -6765,6 +6765,13 @@ type CleanKey = (vfs::FileId, Option<(usize, u64)>, (bool, bool));
+ static CLEAN: std::sync::LazyLock<std::sync::Mutex<FxHashMap<CleanKey, Clean>>> =
+     std::sync::LazyLock::new(Default::default);
+ 
++#[cfg(test)]
++thread_local! {
++    static DIAGNOSTICS_LAST_ASKED: std::cell::Cell<(usize, usize)> = const {
++        std::cell::Cell::new((0, 0))
++    };
++}
++
+ /// Startup-only opt-in inherited from a dedicated measurement daemon by its workers.
+ /// This is not a dynamically forwarded or worker-identity configuration variable.
+ fn diagnostics_telemetry_enabled() -> bool {
+@@ -6984,7 +6991,7 @@ fn errors_of(
+         (set.len(), hashes.fold(0, |all, it| all ^ it))
+     });
+     let key = (file, crates, (lints, refuse_borrowck));
+-    let skeleton = outline::skeleton(db, file);
++    let skeleton = outline::diagnostic_skeleton(db, file, within.as_deref());
+     let was = skeleton.and_then(|now| lock(&CLEAN).remove(&key).filter(|it| it.skeleton == now));
+     drop(skeleton_phase);
+     let functions = std::cell::RefCell::new(FxHashMap::default());
+@@ -7062,6 +7069,8 @@ fn errors_of(
+         let (n, of) = asked_of.get();
+         eprintln!("check: {file:?}: the bodies of {n} of {of} functions asked");
+     }
++    #[cfg(test)]
++    DIAGNOSTICS_LAST_ASKED.set(asked_of.get());
+     if let Some(skeleton) = skeleton.filter(|_| found.is_empty()) {
+         lock(&CLEAN).insert(key, Clean { skeleton, functions: functions.into_inner() });
+     }
+@@ -12016,6 +12025,102 @@ extern "C" fn exported() {}
+         });
+     }
+ 
++    /// Each revision checks the real selective path against CLEAN-empty diagnostics,
++    /// including exact file ranges, codes and messages. The oracle never consumes the
++    /// sequence's cached state or clears another file's key, even if an assertion panics.
++    #[test]
++    fn resident_diagnostic_skeleton_cache_matches_fresh_errors_after_each_edit() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++
++        struct SavedClean {
++            key: CleanKey,
++            previous: Option<Clean>,
++        }
++        impl SavedClean {
++            fn take(key: CleanKey) -> Self {
++                Self { key, previous: lock(&CLEAN).remove(&key) }
++            }
++        }
++        impl Drop for SavedClean {
++            fn drop(&mut self) {
++                let mut clean = lock(&CLEAN);
++                clean.remove(&self.key);
++                if let Some(previous) = self.previous.take() {
++                    clean.insert(self.key, previous);
++                }
++            }
++        }
++
++        const SOURCE: &str = "\
++//- /main.rs crate:main cfg:test
++#[rustc_builtin_macro]
++pub macro test($item:item) {}
++#[test] fn first() { let _: u8 = 1; }
++#[test] fn second() { let _: u8 = 2; }
++";
++        let (mut db, file) = RootDatabase::with_single_file(SOURCE);
++        let file = file.file_id(&db);
++        let key = (file, None, (false, false));
++        let _restore_original = SavedClean::take(key);
++        let config = ide_diagnostics::DiagnosticsConfig::test_sample();
++        // Labels distinguish full invalidation from recovery after an unclean result.
++        let variants = [
++            ("cold", SOURCE.to_owned(), false),
++            ("unchanged", SOURCE.to_owned(), false),
++            ("body", SOURCE.replace("u8 = 1", "u8 = 3"), false),
++            ("body error", SOURCE.replace("u8 = 1", "u8 = true"), true),
++            ("recovery", SOURCE.to_owned(), false),
++            ("signature", SOURCE.replace("fn first()", "fn first(x: u8)"), false),
++            ("signature recovery", SOURCE.to_owned(), false),
++            (
++                "attribute",
++                SOURCE.replace("#[test] fn first", "#[test] #[allow(unused)] fn first"),
++                false,
++            ),
++            ("attribute recovery", SOURCE.to_owned(), false),
++            (
++                "nested item",
++                SOURCE.replace("let _: u8 = 1;", "fn nested() { let _: u8 = true; }"),
++                true,
++            ),
++            ("nested recovery", SOURCE.to_owned(), false),
++            ("final unchanged", SOURCE.to_owned(), false),
++        ];
++        for (label, source, expect_error) in variants {
++            // Fixture directives are comments and are intentionally kept in the updated
++            // text. The crate graph/cfg remains the one installed by WithFixture.
++            db.set_file_text_with_durability(file, &source, Durability::LOW);
++            hir::attach_db(&db, || {
++                let actual = errors_of(&db, &config, file, None, (false, false));
++                let (asked, total) = DIAGNOSTICS_LAST_ASKED.get();
++                assert!(total >= 2, "{label}: fixture did not visit test functions");
++                match label {
++                    "cold" | "recovery" | "signature" | "attribute" | "nested item" => {
++                        assert_eq!(asked, total, "{label}")
++                    }
++                    // A None skeleton does not evict the previous clean entry. Restoring
++                    // exactly its source can reuse it, unlike recovery from a Some key
++                    // whose erroneous revision already consumed that entry.
++                    "unchanged" | "nested recovery" | "final unchanged" => {
++                        assert_eq!(asked, 0, "{label}")
++                    }
++                    "body" | "body error" => assert_eq!(asked, 1, "{label}"),
++                    _ => {}
++                }
++                let fresh = {
++                    let _restore_sequence = SavedClean::take(key);
++                    errors_of(&db, &config, file, None, (false, false))
++                };
++                assert_eq!(actual, fresh, "{label}: selective diagnostics differ from fresh");
++                assert_eq!(!actual.is_empty(), expect_error, "{label}: unexpected verdict");
++                if expect_error {
++                    assert!(actual.iter().any(|(_, code, _)| *code == "E0308"), "{label}");
++                }
++            });
++        }
++    }
++
+     /// Compare with the uncached traversal after each real database revision, not
+     /// just with a hand-written list of top-level declarations.
+     #[test]
+diff --git a/toolchain/resident/crates/ra-jit/src/outline.rs b/toolchain/resident/crates/ra-jit/src/outline.rs
+index 6f344f1a1..d6eca2980 100644
+--- a/toolchain/resident/crates/ra-jit/src/outline.rs
++++ b/toolchain/resident/crates/ra-jit/src/outline.rs
+@@ -702,6 +702,89 @@ pub(crate) fn skeleton(db: &RootDatabase, file: FileId) -> Option<u64> {
+ }
+ 
+ fn skeleton_of(tree: &SyntaxNode) -> Option<u64> {
++    skeleton_with(tree, is_unseen_body)
++}
++
++/// Diagnostic cache identity only. Unlike the executable outline, a resolved built-in
++/// `#[test]` may hide its body here. Never use this key for codepatch or function listing.
++/// Resolution is repeated in every relevant crate, and uncertain contexts fail closed.
++pub(crate) fn diagnostic_skeleton(
++    db: &RootDatabase,
++    file: FileId,
++    within: Option<&FxHashSet<ide_db::base_db::Crate>>,
++) -> Option<u64> {
++    let crates: Vec<_> = relevant_crates(db, file)
++        .iter()
++        .copied()
++        .filter(|it| within.is_none_or(|within| within.contains(it)))
++        .collect();
++    // The semantic API has fallback contexts when none of `within` owns a file.
++    // No proof is available for that fallback, so do not cache it.
++    if crates.is_empty() {
++        return None;
++    }
++    let edition = crates.first().map_or(Edition::CURRENT, |it| it.data(db).edition);
++    let tree = EditionedFileId::new(db, file, edition).parse(db).syntax_node();
++    let mut proven = None::<FxHashSet<TextRange>>;
++    for &krate in crates.iter() {
++        // One syntax tree cannot stand for different edition parses or multiple module
++        // contexts. Refuse the optimization rather than guess which resolver was used.
++        if krate.data(db).edition != edition {
++            return None;
++        }
++        let sema =
++            hir::Semantics::new_within(db, std::sync::Arc::new(FxHashSet::from_iter([krate])));
++        let modules: Vec<_> = sema.file_to_module_defs(file).collect();
++        if modules.len() != 1 || ide_db::base_db::Crate::from(modules[0].krate(db)) != krate {
++            return None;
++        }
++        let source = sema.parse(EditionedFileId::new(db, file, edition));
++        let mut here = FxHashSet::default();
++        for func in source.syntax().descendants().filter_map(ast::Fn::cast) {
++            let mut test = false;
++            let inert = func.attrs().all(|attr| {
++                let Some(name) = attr.simple_name() else { return false };
++                if INERT.contains(&name.as_str()) {
++                    return true;
++                }
++                // Only the ordinary, argument-free spelling. `is_test` on a function
++                // is a syntactic flag, not evidence about a shadowing attribute macro.
++                if name != "test" || attr.as_simple_atom().is_none() {
++                    return false;
++                }
++                let Some(path) = attr.path() else { return false };
++                let Some(hir::PathResolution::Def(hir::ModuleDef::Macro(mac))) =
++                    sema.resolve_path(&path)
++                else {
++                    return false;
++                };
++                let id: hir_def::MacroId = mac.into();
++                let expander = match id {
++                    hir_def::MacroId::Macro2Id(id) => id.lookup(db).expander,
++                    hir_def::MacroId::MacroRulesId(id) => id.lookup(db).expander,
++                    hir_def::MacroId::ProcMacroId(_) => return false,
++                };
++                let builtin = matches!(expander,
++                    hir_def::MacroExpander::BuiltInAttr(it) if it.is_test());
++                test |= builtin;
++                builtin
++            });
++            if inert && test {
++                here.insert(func.syntax().text_range());
++            }
++        }
++        match &mut proven {
++            Some(proven) => proven.retain(|range| here.contains(range)),
++            None => proven = Some(here),
++        }
++    }
++    let proven = proven.unwrap_or_default();
++    skeleton_with(&tree, |node| {
++        is_unseen_body_with(node, |func| proven.contains(&func.text_range()) || is_inert(func))
++    })
++}
++
++fn skeleton_with(tree: &SyntaxNode, unseen: impl Fn(&SyntaxNode) -> bool) -> Option<u64> {
+     let written_by_macro = |node: &SyntaxNode| {
+         node.kind() == SyntaxKind::MACRO_CALL
+             && node.parent().is_some_and(|it| {
+@@ -725,11 +808,11 @@ fn skeleton_of(tree: &SyntaxNode) -> Option<u64> {
+         })
+     };
+     for node in tree.descendants() {
+-        if written_by_macro(&node) || is_unseen_body(&node) && has_items(&node) {
++        if written_by_macro(&node) || unseen(&node) && has_items(&node) {
+             return None;
+         }
+     }
+-    Some(hash_outside_bodies(tree, &FxHashSet::default(), &FxHashSet::default()).0)
++    Some(hash_outside_bodies_with(tree, &FxHashSet::default(), &FxHashSet::default(), unseen).0)
+ }
+ 
+ /// The hash, and how many of the `declaring` functions were come by. The functions at
+@@ -738,6 +821,15 @@ fn hash_outside_bodies(
+     file: &SyntaxNode,
+     declaring: &FxHashSet<TextRange>,
+     skipped: &FxHashSet<TextRange>,
++) -> (u64, usize) {
++    hash_outside_bodies_with(file, declaring, skipped, is_unseen_body)
++}
++
++fn hash_outside_bodies_with(
++    file: &SyntaxNode,
++    declaring: &FxHashSet<TextRange>,
++    skipped: &FxHashSet<TextRange>,
++    unseen: impl Fn(&SyntaxNode) -> bool,
+ ) -> (u64, usize) {
+     let mut hasher = FxHasher::default();
+     let mut found = 0;
+@@ -753,7 +845,7 @@ fn hash_outside_bodies(
+                 node.kind().hash(&mut hasher);
+                 if node.kind() == SyntaxKind::FN && declaring.contains(&node.text_range()) {
+                     found += 1;
+-                } else if is_unseen_body(&node)
++                } else if unseen(&node)
+                     && node.parent().is_none_or(|it| !declaring.contains(&it.text_range()))
+                 {
+                     walk.skip_subtree();
+@@ -778,6 +870,10 @@ fn hash_outside_bodies(
+ /// Whether the node is the body of a function that nothing else sees into, going by how the
+ /// function is written. What its body declares takes name resolution to tell.
+ fn is_unseen_body(node: &SyntaxNode) -> bool {
++    is_unseen_body_with(node, is_inert)
++}
++
++fn is_unseen_body_with(node: &SyntaxNode, inert: impl Fn(&SyntaxNode) -> bool) -> bool {
+     if node.kind() != SyntaxKind::BLOCK_EXPR {
+         return false;
+     }
+@@ -788,7 +884,7 @@ fn is_unseen_body(node: &SyntaxNode) -> bool {
+     let names_its_type = func.ret_type().is_some_and(|it| {
+         it.syntax().descendants().any(|it| it.kind() == SyntaxKind::IMPL_TRAIT_TYPE)
+     });
+-    if names_its_type || !is_inert(func.syntax()) {
++    if names_its_type || !inert(func.syntax()) {
+         return false;
+     }
+     // rustc copies the body into the callers, also the ones it compiled for us.
+@@ -1164,6 +1260,158 @@ mod tests {
+         }
+     }
+ 
++    // Real resolver fixtures, not a syntactic stand-in for attribute provenance.
++    // Keep the built-in definition explicit: a bare #[test] with no core/prelude
++    // in a fixture is unresolved and must not qualify. Attribute builtins are
++    // registered by collect_macro_def (macro2), not collect_macro_rules.
++    const DIAGNOSTIC_BUILTIN_TEST: &str = "\
++//- /main.rs crate:main cfg:test
++#[rustc_builtin_macro]
++pub macro test($item:item) {}
++";
++
++    fn diagnostic_key(fixture: &str) -> Option<u64> {
++        use test_fixture::WithFixture;
++        let (db, files) = RootDatabase::with_many_files(fixture);
++        hir::attach_db(&db, || diagnostic_skeleton(&db, files[0].file_id(&db), None))
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_omits_only_resolved_builtin_test_bodies() {
++        let file = |body: &str| {
++            format!("{DIAGNOSTIC_BUILTIN_TEST}#[test]\nfn f() {{ {body} }}\nfn after() {{}}")
++        };
++        let before = diagnostic_key(&file("1;"));
++        assert!(before.is_some());
++        for body in ["2;", "let changed = 123456;", "{ let nested_block = 0; }"] {
++            assert_eq!(diagnostic_key(&file(body)), before, "{body}");
++        }
++        // The global executable/function-ID key still sees a test's body.
++        assert_ne!(skeleton(&file("1;")), skeleton(&file("2;")));
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_keeps_test_signatures_and_attributes() {
++        let key = |item: &str| diagnostic_key(&format!("{DIAGNOSTIC_BUILTIN_TEST}{item}"));
++        let before = key("#[test] fn f() { 1; }");
++        assert!(before.is_some());
++        for item in [
++            "#[test] fn renamed() { 1; }",
++            "#[test] fn f(x: u8) { 1; }",
++            "#[test] fn f() -> u8 { 1; }",
++            "#[test] #[allow(dead_code)] fn f() { 1; }",
++            "#[test] #[ignore] fn f() { 1; }",
++            "fn f() { 1; }",
++        ] {
++            assert_ne!(key(item), before, "{item}");
++        }
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_rejects_nested_test_items_and_item_macros() {
++        for body in [
++            "fn nested() {}",
++            "struct Nested;",
++            "const N: u8 = 1;",
++            "static N: u8 = 1;",
++            "mod nested {}",
++            "impl T { items!(); }",
++        ] {
++            let file = format!("{DIAGNOSTIC_BUILTIN_TEST}#[test] fn f() {{ {body} }}");
++            assert_eq!(diagnostic_key(&file), None, "{body}");
++        }
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_keeps_unresolved_and_proc_shadowed_test_bodies() {
++        for prefix in [
++            "//- /main.rs crate:main cfg:test\n",
++            "//- proc_macros: identity\n//- /main.rs crate:main cfg:test\nuse proc_macros::identity as test;\n",
++            "//- /main.rs crate:main cfg:test\nmacro_rules! test { ($i:item) => { $i } }\n",
++        ] {
++            let before = diagnostic_key(&format!("{prefix}#[test] fn f() {{ 1; }}"));
++            let after = diagnostic_key(&format!("{prefix}#[test] fn f() {{ 2; }}"));
++            assert!(before.is_none() || before != after, "{prefix}");
++        }
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_preserves_all_body_visibility_guards() {
++        for (attrs, signature, body) in [
++            ("#[test] #[unknown]", "fn f()", "VALUE;"),
++            ("#[test] #[inline(always)]", "fn f()", "VALUE;"),
++            ("#[test]", "const fn f()", "VALUE;"),
++            ("#[test]", "async fn f()", "VALUE;"),
++            ("#[test]", "fn f() -> impl Sized", "VALUE"),
++            ("#[test]", "fn f()", "#![allow(unused)] VALUE;"),
++            ("#[test]", "fn f()", "macro_rules! exported { () => { VALUE } }"),
++            ("#[test() ]", "fn f()", "VALUE;"),
++        ] {
++            let file = |value| {
++                format!(
++                    "{DIAGNOSTIC_BUILTIN_TEST}{attrs} {signature} {{ {} }}",
++                    body.replace("VALUE", value)
++                )
++            };
++            let before = diagnostic_key(&file("1"));
++            let after = diagnostic_key(&file("2"));
++            assert!(before.is_none() || before != after, "{attrs} {signature}: {body}");
++        }
++        let file = |body| {
++            format!("{DIAGNOSTIC_BUILTIN_TEST}#[unknown] mod m {{ #[test] fn f() {{ {body} }} }}")
++        };
++        let before = diagnostic_key(&file("1;"));
++        assert!(before.is_none() || before != diagnostic_key(&file("2;")));
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_refuses_multiple_module_contexts() {
++        let fixture = "\
++//- /main.rs crate:main cfg:test
++#[path = \"shared.rs\"] mod a;
++#[path = \"shared.rs\"] mod b;
++//- /shared.rs
++#[test] fn f() { 1; }
++";
++        use test_fixture::WithFixture;
++        let (db, files) = RootDatabase::with_many_files(fixture);
++        hir::attach_db(&db, || {
++            assert_eq!(diagnostic_skeleton(&db, files[1].file_id(&db), None), None);
++        });
++    }
++
++    #[test]
++    fn resident_diagnostic_skeleton_resolves_within_active_test_crate() {
++        use test_fixture::WithFixture;
++        let key = |body: &str| {
++            let fixture = format!(
++                "\
++//- /plain.rs crate:plain
++mod shared;
++//- /tests.rs crate:tests cfg:test
++mod shared;
++//- /shared.rs
++#[rustc_builtin_macro]
++pub macro test($item:item) {{}}
++#[cfg(test)] mod tests {{ use super::test; #[test] fn f() {{ {body} }} }}
++"
++            );
++            let (db, files) = RootDatabase::with_many_files(&fixture);
++            hir::attach_db(&db, || {
++                let sema = hir::Semantics::new(&db);
++                let krate =
++                    sema.file_to_module_defs(files[1].file_id(&db)).next().unwrap().krate(&db);
++                let within = FxHashSet::from_iter([krate.into()]);
++                let shared = files[2].file_id(&db);
++                assert_eq!(diagnostic_skeleton(&db, shared, Some(&FxHashSet::default())), None);
++                diagnostic_skeleton(&db, shared, Some(&within))
++            })
++        };
++        let before = key("1;");
++        assert!(before.is_some());
++        assert_eq!(before, key("let longer_edit = 2;"));
++    }
++
+     #[test]
+     fn a_body_that_declares_items_is_kept() {
+         let text = |n: u8| format!("fn f() {{ fn g() -> u8 {{ {n} }} }}");

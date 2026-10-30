@@ -1,0 +1,71 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+thread 'outline::tests::resident_diagnostic_skeleton_rejects_nested_test_items_and_item_macros' (4158918) panicked at crates/ra-jit/src/outline.rs:1320:13:
+assertion `left == right` failed: fn nested() {}
+  left: Some(12241450417558440071)
+ right: None
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+test outline::tests::resident_diagnostic_skeleton_rejects_nested_test_items_and_item_macros ... FAILED <0.001s>
+thread 'outline::tests::resident_diagnostic_skeleton_omits_only_resolved_builtin_test_bodies' (4158915) panicked at crates/ra-jit/src/outline.rs:1286:13:
+assertion `left == right` failed: 2;
+  left: Some(15721980932750733107)
+ right: Some(17000466663643035468)
+thread 'tests::resident_diagnostic_skeleton_cache_matches_fresh_errors_after_each_edit' (4158920) panicked at crates/ra-jit/src/main.rs:12097:17:
+cold: fixture did not visit test functions
+test outline::tests::resident_diagnostic_skeleton_omits_only_resolved_builtin_test_bodies ... FAILED <0.003s>
+thread 'outline::tests::resident_diagnostic_skeleton_keeps_unresolved_and_proc_shadowed_test_bodies' (4158914) panicked at vendor/rust-analyzer/crates/test-fixture/src/lib.rs:457:35:
+no entry found for key
+thread 'outline::tests::resident_diagnostic_skeleton_resolves_within_active_test_crate' (4158919) panicked at crates/ra-jit/src/outline.rs:1411:9:
+assertion `left == right` failed
+  left: Some(15401329320433403607)
+ right: Some(13816173505884414924)
+test outline::tests::resident_diagnostic_skeleton_resolves_within_active_test_crate ... FAILED <0.002s>
+test tests::resident_diagnostic_skeleton_cache_matches_fresh_errors_after_each_edit ... FAILED <0.002s>
+test outline::tests::resident_diagnostic_skeleton_keeps_unresolved_and_proc_shadowed_test_bodies ... FAILED <0.003s>
+
+failures:
+
+failures:
+    outline::tests::resident_diagnostic_skeleton_keeps_unresolved_and_proc_shadowed_test_bodies
+    outline::tests::resident_diagnostic_skeleton_omits_only_resolved_builtin_test_bodies
+    outline::tests::resident_diagnostic_skeleton_rejects_nested_test_items_and_item_macros
+    outline::tests::resident_diagnostic_skeleton_resolves_within_active_test_crate
+    tests::resident_diagnostic_skeleton_cache_matches_fresh_errors_after_each_edit
+
+test result: FAILED. 3 passed; 5 failed; 0 ignored; 0 measured; 351 filtered out; finished in 0.01s
+
+error: test failed, to rerun pass `-p ra-jit --bin jr-engine`
+
+justrust: FAILED: 5 of 8 tests failed in 46.5s
+  time    startup 0.27s | compile 46.15s | tests 0.02s | after 0.03s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 428 fresh. Rebuilt because: ra-jit changed (ra-jit)
+          jr_engine (test)                  46.15s  cpu 174.0s   2653 MB
+  tests   3 passed, 5 failed, 0 ignored, 351 filtered out, 1 binary in 0.02s
+  cpu     174.6s total, avg 3.8/peak 6.3 of 16 cores; others used 3.6 cores
+  memory  peak 2771 MB build, 2653 MB largest rustc, 25.5 GB free; stalls cpu 0.45s mem 0.00s io 0.02s
+  output  3 warnings shown, 251 hidden; 434 progress and 3 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 34.5s  46.1s went to recompiling oversized crates: jr_engine (79k lines, 46.1s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 13.8s  build averaged 3.8 of 16 cores: jr_engine (test) ran 46.1s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-142404178-4153131` full output, `justrust show 20261030-142404178-4153131` full profile

@@ -221,3 +221,23 @@ frozen Rust sources. The frozen candidate documentation remains preserved as
 part of the readiness artifacts; this later documentation-only update records
 root's outcomes without changing the Rust candidates. Commits and further
 measurement remain root-owned. Ownership is released in the readiness record.
+
+## Portable retained evidence
+
+Source commit `fe8df07f3` is accompanied by the evidence-only bundle at
+`bench/results/resident-test-diagnostic-skeleton-20261030/`. It retains the v27
+failure, v28 8/359 native and 700 regression gates, four strict sessions with
+88 total rows, two warm runs with 282 total rows, and all 12 profile rows.
+Run its `validate.py` for a manifest and semantic replay without native tools.
+Its 31 offline controls passed, including isolated relocated replay and
+coherently rehashed wrong-marker, failing-test, order, phase and thread mutations.
+Historical scratch paths in raw receipts are labels, not replay dependencies.
+
+The validator checks all four outer and five semantic profile labels, actual
+raw trace correspondence, finite nonnegative durations, wall containment and
+same-thread semantic-parent containment without inventing file/thread identity.
+The two replicate-zero `module_context` spans round to zero microseconds, so
+strict positivity for every individual tiny span would contradict the evidence.
+Every required label has positive observations elsewhere in the twelve rows.
+These offline checks establish retained evidence consistency, not a new native
+execution or a general/default performance gate.

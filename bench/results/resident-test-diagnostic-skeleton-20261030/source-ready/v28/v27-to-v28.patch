@@ -1,0 +1,123 @@
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/originals/docs/resident-test-diagnostic-skeleton.md b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/candidate/docs/resident-test-diagnostic-skeleton.md
+index 583f5925f..d3a806993 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/originals/docs/resident-test-diagnostic-skeleton.md
++++ b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/candidate/docs/resident-test-diagnostic-skeleton.md
+@@ -1,4 +1,4 @@
+-# Resident diagnostic test-body skeleton (v27)
++# Resident diagnostic test-body skeleton (v28)
+ 
+ ## Scope and status
+ 
+@@ -9,6 +9,36 @@ Source and native unit fixtures were prepared without running builds, tests,
+ native workloads or commits. Root owns native validation and measurement after
+ freeze. No speedup or passing-test claim is made here.
+ 
++### Actual v27 gate and v28 repair
++
++Root's v27 native check/build passed, but only three of eight new tests passed.
++The five failures are retained in
++`candidate-unit-v27/resident_diagnostic_skeleton.log`, run
++`20261030-142404178-4153131`, under the scratch root. Positive builtin-body
++eligibility and actual body visitation failed, so no performance candidate was
++admitted. The v27 fixtures incorrectly declared `macro_rules! test` as a
++rustc builtin. `collect_macro_rules` only looks up bang/eager builtins and marks
++this spelling `UnimplementedBuiltIn`. Attribute builtins are registered by
++`collect_macro_def` for macro2 definitions. The actual core declaration is
++`#[rustc_builtin_macro] pub macro test($item:item) {}`.
++
++The proc-shadow fixture also listed `deps:proc_macros` explicitly. The fixture
++builder resolves explicit crate dependencies before adding the synthetic proc
++macro crate, which caused a missing-key panic. `proc_macros: identity` already
++installs that server and adds its dependency to every fixture crate. V28 removes
++only the premature explicit dependency and retains the actual identity macro
++imported as `test`.
++
++The shared-file fixture explicitly imports `super::test` inside its cfg(test)
++child module. Macro2 definitions have module scope rather than macro_rules'
++textual scope, and this fixture has no core prelude to import it implicitly.
++
++V28 corrects those fixture definitions and imports only, without changing production
++provenance, eligibility, positive body counts or any of the eight test assertions.
++All eight tests remain mandatory and unexecuted by this worker. Root must repeat
++the native gate. Exact frozen v27 originals are retained under the distinct
++`test-diagnostic-skeleton-v28/originals/` handoff directory.
++
+ ## Why test-body edits invalidated the old key
+ 
+ The old diagnostic key called `outline::skeleton`, which calls `skeleton_of`,
+@@ -103,7 +133,7 @@ Minimal positive fixture, derived from native resolver sources:
+ ```rust
+ //- /main.rs crate:main cfg:test
+ #[rustc_builtin_macro]
+-macro_rules! test { () => {} }
++pub macro test($item:item) {}
+ #[test]
+ fn example() { let _: u8 = 1; }
+ ```
+@@ -115,8 +145,9 @@ and must not demonstrate eligibility.
+ 
+ Initial originals, frozen candidate copies, exact source patches, SHA-256 hashes
+ and readiness are under
+-`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v27/`.
+-The documentation path was absent initially. `main.rs` ownership was explicitly
+-expanded by root after collector commit `3b13e250b`, and its saved original is
+-from that handoff. Root must run native gates on these exact frozen sources
+-before committing or measuring. Ownership is released in the readiness record.
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/`.
++The documentation path was absent before v27. V27's original main.rs was saved
++after root expanded ownership following collector commit `3b13e250b`. V28's
++three originals are exact v27 frozen candidates, with their original hashes.
++Root must run native gates on these exact frozen sources before committing or
++measuring. Ownership is released in the readiness record.
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/originals/toolchain/resident/crates/ra-jit/src/main.rs b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/candidate/toolchain/resident/crates/ra-jit/src/main.rs
+index 846eca382..057891ae2 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/originals/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/candidate/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -12055,7 +12055,7 @@ extern "C" fn exported() {}
+         const SOURCE: &str = "\
+ //- /main.rs crate:main cfg:test
+ #[rustc_builtin_macro]
+-macro_rules! test { () => {} }
++pub macro test($item:item) {}
+ #[test] fn first() { let _: u8 = 1; }
+ #[test] fn second() { let _: u8 = 2; }
+ ";
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/originals/toolchain/resident/crates/ra-jit/src/outline.rs b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/candidate/toolchain/resident/crates/ra-jit/src/outline.rs
+index 466526fe6..d6eca2980 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/originals/toolchain/resident/crates/ra-jit/src/outline.rs
++++ b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/test-diagnostic-skeleton-v28/candidate/toolchain/resident/crates/ra-jit/src/outline.rs
+@@ -1262,11 +1262,12 @@ mod tests {
+ 
+     // Real resolver fixtures, not a syntactic stand-in for attribute provenance.
+     // Keep the built-in definition explicit: a bare #[test] with no core/prelude
+-    // in a fixture is unresolved and must not qualify.
++    // in a fixture is unresolved and must not qualify. Attribute builtins are
++    // registered by collect_macro_def (macro2), not collect_macro_rules.
+     const DIAGNOSTIC_BUILTIN_TEST: &str = "\
+ //- /main.rs crate:main cfg:test
+ #[rustc_builtin_macro]
+-macro_rules! test { () => {} }
++pub macro test($item:item) {}
+ ";
+ 
+     fn diagnostic_key(fixture: &str) -> Option<u64> {
+@@ -1325,7 +1326,7 @@ macro_rules! test { () => {} }
+     fn resident_diagnostic_skeleton_keeps_unresolved_and_proc_shadowed_test_bodies() {
+         for prefix in [
+             "//- /main.rs crate:main cfg:test\n",
+-            "//- proc_macros: identity\n//- /main.rs crate:main deps:proc_macros cfg:test\nuse proc_macros::identity as test;\n",
++            "//- proc_macros: identity\n//- /main.rs crate:main cfg:test\nuse proc_macros::identity as test;\n",
+             "//- /main.rs crate:main cfg:test\nmacro_rules! test { ($i:item) => { $i } }\n",
+         ] {
+             let before = diagnostic_key(&format!("{prefix}#[test] fn f() {{ 1; }}"));
+@@ -1391,8 +1392,8 @@ mod shared;
+ mod shared;
+ //- /shared.rs
+ #[rustc_builtin_macro]
+-macro_rules! test {{ () => {{}} }}
+-#[cfg(test)] mod tests {{ #[test] fn f() {{ {body} }} }}
++pub macro test($item:item) {{}}
++#[cfg(test)] mod tests {{ use super::test; #[test] fn f() {{ {body} }} }}
+ "
+             );
+             let (db, files) = RootDatabase::with_many_files(&fixture);

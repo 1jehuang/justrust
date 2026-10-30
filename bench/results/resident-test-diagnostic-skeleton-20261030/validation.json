@@ -1,0 +1,1 @@
+{"files": 992, "native_tests": 359, "new_native_tests": 8, "profile_rows": 12, "regression_tests": 700, "retained_v27_failed_tests": 5, "scope": "Scoped resident test edit observations only, unknown noise, no general/default promotion", "source_commit": "fe8df07f3", "status": "passed", "suite_rows": 88, "suite_sessions": 4, "warm_rows": 282, "warm_runs": 2}
