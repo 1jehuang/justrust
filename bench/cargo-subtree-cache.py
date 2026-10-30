@@ -23,17 +23,28 @@ def digest(path):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--before', type=Path, required=True)
-    parser.add_argument('--after', type=Path, required=True)
+    parser.add_argument('--cargo', type=Path, help='one candidate binary measured with the native gate off/on')
+    parser.add_argument('--before', type=Path)
+    parser.add_argument('--after', type=Path)
     parser.add_argument('--rustc', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('-n', type=int, default=16)
     args = parser.parse_args()
+    if args.cargo:
+        if args.before or args.after:
+            parser.error('--cargo cannot be combined with --before/--after')
+        args.before = args.after = args.cargo
+    if not args.before or not args.after or args.n < 1:
+        parser.error('provide --cargo or both --before/--after, and positive -n')
     executables = {'before': args.before.resolve(), 'after': args.after.resolve()}
     env = dict(os.environ, RUSTC=str(args.rustc.resolve()), CARGO_INCREMENTAL='0')
     env.pop('RUSTC_WRAPPER', None)
     env.pop('RUSTC_WORKSPACE_WRAPPER', None)
-    results = {'scope': 'native Cargo warm overlapping rerun-if-changed validation',
+    env.pop('JUSTRUST_CARGO_SUBTREE_CACHE', None)
+    environments = {key: dict(env, JUSTRUST_CARGO_SUBTREE_CACHE='1' if key == 'after' else '0') for key in executables}
+    results = {'native_gate': {'before': '0', 'after': '1', 'default': 'unset'},
+               'same_binary': executables['before'] == executables['after'],
+               'scope': 'native Cargo warm overlapping rerun-if-changed validation',
                'identity': {key: {'sha256': digest(binary), 'version': subprocess.check_output([binary, '-vV'], text=True)}
                             for key, binary in executables.items()},
                'rustc': {'sha256': digest(args.rustc), 'version': subprocess.check_output([args.rustc, '-vV'], text=True)},
@@ -52,7 +63,7 @@ def main():
 
         def run(which, measured=False):
             start = time.perf_counter_ns()
-            proc = subprocess.run([executables[which], 'check', '--offline', '-v'], cwd=root, env=env,
+            proc = subprocess.run([executables[which], 'check', '--offline', '-v'], cwd=root, env=environments[which],
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             elapsed = time.perf_counter_ns() - start
             if proc.returncode:
@@ -73,6 +84,10 @@ def main():
             (root / 'build.rs').write_text(script)
             run('before')
             run('after', measured=True)
+            default = subprocess.run([executables['after'], 'check', '--offline', '-v'], cwd=root, env=env, text=True, capture_output=True)
+            if default.returncode or 'Compiling ' in default.stderr or 'Running `' in default.stderr:
+                raise RuntimeError('unset gate did not reuse artifacts: ' + default.stderr)
+            results['correctness'].append(f'{scenario}: unset default gate reuses off/on artifacts')
             for trial in range(args.n):
                 order = ['before', 'after'] if trial % 2 == 0 else ['after', 'before']
                 for which in order:
@@ -82,7 +97,7 @@ def main():
         def require_rebuild(action):
             time.sleep(.02)
             action()
-            proc = subprocess.run([executables['after'], 'check', '--offline', '-v'], cwd=root, env=env,
+            proc = subprocess.run([executables['after'], 'check', '--offline', '-v'], cwd=root, env=environments['after'],
                                   text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if proc.returncode or 'Running `' not in proc.stderr:
                 raise RuntimeError('changed input did not rebuild: ' + proc.stderr)
@@ -105,6 +120,8 @@ def main():
                    for which in executables}
         medians['delta_percent'] = 100 * (medians['after'] / medians['before'] - 1)
         results['summary'][scenario] = medians
+    for key, binary in executables.items():
+        assert digest(binary) == results['identity'][key]['sha256'], 'Cargo binary changed during measurement'
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(results, indent=2) + '\n')
     print(json.dumps(results['summary'], indent=2))

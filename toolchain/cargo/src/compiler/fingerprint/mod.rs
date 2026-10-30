@@ -1255,6 +1255,7 @@ impl LocalFingerprint {
                         &dep_info,
                         info.files.iter().map(|(file, checksum)| (file, *checksum)),
                         *fingerprint,
+                        gctx,
                     )),
                     FingerprintMethod::Mtime => Ok(find_stale_file(
                         mtime_cache,
@@ -1262,6 +1263,7 @@ impl LocalFingerprint {
                         &dep_info,
                         info.files.into_keys().map(|p| (p, None)),
                         *fingerprint,
+                        gctx,
                     )),
                 }
             }
@@ -1274,6 +1276,7 @@ impl LocalFingerprint {
                 &build_root.join(output),
                 paths.iter().map(|p| (pkg_root.join(p), None)),
                 FingerprintMethod::Mtime,
+                gctx,
             )),
 
             // These have no dependencies on the filesystem, and their values
@@ -2362,6 +2365,10 @@ fn pkg_fingerprint(bcx: &BuildContext<'_, '_>, pkg: &Package) -> CargoResult<Str
     source.fingerprint(pkg)
 }
 
+fn subtree_cache_enabled(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 /// The `reference` file is considered as "stale" if any file from `paths` has a newer mtime.
 fn find_stale_file<I, P>(
     mtime_cache: &mut HashMap<PathBuf, FileTime>,
@@ -2369,6 +2376,7 @@ fn find_stale_file<I, P>(
     reference: &Path,
     paths: I,
     fingerprint: FingerprintMethod,
+    gctx: &GlobalContext,
 ) -> Option<StaleItem>
 where
     I: IntoIterator<Item = (P, Option<(u64, Checksum)>)>,
@@ -2392,6 +2400,7 @@ where
     } else {
         None
     };
+    let subtree_cache = subtree_cache_enabled(gctx.get_env("JUSTRUST_CARGO_SUBTREE_CACHE").ok());
     for (path, prior_checksum) in paths {
         let path = path.as_ref();
 
@@ -2454,7 +2463,12 @@ where
                 let path_mtime = match mtime_cache.get(path) {
                     Some(mtime) => *mtime,
                     None => {
-                        let Ok(mtime) = paths::mtime_recursive_with_cache(path, mtime_cache) else {
+                        let observed = if subtree_cache {
+                            paths::mtime_recursive_with_cache(path, mtime_cache)
+                        } else {
+                            paths::mtime_recursive(path)
+                        };
+                        let Ok(mtime) = observed else {
                             return Some(StaleItem::MissingFile {
                                 path: path.to_path_buf(),
                             });
@@ -2501,4 +2515,25 @@ where
         reference, reference_mtime
     );
     None
+}
+
+#[cfg(test)]
+mod subtree_cache_gate {
+    use super::subtree_cache_enabled;
+
+    #[test]
+    fn default_off_requires_exact_one() {
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some("01"),
+            Some("1 "),
+        ] {
+            assert!(!subtree_cache_enabled(value), "{value:?}");
+        }
+        assert!(subtree_cache_enabled(Some("1")));
+    }
 }
