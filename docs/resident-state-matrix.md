@@ -189,3 +189,43 @@ The root coordinator owns the real gating run and its interpretation. This is
 not `bench/suite.py run --synth 1 -n 1`, not a comprehensive session-weighted
 synthetic workload, not statistical significance, not a stock-versus-owned
 architectural proof, and not a default-promotion gate.
+
+## 2026-10-30 actual failed matrix and portable evidence
+
+The root subsequently ran the frozen5ec494e60 harness as `/home/jeremy/rsm01`
+against a fresh private source63 copy. All140 calls completed with source,
+manifest, tools and pinned toolchain restored/unchanged. The matrix exited1:
+130 observations passed, but all ten type-error calls lacked current-source
+`E0308`/nonce diagnostics and remain **REJECTED**, with both type-error medians
+excluded. Status101 and generic `HasErrors` are not freshness evidence.
+
+The portable bundle is `bench/results/resident-state-matrix-20261030/`. Its
+README provides every per-state median and mutation/cache/noise caveat. It retains
+all140 raw console pairs, source/manifest backups, frozen helpers and63 source
+files, both8-call failed diagnostic probes with worker-log snapshots/deltas, the
+original rejected full-lib probe plus separate offline exact148-result admission,
+the728-test root log, and eight strictly scoped stop receipts. Environment maps
+are allowlisted derivatives, never credential-bearing ambient snapshots. Private
+originals are unchanged and committed hashes identify them. Replay is portable:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 bench/results/resident-state-matrix-20261030/validate.py
+PYTHONDONTWRITEBYTECODE=1 python3 bench/results/resident-state-matrix-20261030/test_validate.py
+```
+
+A replay PASS means the original failed experiment is faithfully reproduced, not
+that the native matrix passes. Re-signed semantic mutation and empty-HOME
+relocation controls reject changed oracles even after hashes are recomputed.
+The exact ignored full-lib name remains `split_index::tests::attach_cost`,
+independently declared in pinned source, not a blanket allowance for ignored tests.
+
+Removing the helper and then testing exact uninstrumented original type-error
+recipes did not restore detailed diagnostics. This is not a demonstrated fixture
+repair. Frozen licensed imported Blaze `ra-jit` source shows cold refusal bails
+before the existing whole-file detailed-check block. Probe cold-log observations
+support a diagnostic-ordering hypothesis only. Any later native repair requires
+separate strict positive proof, never relabeling these failures. Cold medians were
+23679.448ms reference and27287.192ms engine. Some warm states were faster while
+signature invalidation and full-lib were not. General faster-than-Blaze, arbitrary
+aggregate weighting, comprehensive synthetic/default promotion and significance
+remain unsupported.

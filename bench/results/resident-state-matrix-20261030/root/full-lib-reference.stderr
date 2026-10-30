@@ -1,0 +1,4 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-probe-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 23.57s
+     Running unittests src/lib.rs (/home/jeremy/rmp01/reference/target/debug/deps/justrust-0fe9e7b86f022092)
+justrust: an identical build is running in slot 1; waiting for it instead of compiling the same crates twice (JUSTRUST_JOIN=0 disables)

@@ -1,0 +1,119 @@
+{
+  "unchanged": true,
+  "calls": 8,
+  "results": [
+    {
+      "variant": "canonical-fixed-uninstrumented",
+      "stack": "reference",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fixed canonical control is observational, not freshness-admitted"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false,
+      "observational_control": true,
+      "observation_passed": false,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "canonical-fixed-uninstrumented",
+      "stack": "reference",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true,
+      "observational_control": false,
+      "observation_passed": null,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "canonical-fixed-uninstrumented",
+      "stack": "engine",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fixed canonical control is observational, not freshness-admitted"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false,
+      "observational_control": true,
+      "observation_passed": false,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "canonical-fixed-uninstrumented",
+      "stack": "engine",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true,
+      "observational_control": false,
+      "observation_passed": null,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "probe-only-fresh",
+      "stack": "reference",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false,
+      "observational_control": false,
+      "observation_passed": null,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "probe-only-fresh",
+      "stack": "reference",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true,
+      "observational_control": false,
+      "observation_passed": null,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "probe-only-fresh",
+      "stack": "engine",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false,
+      "observational_control": false,
+      "observation_passed": null,
+      "direct_has_fixed_original_literal": false
+    },
+    {
+      "variant": "probe-only-fresh",
+      "stack": "engine",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true,
+      "observational_control": false,
+      "observation_passed": null,
+      "direct_has_fixed_original_literal": false
+    }
+  ],
+  "policy": "Diagnostic differential only. Generic HasErrors is not E0308. Original rejection retained."
+}

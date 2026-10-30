@@ -1,0 +1,41 @@
+symbols: 0 in 309.0µs
+load workspace: 165.6ms
+resolve: 69 crates in 473.5ms
+frozen, of 68 crates: def maps of 68, impls of 68, lang items of 68 from the store, 0 written in 85.1µs
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+standard library: from the store, 17 crates
+manifest: 2 files of the program from the store in 51.5ms, nothing compiled
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+check: 31 files in 1.8s
+link: 167.9ms (exit status: 0; not spliced: no executable to add to)
+watching 49 files
+tier: off (RA_JIT_TIER=off, blaze built without `--features llvm`, or not macOS on AArch64)
+request: sync at_us=1793400301258024
+taking the program's code from the store, for the first edit to patch: src/lib.rs
+change: 0 files
+store: 179 functions found, 0 compiled and added
+entries: 44425 found, 0 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+not found: [("an entry that calls what cannot be used", 115), ("an entry linked against what the program lacks", 5)]
+edit (apply 750.8µs): compiled 3991 of 3991 fns (+822 instances) in 2.1s (+1.6µs emit)
+stats: 152 of 44577 functions compiled, 44425 reused
+phases: compile 36.9ms, resolve 7.0ms, define 453.5ms, fallback 18.8µs, object 111.2ms, 1 rounds
+link: 153.7ms (exit status: 0; not spliced: the whole object was written again)
+edit-to-binary: 2.3s
+request: sync at_us=1793400303622411
+request: sync at_us=1793400309392426
+change: 1 files
+edit (apply 153.5ms): compiled 3991 of 3991 fns (+120 instances) in 1.4s (+843.0ns emit)
+stats: 10923 of 44577 functions compiled, 33654 reused
+patch: 6 functions
+phases: compile 196.5µs, resolve 1.8ms, define 15.9µs, fallback 0.0ns, object 478.0µs, 1 rounds
+link: 1.1ms (spliced: 6 functions redirected, 2146648 bytes, 0 copied)
+edit-to-binary: 1.6s
+request: sync at_us=1793400312638544
+change: 1 files
+edit (apply 33.3ms): compiled 3991 of 3991 fns (+120 instances) in 128.2ms (+1.0µs emit)
+stats: 2 of 44577 functions compiled, 44575 reused
+patch: 0 functions
+phases: compile 213.1µs, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 234.9µs, 1 rounds
+link: 812.0µs (spliced: 0 functions redirected, 2097160 bytes, 0 copied)
+edit-to-binary: 357.5ms
+request: sync at_us=1793400313380956

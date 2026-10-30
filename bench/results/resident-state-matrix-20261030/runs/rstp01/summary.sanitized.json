@@ -1,0 +1,95 @@
+{
+  "unchanged": true,
+  "calls": 8,
+  "results": [
+    {
+      "variant": "helper-present",
+      "stack": "reference",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "helper-present",
+      "stack": "reference",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true
+    },
+    {
+      "variant": "helper-present",
+      "stack": "engine",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "helper-present",
+      "stack": "engine",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true
+    },
+    {
+      "variant": "helper-absent",
+      "stack": "reference",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "helper-absent",
+      "stack": "reference",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true
+    },
+    {
+      "variant": "helper-absent",
+      "stack": "engine",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "helper-absent",
+      "stack": "engine",
+      "phase": "type-recovery",
+      "status": 0,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": true
+    }
+  ],
+  "policy": "Diagnostic differential only. Generic HasErrors is not E0308. Original rejection retained."
+}

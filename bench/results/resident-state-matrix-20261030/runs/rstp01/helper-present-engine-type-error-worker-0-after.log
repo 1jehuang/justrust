@@ -1,0 +1,15 @@
+symbols: 0 in 467.5µs
+load workspace: 246.1ms
+resolve: 69 crates in 599.3ms
+frozen, of 68 crates: def maps of 68, impls of 68, lang items of 68 from the store, 0 written in 87.8µs
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+standard library: from the store, 17 crates
+manifest: none used, the store has none of this build (20.7ms)
+store: 10625 functions found, 0 compiled and added
+entries: 33827 found, 10516 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+not found: [("no entry", 9942), ("an entry that calls what cannot be used", 65), ("an entry linked against what the program lacks", 5)]
+cold: compiled 3988 of 3989 fns (+12823 instances) in 3.3s (+23.5ms emit)
+  refused: justrust[baadcb47f5ef2310]::summary::tests::shares_overlapping_time: frontend: mir: HasErrors
+proc macros: 0 expanded in 0.00s, 224 from the store in 0.06s, 0.01s to key them
+Error: `src/lib.rs` reaches 1 function blaze could not compile, and a build with nothing of rustc's has nothing else to compile it, so it is not built:
+  justrust::summary::tests::shares_overlapping_time: frontend: mir: HasErrors

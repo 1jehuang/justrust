@@ -1,0 +1,26 @@
+{
+  "status": "passed",
+  "scope": "Offline semantic admission only. Not new native execution or cold speed claim.",
+  "original_probe_status": "failed/support-not-established",
+  "original_state_sha256": "c0804f5b8c8903e9d356e00cbcd904c3b768bf1235a595efa081e4e7ae141c73",
+  "correction": "Original harness wrongly demanded no ignored tests. Exact pinned ignored microbenchmark is preserved, with no new ignored tests permitted.",
+  "ignored_source_sha256": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+  "rows": [
+    {
+      "stack": "reference",
+      "status": 0,
+      "stdout_sha256": "7cad337cfbe450f76e0bc9065f2899c3e5b47530ac4788bcd099fb598794d5c9",
+      "stderr_sha256": "acfa8d36b1d0a28d9c8e0e014d0fa6e50d16d3421d7cb036175c0346fac1bb8e",
+      "passed": 147,
+      "ignored": 1
+    },
+    {
+      "stack": "engine",
+      "status": 0,
+      "stdout_sha256": "825949f9488e2028d8a404f995aa0e8ef6c41c2cda44c81f5ed51e8f47129706",
+      "stderr_sha256": "a9ee37e56f7e41a55129e95c7c11efd5b5d91ab9eee70478a6d9035f5b347832",
+      "passed": 147,
+      "ignored": 1
+    }
+  ]
+}

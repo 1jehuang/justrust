@@ -1,0 +1,3 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 33.28s
+     Running unittests src/lib.rs (/home/jeremy/rsm01/s4/reference/target/debug/deps/justrust-ea6ee1decb16d012)

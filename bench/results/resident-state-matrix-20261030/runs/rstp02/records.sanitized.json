@@ -1,0 +1,1556 @@
+[
+  {
+    "variant": "canonical-fixed-uninstrumented",
+    "stack": "reference",
+    "phase": "type-error",
+    "nonce": "1ebfe0eb428542b3a085959d3196817e",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "7f6d3ed1e1cce1da509b1f6e4da64432aef422f8298d5cf7d9b231c558d3ed0d",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "7f6d3ed1e1cce1da509b1f6e4da64432aef422f8298d5cf7d9b231c558d3ed0d",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/reference/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/reference/blaze-home",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/reference/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/reference/target",
+      "HOME": "/home/jeremy",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/reference/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/reference/ra-home",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/reference/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/reference/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/reference/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/reference/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/reference/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+      "cargo",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 101,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 3.9705435920041054,
+    "noise": {
+      "before": {
+        "busy_seconds": 502189.2,
+        "loadavg": [
+          2.89892578125,
+          3.736328125,
+          5.3447265625
+        ]
+      },
+      "after": {
+        "busy_seconds": 502219.37,
+        "loadavg": [
+          2.9072265625,
+          3.7236328125,
+          5.33203125
+        ]
+      },
+      "child_cpu_seconds": 0.032175999999999996,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 30.137823999983702
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-error.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-error.stderr",
+        "bytes": 255,
+        "sha256": "ef1dedf5feb43fb4667aa6f806d334688073046db8cb3c73a4c1f0d76f07e3b3"
+      }
+    },
+    "raw_error": null,
+    "parsed": null,
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/reference/blaze-home/workers/bdad4eeca7b58300/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-error-worker-0-before.log",
+          "bytes": 1323,
+          "sha256": "56201b65324f1b1d83b0e72fc79fa027fd46490d9858dc8b6d7a9337943c6853"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-error-worker-0-after.log",
+          "bytes": 1161,
+          "sha256": "a90f5447709b4b917c7a8a59378cc0b5905c77c950f80aa2990976af3dbf60e9"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-error-worker-0-delta.log",
+          "bytes": 1161,
+          "sha256": "a90f5447709b4b917c7a8a59378cc0b5905c77c950f80aa2990976af3dbf60e9"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": false,
+    "observational_control": true,
+    "direct_has_fixed_original_literal": false,
+    "observation_passed": false,
+    "failures": [
+      "fixed canonical control is observational, not freshness-admitted"
+    ],
+    "accepted": false
+  },
+  {
+    "variant": "canonical-fixed-uninstrumented",
+    "stack": "reference",
+    "phase": "type-recovery",
+    "nonce": "86a2f15e05a0470ea3623bf583210cf9",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "24e086649d3463f2fbe42ab8de51d6ce1685cbdbf664514eb043d28454652ffa",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "bda4407c83ae9ccd9dc646f8ae2b91b87c8c5b2c117c4263370514c0831768e2",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/reference/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/reference/blaze-home",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/reference/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/reference/target",
+      "HOME": "/home/jeremy",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/reference/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/reference/ra-home",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/reference/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/reference/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/reference/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/reference/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/reference/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+      "cargo",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 0,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 5.851547117999871,
+    "noise": {
+      "before": {
+        "busy_seconds": 502219.46,
+        "loadavg": [
+          2.9072265625,
+          3.7236328125,
+          5.33203125
+        ]
+      },
+      "after": {
+        "busy_seconds": 502269.28,
+        "loadavg": [
+          2.9150390625,
+          3.71142578125,
+          5.3193359375
+        ]
+      },
+      "child_cpu_seconds": 0.04018999999999999,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 49.77981000000698
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-recovery.stdout",
+        "bytes": 389,
+        "sha256": "21acf26b7b39b179f68763541952757535bf2535889d608786c1d8a3fe2586cf"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-recovery.stderr",
+        "bytes": 167,
+        "sha256": "b91520670ac43bc5743010da847338ee9cd5bf5f761dd16d48325292540cc915"
+      }
+    },
+    "raw_error": null,
+    "parsed": {
+      "tests": [
+        [
+          "summary::tests::parses_libtest_results",
+          "ok"
+        ],
+        [
+          "summary::tests::shares_overlapping_time",
+          "ok"
+        ],
+        [
+          "summary::tests::splits_passes_without_double_counting",
+          "ok"
+        ],
+        [
+          "summary::tests::test_failures_are_not_compile_errors",
+          "ok"
+        ]
+      ],
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 144
+    },
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/reference/blaze-home/workers/bdad4eeca7b58300/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-recovery-worker-0-before.log",
+          "bytes": 1161,
+          "sha256": "a90f5447709b4b917c7a8a59378cc0b5905c77c950f80aa2990976af3dbf60e9"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-recovery-worker-0-after.log",
+          "bytes": 1323,
+          "sha256": "0debf4c766131aa27ced2cd60907cbbf6a8fd64157908c6c7664cc3f92fdb600"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-reference-type-recovery-worker-0-delta.log",
+          "bytes": 1323,
+          "sha256": "0debf4c766131aa27ced2cd60907cbbf6a8fd64157908c6c7664cc3f92fdb600"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": true,
+    "observational_control": false,
+    "direct_has_fixed_original_literal": false,
+    "failures": [],
+    "accepted": true,
+    "expected_recovery_marker": "JR_RUNTIME_EXECUTED_1759270375446414449"
+  },
+  {
+    "variant": "canonical-fixed-uninstrumented",
+    "stack": "engine",
+    "phase": "type-error",
+    "nonce": "cb38602ba1f54de9bbb9196218538680",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "7f6d3ed1e1cce1da509b1f6e4da64432aef422f8298d5cf7d9b231c558d3ed0d",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "7f6d3ed1e1cce1da509b1f6e4da64432aef422f8298d5cf7d9b231c558d3ed0d",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/engine/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/engine/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/engine/target",
+      "HOME": "/home/jeremy",
+      "JR_ENGINE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/engine/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/engine/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/engine/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/engine/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/engine/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/engine/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v28-bin/jr-engine",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 101,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 5.014621977010393,
+    "noise": {
+      "before": {
+        "busy_seconds": 502269.38,
+        "loadavg": [
+          2.9150390625,
+          3.71142578125,
+          5.3193359375
+        ]
+      },
+      "after": {
+        "busy_seconds": 502313.2,
+        "loadavg": [
+          2.921875,
+          3.69921875,
+          5.306640625
+        ]
+      },
+      "child_cpu_seconds": 0.03864300000000001,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 43.781357000006984
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-error.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-error.stderr",
+        "bytes": 273,
+        "sha256": "02a133d19c16c3339c661034ebdcf69a28afea9462e1bbf348532922cf7eb9c1"
+      }
+    },
+    "raw_error": null,
+    "parsed": null,
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime/workers/2f3e6968090f4fb1/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-error-worker-0-before.log",
+          "bytes": 1323,
+          "sha256": "f07a27d1df61e6a926fd68c6e0832ccfac4f7635d822bdcbff2272b52f97d185"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-error-worker-0-after.log",
+          "bytes": 1162,
+          "sha256": "e141fbab3294c77038e9e01a4bbc5c1b73285f9e4707d9cb6979f62320a98124"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-error-worker-0-delta.log",
+          "bytes": 1162,
+          "sha256": "e141fbab3294c77038e9e01a4bbc5c1b73285f9e4707d9cb6979f62320a98124"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": false,
+    "observational_control": true,
+    "direct_has_fixed_original_literal": false,
+    "observation_passed": false,
+    "failures": [
+      "fixed canonical control is observational, not freshness-admitted"
+    ],
+    "accepted": false
+  },
+  {
+    "variant": "canonical-fixed-uninstrumented",
+    "stack": "engine",
+    "phase": "type-recovery",
+    "nonce": "44f1524421b740af94d977023580203a",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "8c3b505b948b2ad26b357e88d5b4416c36abe5d5cdf795ae894b155f8fadcccc",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "bda4407c83ae9ccd9dc646f8ae2b91b87c8c5b2c117c4263370514c0831768e2",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/engine/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/engine/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/engine/target",
+      "HOME": "/home/jeremy",
+      "JR_ENGINE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/engine/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/engine/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/engine/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/engine/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/engine/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/engine/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v28-bin/jr-engine",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 0,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 5.8046828160004225,
+    "noise": {
+      "before": {
+        "busy_seconds": 502313.26,
+        "loadavg": [
+          2.921875,
+          3.69921875,
+          5.306640625
+        ]
+      },
+      "after": {
+        "busy_seconds": 502362.44,
+        "loadavg": [
+          3.16845703125,
+          3.73779296875,
+          5.310546875
+        ]
+      },
+      "child_cpu_seconds": 0.03945599999999999,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 49.140543999993014
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-recovery.stdout",
+        "bytes": 389,
+        "sha256": "483e02477bdfabd290c0843fae403f880931b69df495c155687343bb298854c6"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-recovery.stderr",
+        "bytes": 164,
+        "sha256": "00bb5eb1273d714ecdf68ed02ef21fff7d759f42a6689ddb495d11c1cff13b9e"
+      }
+    },
+    "raw_error": null,
+    "parsed": {
+      "tests": [
+        [
+          "summary::tests::parses_libtest_results",
+          "ok"
+        ],
+        [
+          "summary::tests::shares_overlapping_time",
+          "ok"
+        ],
+        [
+          "summary::tests::splits_passes_without_double_counting",
+          "ok"
+        ],
+        [
+          "summary::tests::test_failures_are_not_compile_errors",
+          "ok"
+        ]
+      ],
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 144
+    },
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime/workers/2f3e6968090f4fb1/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-recovery-worker-0-before.log",
+          "bytes": 1162,
+          "sha256": "e141fbab3294c77038e9e01a4bbc5c1b73285f9e4707d9cb6979f62320a98124"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-recovery-worker-0-after.log",
+          "bytes": 1323,
+          "sha256": "45e1ed22867deb4d7b928515fd0887d51beefb019e71a8d1a0139084f6765b53"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/canonical-fixed-uninstrumented-engine-type-recovery-worker-0-delta.log",
+          "bytes": 1323,
+          "sha256": "45e1ed22867deb4d7b928515fd0887d51beefb019e71a8d1a0139084f6765b53"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": true,
+    "observational_control": false,
+    "direct_has_fixed_original_literal": false,
+    "failures": [],
+    "accepted": true,
+    "expected_recovery_marker": "JR_RUNTIME_EXECUTED_1463411649390801931"
+  },
+  {
+    "variant": "probe-only-fresh",
+    "stack": "reference",
+    "phase": "type-error",
+    "nonce": "fed900db5052429baaa695df5bb0ef3e",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "632aad8751c72fe28a75b918858b70496764bad42610520a149be1f68dd6b249",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "35bd4cdd4e2533a0f2d7a27c5a9f4d4d4c6749a8a3934e3b502f36f2542c58d4",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "7f6d3ed1e1cce1da509b1f6e4da64432aef422f8298d5cf7d9b231c558d3ed0d",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/reference/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/reference/blaze-home",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/reference/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/reference/target",
+      "HOME": "/home/jeremy",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/reference/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/reference/ra-home",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/reference/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/reference/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/reference/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/reference/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/reference/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+      "cargo",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 101,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 4.9050953069963725,
+    "noise": {
+      "before": {
+        "busy_seconds": 502362.56,
+        "loadavg": [
+          3.16845703125,
+          3.73779296875,
+          5.310546875
+        ]
+      },
+      "after": {
+        "busy_seconds": 502405.57,
+        "loadavg": [
+          4.5966796875,
+          4.0244140625,
+          5.39501953125
+        ]
+      },
+      "child_cpu_seconds": 0.035689,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 42.974311000009315
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-error.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-error.stderr",
+        "bytes": 255,
+        "sha256": "ef1dedf5feb43fb4667aa6f806d334688073046db8cb3c73a4c1f0d76f07e3b3"
+      }
+    },
+    "raw_error": null,
+    "parsed": null,
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/reference/blaze-home/workers/bdad4eeca7b58300/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-error-worker-0-before.log",
+          "bytes": 1323,
+          "sha256": "0debf4c766131aa27ced2cd60907cbbf6a8fd64157908c6c7664cc3f92fdb600"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-error-worker-0-after.log",
+          "bytes": 1161,
+          "sha256": "d10a346e70fdcf4843d92e7dd3f4a430a0f379713e620d99f1edd3c016b731c3"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-error-worker-0-delta.log",
+          "bytes": 1161,
+          "sha256": "d10a346e70fdcf4843d92e7dd3f4a430a0f379713e620d99f1edd3c016b731c3"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": false,
+    "observational_control": false,
+    "direct_has_fixed_original_literal": false,
+    "failures": [
+      "fresh type-error diagnostic/no-runtime oracle failed"
+    ],
+    "accepted": false
+  },
+  {
+    "variant": "probe-only-fresh",
+    "stack": "reference",
+    "phase": "type-recovery",
+    "nonce": "331af8558b974ca58cb0ff566d59372c",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "632aad8751c72fe28a75b918858b70496764bad42610520a149be1f68dd6b249",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "e2cd15071c1079b6288f3980b18bb8126d826ac96a806243649a6adbe59ac0c8",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "bda4407c83ae9ccd9dc646f8ae2b91b87c8c5b2c117c4263370514c0831768e2",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/reference/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/reference/blaze-home",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/reference/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/reference/target",
+      "HOME": "/home/jeremy",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/reference/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/reference/ra-home",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/reference/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/reference/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/reference/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/reference/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/reference/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/reference-bin/ra-jit",
+      "cargo",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 0,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 5.708477536012651,
+    "noise": {
+      "before": {
+        "busy_seconds": 502405.68,
+        "loadavg": [
+          4.5966796875,
+          4.0244140625,
+          5.39501953125
+        ]
+      },
+      "after": {
+        "busy_seconds": 502454.74,
+        "loadavg": [
+          6.23095703125,
+          4.373046875,
+          5.50048828125
+        ]
+      },
+      "child_cpu_seconds": 0.04330099999999998,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 49.01669899999767
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-recovery.stdout",
+        "bytes": 440,
+        "sha256": "fcaa367b828b18ca1333e33bf719584813e81782eaf8fff97905269632225ffd"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-recovery.stderr",
+        "bytes": 167,
+        "sha256": "0e1098350501d16ac78533c82f070b7a9055e1da1b966bd933c96ea6c9280bee"
+      }
+    },
+    "raw_error": null,
+    "parsed": {
+      "tests": [
+        [
+          "summary::tests::parses_libtest_results",
+          "ok"
+        ],
+        [
+          "summary::tests::shares_overlapping_time",
+          "ok"
+        ],
+        [
+          "summary::tests::splits_passes_without_double_counting",
+          "ok"
+        ],
+        [
+          "summary::tests::test_failures_are_not_compile_errors",
+          "ok"
+        ]
+      ],
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 144
+    },
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/reference/blaze-home/workers/bdad4eeca7b58300/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-recovery-worker-0-before.log",
+          "bytes": 1161,
+          "sha256": "d10a346e70fdcf4843d92e7dd3f4a430a0f379713e620d99f1edd3c016b731c3"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-recovery-worker-0-after.log",
+          "bytes": 1323,
+          "sha256": "ecaa33bba1b199dcf2fc1bab79e0c99ab9a1166a35f3d025c96ece6a0abca7f5"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-reference-type-recovery-worker-0-delta.log",
+          "bytes": 1323,
+          "sha256": "ecaa33bba1b199dcf2fc1bab79e0c99ab9a1166a35f3d025c96ece6a0abca7f5"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": true,
+    "observational_control": false,
+    "direct_has_fixed_original_literal": false,
+    "failures": [],
+    "accepted": true,
+    "expected_recovery_marker": "JR_RUNTIME_EXECUTED_1383079547833513163"
+  },
+  {
+    "variant": "probe-only-fresh",
+    "stack": "engine",
+    "phase": "type-error",
+    "nonce": "fa476bd5bc154cf6b1c17396775f74b8",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "632aad8751c72fe28a75b918858b70496764bad42610520a149be1f68dd6b249",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "9aa9cf7ceec4a1cd3779ee308c4792e41947d10f7d97443fc9ae48c7841fd6d7",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "7f6d3ed1e1cce1da509b1f6e4da64432aef422f8298d5cf7d9b231c558d3ed0d",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/engine/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/engine/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/engine/target",
+      "HOME": "/home/jeremy",
+      "JR_ENGINE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/engine/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/engine/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/engine/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/engine/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/engine/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/engine/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v28-bin/jr-engine",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 101,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 4.841078470009961,
+    "noise": {
+      "before": {
+        "busy_seconds": 502454.81,
+        "loadavg": [
+          6.23095703125,
+          4.373046875,
+          5.50048828125
+        ]
+      },
+      "after": {
+        "busy_seconds": 502495.69,
+        "loadavg": [
+          6.05224609375,
+          4.36669921875,
+          5.4921875
+        ]
+      },
+      "child_cpu_seconds": 0.03765600000000002,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 40.84234400000466
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-error.stdout",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-error.stderr",
+        "bytes": 273,
+        "sha256": "02a133d19c16c3339c661034ebdcf69a28afea9462e1bbf348532922cf7eb9c1"
+      }
+    },
+    "raw_error": null,
+    "parsed": null,
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime/workers/2f3e6968090f4fb1/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-error-worker-0-before.log",
+          "bytes": 1323,
+          "sha256": "45e1ed22867deb4d7b928515fd0887d51beefb019e71a8d1a0139084f6765b53"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-error-worker-0-after.log",
+          "bytes": 1162,
+          "sha256": "81651f1acee98094852bb869248632301ee9992eb441865dd0af72811e4be772"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-error-worker-0-delta.log",
+          "bytes": 1162,
+          "sha256": "81651f1acee98094852bb869248632301ee9992eb441865dd0af72811e4be772"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": false,
+    "observational_control": false,
+    "direct_has_fixed_original_literal": false,
+    "failures": [
+      "fresh type-error diagnostic/no-runtime oracle failed"
+    ],
+    "accepted": false
+  },
+  {
+    "variant": "probe-only-fresh",
+    "stack": "engine",
+    "phase": "type-recovery",
+    "nonce": "21abca7121a24295bfd58d9abd4b6e2b",
+    "before_phase_inputs": {
+      ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+      ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+      ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+      "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+      "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+      "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+      "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+      "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+      "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+      "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+      "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+      "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+      "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+      "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+      "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+      "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+      "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+      "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+      "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+      "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+      "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+      "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+      "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+      "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+      "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+      "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+      "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+      "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+      "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+      "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+      "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+      "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+      "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+      "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+      "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+      "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+      "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+      "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+      "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+      "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+      "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+      "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+      "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+      "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+      "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+      "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+      "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+      "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+      "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+      "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+      "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+      "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+      "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+      "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+      "src/shim.rs": "632aad8751c72fe28a75b918858b70496764bad42610520a149be1f68dd6b249",
+      "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+      "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+      "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+      "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+      "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+      "src/summary.rs": "e6b76b780ca9a3065f961438af19560f7be690c15566bcd6f0c3a3bc3187e418",
+      "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+    },
+    "normalized_summary_sha256": "bda4407c83ae9ccd9dc646f8ae2b91b87c8c5b2c117c4263370514c0831768e2",
+    "environment": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_CACHE": "/home/jeremy/rsm01/s0/engine/blaze-cache",
+      "BLAZE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "BLAZE_OPT": "0",
+      "BLAZE_PROC_MACRO_SERVER": "0",
+      "BLAZE_REMOTE": "off",
+      "CARGO_HOME": "/home/jeremy/rsm01/s0/engine/cargo-home",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+      "CARGO_TARGET_DIR": "/home/jeremy/rsm01/s0/engine/target",
+      "HOME": "/home/jeremy",
+      "JR_ENGINE_HOME": "/home/jeremy/rsm01/s0/engine/engine-home",
+      "RA_JIT_CACHE": "/home/jeremy/rsm01/s0/engine/ra-cache",
+      "RA_JIT_HOME": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime",
+      "RA_JIT_PROC_MACRO_SERVER": "0",
+      "RA_JIT_REMOTE": "off",
+      "RUSTUP_HOME": "/home/jeremy/rsm01/s0/engine/rustup-home",
+      "XDG_CACHE_HOME": "/home/jeremy/rsm01/s0/engine/cache",
+      "XDG_CONFIG_HOME": "/home/jeremy/rsm01/s0/engine/config",
+      "XDG_DATA_HOME": "/home/jeremy/rsm01/s0/engine/data",
+      "XDG_RUNTIME_DIR": "/home/jeremy/rsm01/s0/engine/runtime"
+    },
+    "cwd": "/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63",
+    "command": [
+      "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v28-bin/jr-engine",
+      "test",
+      "--lib",
+      "--",
+      "summary::tests::",
+      "--test-threads=1",
+      "--nocapture"
+    ],
+    "status": 0,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 5.8795166370109655,
+    "noise": {
+      "before": {
+        "busy_seconds": 502495.76,
+        "loadavg": [
+          6.05224609375,
+          4.36669921875,
+          5.4921875
+        ]
+      },
+      "after": {
+        "busy_seconds": 502545.29,
+        "loadavg": [
+          6.52880859375,
+          4.49365234375,
+          5.52734375
+        ]
+      },
+      "child_cpu_seconds": 0.034351999999999994,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 49.495647999969734
+    },
+    "raw": {
+      "stdout": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-recovery.stdout",
+        "bytes": 440,
+        "sha256": "8cd755e68849d39fd6b0172093b1598f104151ba3f369cc264230cc9f1a6fb2e"
+      },
+      "stderr": {
+        "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-recovery.stderr",
+        "bytes": 164,
+        "sha256": "f86404270781563ea7d87447fb6265e7d821f832e660ad349e0678ac20286c12"
+      }
+    },
+    "raw_error": null,
+    "parsed": {
+      "tests": [
+        [
+          "summary::tests::parses_libtest_results",
+          "ok"
+        ],
+        [
+          "summary::tests::shares_overlapping_time",
+          "ok"
+        ],
+        [
+          "summary::tests::splits_passes_without_double_counting",
+          "ok"
+        ],
+        [
+          "summary::tests::test_failures_are_not_compile_errors",
+          "ok"
+        ]
+      ],
+      "passed": 4,
+      "failed": 0,
+      "ignored": 0,
+      "filtered": 144
+    },
+    "input_unchanged": true,
+    "worker_logs": [
+      {
+        "worker_log": "/home/jeremy/rsm01/s0/engine/engine-home/resident-v1/runtime/workers/2f3e6968090f4fb1/log",
+        "before_present": true,
+        "after_present": true,
+        "before": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-recovery-worker-0-before.log",
+          "bytes": 1162,
+          "sha256": "81651f1acee98094852bb869248632301ee9992eb441865dd0af72811e4be772"
+        },
+        "after": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-recovery-worker-0-after.log",
+          "bytes": 1323,
+          "sha256": "4e8d1efaec23b880a5d135684b096e4777be98cf47e804a3e29f718049d600b5"
+        },
+        "delta_kind": "new/replaced/deleted",
+        "delta": {
+          "path": "/home/jeremy/rstp02/probe-only-fresh-engine-type-recovery-worker-0-delta.log",
+          "bytes": 1323,
+          "sha256": "4e8d1efaec23b880a5d135684b096e4777be98cf47e804a3e29f718049d600b5"
+        },
+        "delta_has_E0308": false,
+        "delta_has_current_nonce": false
+      }
+    ],
+    "direct_has_E0308": false,
+    "direct_has_current_nonce": true,
+    "observational_control": false,
+    "direct_has_fixed_original_literal": false,
+    "failures": [],
+    "accepted": true,
+    "expected_recovery_marker": "JR_RUNTIME_EXECUTED_1304562467826443306"
+  }
+]
