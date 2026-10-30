@@ -30,6 +30,16 @@ fn main() { let mut records=vec![Record{inner:Inner{name:String::from("hello")}}
                 expect: Expect::Run("hello!\n"),
             },
             Case {
+                name: "custom_index_nested_field_evaluates_index_once",
+                source: r#"use std::ops::{Index,IndexMut};
+struct Value { text: String } struct Record { value: Value } struct Store { record: Record }
+impl Index<usize> for Store { type Output=Record; fn index(&self,_i:usize)->&Record { &self.record } }
+impl IndexMut<usize> for Store { fn index_mut(&mut self,_i:usize)->&mut Record { &mut self.record } }
+fn index()->usize { println!("index"); 0 }
+fn main() { let mut store=Store{record:Record{value:Value{text:String::from("hello")}}}; store[index()].value.text.push_str("!"); println!("{}",store[index()].value.text.as_str()); }"#,
+                expect: Expect::Run("index\nindex\nhello!\n"),
+            },
+            Case {
                 name: "shared_vec_cannot_mutate_field",
                 source: r#"struct Record { name: String }
 fn main() { let records=vec![Record{name:String::from("hello")}]; let shared=&records; (*shared)[0].name.push_str("!"); }"#,
