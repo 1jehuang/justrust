@@ -328,6 +328,7 @@ pub fn main(args: Vec<OsString>) -> ! {
 
 /// Record `cargo <args>` and exit with cargo's exit code.
 pub fn run(args: Vec<OsString>, opts: Options) -> ! {
+    let mut trace = PhaseTrace::new();
     if !should_record(&args) {
         exec_cargo(&args);
     }
@@ -337,6 +338,7 @@ pub fn run(args: Vec<OsString>, opts: Options) -> ! {
         &subcommand(&args).unwrap_or_default(),
         crate::telemetry::local_route_label(),
     );
+    trace.mark("lifecycle-start");
     match record(&args, opts, &id, &mut lifecycle) {
         Ok(code) => std::process::exit(code),
         Err(e) => {
@@ -634,12 +636,45 @@ fn compatible_toolchain(
     }
 }
 
+/// Bounded, opt-in wall-clock diagnostics. Never enters Cargo's environment or
+/// artifact keys, and does no filesystem work when disabled.
+struct PhaseTrace {
+    last: std::time::Instant,
+    enabled: bool,
+}
+
+impl PhaseTrace {
+    fn new() -> Self {
+        Self {
+            last: std::time::Instant::now(),
+            enabled: std::env::var_os("JUSTRUST_RECORD_PHASE_TRACE").as_deref()
+                == Some(std::ffi::OsStr::new("1")),
+        }
+    }
+
+    fn mark(&mut self, phase: &'static str) {
+        let now = std::time::Instant::now();
+        if self.enabled {
+            eprintln!(
+                "justrust: record-phase {phase} {:.3}ms",
+                now.duration_since(self.last).as_secs_f64() * 1000.0
+            );
+        }
+        self.last = now;
+    }
+}
+
 fn record(
     args: &[OsString],
     opts: Options,
     id: &str,
     lifecycle: &mut crate::telemetry::BuildLifecycle,
 ) -> Result<i32> {
+    let mut trace = PhaseTrace::new();
+    // Git is observational metadata, not an input to Cargo or cache keys.
+    // Start its independent filesystem walk before slot/setup work so a
+    // no-op Cargo run does not pay that setup followed by the whole walk.
+    let git = std::thread::spawn(git_info);
     // A pinned toolchain (`justrust.toml`) replaces the system cargo and
     // rustc. Installed on first use. Fails open to the system toolchain.
     let required = matches!(
@@ -665,6 +700,7 @@ fn record(
         None => paths::real_cargo()?,
     };
     let shim = paths::ensure_rustc_shim()?;
+    trace.mark("toolchain");
     let me = std::env::current_exe()?.canonicalize()?;
     // Respect an existing RUSTC unless it already points at us.
     let real_rustc = match &pinned {
@@ -682,6 +718,7 @@ fn record(
     // Agent runs get a private target dir so parallel agents do not block.
     let slot = opts.agent.then(|| slots::acquire(args)).flatten();
     let cargo_args = slot.as_ref().map_or(args, |s| s.args.as_slice());
+    trace.mark("slot");
 
     let tty = isatty(2);
     let env_keys = [
@@ -725,7 +762,6 @@ fn record(
     };
     std::fs::write(run_dir.join("meta.json"), serde_json::to_vec_pretty(&meta)?)?;
 
-    let git = std::thread::spawn(git_info);
     // Before cargo starts, so it and everything it runs share the scope.
     let scope = crate::sched::enter(id);
 
@@ -813,6 +849,7 @@ fn record(
         cmd.env(crate::test_pool::POOL_ENV, p.sock());
     }
     cmd.args(&cargo_args)
+        .env_remove("JUSTRUST_RECORD_PHASE_TRACE")
         .env("RUSTC", &shim)
         .env("JUSTRUST_REAL_RUSTC", &real_rustc)
         .env("JUSTRUST_RUN_DIR", &run_dir)
@@ -850,6 +887,7 @@ fn record(
         None
     };
     install_signal_forwarding();
+    trace.mark("prepare");
     let mut child = cmd
         .spawn()
         .with_context(|| format!("spawning {}", real_cargo.display()))?;
@@ -905,6 +943,7 @@ fn record(
     };
 
     let (mut code, mut cpu_user, cpu_sys) = wait_child(&mut child, job.as_ref());
+    trace.mark("cargo");
     // Cargo may finish long before its pooled tests. Do not retain a reaped
     // PID that the OS could reuse while those tests are still running.
     CHILD_PID.store(0, Ordering::SeqCst);
@@ -920,6 +959,7 @@ fn record(
     }
     let end = paths::now();
     let sched = scope.map(crate::sched::Scope::finish);
+    trace.mark("drain-scope");
     {
         let (lock, cv) = &*done;
         *lock.lock().unwrap() = true;
@@ -930,7 +970,9 @@ fn record(
     // slow or stuck one must not hold up the build's exit.
     let early = early_rx.and_then(|rx| rx.recv_timeout(std::time::Duration::from_millis(50)).ok());
     let (samples, procs) = sampler.join().unwrap_or_default();
+    trace.mark("sampler");
     let git = git.join().unwrap_or_default();
+    trace.mark("git-join");
 
     let (lines, journal_complete) = {
         let mut capture = lines.lock().unwrap();
@@ -975,6 +1017,7 @@ fn record(
         );
     }
     lifecycle.done(code, logs_complete);
+    trace.mark("finish");
     // Early diagnostics, auto mode: warm a daemon for busy workspaces,
     // in the background, after the build.
     if opts.agent {
@@ -987,6 +1030,7 @@ fn record(
         // Detached and at most hourly; never delays or fails this run.
         slots::maybe_gc_background(&s.info);
     }
+    trace.mark("cleanup");
     Ok(code)
 }
 
