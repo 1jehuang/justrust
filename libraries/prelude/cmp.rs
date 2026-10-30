@@ -164,6 +164,26 @@ impl PartialEq for Ordering {
 }
 impl Eq for Ordering {}
 
+impl PartialOrd for Ordering {
+    fn partial_cmp(&self, other: &Ordering) -> Option<Ordering> {
+        Option::Some(self.cmp(other))
+    }
+}
+
+impl Ord for Ordering {
+    fn cmp(&self, other: &Ordering) -> Ordering {
+        match (*self, *other) {
+            (Ordering::Less, Ordering::Less) => Ordering::Equal,
+            (Ordering::Less, _) => Ordering::Less,
+            (Ordering::Equal, Ordering::Less) => Ordering::Greater,
+            (Ordering::Equal, Ordering::Equal) => Ordering::Equal,
+            (Ordering::Equal, Ordering::Greater) => Ordering::Less,
+            (Ordering::Greater, Ordering::Greater) => Ordering::Equal,
+            (Ordering::Greater, _) => Ordering::Greater,
+        }
+    }
+}
+
 impl PartialEq for i8 {
     fn eq(&self, other: &i8) -> bool {
         *self == *other

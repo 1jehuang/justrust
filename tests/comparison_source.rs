@@ -8,6 +8,39 @@ use std::process::Command;
 mod closure_oracle;
 
 #[test]
+fn ordering_total_order_matches_stock_for_every_variant_pair() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "ordering-total-order",
+        &[Case {
+            name: "all_pairs_and_generic_defaults",
+            source: r#"use std::cmp::Ordering;
+fn pair(a:Ordering,b:Ordering){
+    let c=a.cmp(&b);
+    println!("{} {} {} {}",c.is_lt(),c.is_eq(),c.is_gt(),a.partial_cmp(&b).unwrap()==c);
+}
+fn choose<T:Ord>(a:T,b:T)->T{a.min(b)}
+fn main(){
+    pair(Ordering::Less,Ordering::Less);
+    pair(Ordering::Less,Ordering::Equal);
+    pair(Ordering::Less,Ordering::Greater);
+    pair(Ordering::Equal,Ordering::Less);
+    pair(Ordering::Equal,Ordering::Equal);
+    pair(Ordering::Equal,Ordering::Greater);
+    pair(Ordering::Greater,Ordering::Less);
+    pair(Ordering::Greater,Ordering::Equal);
+    pair(Ordering::Greater,Ordering::Greater);
+    let lo=Ordering::Less;let hi=Ordering::Greater;
+    println!("{} {} {} {}",choose(lo,hi).is_lt(),lo.max(hi).is_gt(),Ordering::Equal.clamp(lo,hi).is_eq(),choose(&lo,&hi).is_lt());
+}"#,
+            expect: Expect::Run(
+                "false true false true\ntrue false false true\ntrue false false true\nfalse false true true\nfalse true false true\ntrue false false true\nfalse false true true\nfalse false true true\nfalse true false true\ntrue true true true\n",
+            ),
+        }],
+    );
+}
+
+#[test]
 fn reference_ordering_forwards_exact_pointee_traits() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(
