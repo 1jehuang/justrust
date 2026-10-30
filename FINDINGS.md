@@ -1,5 +1,22 @@
 # Findings: where agent build time goes
 
+## 2026-10-29: Clippy's cached path still paid for ignored build-tree scans
+
+Fixed ignored-lockfile discovery in `29c6e250b`: collapse ignored directories
+before walking them, pruning build output instead of filtering its lockfiles
+after Git traverses all artifacts. The local Jcode scan diagnostic retained
+2655 files and seven oversized files. Its five scans went from
+1.890-2.239 s to 0.035-0.038 s (`20261029-201053352-1916653`, after).
+This is a focused source-scan observation, not a compiler or broad speed claim.
+Pinned hosted no-op suite comparison: 0.92 -> 0.83 s, **within noise**.
+Installed cached Clippy: 1.57 s client-visible, 0.04 s Cargo, all 62 units fresh
+(`20261029-201238735-1925361`). Initial daemon mirror initialization still
+cost 14.65 s on this 68k-file tree. Hosted check, all-target Clippy and all
+831 tests passed. Actual-edit Clippy profile: 2.25 s compiler, including
+0.366 s crate lint traversal (`20261029-200741491-1880584`). No unsafe lint
+skipping or speculative compiler optimization. Full evidence, cold-mirror
+limitation and blocked comprehensive gate: `docs/clippy-performance-20261029.md`.
+
 ## 2026-10-30: measuring incremental reuse opportunity, not a claimed ceiling
 
 Native self-profile markers now distinguish proven-green query value acquisition
