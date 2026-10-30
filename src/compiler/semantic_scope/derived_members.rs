@@ -145,13 +145,13 @@ impl ScopeArena {
         derive: SpanId,
         nominal: SpanId,
     ) -> Result<(), ScopeError> {
-        self.check_names(names)?;
+        let arena = self.metadata_owner(names, admission.owner)?;
         admission.expansion.check_modules(names, modules)?;
-        self.check_item_proof(&admission.expansion)?;
-        if admission.owner != self.owner || metadata.owner != self.owner {
+        arena.check_item_proof(&admission.expansion)?;
+        if metadata.owner != arena.owner {
             return Err(ScopeError::ForeignOwner);
         }
-        let original = self
+        let original = arena
             .items
             .metadata
             .members

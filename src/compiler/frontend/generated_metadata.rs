@@ -809,6 +809,202 @@ impl Parser<'_, '_> {
 mod tests {
     use super::*;
 
+    fn merged_metadata_program() -> (Program, Program) {
+        use crate::compiler::expansion_budget::ExpansionBudget;
+        use crate::compiler::owner_path::{OwnerDomain, standalone_issued};
+        let parsed = parse_unresolved("macro_rules! item{()=>{#[doc=\"first\"]#[derive(Clone,Copy)]struct A;#[doc=\"second\"]#[derive(Clone,Copy)]struct B;}}item!();fn main(){}").unwrap();
+        let original = parsed.program.clone();
+        let budget = ExpansionBudget::default();
+        let owner = standalone_issued(&budget, OwnerDomain::TokenSession).unwrap();
+        let merged = merge_crate_files(&[parsed], budget, owner).unwrap().program;
+        assert!(
+            !original
+                .names
+                .budget()
+                .same_authority(merged.names.budget())
+        );
+        (original, merged)
+    }
+
+    #[test]
+    fn merged_metadata_validates_exact_owner_without_merging_task_budgets() {
+        let (original, merged) = merged_metadata_program();
+        validate(&original).unwrap();
+        validate(&merged).unwrap();
+        let (_, foreign) = merged_metadata_program();
+        for change in 0..6 {
+            let mut forged = merged.clone();
+            let mut attachments = forged.generated_metadata.to_vec();
+            match change {
+                0 => attachments[0].binding = attachments[1].binding,
+                1 => attachments[0].owner = attachments[1].owner,
+                2 => attachments[0].attributes[0].close = attachments[1].attributes[0].close,
+                3 => attachments[0].copies[0].proof = attachments[1].copies[0].proof.clone(),
+                4 => attachments[0].copies[1].proof = attachments[1].copies[1].proof.clone(),
+                _ => attachments[0].binding = foreign.generated_metadata[0].binding,
+            }
+            forged.generated_metadata = attachments.into();
+            assert!(
+                validate(&forged).is_err(),
+                "accepted linked metadata forgery {change}"
+            );
+        }
+        // The serving view is an explicit capability, not permission to call
+        // an issuing arena with any other view's budget or unrelated names.
+        let attachment = &merged.generated_metadata[0];
+        let spans = ordered_spans(&attachment.attributes, &*merged.names).unwrap();
+        for (scopes, names) in [
+            (original.scopes.as_ref().unwrap(), &merged.names),
+            (merged.scopes.as_ref().unwrap(), &foreign.names),
+        ] {
+            assert!(matches!(
+                scopes.validate_item_metadata(
+                    &**names,
+                    &*merged.modules,
+                    attachment.binding,
+                    &attachment.admission,
+                    (attachment.scope, attachment.owner),
+                    &spans,
+                ),
+                Err(crate::compiler::semantic_scope::ScopeError::ForeignNames)
+            ));
+        }
+    }
+
+    #[test]
+    fn merged_metadata_preserves_issuing_and_serving_budget_failures() {
+        use crate::compiler::semantic_scope::ScopeError;
+        use crate::compiler::token_session::TokenError;
+        for poison_owner in [false, true] {
+            let (original, merged) = merged_metadata_program();
+            validate(&merged).unwrap();
+            let attachment = &merged.generated_metadata[0];
+            let spans = ordered_spans(&attachment.attributes, &*merged.names).unwrap();
+            let scopes = merged.scopes.as_ref().unwrap();
+            let emissions = attachment
+                .copies
+                .iter()
+                .map(|emitted| {
+                    let declaration = &merged.structs[emitted.nominal];
+                    let nominal = *declaration.name.segments().last().unwrap();
+                    (
+                        emitted.proof.clone(),
+                        merged.names.span(emitted.derive).unwrap(),
+                        merged.names.span(nominal).unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let failure = if poison_owner {
+                original.names.budget().poison_allocation()
+            } else {
+                merged.names.budget().poison_allocation()
+            };
+            let mut results = vec![scopes.validate_item_metadata(
+                &*merged.names,
+                &*merged.modules,
+                attachment.binding,
+                &attachment.admission,
+                (attachment.scope, attachment.owner),
+                &spans,
+            )];
+            for (proof, derive, nominal) in emissions {
+                results.push(match proof {
+                    generated_derive::EmissionProof::Copy(proof) => scopes.validate_item_copy(
+                        &*merged.names,
+                        proof,
+                        attachment.binding,
+                        derive,
+                        nominal,
+                    ),
+                    generated_derive::EmissionProof::Clone(proof) => scopes
+                        .validate_derived_member(
+                            &*merged.names,
+                            &*merged.modules,
+                            &proof,
+                            attachment.binding,
+                            derive,
+                            nominal,
+                        ),
+                });
+            }
+            for result in results {
+                assert!(
+                    matches!(result, Err(ScopeError::Token(TokenError::Budget(actual))) if actual == failure)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn merged_clone_self_recipe_rejects_nominal_scope_and_source_transplants() {
+        let (_, original) = merged_metadata_program();
+        validate(&original).unwrap();
+        let clone_index = |program: &Program, attachment: usize| {
+            program.generated_metadata[attachment]
+                .copies
+                .iter()
+                .find(|emission| {
+                    matches!(emission.proof, generated_derive::EmissionProof::Clone(_))
+                })
+                .unwrap()
+                .implementation
+        };
+        let first = clone_index(&original, 0);
+        let second = clone_index(&original, 1);
+        let (_, foreign) = merged_metadata_program();
+        for change in 0..7 {
+            let mut forged = original.clone();
+            match change {
+                0 => forged.impls[first].self_ty = forged.impls[second].self_ty.clone(),
+                1 => forged.impls[first].items[0].function.module = forged.modules.core_root(),
+                2 | 3 => {
+                    let path = forged.structs[usize::from(change == 3)].name.clone();
+                    let Some(Expr::Struct { name, .. }) = forged.impls[first].items[0]
+                        .function
+                        .body
+                        .tail
+                        .as_deref_mut()
+                    else {
+                        panic!("unit Clone body")
+                    };
+                    *name = path;
+                }
+                4 => {
+                    let source = &forged.structs[0].name;
+                    let path = AstPath::new(&*forged.names, PathAnchor::SelfType, &[])
+                        .unwrap()
+                        .with_resolved_use(&*forged.names, source)
+                        .unwrap();
+                    let Some(Expr::Struct { name, .. }) = forged.impls[first].items[0]
+                        .function
+                        .body
+                        .tail
+                        .as_deref_mut()
+                    else {
+                        panic!("unit Clone body")
+                    };
+                    *name = path;
+                }
+                5 => {
+                    forged.impls[first].items[0].function.lexical_scope =
+                        forged.impls[second].items[0].function.lexical_scope
+                }
+                _ => {
+                    forged.impls[first].items[0].function.body.tail =
+                        foreign.impls[clone_index(&foreign, 0)].items[0]
+                            .function
+                            .body
+                            .tail
+                            .clone()
+                }
+            }
+            assert!(
+                validate(&forged).is_err(),
+                "accepted Clone Self recipe forgery {change}"
+            );
+        }
+    }
+
     fn program() -> Program {
         parse("macro_rules! item{()=>{#[doc=\"first\"]fn first(){}#[doc=\"second\"]fn second(){}}}item!();fn main(){}").unwrap()
     }

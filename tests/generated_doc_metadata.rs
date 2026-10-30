@@ -1,7 +1,58 @@
 //! Genuine item-macro metadata retains expansion identity and normal body checks.
 use justrust_engine::compiler;
+#[path = "support/source_macro_binding_oracle.rs"]
+mod file_oracle;
 #[path = "support/oracle.rs"]
 mod oracle;
+
+#[test]
+fn generated_metadata_in_file_views_preserves_issuing_owner() {
+    for source in [SOURCE, COMBINED_SOURCE] {
+        file_oracle::Fixture::new(source, &[], None).assert_positive();
+    }
+    let child = "macro_rules! item{()=>{#[doc=concat!(\"original \",stringify!(Unit))]#[derive(Debug,Clone,Copy)]pub struct Unit;}}item!();pub fn run(){let original=Unit;let copied=original;let cloned=original.clone();println!(\"{:?} {:?} {:?}\",original,copied,cloned);}";
+    file_oracle::Fixture::new(
+        "mod child;fn main(){child::run();}",
+        &[("child.rs", child)],
+        None,
+    )
+    .assert_positive();
+    let inline = format!("mod child {{{child}}}fn main(){{child::run();}}");
+    file_oracle::Fixture::new(&inline, &[], None).assert_positive();
+    file_oracle::Fixture::new(
+        "mod child;fn main(){child::nested::run();}",
+        &[("child.rs", "pub mod nested;"), ("child/nested.rs", child)],
+        None,
+    )
+    .assert_positive();
+    file_oracle::Fixture::new("fn main(){dep::run();}", &[], Some(child)).assert_positive();
+}
+
+#[test]
+fn file_view_metadata_does_not_hide_invalid_unused_expansions() {
+    let invalid = "macro_rules! item{()=>{#[doc=\"not a type permission\"]pub fn unused()->u8{true}}}item!();";
+    file_oracle::Fixture::new("mod child;fn main(){}", &[("child.rs", invalid)], None)
+        .assert_negative();
+    file_oracle::Fixture::new("fn main(){}", &[], Some(invalid)).assert_negative();
+}
+
+#[test]
+fn file_view_generated_metadata_check_has_no_codegen() {
+    let fixture = file_oracle::Fixture::new(COMBINED_SOURCE, &[], None);
+    for workers in [1, 8] {
+        let checked = fixture.native(workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert_eq!(checked.report.events_dropped, 0);
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, count)| { *count == 1 && !matches!(key.kind, 103 | 105 | 130..=133) })
+        );
+    }
+}
 
 fn run_worker_image(image: Vec<u8>, workers: usize, tag: &str, expected: &[u8]) {
     use std::os::unix::fs::PermissionsExt;

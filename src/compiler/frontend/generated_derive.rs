@@ -83,7 +83,11 @@ impl Parser<'_, '_> {
                 body: Block {
                     statements: Vec::new(),
                     tail: Some(Box::new(Expr::Struct {
-                        name: declaration.name.clone(),
+                        // The exact nominal is already sealed in the owning
+                        // impl's self type. Enclosing module-name occurrences
+                        // belong to the declaration, not this generated body.
+                        name: AstPath::new(self.names, PathAnchor::SelfType, &[])
+                            .map_err(native_adapter::name_error)?,
                         fields: Vec::new(),
                     })),
                 },
@@ -138,9 +142,20 @@ pub(super) fn validate_unit_clone(
     let Some(Expr::Struct { name, fields }) = function.body.tail.as_deref() else {
         return Err("generated Clone body changed".into());
     };
-    let mut constructed = shape.clone();
-    constructed.self_ty = Type::Named(name.clone());
-    validate_unit_copy(names, declaration, &constructed)?;
+    // Both the semantic path and its original-use certificate must be the
+    // closed Self constructor. The owning impl still undergoes exact nominal,
+    // module and occurrence validation above, so this cannot name another unit
+    // or turn a foreign source occurrence into generated-body authority.
+    let original = name
+        .original_use(names)
+        .map_err(|error| error.to_string())?;
+    if name.anchor() != PathAnchor::SelfType
+        || !name.is_empty()
+        || original.anchor() != PathAnchor::SelfType
+        || !original.is_empty()
+    {
+        return Err("generated Clone Self constructor changed".into());
+    }
     if !function.params.is_empty()
         || !matches!(function.result, Type::SelfType)
         || !matches!(

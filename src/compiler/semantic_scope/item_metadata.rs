@@ -209,6 +209,23 @@ impl ScopeArenaBuilder {
 }
 
 impl ScopeArena {
+    /// Authenticate the serving view once, then read the exact issuing file's
+    /// immutable metadata. Linked files retain their own task budgets, so the
+    /// issuing arena must not compare its budget to the merged name view's.
+    /// Both budgets remain checked, and no unknown owner is admitted.
+    fn metadata_owner(
+        &self,
+        names: &impl NameAccess,
+        owner: NonZeroU64,
+    ) -> Result<&Self, ScopeError> {
+        self.check_names(names)?;
+        let arena = self.linked_arena(owner)?.unwrap_or(self);
+        arena.budget.check()?;
+        if !names.session().serves(arena.names) {
+            return Err(ScopeError::ForeignNames);
+        }
+        Ok(arena)
+    }
     pub(crate) fn validate_item_copy(
         &self,
         names: &impl NameAccess,
@@ -217,16 +234,11 @@ impl ScopeArena {
         derive: SpanId,
         nominal: SpanId,
     ) -> Result<(), ScopeError> {
-        if id.owner == metadata.owner
-            && let Some(arena) = self.linked_arena(id.owner)?
-        {
-            return arena.validate_item_copy(names, id, metadata, derive, nominal);
-        }
-        self.check_names(names)?;
-        if id.owner != self.owner || metadata.owner != self.owner {
+        let arena = self.metadata_owner(names, id.owner)?;
+        if metadata.owner != arena.owner {
             return Err(ScopeError::ForeignOwner);
         }
-        let binding = self
+        let binding = arena
             .items
             .metadata
             .copies
@@ -246,17 +258,11 @@ impl ScopeArena {
         location: (ModuleId, SpanId),
         attributes: &[SpanId],
     ) -> Result<(), ScopeError> {
-        if let Some(arena) = self.linked_arena(id.owner)? {
-            return arena.validate_item_metadata(names, modules, id, proof, location, attributes);
-        }
+        let arena = self.metadata_owner(names, id.owner)?;
         let (scope, item) = location;
-        self.check_names(names)?;
         proof.check_modules(names, modules)?;
-        self.check_item_proof(proof)?;
-        if id.owner != self.owner {
-            return Err(ScopeError::ForeignOwner);
-        }
-        let state = &self.items.metadata;
+        arena.check_item_proof(proof)?;
+        let state = &arena.items.metadata;
         let binding = state
             .bindings
             .get(id.index as usize)
@@ -277,7 +283,7 @@ impl ScopeArena {
             .get(binding.start..end)
             .ok_or(ScopeError::ConflictingAssociation)?;
         for (original, supplied) in original.iter().zip(attributes) {
-            self.budget.charge(Counter::Work, 1)?;
+            arena.budget.charge(Counter::Work, 1)?;
             if original != supplied {
                 return Err(ScopeError::ConflictingAssociation);
             }
