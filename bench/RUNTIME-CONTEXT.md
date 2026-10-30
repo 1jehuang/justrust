@@ -75,6 +75,36 @@ must not fabricate authentication to hide this remaining correctness issue.
 The coordinator must resolve it outside the harness-only lane before restarting
 a complete comparison. All original failure logs remain retained.
 
+## Additional stopped-baseline evidence
+
+The coordinator reports the original scalar baseline stopped at 22/40 points,
+with seven failed points. This partial run is not a passing broad gate.
+Inspection of the retained point-11 log confirms two source/schema assertions
+that runtime isolation cannot repair:
+
+- `tool_descriptions_stay_under_token_cap`: `compile_remote` is approximately
+  101 tokens against a 20-token cap.
+- `tool_parameter_descriptions_stay_under_token_cap`: `gmail`'s `bcc` description
+  is approximately 26 tokens against a 25-token cap.
+
+The same log has missing-repository assertions, a background-wake timeout, and
+`post_tool_feedback_hook_appends_stdout_to_tool_result` failing with numbered
+`hello` output. The latter two are not established as runtime-context fixes.
+The full retained log is:
+
+```text
+/home/jeremy/.justrust/bench/versus/logs/synth-retention-run-20261029-211336755-1968926792.log
+```
+
+The coordinator additionally reports workspace hint-chip bounds races at points
+1/6 and a bundled GitHub applet missing `Review requested1` at point 9. Those
+reports have not been independently replayed in this harness lane. Catalog and
+TUI failures also recur at later points. The focused eight-test replay above
+must not be generalized into an assertion that these other failures are fixed.
+Pinned source, test expectations, coverage, and workload points remain unchanged.
+A new complete comparison is still unauthorized until the coordinator resolves
+or explicitly accounts for all these baseline correctness failures.
+
 Focused harness regression command:
 
 ```sh
