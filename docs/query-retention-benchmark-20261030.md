@@ -114,3 +114,25 @@ gate remains blocked, not replaced by the native fixture. All points, coverage
 errors, command/change breakdowns, noise and cache/storage costs must be reviewed
 before a decision. Even a successful result would establish only a measured
 frontier for this candidate and workload, not the theoretical maximum reuse.
+
+## Named body-test diagnostic also blocked
+
+A narrower `bench/suite.py run justrust-body-test -n 3 --warmup 1` attempt
+used the same frozen compiler/client and explicit off/on scalar flags. Its
+baseline repeatedly failed
+`buildscript::tests::wrapper_replaces_elf_and_falls_back`: the pinned test
+unconditionally unwraps `wrap()`, but `wrap()` correctly returns `None` when
+the experiment's `JUSTRUST_DEPCACHE=0` disables build-script caching. This is
+an incompatible test precondition in this controlled configuration, not proof
+of a compiler regression. The source snapshot and assertion were not changed.
+
+The named runner printed the failed-test count but returned success, allowing
+the private orchestrator to start the candidate. The coordinator stopped that
+candidate before completion and did not run or accept a comparison. The runner
+acceptance hole is being fixed separately. Baseline samples were also marked
+noisy. Full baseline command output, summaries, timing observations and stopped
+launcher state are retained in
+`bench/results/query-value-retention-20261030/blocked-focused-body-test/`.
+These are failure evidence only, not an accepted speed measurement. A future
+diagnostic must use a workload compatible with its cache controls or explicitly
+declare a different matched configuration before running both modes.

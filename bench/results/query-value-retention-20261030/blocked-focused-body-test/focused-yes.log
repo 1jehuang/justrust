@@ -1,0 +1,20 @@
+bench: justrust-body-test (1/1)
+  note justrust-body-test: 1 test(s) failed (justrust log 20261029-215306232-3129798723)
+  justrust-body-test 1/4: 28.25s compile 27.86s units 61 id 20261029-215306232-3129798723 noisy (warmup)
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/suite.py", line 1698, in <module>
+    main()
+    ~~~~^^
+  File "/home/jeremy/justrust/bench/suite.py", line 1694, in main
+    args.fn(args)
+    ~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/suite.py", line 1478, in cmd_run
+    result["scenarios"][name] = run_scenario(scenario, args.n, args.warmup, args.quiet_wait)
+                                ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/suite.py", line 984, in run_scenario
+    wait_quiet(quiet_wait)
+    ~~~~~~~~~~^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/suite.py", line 603, in wait_quiet
+    time.sleep(5)
+    ~~~~~~~~~~^^^
+KeyboardInterrupt

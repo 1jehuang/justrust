@@ -1,0 +1,13 @@
+bench: justrust-body-test (1/1)
+  note justrust-body-test: 1 test(s) failed (justrust log 20261029-215031868-3109211409)
+  justrust-body-test 1/4: 25.85s compile 25.37s units 61 id 20261029-215031868-3109211409 noisy (warmup)
+  note justrust-body-test: 1 test(s) failed (justrust log 20261029-215127953-3109211761)
+  justrust-body-test 2/4: 2.12s compile 1.73s units 5 id 20261029-215127953-3109211761 noisy
+  note justrust-body-test: 1 test(s) failed (justrust log 20261029-215200300-3109211115)
+  justrust-body-test 3/4: 2.50s compile 2.06s units 5 id 20261029-215200300-3109211115 noisy
+  note justrust-body-test: 1 test(s) failed (justrust log 20261029-215233009-3109211707)
+  justrust-body-test 4/4: 2.09s compile 1.72s units 5 id 20261029-215233009-3109211707 noisy
+scenario                      median     min     max   n   quiet 1st err  start compile  tests  front codegen   incr   link units
+justrust-body-test              2.12    2.09    2.50   3       -    2.10   0.04    1.73   0.31   1.59    0.37   0.37   0.46     5
+
+saved /home/jeremy/.jcode/scratch/query-retention-bench-20261030/focused-no.json
