@@ -621,6 +621,11 @@ void _start(void){{
  if(call(79,(long)observation,512,0)!=-1)die(83);
  if(call(95,022,0,0)!=-1)die(84);
  if(call(157,25,(long)observation,0)!=-1)die(101);
+ static const long architecture_ops[]={{0x1001,0x1003,0x1004,0x1011,0x1012,0x1021,0x1022,0x1023,0x1024,0x5001,-1}};
+ for(long i=0;i<(long)(sizeof architecture_ops/sizeof architecture_ops[0]);i++){{
+  if(call(158,architecture_ops[i],(long)observation,0)!=-1)die(105);
+  if(call(158,architecture_ops[i],0,0)!=-1)die(106);
+ }}
  volatile int clear_tid=0x12345678;
  if(call(218,(long)&clear_tid,0,0)!=-1||clear_tid!=0x12345678)die(102);
  static unsigned char restartable[32] __attribute__((aligned(32)));

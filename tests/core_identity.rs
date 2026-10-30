@@ -739,7 +739,9 @@ fn native_probe_runs_under_immutable_namespace_without_unproven_warning() {
             }
         }
     }
-    eprintln!("identity probe immutable-namespace acceptance: disjoint client/lock roots, 1/8 workers, CHECK+BUILD+run");
+    eprintln!(
+        "identity probe immutable-namespace acceptance: disjoint client/lock roots, 1/8 workers, CHECK+BUILD+run"
+    );
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -823,5 +825,7 @@ fn native_probe_namespace_boundary_fails_closed() {
             }
         }
     }
-    eprintln!("identity probe namespace boundary: 5 capture-time rejections x 1/8 workers x CHECK+BUILD, fail closed");
+    eprintln!(
+        "identity probe namespace boundary: 5 capture-time rejections x 1/8 workers x CHECK+BUILD, fail closed"
+    );
 }

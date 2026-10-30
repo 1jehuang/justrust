@@ -142,6 +142,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                     cap_lints_allow: false,
                 });
             }
+            Some("--panic") => {
+                let value = args.next().ok_or("missing panic strategy")?;
+                source_options.panic_unwind = match value.to_str() {
+                    Some("unwind") => true,
+                    Some("abort") => false,
+                    _ => return Err("--panic must be unwind or abort".into()),
+                };
+            }
             Some("--opt") => {
                 let value = args.next().ok_or("missing optimizer mode")?;
                 source_options.opt = compiler::ssa::OptMode::parse(

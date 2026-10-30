@@ -319,7 +319,7 @@ fn controlled_link_initial_auxv_random_is_normalized_across_launches() {
 .global _start
 .bss
 .balign 8
-observed: .skip 64
+observed: .skip 96
 .text
 _start:
  mov (%rsp),%rcx
@@ -362,21 +362,32 @@ _start:
  mov 24(%rax),%rcx
  mov %rcx,observed+56(%rip)
  or $4,%r8d
-10: cmp $3,%rdx
+10: cmp $11,%rdx
+ jb 11f
+ cmp $14,%rdx
+ ja 11f
+ mov %rdx,%rcx
+ sub $11,%rcx
+ lea observed+64(%rip),%rdi
+ mov %rax,(%rdi,%rcx,8)
+ mov $8,%eax
+ shl %cl,%eax
+ or %eax,%r8d
+11: cmp $3,%rdx
  je 8f
  cmp $9,%rdx
  jne 2b
 8: test %rax,%rax
  jz 9f
  jmp 2b
-6: cmp $7,%r8d
+6: cmp $127,%r8d
  jne 9f
  mov $1,%eax
  mov $1,%edi
  lea observed(%rip),%rsi
- mov $64,%edx
+ mov $96,%edx
  syscall
- cmp $64,%rax
+ cmp $96,%rax
  jne 9f
  mov $60,%eax
  xor %edi,%edi
@@ -401,6 +412,9 @@ _start:
     expected.extend_from_slice(&56u64.to_le_bytes());
     expected.extend_from_slice(b"jr-controlled-ld");
     expected.extend_from_slice(&[0; 16]);
+    for _ in 0..4 {
+        expected.extend_from_slice(&1000u64.to_le_bytes());
+    }
     let alternate = scratch.0.join("different-private-prefix-length");
     fs::create_dir(&alternate).unwrap();
     fs::copy(scratch.0.join("probe"), alternate.join("probe")).unwrap();

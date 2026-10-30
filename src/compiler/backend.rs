@@ -446,6 +446,10 @@ fn owning_projection(function: &cfg::Function, place: &ir::Place) -> Result<bool
 
 struct Emitter<'a> {
     overflow_checks: bool,
+    /// panic=unwind: r15 is the in-flight panic flag, checked after calls.
+    unwind: bool,
+    /// Jumps to this function's unwind cleanup path.
+    unwinds: Vec<usize>,
     object: Object,
     concrete: NativeConcrete<'a>,
     resolve: &'a dyn Fn(&ir::CallTarget) -> Result<String, String>,
@@ -959,6 +963,52 @@ impl<'a> Emitter<'a> {
                 self.normalize_integer(*integer);
             }
         }
+        Ok(())
+    }
+    /// panic=unwind landing pad: drop every still-initialized owning local
+    /// in reverse declaration order, then return with the panic flag set.
+    /// Destructors run with the flag cleared so their own calls proceed.
+    fn unwind_cleanup(&mut self) -> Result<(), String> {
+        let sites = std::mem::take(&mut self.unwinds);
+        if sites.is_empty() {
+            return Ok(());
+        }
+        let pad = self.position();
+        for at in sites {
+            self.patch(at, pad)?;
+        }
+        self.bytes(&[0x45, 0x31, 0xff]); // xor r15d, r15d
+        let function = self.function();
+        for local in (0..function.locals.len()).rev() {
+            let Some(Some(offset)) = self.drop_flags.get(local).copied() else {
+                continue;
+            };
+            let destructor = match self
+                .concrete
+                .facts()
+                .normal_drop_plan(&function.locals[local].ty)
+                .map_err(|e| e.into_legacy_diagnostic(self.concrete.facts().budget()))?
+            {
+                super::traits::NormalDropPlan::Destructor(d) => d,
+                _ => continue,
+            };
+            self.bytes(&[0x80, 0xbd]); // cmp byte [rbp+disp32], 0
+            self.i32(offset);
+            self.bytes(&[0]);
+            let skip = self.jump(&[0x0f, 0x84]);
+            self.set_drop_flag(LocalId(local), false);
+            let place = ir::Place {
+                local: LocalId(local),
+                projection: Vec::new(),
+            };
+            self.place_address(&place)?;
+            self.bytes(&[0x50]);
+            self.drop_elaborated(LocalId(local), &mut Vec::new(), &destructor)?;
+            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+            let here = self.position();
+            self.patch(skip, here)?;
+        }
+        self.bytes(&[0x41, 0xbf, 1, 0, 0, 0, 0xc9, 0xc3]); // mov r15d,1; leave; ret
         Ok(())
     }
     fn trap_block(&mut self) -> Result<(), String> {
@@ -2536,9 +2586,18 @@ impl<'a> Emitter<'a> {
             ),
             budget: &budget,
         };
-        let result = emit_panic_payload(&mut code, &panic.message, &panic.location, bounds);
+        let result = emit_panic_payload(
+            &mut code,
+            &panic.message,
+            &panic.location,
+            bounds,
+            self.unwind,
+        );
         self.object = code.object;
-        result
+        if let Some(at) = result? {
+            self.unwinds.push(at);
+        }
+        Ok(())
     }
 }
 
@@ -2635,7 +2694,7 @@ pub(crate) fn emit_panic_into(
 }
 
 fn emit_panic(this: &mut dyn PanicSink, message: &str, location: &str) -> Result<(), String> {
-    emit_panic_payload(this, message, location, None)
+    emit_panic_payload(this, message, location, None, false).map(|_| ())
 }
 
 fn emit_panic_payload(
@@ -2643,7 +2702,8 @@ fn emit_panic_payload(
     message: &str,
     location: &str,
     bounds: Option<&ir::RuntimeLocation>,
-) -> Result<(), String> {
+    unwind: bool,
+) -> Result<Option<usize>, String> {
     if bounds.is_some() {
         this.bytes(&[0x50, 0x52])?; // preserve unsigned index and length before syscalls
     }
@@ -2717,6 +2777,20 @@ fn emit_panic_payload(
         this.patch(more, retry)?;
         let abort = this.position();
         this.patch(failed_write, abort)?;
+        if unwind {
+            // panic=unwind: raise the r15 panic flag and leave through the
+            // function's cleanup path, which runs pending drops and returns.
+            this.bytes(&[0x41, 0xbf, 1, 0, 0, 0])?;
+            let unwinding = this.jump(&[0xe9])?;
+            let fallback = this.position();
+            for failed in [failed_sigabrt, failed_sigpipe] {
+                this.patch(failed, fallback)?;
+            }
+            this.bytes(&[
+                0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+            ])?;
+            return Ok(Some(unwinding));
+        }
 
         // This abort-only runtime does not produce core files. In particular a
         // piped core_pattern must not delay termination in an external service.
@@ -2754,7 +2828,7 @@ fn emit_panic_payload(
         this.bytes(&[
             0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
         ])?;
-        Ok(())
+        Ok(None)
     }
 }
 
@@ -3600,6 +3674,11 @@ impl Emitter<'_> {
                     }
                     _ => return Err("invalid call transport".into()),
                 }
+                if self.unwind {
+                    self.bytes(&[0x45, 0x85, 0xff]); // test r15d, r15d
+                    let at = self.jump(&[0x0f, 0x85]);
+                    self.unwinds.push(at);
+                }
                 if cleanup != 0 {
                     self.bytes(&[0x48, 0x81, 0xc4]);
                     self.i32(cleanup);
@@ -3656,7 +3735,21 @@ pub fn emit_cfg_function_with_overflow(
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
     overflow_checks: bool,
 ) -> Result<Object, String> {
-    emit_native_cfg(NativeConcrete::Ordinary(concrete), resolve, overflow_checks)
+    emit_cfg_function_with_profile(concrete, resolve, overflow_checks, false)
+}
+
+pub fn emit_cfg_function_with_profile(
+    concrete: &ownership::ConcreteCfg,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    overflow_checks: bool,
+    unwind: bool,
+) -> Result<Object, String> {
+    emit_native_cfg(
+        NativeConcrete::Ordinary(concrete),
+        resolve,
+        overflow_checks,
+        unwind,
+    )
 }
 
 #[cfg(test)]
@@ -3664,22 +3757,29 @@ pub(super) fn emit_physical_cfg_function(
     concrete: &ownership::PhysicalConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
 ) -> Result<Object, String> {
-    emit_physical_cfg_function_with_overflow(concrete, resolve, true)
+    emit_physical_cfg_function_with_profile(concrete, resolve, true, false)
 }
 
-pub(super) fn emit_physical_cfg_function_with_overflow(
+pub(super) fn emit_physical_cfg_function_with_profile(
     concrete: &ownership::PhysicalConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
     overflow_checks: bool,
+    unwind: bool,
 ) -> Result<Object, String> {
     concrete.validate()?;
-    emit_native_cfg(NativeConcrete::Physical(concrete), resolve, overflow_checks)
+    emit_native_cfg(
+        NativeConcrete::Physical(concrete),
+        resolve,
+        overflow_checks,
+        unwind,
+    )
 }
 
 fn emit_native_cfg(
     concrete: NativeConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
     overflow_checks: bool,
+    unwind: bool,
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
     let budget = concrete.facts().budget();
@@ -3882,6 +3982,8 @@ fn emit_native_cfg(
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
     let mut emitter = Emitter {
         overflow_checks,
+        unwind,
+        unwinds: Vec::new(),
         object: Object {
             code: Vec::new(),
             calls: Vec::new(),
@@ -3963,6 +4065,7 @@ fn emit_native_cfg(
     }
     emitter.trap_block()?;
     emitter.runtime_panic_blocks()?;
+    emitter.unwind_cleanup()?;
     Ok(emitter.object)
 }
 
@@ -4046,9 +4149,25 @@ fn segment(bytes: &mut [u8], index: usize, kind: u32, flags: u32, offset: usize,
 /// Link private objects into a fixed-address ET_EXEC with separate R headers,
 /// RX code and R literals. GNU_STACK explicitly requests a non-executable stack.
 pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
-    let mut code = vec![
-        0xe8, 0, 0, 0, 0, 0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
-    ];
+    link_with_panic(functions, false)
+}
+
+/// `unwind` selects the panic=unwind entry: a returned main with the r15
+/// panic flag raised exits 101 after its cleanup ran.
+pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<Vec<u8>, String> {
+    let mut code = if unwind {
+        vec![
+            0x45, 0x31, 0xff, // xor r15d, r15d
+            0xe8, 0, 0, 0, 0, 0x31, 0xff, // call main; xor edi, edi
+            0x45, 0x85, 0xff, 0x74, 0x05, 0xbf, 101, 0, 0, 0, // r15 ? edi = 101
+            0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+        ]
+    } else {
+        vec![
+            0xe8, 0, 0, 0, 0, 0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
+        ]
+    };
+    let call_end = if unwind { 8 } else { 5 };
     let mut symbols = HashMap::new();
     for (name, object) in functions {
         if symbols.insert(name.as_str(), code.len()).is_some() {
@@ -4065,8 +4184,9 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
     }
     let main = *symbols.get("main").ok_or("missing main function")?;
     let main_displacement =
-        i32::try_from(main as i128 - 5).map_err(|_| "main outside rel32 range")?;
-    code[1..5].copy_from_slice(&main_displacement.to_le_bytes());
+        i32::try_from(main as i128 - call_end).map_err(|_| "main outside rel32 range")?;
+    code[call_end as usize - 4..call_end as usize]
+        .copy_from_slice(&main_displacement.to_le_bytes());
     let data_offset = page_align(PAGE.checked_add(code.len()).ok_or("ELF too large")?)?;
     let mut data = Vec::new();
     for (name, object) in functions {
@@ -4860,6 +4980,8 @@ mod tests {
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut emitter = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -4931,6 +5053,8 @@ mod tests {
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -4986,6 +5110,8 @@ mod tests {
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -5494,6 +5620,8 @@ mod tests {
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -5654,6 +5782,8 @@ mod tests {
         let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
         let mut e = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: Vec::new(),
                 calls: Vec::new(),
@@ -8001,6 +8131,8 @@ mod tests {
         // through source indexing because an empty array has no valid index.
         let mut emitter = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: vec![],
                 calls: vec![],
@@ -8276,6 +8408,8 @@ mod tests {
             .unwrap();
             let mut branch = Emitter {
                 overflow_checks: true,
+                unwind: false,
+                unwinds: Vec::new(),
                 object: Object {
                     code: vec![],
                     calls: vec![],
@@ -8376,6 +8510,8 @@ mod tests {
         // can inspect inactive physical storage, which source Rust cannot read.
         let mut emitter = Emitter {
             overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
             object: Object {
                 code: vec![],
                 calls: vec![],

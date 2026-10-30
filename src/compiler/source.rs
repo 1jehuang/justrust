@@ -66,6 +66,9 @@ pub struct SourceOptions {
     /// Runtime integer overflow checks, independent of debug assertions and optimization.
     /// False wraps arithmetic and masks shifts; division and remainder still trap.
     pub overflow_checks: bool,
+    /// panic=unwind: a panic runs pending drops up the stack and exits 101.
+    /// False keeps the abort runtime (SIGABRT), matching `-Cpanic=abort`.
+    pub panic_unwind: bool,
     /// Dependency crates compiled with this crate, each mounted as a hidden
     /// root module `__justrust_extern_<name>` and nameable as `<name>::`.
     /// Order is attachment order; the graph keys them as SOURCE `[2 + i]`.
@@ -114,6 +117,7 @@ impl Default for SourceOptions {
             prelude: true,
             opt: super::ssa::OptMode::default(),
             overflow_checks: true,
+            panic_unwind: false,
             externs: Vec::new(),
             library: false,
             test_filter: TestFilter::default(),

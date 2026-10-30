@@ -354,6 +354,7 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         prelude,
         opt,
         overflow_checks,
+        panic_unwind,
         externs,
         library,
         test_filter,
@@ -436,6 +437,7 @@ fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
         crate::compiler::ssa::OptMode::Final => 2,
     }]);
     id.flag(*overflow_checks);
+    id.flag(*panic_unwind);
     id.count(externs.len());
     id.valid &= externs.len() <= MAX_OBSERVATIONS;
     for super::ExternCrate {
@@ -585,6 +587,7 @@ mod tests {
             Box::new(|o| o.prelude = false),
             Box::new(|o| o.opt = compiler::ssa::OptMode::Final),
             Box::new(|o| o.overflow_checks = false),
+            Box::new(|o| o.panic_unwind = true),
             Box::new(|o| {
                 o.externs.push(source::ExternCrate {
                     name: "dep".into(),

@@ -2494,7 +2494,12 @@ impl Provider for CompilerProvider {
                             .map_err(Error::new)?;
                         return cx.publish_fact(0, object);
                     }
-                    if this.0.source_options.opt != ssa::OptMode::Off && c_boundary.is_none() {
+                    // panic=unwind reserves r15 as the panic flag, which the
+                    // SSA register allocator does not yet preserve.
+                    if this.0.source_options.opt != ssa::OptMode::Off
+                        && !this.0.source_options.panic_unwind
+                        && c_boundary.is_none()
+                    {
                         let optimized: Arc<SsaFact> = facts.get(sibling(IPO_OPT)?).await?;
                         if let Some(lowered) = &optimized.lowered {
                             let meter = ssa::meter::Meter::new(&this.0.budget);
@@ -2512,10 +2517,11 @@ impl Provider for CompilerProvider {
                             return cx.publish_fact(0, object);
                         }
                     }
-                    let mut object = backend::emit_cfg_function_with_overflow(
+                    let mut object = backend::emit_cfg_function_with_profile(
                         &proof.concrete,
                         &|target| instances::symbol_of(target, &types, &this.0.budget),
                         this.0.source_options.overflow_checks,
+                        this.0.source_options.panic_unwind,
                     )
                     .map_err(Error::new)?;
                     if let Some((target, false, true, signature)) = c_boundary {
@@ -3055,9 +3061,14 @@ impl Provider for CompilerProvider {
                         || !native.objects.is_empty()
                         || !native.libraries.is_empty()
                     {
-                        c_abi::elf::link(&objects, native, &this.0.budget)
+                        c_abi::elf::link_with_panic(
+                            &objects,
+                            native,
+                            this.0.source_options.panic_unwind,
+                            &this.0.budget,
+                        )
                     } else {
-                        backend::link(&objects)
+                        backend::link_with_panic(&objects, this.0.source_options.panic_unwind)
                     }
                     .map_err(Error::new)?;
                     if let Some(runtime) = &runtime {

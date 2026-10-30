@@ -1,7 +1,7 @@
 //! Bounded native64 initial-stack normalization, while the exec trace stop
 //! prevents even the dynamic interpreter from executing. This changes only
-//! AT_RANDOM's sixteen bytes, the stack AT_SYSINFO_EHDR value and the existing
-//! AT_EXECFN string. It does not
+//! AT_RANDOM's sixteen bytes, present stack credential values, the stack
+//! AT_SYSINFO_EHDR value and the existing AT_EXECFN string. It does not
 //! remove the vDSO mapping, canonicalize addresses, CPU features or /proc auxv,
 //! or establish complete launch determinism. A public seed is intentional for
 //! this confined tool, not a source of cryptographic randomness.
@@ -19,6 +19,7 @@ use std::{
 
 const SEED: [u8; 16] = *b"jr-link-seed-v1!";
 const EXECFN: &[u8] = b"jr-controlled-ld\0";
+const CREDENTIAL: u64 = 1000;
 const STACK_SPAN: u64 = 1024 * 1024;
 const MAX_POINTERS: u64 = 8192;
 const MAX_AUX: usize = 64;
@@ -32,6 +33,7 @@ fn invalid(reason: &str) -> io::Error {
 }
 
 struct Plan {
+    credentials: [Option<u64>; 4],
     random: u64,
     sysinfo: Option<u64>,
     execfn: u64,
@@ -89,6 +91,7 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
         return Err(invalid("environment count"));
     }
     let mut seen = 0u64;
+    let mut credentials = [None; 4];
     let mut random = None;
     let mut sysinfo_index = None;
     let mut execfn = None;
@@ -114,6 +117,12 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
         }
         seen |= 1 << kind;
         match kind {
+            11..=14 => {
+                if value > u32::MAX as u64 {
+                    return Err(invalid("credential value exceeds native uid/gid width"));
+                }
+                credentials[(kind - 11) as usize] = Some(address + 8);
+            }
             4 if value != 56 => return Err(invalid("non-native program header size")),
             5 if !(1..=4096).contains(&value) => return Err(invalid("program header count")),
             6 if value != 4096 => return Err(invalid("non-native page size")),
@@ -144,6 +153,7 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
         return Err(invalid("AT_EXECFN overlaps stack tables"));
     }
     Ok(Plan {
+        credentials,
         random,
         sysinfo: sysinfo_index.map(|index| aux_start + index as u64 * 16 + 8),
         execfn,
@@ -240,6 +250,9 @@ pub(super) fn normalize(procdir: &File, rsp: u64) -> io::Result<()> {
         memory.transfer(address, &mut byte, false)?;
         Ok(byte[0])
     })?;
+    for address in plan.credentials.into_iter().flatten() {
+        memory.replace(address, &CREDENTIAL.to_le_bytes())?;
+    }
     memory.replace(plan.execfn, &name)?;
     memory.replace(plan.random, &SEED)?;
     if let Some(address) = plan.sysinfo {
@@ -311,6 +324,46 @@ mod tests {
         let mut absent = words();
         absent.drain(19..21);
         assert!(inspect(&absent).unwrap().sysinfo.is_none());
+    }
+
+    #[test]
+    fn controlled_link_launch_credentials_are_optional_bounded_value_slots() {
+        assert_eq!(inspect(&words()).unwrap().credentials, [None; 4]);
+        for mask in 0u8..16 {
+            let mut fixture = words();
+            fixture.truncate(fixture.len() - 2);
+            let mut expected = [None; 4];
+            for (index, slot) in expected.iter_mut().enumerate() {
+                if mask & (1 << index) != 0 {
+                    *slot = Some(0x1000 + (fixture.len() as u64 + 1) * 8);
+                    fixture.extend_from_slice(&[11 + index as u64, u32::MAX as u64]);
+                }
+            }
+            // Security state and CPU capabilities are not credentials.
+            fixture.extend_from_slice(&[23, 1, 16, 0xdeadbeef, 0, 0]);
+            let original = fixture.clone();
+            assert_eq!(inspect(&fixture).unwrap().credentials, expected);
+            assert_eq!(fixture, original);
+        }
+        for tag in 11..=14 {
+            for value in [0, 1000, u32::MAX as u64] {
+                let mut fixture = words();
+                fixture.splice(23..23, [tag, value]);
+                assert!(inspect(&fixture).is_ok());
+            }
+            for value in [u32::MAX as u64 + 1, u64::MAX] {
+                let mut fixture = words();
+                fixture.splice(23..23, [tag, value]);
+                assert!(inspect(&fixture).is_err());
+            }
+            let mut duplicate = words();
+            duplicate.splice(23..23, [tag, 0, tag, 1000]);
+            assert!(inspect(&duplicate).is_err());
+            let mut truncated = words();
+            truncated.truncate(23);
+            truncated.push(tag);
+            assert!(inspect(&truncated).is_err());
+        }
     }
 
     #[test]

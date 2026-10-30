@@ -57,6 +57,17 @@ pub fn object(
     entry: bool,
     budget: &ir::PlanBudget,
 ) -> Result<Vec<u8>, String> {
+    object_with_panic(functions, entry, false, budget)
+}
+
+/// `unwind` builds the panic=unwind entry bridge: it clears the r15 panic
+/// flag before the private main and returns 101 when main unwound.
+pub fn object_with_panic(
+    functions: &[(String, Object)],
+    entry: bool,
+    unwind: bool,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<u8>, String> {
     let bound = functions.iter().try_fold(4096usize, |n, (name, o)| {
         let reloc = o
             .calls
@@ -94,12 +105,22 @@ pub fn object(
         // A real SysV main lets the host CRT initialize libc and native
         // constructors and flush C streams. The private main may clobber
         // callee-saved registers, so preserve them across the bridge.
-        definitions.insert("main".to_string(), (0usize, 39usize));
-        text.extend_from_slice(&[
-            0x55, 0x48, 0x89, 0xe5, 0x53, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48,
-            0x83, 0xec, 0x08, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5f, 0x41, 0x5e,
-            0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x31, 0xc0, 0xc9, 0xc3,
-        ]);
+        if unwind {
+            definitions.insert("main".to_string(), (0usize, 52usize));
+            text.extend_from_slice(&[
+                0x55, 0x48, 0x89, 0xe5, 0x53, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48,
+                0x83, 0xec, 0x08, 0x45, 0x31, 0xff, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x08, 0x31,
+                0xc0, 0x45, 0x85, 0xff, 0x74, 0x05, 0xb8, 101, 0, 0, 0, 0x41, 0x5f, 0x41, 0x5e,
+                0x41, 0x5d, 0x41, 0x5c, 0x5b, 0xc9, 0xc3,
+            ]);
+        } else {
+            definitions.insert("main".to_string(), (0usize, 39usize));
+            text.extend_from_slice(&[
+                0x55, 0x48, 0x89, 0xe5, 0x53, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48,
+                0x83, 0xec, 0x08, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5f, 0x41, 0x5e,
+                0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x31, 0xc0, 0xc9, 0xc3,
+            ]);
+        }
     }
     let mut starts = Vec::with_capacity(functions.len());
     for (name, o) in functions {
@@ -167,7 +188,8 @@ pub fn object(
     let mut rel_text = Vec::new();
     let mut rel_data = Vec::new();
     if entry {
-        relocation(&mut rel_text, 18, indices["__jr_private_main"], 4, -4);
+        let at = if unwind { 21 } else { 18 };
+        relocation(&mut rel_text, at, indices["__jr_private_main"], 4, -4);
     }
     for ((_, o), start) in functions.iter().zip(starts) {
         for (at, name) in &o.calls {
@@ -329,7 +351,16 @@ pub fn link(
     options: &LinkOptions,
     budget: &ir::PlanBudget,
 ) -> Result<Vec<u8>, String> {
-    let bytes = object(functions, !options.emit_object, budget)?;
+    link_with_panic(functions, options, false, budget)
+}
+
+pub fn link_with_panic(
+    functions: &[(String, Object)],
+    options: &LinkOptions,
+    unwind: bool,
+    budget: &ir::PlanBudget,
+) -> Result<Vec<u8>, String> {
+    let bytes = object_with_panic(functions, !options.emit_object, unwind, budget)?;
     if options.emit_object {
         return Ok(bytes);
     }
