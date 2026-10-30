@@ -123,3 +123,39 @@ speed claim, silently omit them, or compare inherited-context baseline samples
 against isolated-context candidate samples. See
 `query-retention-benchmark-20261030.md` and `../bench/RUNTIME-CONTEXT.md` for the
 retained evidence and limitations.
+
+## Later matched frontier, October 30, 2026
+
+The earlier table is historical, not the final coverage inventory. Subsequent
+native acceptance and real-workload evidence establish additional mechanisms:
+
+* Narrow literal/TT declarative expansion reuse passed 357 differential semantic
+  compilations and independent positive cache-hit gates. The real TT edit had
+  634 eligible lookups and one provider execution. This did not establish a
+  useful end-to-end latency win. See `declarative-tt-real-20261030.md`.
+* Demand-only query persistence passed 288 main differential compilations and
+  ten profiled mechanism invocations. Removing eager promotion reduced a
+  recorded persistence interval, but the matched total median was 1.431 seconds
+  versus 1.421 seconds with the option off. See
+  `blaze-demand-br42-20261030.md` and `demand-query-real-20261030.md`.
+* The br44 backend/thread frontier accepted seven stacks and 35 executed edits.
+  Cranelift plus four frontend threads measured 1.187 seconds, versus 1.289
+  seconds for its owned baseline and 0.101/0.112 seconds for the Blaze stacks.
+  See `native-backend-frontier-br44-20261030.md` for exact gates and artifacts.
+
+These are descriptive medians from scoped, seeded warm workflows, not
+significance tests, comprehensive-workload wins, or default-promotion evidence.
+Fresh Blaze-store failures remain separate from the accepted warm workflow.
+The native experimental compiler was built with incremental compiler compilation
+and thin-local LTO, rather than a trained distribution PGO/BOLT build. Compiler
+build quality is another comparison boundary, not evidence that it explains the
+remaining gap or that release compilation alone will close it.
+
+The next investigations must distinguish repeated frontend construction from
+backend graph work and orchestration. A parked Cargo process does not retain a
+live compiler context. A query value saved to disk is not a generation-safe live
+HIR/MIR graph. Neither mechanism alone establishes function-granular frontend
+invalidation. Native resident frontend work still needs explicit ownership of
+source maps, spans, diagnostics, macro external inputs, query identities and
+arena lifetimes, with edit/error/recovery gates rather than pointer reuse across
+destroyed sessions.
