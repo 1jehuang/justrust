@@ -259,6 +259,9 @@ class HarnessTests(unittest.TestCase):
             rows = self.exercise(Path(temp))
             metadata = json.loads((Path(temp) / 'out/metadata.json').read_text())
             self.assertEqual(metadata['stacks'], ['owned-off', 'all3on', 'blaze', 'blaze-llvm'])
+            self.assertEqual(metadata['known_unsafe_external_input_stacks'], [])
+            summary = json.loads((Path(temp) / 'out/summary.json').read_text())
+            self.assertEqual(summary['known_unsafe_external_input_stacks'], [])
             for rep in range(2):
                 edits = [(name, data) for name, data in rows if name.startswith(f'edit-{rep:03d}')]
                 self.assertEqual(len(edits), 4)
@@ -349,10 +352,15 @@ class HarnessTests(unittest.TestCase):
                 summary = json.loads((root / 'out/summary.json').read_text())
                 self.assertEqual('owned-macro-hotpatch' in summary['medians_seconds'], phase is None)
                 self.assertIn('owned-macro', summary['medians_seconds'])
+                self.assertEqual(summary['known_unsafe_external_input_stacks'],
+                                 ['owned-macro', 'owned-macro-hotpatch'])
+                self.assertIn('not correctness-certified', summary['macro_cache_safety'])
                 metadata = json.loads((root / 'out/metadata.json').read_text())
                 self.assertEqual(set(metadata['wild_copies']),
                                  {'owned-off', 'all3on', 'owned-macro', 'owned-macro-hotpatch'})
                 self.assertEqual(set(metadata['blaze_seed_manifests']), {'blaze', 'blaze-llvm'})
+                self.assertEqual(metadata['known_unsafe_external_input_stacks'],
+                                 summary['known_unsafe_external_input_stacks'])
                 if phase is None:
                     self.assertEqual(summary['edit_hotpatch_outcomes']['owned-macro-hotpatch'],
                                      ['patched', 'patched'])

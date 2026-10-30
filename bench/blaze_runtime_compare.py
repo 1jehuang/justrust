@@ -308,6 +308,8 @@ def execute(args):
                 'source_before': source_hashes(args.source, args.output),
                 'identities_before': identities(args), 'profiles': PROFILES,
                 'samples': args.samples, 'stacks': stacks,
+                'known_unsafe_external_input_stacks': [s for s in stacks if s in ('owned-macro', 'owned-macro-hotpatch')],
+                'macro_cache_safety': 'derive/attribute cache has confirmed stale env/file outputs including tracked APIs; explicit experiment timings are not correctness-certified optimizations',
                 'store_scope': 'warm-store seeded' if args.blaze_seed_cache else 'unseeded private stores',
                 'blaze_seed_manifests': {}, 'wild_copies': {},
                 'seed_source_before': seed_manifest(args.blaze_seed_cache) if args.blaze_seed_cache else None}
@@ -448,6 +450,8 @@ def execute(args):
         (args.output / 'summary.json').write_text(json.dumps({
             'medians_seconds': medians, 'excluded': [s for s in stacks if s not in medians],
             'store_scope': metadata['store_scope'],
+            'known_unsafe_external_input_stacks': metadata['known_unsafe_external_input_stacks'],
+            'macro_cache_safety': metadata['macro_cache_safety'],
             'edit_hotpatch_outcomes': {stack: [outcome for row in records
                 if row['stack'] == stack and row['phase'] == 'edit'
                 for outcome in row.get('raw_output', {}).get('hotpatch', {}).get('outcomes', [])]
@@ -473,7 +477,7 @@ def main():
     parser.add_argument('--owned-experiments', action='store_true',
                         help='add isolated all4on and all4hotpatch stacks')
     parser.add_argument('--native-macro-cache', action='store_true',
-                        help='add isolated owned-macro and owned-macro-hotpatch stacks using native -Zcache-proc-macros=yes')
+                        help='UNSAFE external-input experiment: add native proc-macro cache stacks; known stale derive/attribute env/file output, not correctness-certified')
     parser.add_argument('--blaze-seed-cache', type=lambda s: Path(s).expanduser().absolute(),
                         help='copy a private successful store into each fresh Blaze cache; warm-store scope only')
     parser.add_argument('--timeout', type=float, default=360)
