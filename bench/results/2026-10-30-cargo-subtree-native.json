@@ -1,0 +1,806 @@
+{
+  "scope": "native Cargo warm overlapping rerun-if-changed validation",
+  "identity": {
+    "before": {
+      "sha256": "ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6",
+      "version": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 5abb73e57230a73e4504dbae6f518def2e651424)\nrelease: 1.101.0-nightly\ncommit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928\ncommit-date: 2026-09-29\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Arch Linux Rolling Release [64-bit]\n"
+    },
+    "after": {
+      "sha256": "03b647852528536d52934aee1cecbfc60144a13fd3dc5f16a3135514bac5fdf1",
+      "version": "cargo 1.101.0-nightly (f3865b2a4 2026-09-29) (jr-cargo 4cb3d69e90dcceb2934308e1e84bf0bb9622c447)\nrelease: 1.101.0-nightly\ncommit-hash: f3865b2a4d1acc5276f6b3c67d0e057f4dab3928\ncommit-date: 2026-09-29\nhost: x86_64-unknown-linux-gnu\nlibgit2: 1.9.6 (sys:0.21.0 vendored)\nlibcurl: 8.21.0-DEV (sys:0.4.90+curl-8.21.0 vendored ssl:OpenSSL/3.6.3)\nssl: OpenSSL 3.6.3 9 Jun 2026\nos: Arch Linux Rolling Release [64-bit]\n"
+    }
+  },
+  "rustc": {
+    "sha256": "66877d44efc77e5d5478c756abf48574c5ce4d41a1102518b20e2ff3f3a0ba56",
+    "version": "rustc 1.101.0-nightly (1d81eb4ad 2026-10-07)\nbinary: rustc\ncommit-hash: 1d81eb4ad9cd207e3e638bd32b17ec4fce8412a6\ncommit-date: 2026-10-07\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n"
+  },
+  "files": 3072,
+  "samples": [
+    {
+      "scenario": "single",
+      "trial": 0,
+      "which": "before",
+      "elapsed_ns": 44775555
+    },
+    {
+      "scenario": "single",
+      "trial": 0,
+      "which": "after",
+      "elapsed_ns": 45175401
+    },
+    {
+      "scenario": "single",
+      "trial": 1,
+      "which": "after",
+      "elapsed_ns": 36478930
+    },
+    {
+      "scenario": "single",
+      "trial": 1,
+      "which": "before",
+      "elapsed_ns": 59893627
+    },
+    {
+      "scenario": "single",
+      "trial": 2,
+      "which": "before",
+      "elapsed_ns": 70732282
+    },
+    {
+      "scenario": "single",
+      "trial": 2,
+      "which": "after",
+      "elapsed_ns": 137825269
+    },
+    {
+      "scenario": "single",
+      "trial": 3,
+      "which": "after",
+      "elapsed_ns": 78108578
+    },
+    {
+      "scenario": "single",
+      "trial": 3,
+      "which": "before",
+      "elapsed_ns": 120338207
+    },
+    {
+      "scenario": "single",
+      "trial": 4,
+      "which": "before",
+      "elapsed_ns": 119436423
+    },
+    {
+      "scenario": "single",
+      "trial": 4,
+      "which": "after",
+      "elapsed_ns": 64022128
+    },
+    {
+      "scenario": "single",
+      "trial": 5,
+      "which": "after",
+      "elapsed_ns": 54391508
+    },
+    {
+      "scenario": "single",
+      "trial": 5,
+      "which": "before",
+      "elapsed_ns": 114766689
+    },
+    {
+      "scenario": "single",
+      "trial": 6,
+      "which": "before",
+      "elapsed_ns": 79205776
+    },
+    {
+      "scenario": "single",
+      "trial": 6,
+      "which": "after",
+      "elapsed_ns": 54361487
+    },
+    {
+      "scenario": "single",
+      "trial": 7,
+      "which": "after",
+      "elapsed_ns": 67417584
+    },
+    {
+      "scenario": "single",
+      "trial": 7,
+      "which": "before",
+      "elapsed_ns": 53983459
+    },
+    {
+      "scenario": "single",
+      "trial": 8,
+      "which": "before",
+      "elapsed_ns": 80002193
+    },
+    {
+      "scenario": "single",
+      "trial": 8,
+      "which": "after",
+      "elapsed_ns": 48840939
+    },
+    {
+      "scenario": "single",
+      "trial": 9,
+      "which": "after",
+      "elapsed_ns": 38618963
+    },
+    {
+      "scenario": "single",
+      "trial": 9,
+      "which": "before",
+      "elapsed_ns": 51548364
+    },
+    {
+      "scenario": "single",
+      "trial": 10,
+      "which": "before",
+      "elapsed_ns": 78569607
+    },
+    {
+      "scenario": "single",
+      "trial": 10,
+      "which": "after",
+      "elapsed_ns": 88399073
+    },
+    {
+      "scenario": "single",
+      "trial": 11,
+      "which": "after",
+      "elapsed_ns": 56545823
+    },
+    {
+      "scenario": "single",
+      "trial": 11,
+      "which": "before",
+      "elapsed_ns": 78769905
+    },
+    {
+      "scenario": "single",
+      "trial": 12,
+      "which": "before",
+      "elapsed_ns": 48619226
+    },
+    {
+      "scenario": "single",
+      "trial": 12,
+      "which": "after",
+      "elapsed_ns": 61167122
+    },
+    {
+      "scenario": "single",
+      "trial": 13,
+      "which": "after",
+      "elapsed_ns": 85709806
+    },
+    {
+      "scenario": "single",
+      "trial": 13,
+      "which": "before",
+      "elapsed_ns": 69700118
+    },
+    {
+      "scenario": "single",
+      "trial": 14,
+      "which": "before",
+      "elapsed_ns": 47393619
+    },
+    {
+      "scenario": "single",
+      "trial": 14,
+      "which": "after",
+      "elapsed_ns": 39657075
+    },
+    {
+      "scenario": "single",
+      "trial": 15,
+      "which": "after",
+      "elapsed_ns": 34069264
+    },
+    {
+      "scenario": "single",
+      "trial": 15,
+      "which": "before",
+      "elapsed_ns": 45311970
+    },
+    {
+      "scenario": "single",
+      "trial": 16,
+      "which": "before",
+      "elapsed_ns": 50930747
+    },
+    {
+      "scenario": "single",
+      "trial": 16,
+      "which": "after",
+      "elapsed_ns": 31948783
+    },
+    {
+      "scenario": "single",
+      "trial": 17,
+      "which": "after",
+      "elapsed_ns": 38952530
+    },
+    {
+      "scenario": "single",
+      "trial": 17,
+      "which": "before",
+      "elapsed_ns": 40796150
+    },
+    {
+      "scenario": "single",
+      "trial": 18,
+      "which": "before",
+      "elapsed_ns": 30264394
+    },
+    {
+      "scenario": "single",
+      "trial": 18,
+      "which": "after",
+      "elapsed_ns": 36325655
+    },
+    {
+      "scenario": "single",
+      "trial": 19,
+      "which": "after",
+      "elapsed_ns": 34645472
+    },
+    {
+      "scenario": "single",
+      "trial": 19,
+      "which": "before",
+      "elapsed_ns": 39619266
+    },
+    {
+      "scenario": "single",
+      "trial": 20,
+      "which": "before",
+      "elapsed_ns": 37130059
+    },
+    {
+      "scenario": "single",
+      "trial": 20,
+      "which": "after",
+      "elapsed_ns": 50216138
+    },
+    {
+      "scenario": "single",
+      "trial": 21,
+      "which": "after",
+      "elapsed_ns": 41099786
+    },
+    {
+      "scenario": "single",
+      "trial": 21,
+      "which": "before",
+      "elapsed_ns": 54284331
+    },
+    {
+      "scenario": "single",
+      "trial": 22,
+      "which": "before",
+      "elapsed_ns": 54419125
+    },
+    {
+      "scenario": "single",
+      "trial": 22,
+      "which": "after",
+      "elapsed_ns": 60504572
+    },
+    {
+      "scenario": "single",
+      "trial": 23,
+      "which": "after",
+      "elapsed_ns": 55453895
+    },
+    {
+      "scenario": "single",
+      "trial": 23,
+      "which": "before",
+      "elapsed_ns": 60851724
+    },
+    {
+      "scenario": "single",
+      "trial": 24,
+      "which": "before",
+      "elapsed_ns": 58314051
+    },
+    {
+      "scenario": "single",
+      "trial": 24,
+      "which": "after",
+      "elapsed_ns": 51960876
+    },
+    {
+      "scenario": "single",
+      "trial": 25,
+      "which": "after",
+      "elapsed_ns": 60956171
+    },
+    {
+      "scenario": "single",
+      "trial": 25,
+      "which": "before",
+      "elapsed_ns": 126435572
+    },
+    {
+      "scenario": "single",
+      "trial": 26,
+      "which": "before",
+      "elapsed_ns": 126562490
+    },
+    {
+      "scenario": "single",
+      "trial": 26,
+      "which": "after",
+      "elapsed_ns": 76354631
+    },
+    {
+      "scenario": "single",
+      "trial": 27,
+      "which": "after",
+      "elapsed_ns": 104510182
+    },
+    {
+      "scenario": "single",
+      "trial": 27,
+      "which": "before",
+      "elapsed_ns": 82182656
+    },
+    {
+      "scenario": "single",
+      "trial": 28,
+      "which": "before",
+      "elapsed_ns": 66963641
+    },
+    {
+      "scenario": "single",
+      "trial": 28,
+      "which": "after",
+      "elapsed_ns": 71096798
+    },
+    {
+      "scenario": "single",
+      "trial": 29,
+      "which": "after",
+      "elapsed_ns": 106176208
+    },
+    {
+      "scenario": "single",
+      "trial": 29,
+      "which": "before",
+      "elapsed_ns": 142921732
+    },
+    {
+      "scenario": "single",
+      "trial": 30,
+      "which": "before",
+      "elapsed_ns": 105830156
+    },
+    {
+      "scenario": "single",
+      "trial": 30,
+      "which": "after",
+      "elapsed_ns": 93465357
+    },
+    {
+      "scenario": "single",
+      "trial": 31,
+      "which": "after",
+      "elapsed_ns": 83512337
+    },
+    {
+      "scenario": "single",
+      "trial": 31,
+      "which": "before",
+      "elapsed_ns": 171011335
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 0,
+      "which": "before",
+      "elapsed_ns": 52232810
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 0,
+      "which": "after",
+      "elapsed_ns": 87125122
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 1,
+      "which": "after",
+      "elapsed_ns": 90816664
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 1,
+      "which": "before",
+      "elapsed_ns": 113736297
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 2,
+      "which": "before",
+      "elapsed_ns": 190261211
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 2,
+      "which": "after",
+      "elapsed_ns": 154963760
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 3,
+      "which": "after",
+      "elapsed_ns": 153991469
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 3,
+      "which": "before",
+      "elapsed_ns": 216984297
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 4,
+      "which": "before",
+      "elapsed_ns": 146837596
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 4,
+      "which": "after",
+      "elapsed_ns": 47260994
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 5,
+      "which": "after",
+      "elapsed_ns": 43187242
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 5,
+      "which": "before",
+      "elapsed_ns": 48683190
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 6,
+      "which": "before",
+      "elapsed_ns": 92021299
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 6,
+      "which": "after",
+      "elapsed_ns": 52031715
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 7,
+      "which": "after",
+      "elapsed_ns": 42547210
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 7,
+      "which": "before",
+      "elapsed_ns": 75760236
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 8,
+      "which": "before",
+      "elapsed_ns": 55554985
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 8,
+      "which": "after",
+      "elapsed_ns": 67504054
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 9,
+      "which": "after",
+      "elapsed_ns": 41225581
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 9,
+      "which": "before",
+      "elapsed_ns": 76029236
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 10,
+      "which": "before",
+      "elapsed_ns": 91110791
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 10,
+      "which": "after",
+      "elapsed_ns": 28991574
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 11,
+      "which": "after",
+      "elapsed_ns": 64088820
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 11,
+      "which": "before",
+      "elapsed_ns": 58919256
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 12,
+      "which": "before",
+      "elapsed_ns": 111138094
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 12,
+      "which": "after",
+      "elapsed_ns": 225892833
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 13,
+      "which": "after",
+      "elapsed_ns": 68111994
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 13,
+      "which": "before",
+      "elapsed_ns": 414979891
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 14,
+      "which": "before",
+      "elapsed_ns": 369936381
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 14,
+      "which": "after",
+      "elapsed_ns": 399416061
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 15,
+      "which": "after",
+      "elapsed_ns": 120625436
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 15,
+      "which": "before",
+      "elapsed_ns": 83977811
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 16,
+      "which": "before",
+      "elapsed_ns": 118078537
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 16,
+      "which": "after",
+      "elapsed_ns": 82907224
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 17,
+      "which": "after",
+      "elapsed_ns": 73517100
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 17,
+      "which": "before",
+      "elapsed_ns": 98726388
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 18,
+      "which": "before",
+      "elapsed_ns": 77682250
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 18,
+      "which": "after",
+      "elapsed_ns": 112981926
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 19,
+      "which": "after",
+      "elapsed_ns": 42623214
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 19,
+      "which": "before",
+      "elapsed_ns": 76751508
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 20,
+      "which": "before",
+      "elapsed_ns": 77351181
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 20,
+      "which": "after",
+      "elapsed_ns": 52332043
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 21,
+      "which": "after",
+      "elapsed_ns": 32916055
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 21,
+      "which": "before",
+      "elapsed_ns": 46511073
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 22,
+      "which": "before",
+      "elapsed_ns": 45686612
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 22,
+      "which": "after",
+      "elapsed_ns": 36944279
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 23,
+      "which": "after",
+      "elapsed_ns": 43919356
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 23,
+      "which": "before",
+      "elapsed_ns": 52597320
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 24,
+      "which": "before",
+      "elapsed_ns": 66250184
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 24,
+      "which": "after",
+      "elapsed_ns": 44331392
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 25,
+      "which": "after",
+      "elapsed_ns": 43771119
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 25,
+      "which": "before",
+      "elapsed_ns": 65344496
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 26,
+      "which": "before",
+      "elapsed_ns": 62767124
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 26,
+      "which": "after",
+      "elapsed_ns": 38731309
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 27,
+      "which": "after",
+      "elapsed_ns": 38564131
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 27,
+      "which": "before",
+      "elapsed_ns": 70337180
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 28,
+      "which": "before",
+      "elapsed_ns": 85336814
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 28,
+      "which": "after",
+      "elapsed_ns": 58931980
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 29,
+      "which": "after",
+      "elapsed_ns": 136798774
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 29,
+      "which": "before",
+      "elapsed_ns": 224958818
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 30,
+      "which": "before",
+      "elapsed_ns": 189635457
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 30,
+      "which": "after",
+      "elapsed_ns": 125392467
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 31,
+      "which": "after",
+      "elapsed_ns": 77091124
+    },
+    {
+      "scenario": "overlapping",
+      "trial": 31,
+      "which": "before",
+      "elapsed_ns": 473918817
+    }
+  ],
+  "correctness": [
+    "watched edit changed compiled generated constant",
+    "watched nested addition reran build script and compiler",
+    "watched nested deletion reran build script and compiler",
+    "all paired warm calls reused artifacts across Cargo executables"
+  ],
+  "summary": {
+    "single": {
+      "before": 63907682.5,
+      "after": 55999859.0,
+      "delta_percent": -12.37382297503904
+    },
+    "overlapping": {
+      "before": 80830030.5,
+      "after": 61510400.0,
+      "delta_percent": -23.901550426855277
+    }
+  }
+}

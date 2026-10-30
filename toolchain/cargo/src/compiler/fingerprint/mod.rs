@@ -2451,15 +2451,16 @@ where
                 });
             }
             FingerprintMethod::Mtime => {
-                let path_mtime = match mtime_cache.entry(path.to_path_buf()) {
-                    Entry::Occupied(o) => *o.get(),
-                    Entry::Vacant(v) => {
-                        let Ok(mtime) = paths::mtime_recursive(path) else {
+                let path_mtime = match mtime_cache.get(path) {
+                    Some(mtime) => *mtime,
+                    None => {
+                        let Ok(mtime) = paths::mtime_recursive_with_cache(path, mtime_cache) else {
                             return Some(StaleItem::MissingFile {
                                 path: path.to_path_buf(),
                             });
                         };
-                        *v.insert(mtime)
+                        mtime_cache.insert(path.to_path_buf(), mtime);
+                        mtime
                     }
                 };
 

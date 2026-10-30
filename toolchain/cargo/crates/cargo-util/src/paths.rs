@@ -377,6 +377,68 @@ pub fn mtime_recursive(path: &Path) -> Result<FileTime> {
     Ok(max_meta)
 }
 
+/// Like [`mtime_recursive`], but also remembers complete, symlink-free directory
+/// subtrees in the caller's invocation-local mtime cache. Build scripts often
+/// watch both a directory and several of its descendants. An exact-path cache
+/// alone would walk those descendants again.
+///
+/// No observations survive the current freshness pass. Symlinks and walk errors
+/// use the original walker: their traversal can depend on the ancestor path
+/// (in particular, symlink-loop detection), so their results must not be reused
+/// as independent subtree observations.
+#[allow(clippy::disallowed_types)] // The caller selects the hasher, including Cargo's FxHasher.
+pub fn mtime_recursive_with_cache<S: std::hash::BuildHasher>(
+    path: &Path,
+    cache: &mut std::collections::HashMap<PathBuf, FileTime, S>,
+) -> Result<FileTime> {
+    if let Some(mtime) = cache.get(path) {
+        return Ok(*mtime);
+    }
+    let meta = metadata(path)?;
+    if !meta.is_dir() {
+        return Ok(FileTime::from_last_modification_time(&meta));
+    }
+
+    let mut stack: Vec<(PathBuf, FileTime)> = Vec::new();
+    let mut subtrees = Vec::new();
+    let mut root_mtime = FileTime::from_last_modification_time(&meta);
+    let finish_directory = |stack: &mut Vec<(PathBuf, FileTime)>,
+                            subtrees: &mut Vec<(PathBuf, FileTime)>| {
+        let (path, mtime) = stack.pop().unwrap();
+        if let Some((_, parent_mtime)) = stack.last_mut() {
+            *parent_mtime = (*parent_mtime).max(mtime);
+        }
+        subtrees.push((path, mtime));
+        mtime
+    };
+    for entry in walkdir::WalkDir::new(path).follow_links(true) {
+        let entry = match entry {
+            Ok(entry) if !entry.path_is_symlink() => entry,
+            _ => return mtime_recursive(path),
+        };
+        while stack.len() > entry.depth() {
+            root_mtime = finish_directory(&mut stack, &mut subtrees);
+        }
+        let meta = match entry.metadata() {
+            Ok(meta) => meta,
+            Err(_) => return mtime_recursive(path),
+        };
+        let mtime = FileTime::from_last_modification_time(&meta);
+        if meta.is_dir() {
+            stack.push((entry.into_path(), mtime));
+        } else if let Some((_, parent_mtime)) = stack.last_mut() {
+            *parent_mtime = (*parent_mtime).max(mtime);
+        }
+    }
+    while !stack.is_empty() {
+        root_mtime = finish_directory(&mut stack, &mut subtrees);
+    }
+    // Commit only after a complete walk. A later symlink or error must not
+    // expose context-dependent partial observations through the cache.
+    cache.extend(subtrees);
+    Ok(root_mtime)
+}
+
 /// Record the current time on the filesystem (using the filesystem's clock)
 /// using a file at the given directory. Returns the current time.
 pub fn set_invocation_time(path: &Path) -> Result<FileTime> {
