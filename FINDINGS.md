@@ -9062,3 +9062,22 @@ identity sharing. Full test run `20261030-042612239-1866782`; compatibility runs
 `20261030-042837633-1891779` and `20261030-042837808-1891834`. Hosted validation
 was paused under the earlier maintenance coordination. Details and exact
 acceptance logs: `docs/macro-cache-safe-default-20261030.md`. No speed claim.
+
+## 2026-10-30: literal macro reuse is real, but not a latency win
+
+The default-off native literal cache passed 224 differential compilations and
+independent cold/unchanged/body-edit provider-avoidance proof (`89f61304b`). Real
+pinned-library diagnostic runs `20261030-050420282-2216133`,
+`20261030-050444548-2220770` and `20261030-050447756-2221826` each observed 106
+eligible successful lookups. Prepare executed 106 providers, while edit and
+restoration executed zero. The edit rejected 1858 other invocations. Raw profiles,
+exact journals, immutable driver identity and all three redacted exports are
+retained and independently replayable (`a6e5438ce`). Counts do not measure saved
+work. Prospective `br37` observed median 1.472484s off versus 1.580672s literal-on,
+with seeded warm Blaze Cranelift/LLVM 0.113914/0.130430s. All five correctness
+contracts and 25 matching executed edits passed, but this did not demonstrate a
+latency improvement. Cold Blaze support and statistical/general claims remain
+excluded. The flag stays off. Next hypothesis is separately audited TT-only raw
+pass-through reuse, not unsafe procedural-macro caching. See
+`docs/declarative-real-eligibility-20261030.md` and
+`docs/blaze-declarative-br37-20261030.md`.
