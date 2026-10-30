@@ -51,6 +51,61 @@ class ReuseTests(unittest.TestCase):
             self.assertIsNone(result['interval_records'])
             self.assertEqual(result['per_thread'], [])
 
+    def test_optional_marker_absence_is_unknown_and_native_unchanged(self):
+        baseline = rc.summarize_records([])
+        result = baseline['optional_branch_inventory']['markers'][rc.OPTIONAL_BRANCH_MARKERS[0]]
+        self.assertEqual(result['evidence'], 'unknown-marker-absent')
+        self.assertIsNone(result['interval_records'])
+        self.assertEqual(result['per_thread'], [])
+        observed = rc.summarize_records([self.marker(label=rc.OPTIONAL_BRANCH_MARKERS[0])])
+        self.assertEqual(baseline['native_green_reuse'], observed['native_green_reuse'])
+        self.assertEqual(len(rc.NATIVE_MARKERS), 2)
+
+    def test_optional_nested_union_multiple_threads_without_arguments(self):
+        label = rc.OPTIONAL_BRANCH_MARKERS[0]
+        rows = [self.marker(label=label), self.marker(10, 20, label=label),
+                self.marker(90, 110, label=label), self.marker(120, 130, label=label),
+                self.marker(0, 100, thread=2, label=label)]
+        def no_resolution(_):
+            self.fail('optional marker must not resolve query-name arguments')
+        report = rc.summarize_records(rows, no_resolution)['optional_branch_inventory']
+        result = report['markers'][label]
+        self.assertEqual(result['evidence'], 'observed')
+        self.assertEqual(result['interval_records'], 5)
+        self.assertEqual(result['per_thread'], [
+            dict(thread=1, interval_records=4, union_elapsed_ns=120),
+            dict(thread=2, interval_records=1, union_elapsed_ns=100)])
+        for key in ('cpu_work_ns', 'time_saved_ns', 'critical_path_ns',
+                    'capture_complete', 'marker_filter_enabled'):
+            self.assertIsNone(report[key])
+
+    def test_optional_invalid_kind_type_thread_and_intervals(self):
+        for change in ({'kind': 'Query'}, {'record_type': 'instant'},
+                       {'record_type': 'integer'}, {'thread': True}, {'thread': -1},
+                       {'thread': '1'}, {'thread': None}, {'start_ns': -1},
+                       {'start_ns': True}, {'start_ns': 1.5}, {'end_ns': '100'},
+                       {'end_ns': None}, {'end_ns': -1}, {'start_ns': 101}):
+            with self.subTest(change=change):
+                row = self.marker(label=rc.OPTIONAL_BRANCH_MARKERS[0])
+                row.update(change)
+                with self.assertRaises(ValueError):
+                    rc.summarize_records([row])
+
+    def test_optional_binary_cli_without_arguments(self):
+        marker = rc.OPTIONAL_BRANCH_MARKERS[0]
+        strings = ('GenericActivity\xff' + marker + '\xff').encode('latin1')
+        data = fixture(strings=strings, index=b'', events=raw(BASE + 8, BASE + 24, 7, 3, 9))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'profile'
+            path.write_bytes(data)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc.main(['--profile', str(path)])
+            result = json.loads(output.getvalue())['profile']['optional_branch_inventory']['markers'][marker]
+            self.assertEqual(result['interval_records'], 1)
+            self.assertEqual(result['per_thread'], [
+                dict(thread=7, interval_records=1, union_elapsed_ns=6)])
+
     def test_native_names_are_arguments_not_decoder_labels(self):
         marker = rc.NATIVE_MARKERS[1]
         report = rc.summarize_records([self.marker()], lambda _: marker + '\x1etype_of')

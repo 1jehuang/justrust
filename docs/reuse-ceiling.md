@@ -194,3 +194,36 @@ Follow-up validation: `python3 -m unittest discover -s bench -p
 `Ran 440 tests in 10.271s`, `OK`. New fixtures exercise nested/crossing/duplicate
 intervals, independent threads, absent markers, unknown/safe query arguments,
 invalid marker types/timestamps and real MMPD CLI argument decoding.
+
+## Optional empty lint-owner branch inventory
+
+`profile.optional_branch_inventory` is an additive, optional inventory separate
+from `profile.native_green_reuse`. Its `OPTIONAL_BRANCH_MARKERS` family currently
+contains only `jr_empty_lint_level_fast_path`, the default-off native
+`GenericActivity` interval inside the guarded empty lint-owner return in
+`compiler/rustc_lint/src/levels.rs`. It counts observed entries into that branch,
+not green-route queries, provider recomputations, distinct owners, or avoided
+work. It requires no query-name argument and does not resolve one.
+
+Each optional marker reports `interval_records` and `per_thread` counts and
+`union_elapsed_ns`, with overlap merged independently within each profiler
+thread and capture. No cross-thread or cross-marker duration total is emitted.
+Kind must be `GenericActivity`, record type must be `interval`, thread must be
+a nonnegative integer, and both endpoints must be nonnegative integers with
+end at least start. Booleans are not valid integers for this contract.
+
+Absent means `evidence: unknown-marker-absent`, a null count and an empty
+per-thread list, never a claim of zero branch execution. Capture completeness
+and filter enablement remain unknown. CPU work, time saved and critical-path
+duration remain null even when intervals are present. This optional family
+does not alter the existing two `NATIVE_MARKERS`, their fields, interpretation,
+or acceptance requirements. It is not required to accept green-route evidence.
+There is no default promotion, broad performance conclusion or speedup claim.
+
+Validation: `python3 -m unittest discover -s bench -p 'test_reuse_ceiling.py'`
+reported `Ran 20 tests`, `OK`. The four additional tests cover absence and native
+field compatibility, wrong kinds/types/threads/endpoints, nested and crossing
+interval unions on multiple threads, no argument resolution, and a real binary
+CLI fixture without arguments. No native workloads were run for this change.
+The complete Python regression command `python3 -m unittest discover -s bench
+-p 'test_*.py'` also passed: `Ran 493 tests in 16.918s`, `OK`.

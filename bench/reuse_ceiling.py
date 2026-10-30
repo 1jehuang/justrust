@@ -26,6 +26,7 @@ LIMITATIONS = [
 
 
 NATIVE_MARKERS = ('jr_incremental_green_query', 'jr_incremental_green_recompute')
+OPTIONAL_BRANCH_MARKERS = ('jr_empty_lint_level_fast_path',)
 
 
 def interval_union_ns(intervals):
@@ -68,6 +69,25 @@ def native_summary(markers):
                 scope='Native proven-green route and provider-recompute branch only. Counts are invocations, not distinct query keys. Per-thread elapsed unions are not summed across threads or markers, CPU work, or removable time.')
 
 
+def optional_branch_summary(markers):
+    result = {}
+    for marker in OPTIONAL_BRANCH_MARKERS:
+        values = markers[marker]
+        threads = defaultdict(list)
+        for event in values:
+            threads[event['thread']].append((event.get('start_ns'), event.get('end_ns')))
+        result[marker] = dict(
+            evidence='observed' if values else 'unknown-marker-absent',
+            interval_records=len(values) if values else None,
+            per_thread=[dict(thread=thread, interval_records=len(spans),
+                             union_elapsed_ns=interval_union_ns(spans))
+                        for thread, spans in sorted(threads.items())],
+        )
+    return dict(markers=result, capture_complete=None, marker_filter_enabled=None,
+                cpu_work_ns=None, time_saved_ns=None, critical_path_ns=None,
+                scope='Optional native branch inventory only. Counts are branch entries, not query keys or avoided work. Per-thread elapsed unions are not summed across threads or markers and imply no CPU work, saved time, or critical path.')
+
+
 def summarize_records(records, resolve_event=None):
     kinds = Counter()
     providers = Counter()
@@ -76,15 +96,19 @@ def summarize_records(records, resolve_event=None):
     unresolved = 0
     loads = 0
     markers = defaultdict(list)
+    optional_markers = defaultdict(list)
     for event in records:
         kind, typ = event['kind'], event['record_type']
         kinds[kind] += 1
         unresolved += not event['label_resolved']
-        if event.get('label') in NATIVE_MARKERS:
+        if event.get('label') in NATIVE_MARKERS + OPTIONAL_BRANCH_MARKERS:
             if kind != 'GenericActivity' or typ != 'interval':
                 raise ValueError('invalid native marker event type')
             if type(event.get('thread')) is not int or event['thread'] < 0:
                 raise ValueError('invalid native marker thread')
+            if event.get('label') in OPTIONAL_BRANCH_MARKERS:
+                optional_markers[event['label']].append(event)
+                continue
             # The normal decoder intentionally discards function arguments.
             # Resolve only these known marker strings, never arbitrary labels.
             parts = resolve_event(event['event_id']).split('\x1e') if resolve_event else []
@@ -132,6 +156,7 @@ def summarize_records(records, resolve_event=None):
         cpu_work_ns=None, time_saved_ns=None, execution_span_ns=None,
         theoretical_maximum_reuse=None,
         native_green_reuse=native_summary(markers),
+        optional_branch_inventory=optional_branch_summary(optional_markers),
     )
 
 
