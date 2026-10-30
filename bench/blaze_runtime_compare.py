@@ -10,6 +10,8 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
+import stat
 import signal
 import statistics
 import subprocess
@@ -20,7 +22,7 @@ import blaze_edit_compare as base
 
 PROFILES = {f'CARGO_PROFILE_{p}_{k}': v for p in ('DEV', 'TEST')
             for k, v in (('OPT_LEVEL', '0'), ('DEBUG', '0'), ('INCREMENTAL', 'true'))}
-ALLOW = base.ENV_LOG_ALLOWLIST | frozenset(PROFILES) | {'BLAZE_BACKEND', 'BLAZE_OPT'}
+ALLOW = base.ENV_LOG_ALLOWLIST | frozenset(PROFILES) | {'BLAZE_BACKEND', 'BLAZE_OPT', 'JUSTRUST_HOTPATCH'}
 
 
 def logged_environment(env):
@@ -150,10 +152,56 @@ def environment(args, stack):
     # base uses stack-named isolation. Move LLVM's base directory separately by
     # supplying a nested output root rather than sharing the Blaze target.
     env.update(PROFILES)
+    if stack in ('all4on', 'all4hotpatch'):
+        env['RUSTFLAGS'] = ' '.join(f'-Z{flag}=yes' for flag in
+                                  (*base.FLAGS, 'jr-cache-dead-code-items'))
+    if stack == 'all4hotpatch':
+        env['JUSTRUST_HOTPATCH'] = '1'
     if stack.startswith('blaze'):
         env.update(BLAZE_BACKEND='llvm' if stack == 'blaze-llvm' else 'cranelift',
                    BLAZE_OPT='0')
     return env
+
+
+def seed_manifest(root):
+    """Reject links and special files, including a linked source root."""
+    root = Path(root)
+    if any(p.is_symlink() for p in (root, *root.parents)) or not root.is_dir():
+        raise ValueError('seed cache must be a real directory, not a symlink')
+    manifest = {}
+    for current, directories, files in os.walk(root, followlinks=False):
+        for name in directories + files:
+            path = Path(current) / name
+            mode = path.lstat().st_mode
+            if stat.S_ISLNK(mode) or not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
+                raise ValueError(f'seed cache refuses symlink or special file: {path}')
+            if stat.S_ISREG(mode):
+                manifest[str(path.relative_to(root))] = base.digest(path)
+    return dict(sorted(manifest.items()))
+
+
+def seed_cache(source, destination):
+    """Copy only into a new private store, validating content before use.
+
+    Copies preserve symlinks rather than following them if a concurrent writer
+    introduces one. Post-copy validation then rejects that store before startup.
+    Source mutations likewise fail closed. Never alter or delete the source.
+    """
+    source, destination = Path(source), Path(destination)
+    src, dst = source.resolve(), destination.resolve()
+    if src == dst or src.is_relative_to(dst) or dst.is_relative_to(src):
+        raise ValueError('seed source and destination must be disjoint')
+    if any(p.is_symlink() for p in destination.parents):
+        raise ValueError('seed destination parents must not be symlinks')
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('seed destination must be new')
+    before = seed_manifest(source)
+    shutil.copytree(source, destination, symlinks=True)
+    copied, after = seed_manifest(destination), seed_manifest(source)
+    if before != copied or before != after:
+        raise ValueError('seed cache changed while copying')
+    return {'source': str(src), 'destination': str(dst), 'files': before,
+            'scope': 'warm-store seeded compatibility diagnostic, not cold-store performance'}
 
 
 def source_hashes(source, output):
@@ -180,11 +228,16 @@ def execute(args):
     anchor = args.edit_anchor.encode()
     edit_bytes(original, anchor=anchor)
     stacks = ['owned-off', 'all3on', 'blaze'] + (['blaze-llvm'] if args.blaze_llvm else [])
+    if args.owned_experiments:
+        stacks += ['all4on', 'all4hotpatch']
     records, medians = [], {}
     metadata = {'scope': 'scoped filtered tests, not full suite or general speed claim',
                 'source_before': source_hashes(args.source, args.output),
                 'identities_before': base.identities(args), 'profiles': PROFILES,
-                'samples': args.samples, 'stacks': stacks}
+                'samples': args.samples, 'stacks': stacks,
+                'store_scope': 'warm-store seeded' if args.blaze_seed_cache else 'unseeded private stores',
+                'blaze_seed_manifests': {},
+                'seed_source_before': seed_manifest(args.blaze_seed_cache) if args.blaze_seed_cache else None}
     expected = None
     def save():
         (args.output / 'metadata.json').write_text(json.dumps(metadata, indent=2) + '\n')
@@ -239,6 +292,12 @@ def execute(args):
             else:
                 env = environment(args, stack)
             environments[stack] = env
+            if stack.startswith('blaze') and args.blaze_seed_cache:
+                metadata['blaze_seed_manifests'][stack] = seed_cache(
+                    args.blaze_seed_cache, Path(env['BLAZE_CACHE']))
+                if metadata['blaze_seed_manifests'][stack]['files'] != metadata['seed_source_before']:
+                    raise ValueError('seed source changed between stacks')
+                save()
             row, output = invoke(stack, 'prepare', 0, env, original)
             if not good(row, output):
                 continue
@@ -287,8 +346,10 @@ def execute(args):
         metadata['source_restored'] = pinned.read_bytes() == original
         try:
             metadata['identities_after'] = base.identities(args)
+            metadata['seed_source_after'] = seed_manifest(args.blaze_seed_cache) if args.blaze_seed_cache else None
             valid = (metadata['source_before'] == metadata['source_after'] and
-                     metadata['identities_before'] == metadata['identities_after'])
+                     metadata['identities_before'] == metadata['identities_after'] and
+                     metadata['seed_source_before'] == metadata['seed_source_after'])
         except Exception as exc:
             metadata['identity_error'] = repr(exc)
             valid = False
@@ -298,6 +359,7 @@ def execute(args):
         save()
         (args.output / 'summary.json').write_text(json.dumps({
             'medians_seconds': medians, 'excluded': [s for s in stacks if s not in medians],
+            'store_scope': metadata['store_scope'],
             'policy': 'Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only.'}, indent=2) + '\n')
     return 0 if len(medians) == len(stacks) else 1
 
@@ -314,6 +376,10 @@ def main():
     parser.add_argument('--edit-file', default='src/summary.rs')
     parser.add_argument('--edit-anchor', default='fn shares_overlapping_time() {')
     parser.add_argument('--blaze-llvm', action='store_true')
+    parser.add_argument('--owned-experiments', action='store_true',
+                        help='add isolated all4on and all4hotpatch stacks')
+    parser.add_argument('--blaze-seed-cache', type=lambda s: Path(s).expanduser().absolute(),
+                        help='copy a private successful store into each fresh Blaze cache; warm-store scope only')
     parser.add_argument('--timeout', type=float, default=360)
     args = parser.parse_args()
     if args.samples < 1 or args.timeout <= 0:

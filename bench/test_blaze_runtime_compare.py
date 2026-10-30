@@ -126,7 +126,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid'):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -134,11 +134,18 @@ class HarnessTests(unittest.TestCase):
         args = argparse.Namespace(source=source, output=root / 'out', samples=2,
             edit_file='src/summary.rs', edit_test=NAME, edit_anchor='fn shares_overlapping_time() {',
             blaze_llvm=True, command='test', test_filter='summary::tests::', timeout=1,
-            binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'))
+            binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
+            owned_experiments=experiments, blaze_seed_cache=root / 'seed' if seeded else None)
+        if seeded:
+            args.blaze_seed_cache.mkdir()
+            (args.blaze_seed_cache / 'test.pack').write_bytes(b'private seeded pack')
         observed = []
         def fake(command, cwd, env, prefix, timeout):
             contents = pinned.read_bytes()
             observed.append((prefix.name, contents))
+            if seeded and command[0] == '/fake/blaze':
+                self.assertEqual((Path(env['BLAZE_CACHE']) / 'test.pack').read_bytes(),
+                                 b'private seeded pack')
             if crash:
                 raise RuntimeError('synthetic interruption')
             text, status = output(), 0
@@ -163,7 +170,8 @@ class HarnessTests(unittest.TestCase):
             return dict(status=status, error=None, timed_out=False, elapsed_seconds=.001)
         with patch.object(h.base, 'identities', return_value={'fake': 'identity'}), \
              patch.object(h, 'environment', side_effect=lambda a, s: {
-                 'HOME': str(a.output / s), 'JUSTRUST_HOME': str(a.output / s / '.justrust')}), \
+                 'HOME': str(a.output / s), 'JUSTRUST_HOME': str(a.output / s / '.justrust'),
+                 'BLAZE_CACHE': str(a.output / s / 'cache')}), \
              patch.object(h, 'run_process', side_effect=fake):
             if crash:
                 with self.assertRaises(RuntimeError):
@@ -182,6 +190,82 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(len(edits), 4)
                 self.assertEqual(len({data for _, data in edits}), 1)
                 self.assertIn('owned-off' if rep == 0 else 'all3on', edits[0][0])
+
+    def test_owned_experiments_isolation_flags_and_logging(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(output=Path(temp), cargo=Path('/fake/cargo'), rustc=Path('/fake/rustc'))
+            envs = {s: h.environment(args, s) for s in ('owned-off', 'all3on', 'all4on', 'all4hotpatch')}
+            self.assertEqual(len({e['CARGO_TARGET_DIR'] for e in envs.values()}), 4)
+            self.assertEqual(len({e['HOME'] for e in envs.values()}), 4)
+            for stack in ('owned-off', 'all3on'):
+                self.assertNotIn('jr-cache-dead-code-items', envs[stack]['RUSTFLAGS'])
+                self.assertNotIn('JUSTRUST_HOTPATCH', envs[stack])
+            for stack in ('all4on', 'all4hotpatch'):
+                self.assertEqual(envs[stack]['RUSTFLAGS'].split(),
+                                 [f'-Z{f}=yes' for f in (*h.base.FLAGS, 'jr-cache-dead-code-items')])
+            self.assertNotIn('JUSTRUST_HOTPATCH', envs['all4on'])
+            for logger in (h.logged_environment, h.base.logged_environment):
+                self.assertEqual(logger(envs['all4hotpatch'])['JUSTRUST_HOTPATCH'], '1')
+
+    def test_experiments_and_seed_keep_all_gates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rows = self.exercise(root, experiments=True, seeded=True)
+            for stack in ('all4on', 'all4hotpatch'):
+                phases = [name for name, _ in rows if name.endswith('-' + stack)]
+                for phase in ('prepare', 'type-error', 'type-recovery', 'test-failure', 'test-recovery'):
+                    self.assertIn(f'{phase}-000-{stack}', phases)
+                self.assertEqual(sum(name.startswith('edit-') for name in phases), 2)
+            metadata = json.loads((root / 'out/metadata.json').read_text())
+            self.assertEqual(metadata['store_scope'], 'warm-store seeded')
+            self.assertEqual(set(metadata['blaze_seed_manifests']), {'blaze', 'blaze-llvm'})
+            for manifest in metadata['blaze_seed_manifests'].values():
+                self.assertEqual(manifest['files'], {'test.pack': h.base.digest(root / 'seed/test.pack')})
+            self.assertEqual((root / 'seed/test.pack').read_bytes(), b'private seeded pack')
+
+    def test_seed_copy_preserves_source_and_rejects_unsafe_paths(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'seed'
+            source.mkdir()
+            (source / 'nested').mkdir()
+            (source / 'nested/a.pack').write_bytes(b'pristine')
+            destination = root / 'new'
+            manifest = h.seed_cache(source, destination)
+            self.assertEqual(manifest['files'], h.seed_manifest(source))
+            (destination / 'nested/a.pack').write_bytes(b'edited copy')
+            self.assertEqual((source / 'nested/a.pack').read_bytes(), b'pristine')
+            for unsafe in (source, source / 'child', destination):
+                with self.assertRaises(ValueError):
+                    h.seed_cache(source, unsafe)
+            for name, target in (('file-link', source / 'nested/a.pack'), ('dir-link', source / 'nested')):
+                link = source / name
+                link.symlink_to(target)
+                with self.assertRaises(ValueError):
+                    h.seed_cache(source, root / ('rejected-' + name))
+                link.unlink()
+            alias = root / 'alias'
+            alias.symlink_to(source)
+            with self.assertRaises(ValueError):
+                h.seed_cache(alias, root / 'rejected-root-link')
+            os.mkfifo(source / 'fifo')
+            with self.assertRaises(ValueError):
+                h.seed_cache(source, root / 'rejected-fifo')
+
+    def test_seed_mutation_during_copy_rejected(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / 'seed'
+            source.mkdir()
+            (source / 'a.pack').write_bytes(b'before')
+            original_copy = h.shutil.copytree
+            def mutate(*args, **kwargs):
+                result = original_copy(*args, **kwargs)
+                (source / 'a.pack').write_bytes(b'concurrent mutation')
+                return result
+            with patch.object(h.shutil, 'copytree', side_effect=mutate):
+                with self.assertRaises(ValueError):
+                    h.seed_cache(source, root / 'new')
 
     def test_missing_or_malformed_raw_logs_excluded(self):
         for mode in ('missing', 'malformed'):
