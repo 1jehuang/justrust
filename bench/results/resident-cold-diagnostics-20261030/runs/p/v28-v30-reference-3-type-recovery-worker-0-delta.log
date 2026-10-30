@@ -1,0 +1,8 @@
+request: sync at_us=1793403455575842
+change: 1 files
+edit (apply 55.8ms): compiled 3991 of 3991 fns (+10092 instances) in 81.8ms (+1.0µs emit)
+stats: 460 of 44577 functions compiled, 44117 reused
+patch: 0 functions
+phases: compile 213.6µs, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 267.7µs, 1 rounds
+link: 1.2ms (spliced: 0 functions redirected, 2097160 bytes, 0 copied)
+edit-to-binary: 144.8ms

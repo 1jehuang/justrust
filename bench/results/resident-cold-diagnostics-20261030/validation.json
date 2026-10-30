@@ -1,0 +1,48 @@
+{
+  "status": "PASS",
+  "runs": {
+    "rstp03": {
+      "calls": 8,
+      "accepted": 2,
+      "acceptance": [
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        true,
+        false
+      ],
+      "historical_path_limit_failure": true,
+      "candidate_all_four_accepted": false
+    },
+    "p": {
+      "calls": 8,
+      "accepted": 7,
+      "acceptance": [
+        false,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "historical_path_limit_failure": false,
+      "candidate_all_four_accepted": true
+    }
+  },
+  "native_gates": {
+    "native_gates": {
+      "check": "20261030-163119597-1821357",
+      "build": "20261030-163136337-1823465",
+      "test": "20261030-163303318-1833909"
+    },
+    "tests": 359,
+    "native_source_files": 3757,
+    "patch": "exact fallback relocation, detailed check before fallback before link"
+  },
+  "scope": "Bounded initial-cold diagnostic correctness only. Original socket-limit failure and v28 initial cold rejection retained. No performance, general superiority, full state-matrix or default-promotion claim."
+}

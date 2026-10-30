@@ -1,0 +1,11 @@
+symbols: 0 in 285.7µs
+load workspace: 169.2ms
+resolve: 69 crates in 495.3ms
+frozen, of 68 crates: def maps of 68, impls of 68, lang items of 68 from the store, 0 written in 84.8µs
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+standard library: from the store, 17 crates
+manifest: 2 files of the program from the store in 79.3ms, nothing compiled
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+check: 31 files in 1.9s
+link: 163.1ms (exit status: 0; not spliced: no executable to add to)
+Error: listening on /home/jeremy/rstp03/private-reference/engine/engine-home/resident-v1/runtime/workers/f39332319e1f8966/sock: path must be shorter than SUN_LEN: /home/jeremy/rstp03/private-reference/engine/engine-home/resident-v1/runtime/workers/f39332319e1f8966/sock.new/s is 112 bytes; BLAZE_HOME can name a shorter directory

@@ -1,0 +1,3 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+error: could not build `justrust`: listening on /home/jeremy/rstp03/private-engine/engine/engine-home/resident-v1/runtime/workers/1fbeec86aee45290/sock: path must be shorter than SUN_LEN: /home/jeremy/rstp03/private-engine/engine/engine-home/resident-v1/runtime/workers/1fbeec86aee45290/sock.new/s is 109 bytes; BLAZE_HOME can name a shorter directory
+(what blaze said is in /home/jeremy/rstp03/private-engine/engine/engine-home/resident-v1/runtime/workers/1fbeec86aee45290/log)

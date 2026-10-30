@@ -1,0 +1,107 @@
+{
+  "unchanged": true,
+  "calls": 8,
+  "results": [
+    {
+      "variant": "v28-v30",
+      "stack": "reference",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "reference",
+      "phase": "type-recovery",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh invocation marker/count mismatch",
+        "exact reference test names/status/counts/filtered mismatch",
+        "process was not successful"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "reference",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh type-error diagnostic/no-runtime oracle failed"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "reference",
+      "phase": "type-recovery",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh invocation marker/count mismatch",
+        "exact reference test names/status/counts/filtered mismatch",
+        "process was not successful"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "engine",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": true,
+      "direct_has_current_nonce": true
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "engine",
+      "phase": "type-recovery",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh invocation marker/count mismatch",
+        "exact reference test names/status/counts/filtered mismatch",
+        "process was not successful"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "engine",
+      "phase": "type-error",
+      "status": 101,
+      "accepted": true,
+      "failures": [],
+      "direct_has_E0308": true,
+      "direct_has_current_nonce": true
+    },
+    {
+      "variant": "v28-v30",
+      "stack": "engine",
+      "phase": "type-recovery",
+      "status": 101,
+      "accepted": false,
+      "failures": [
+        "fresh invocation marker/count mismatch",
+        "exact reference test names/status/counts/filtered mismatch",
+        "process was not successful"
+      ],
+      "direct_has_E0308": false,
+      "direct_has_current_nonce": false
+    }
+  ],
+  "policy": "Diagnostic v28/v30 differential only. Strict nonce E0308 and no-runtime error oracle, exact four-test/current runtime recovery oracle. v28 rejection expected but never admitted. No speed claim."
+}

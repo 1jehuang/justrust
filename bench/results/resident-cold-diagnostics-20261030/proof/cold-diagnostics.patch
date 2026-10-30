@@ -1,0 +1,24 @@
+--- main.rs.original
++++ main.rs.frozen
+@@ -9634,9 +9634,6 @@
+             if let Some(said) = ra_jit_expand::report() {
+                 eprintln!("{said}");
+             }
+-            if let Some(why) = cold.refused_reached(&args) {
+-                bail!("{why}");
+-            }
+             // No rustc checked the source of a build with nothing of rustc's: the worker
+             // does, all of it the build compiles and the code nothing reaches too, as rustc
+             // would. An error fails every build of the checkout until a source is written
+@@ -9693,6 +9690,11 @@
+                     }
+                     bail!("{why}");
+                 }
++            }
++            // Prefer the precise source diagnostics above to a generic reached-MIR
++            // refusal. Keep that refusal as a fallback before linking or execution.
++            if let Some(why) = cold.refused_reached(&args) {
++                bail!("{why}");
+             }
+             memory::report(&mut db, "build")?;
+             report_stats(&known.stats);

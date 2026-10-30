@@ -1,0 +1,12 @@
+request: sync at_us=1793403455233348
+change: 1 files
+edit (apply 30.0ms): not built: no patch, and the source does not compile; the next edit is a patch of the last build
+stats: 0 of 44577 functions compiled, 44577 reused
+no patch: a root of the base no longer compiles
+phases: compile 0.0ns, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 0.0ns, 0 rounds
+refused: error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_MATRIX_TYPE_ce97fa56fd3449ebbccd2419739b3543";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+edit-to-binary: 278.4ms

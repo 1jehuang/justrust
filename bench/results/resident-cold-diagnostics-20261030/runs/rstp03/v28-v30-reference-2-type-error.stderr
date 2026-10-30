@@ -1,0 +1,4 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+error: `justrust` reaches functions blaze could not compile, so it is not built:
+  justrust::summary::tests::shares_overlapping_time: frontend: mir: HasErrors
+(what blaze said is in /home/jeremy/rstp03/private-reference/engine/engine-home/resident-v1/runtime/workers/f39332319e1f8966/log)

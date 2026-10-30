@@ -1,0 +1,36 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: check succeeded, tests not run in 16.7s
+  time    startup 0.22s | compile 16.45s | after 0.03s
+  units   8 compiled (8 local, 0 deps, 0 build scripts), 427 fresh. Rebuilt because: edited crates (ra-jit); edited crates/hir-ty-codegen/patch.rs (hir-ty-codegen)
+          ra_jit (test)                      6.65s  cpu  11.3s   1309 MB
+          hir_ty_codegen                     5.13s  cpu   5.1s    810 MB
+          jr_engine (test)                   4.65s  cpu   9.3s   1301 MB
+  cpu     27.2s total, avg 1.6/peak 2.1 of 16 cores; others used 3.1 cores
+  memory  peak 2568 MB build, 1309 MB largest rustc, 24.4 GB free; stalls cpu 0.12s mem 0.00s io 0.01s
+  output  3 warnings shown, 252 hidden; 441 progress and 0 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  5.0s  6.6s went to recompiling oversized crates: ra_jit (79k lines, 6.6s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+  more    `justrust log 20261030-163119597-1821357` full output, `justrust show 20261030-163119597-1821357` full profile

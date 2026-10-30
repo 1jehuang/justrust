@@ -1,0 +1,54 @@
+symbols: 0 in 585.7µs
+load workspace: 3.8s
+resolve: 69 crates in 2.9s
+frozen, of 68 crates: def maps of 0, impls of 0, lang items of 0 from the store, 204 written in 443.8ms
+proc macros: 111 expanded in 0.21s, 0 from the store in 0.00s, 0.01s to key them (111 derives in 0.21s); 111 kept
+standard library: 17 crates, compiled 25924 of 25960 fns (+16200 instances) in 20.6s (+80.8µs emit)
+      3  unsupported: a call of `_mm512_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm512_mask_fmsubadd_ph)
+      3  unsupported: a call of `_mm256_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm256_mask_fmsubadd_ph)
+      3  unsupported: a call of `_mm_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm_mask_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tilezero.internal`  (e.g. core::core_arch::x86_64::amx::__tile_zero)
+      1  unsupported: LLVM intrinsic `x86.tdpbf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbf8ps)
+      1  unsupported: LLVM intrinsic `x86.tilestored64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stored)
+      1  unsupported: LLVM intrinsic `x86.tdpbssd.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbssd)
+      1  unsupported: LLVM intrinsic `x86.tdphbf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dphbf8ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2bf16h.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2bf16h)
+      1  unsupported: a call of `_mm256_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm256_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tcmmrlfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cmmrlfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tilemovrow.internal`  (e.g. core::core_arch::x86_64::amx::__tile_movrow)
+      1  unsupported: LLVM intrinsic `x86.tdphf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dphf8ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbsud.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbsud)
+      1  unsupported: LLVM intrinsic `x86.tileloaddt164.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stream_loadd)
+      1  unsupported: LLVM intrinsic `x86.tileloaddrst164.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stream_loaddrs)
+      1  unsupported: LLVM intrinsic `x86.tcmmimfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cmmimfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tdpfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowd2ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowd2ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbf16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbf16ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2phl.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2phl)
+      1  unsupported: a call of `_mm_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tileloadd64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_loadd)
+      1  unsupported: LLVM intrinsic `x86.tdpbhf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbhf8ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbuud.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbuud)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2bf16l.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2bf16l)
+      1  unsupported: a call of `_mm512_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm512_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tileloaddrs64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_loaddrs)
+      1  unsupported: LLVM intrinsic `x86.tdpbusd.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbusd)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2phh.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2phh)
+standard library: 17 parts in 119.7ms
+store: 0 functions found, 42131 compiled and added
+entries: 0 found, 41682 added, 0 as stored, 0 not as stored, 0 instances and 434 requests without a stable name
+not kept: [("call of no instance", 434)]
+not found: [("no entry", 16192)]
+manifest: none used, the store has none of this build (34.3ms)
+cold: compiled 3988 of 3989 fns (+40458 instances) in 5.2s (+38.4ms emit)
+  refused: justrust[baadcb47f5ef2310]::summary::tests::shares_overlapping_time: frontend: mir: HasErrors
+proc macros: 113 expanded in 0.26s, 111 from the store in 0.05s, 0.01s to key them (113 derives in 0.26s); 113 kept
+store: 25664 functions found, 17937 compiled and added
+entries: 0 found, 44423 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+not found: [("no entry", 40435)]
+check: 31 files in 1.3s
+Error: error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_MATRIX_TYPE_3db3994286874459991009ef4eb5c417";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
