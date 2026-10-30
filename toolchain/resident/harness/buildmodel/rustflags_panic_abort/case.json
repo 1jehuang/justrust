@@ -1,0 +1,10 @@
+{
+  "row": "`RUSTFLAGS=-C panic=abort` over the profile",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "env": {
+    "RUSTFLAGS": "-C panic=abort"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "row": "`strip = true`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ]
+}

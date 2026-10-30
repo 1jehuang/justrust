@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # The root workspace. The vendored crates (vendor/, git subtrees of the forks) are not updated here.
+  - package-ecosystem: cargo
+    directory: /
+    # The root workspace's path dependencies lead into vendor/rust-analyzer, whose `crates/*` member
+    # glob Dependabot reads against this repository's crates/ and fails on.
+    exclude-paths: ["vendor/**"]
+    schedule:
+      interval: weekly
+    groups:
+      cargo:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

@@ -1,0 +1,45 @@
+/* The ix docs palette, dark scheme only. Copied from ix packages/web/src/styles/site.css (.site grayscale ladder and
+   aliases), styles/theme.css (font stacks) and lib/docs/Blocks.svelte (the red inline-code ink). */
+:root {
+	color-scheme: dark;
+
+	--g-0: #0c0c0d;
+	--g-1: #101011;
+	--g-2: #141415;
+	--g-3: #19191a;
+	--g-4: #1f1f20;
+	--g-5: #28282a;
+	--g-6: #333335;
+	--g-7: #414143;
+	--g-8: #57575a;
+	--g-9: #727274;
+	--g-10: #929190;
+	--g-11: #b3b2af;
+	--g-12: #d4d3cf;
+	--g-13: #ebeae6;
+
+	--bg: var(--g-1);
+	--bg-2: var(--g-2);
+	--bg-3: var(--g-3);
+	--bg-4: var(--g-4);
+	--line: var(--g-5);
+	--line-2: var(--g-6);
+	--ink-1: var(--g-13);
+	--ink-2: var(--g-11);
+	--ink-3: #878684;
+	--ink-4: var(--g-8);
+
+	--code-bg: color-mix(in srgb, var(--g-2) 70%, var(--g-1));
+	--s-tint: color-mix(in srgb, var(--ink-1) 6%, transparent);
+
+	/* Colour carries meaning only: an error or a live status (site.css). */
+	--danger: #ff7168;
+	--ok: #4cc27a;
+
+	/* Inline code in the docs (Blocks.svelte, dark). Also the diagrams' "changed / rebuilt" ink. */
+	--doc-code-ink: #ff7369;
+
+	--font-sans:
+		'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif;
+	--font-mono: 'Berkeley Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}

@@ -1,0 +1,3 @@
+[build]
+target = ["wasm32-unknown-unknown", "aarch64-apple-darwin"]
+rustflags = ["--cfg", "built"]

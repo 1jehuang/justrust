@@ -1,0 +1,49 @@
+[package]
+name = "blaze-registry"
+description = "blaze's reading of registries and fetching of sources as cargo 1.99 does them, into cargo's directories and blaze's store, with no cargo"
+publish = false
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+blaze-resolve = { path = "../blaze-resolve" }
+blaze-source.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+serde_derive.workspace = true
+serde_json.workspace = true
+semver = { workspace = true, features = ["serde"] }
+url.workspace = true
+percent-encoding = "2"
+# The parser cargo 1.99 parses a dependency's `target` with: the same crate and version.
+cargo-platform = "0.3.3"
+sha2 = "0.10"
+flate2 = "1"
+tar = { version = "0.4.46", default-features = false }
+filetime = "0.2.29"
+ra-jit-store.workspace = true
+# The configuration credentials are read from, as cargo's `GlobalContext` holds it.
+blaze-manifest.workspace = true
+toml.workspace = true
+# The HTTP stack the rest of blaze uses (crates/ra-jit/Cargo.toml): hyper 1 over rustls with ring.
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "native-tokio", "ring", "tls12"] }
+http-body-util = "0.1"
+tokio = { version = "1.47", features = ["rt-multi-thread", "sync", "time"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+
+[lints]
+workspace = true

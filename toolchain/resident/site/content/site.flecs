@@ -1,0 +1,114 @@
+// The site's pages. Each page is an entity under `site`; its path is its URL (site.index is /).
+// RFCs live in rfcs/, the charter in charter.flecs, /bench in bench.flecs.
+site {
+  OrderedChildren
+  // https://ix.dev/blaze/ (the worker answers there; ra-jit.ix.dev and blaze.ix.dev redirect to it).
+  Served: {"https://ix.dev", "/blaze"}
+
+  index : Page {
+    Title: {"blaze"}
+    Intro: {"[warm, welcoming] Hey, welcome. [short pause] This is blaze, and here's why you might care."}
+    Outro: {"[warm] So, the short version: edit Rust, and the program that's already running changes in milliseconds, state intact. It's still just cargo, one nix command away. [breath] Thanks for listening."}
+    Tab: {"blaze: edit Rust, see it change in milliseconds"}
+    Description: {"Edit Rust. See it change in milliseconds, in the program that is already running."}
+
+    Lede lede("Edit Rust. See it change in milliseconds, in the program that is already running.") {
+      Say: {"[curious] So here's the thing. You change one line of Rust, and then you wait. It rebuilds, the program restarts, and its state is gone. [pause] [excited] blaze fixes that. Edit, and the program that's <emphasis>already running</emphasis> has the change in milliseconds. [calm] The demo up top shows it: a Game of Life that keeps running while its rules, colours and speed are edited live."}
+    }
+    Command install("nix run github:indexable-inc/blaze") {
+      Silent
+    }
+    Img demo(src: "/demo.avif", alt: "Editing the running Game of Life: rule, colours and speed change live", width: 2560, height: 1440) {
+      Silent
+    }
+
+    Section get(title: "What you get") {
+      Say: {"[warm] So what do you get? Live edits: save a file, and about a millisecond later the running program has the new code, with its state intact. [short pause] Fast builds: after the first one, an edit rebuilds only the functions you changed, and the Rust compiler is never called. [short pause] And it's the same cargo: build, run, test and check, in any project."}
+      Ul list {
+        Li live("**Live edits.** Save a file and the running program has the new code about a millisecond later. Its state stays.")
+        Li fast("**Fast builds.** After the first build, an edit rebuilds only the functions you changed. No `rustc`, no waiting.")
+        Li cargo("**Same commands as cargo.** `blaze build|run|test|check` in any project, or `cargo blaze build` and so on.")
+      }
+    }
+
+    Section speed(title: "How fast") {
+      Say: {"[curious] How fast? [breath] Take a workspace of two hundred crates, edit one function, and build. [matter-of-fact] In the main crate, cargo takes about one point eight seconds. blaze, four tenths. [pause] In a crate everything depends on, the painful case, cargo takes over six seconds. [excited] blaze, six tenths. [calm] The benchmark history page has every run, next to plain cargo."}
+      Dim setup("Edit one function, then build. 200-crate workspace, median of three.")
+      Table numbers {
+        Tr head { Th a("Edit"); Th b("cargo"); Th c("blaze") }
+        Tr main_crate { Td a("Function in the main crate"); Td b("1.76 s"); Td c("0.42 s") }
+        Tr deep_crate { Td a("Function in a crate everything depends on"); Td b("6.33 s"); Td c("0.60 s") }
+      }
+      Dim history("[Benchmark history](/bench): every run on real projects, next to plain cargo.")
+    }
+
+    Section start(title: "Try it") {
+      Say: {"[warm, encouraging] To try it, run blaze's build through nix, straight from GitHub, in any cargo project. To make it your everyday build, install it into your nix profile and switch it on, and plain cargo goes through blaze until you switch it off. [pause] For live edits, add the live edits crate, start a live handle once, and poll it every frame. Each poll tells you how your latest edit went."}
+      Code build(lang: "bash", text: "nix run github:indexable-inc/blaze#blaze -- build")
+      H3 normal("Use it as your normal cargo build")
+      Code enable(lang: "bash", text: `nix profile install github:indexable-inc/blaze#blaze
+        cargo blaze enable`)
+      Dim enabled("Plain `cargo build`, `run`, `test` and `check` then go through blaze. `cargo blaze disable` undoes it.")
+      H3 live("Live edits")
+      Code dep(lang: "toml", text: "ra-jit-live = \{ git = \"https://github.com/indexable-inc/blaze\" }")
+      Code poll(lang: "rust", text: `let mut live = ra_jit_live::Live::start().ok();
+        loop \{
+            if let Some(outcome) = live.as_mut().and_then(|it| it.poll()) \{
+                eprintln!("blaze: \{outcome}");
+            }
+            // ...your frame
+        }`)
+    }
+
+    Section know(title: "What to know") {
+      Say: {"[straightforward] A few things to know. [short pause] Live edits are macOS on Apple silicon only; elsewhere you still get fast builds. There's no borrow checker, so keep running cargo check. It's Rust one point ninety-nine only. [short pause] And changing a struct the running program uses asks for a restart."}
+      Ul list {
+        Li platform("Live edits: macOS Apple silicon only. Elsewhere you still get fast builds.")
+        Li borrowck("No borrow checker: keep running `cargo check`.")
+        Li rust("Rust 1.99.0 only.")
+        Li layout("Changing a struct the program is using asks for a restart.")
+      }
+      P more("More: [how it works](https://github.com/indexable-inc/blaze/blob/main/docs/architecture.md), [full results](https://github.com/indexable-inc/blaze/blob/main/docs/results.md), [what is supported](https://github.com/indexable-inc/blaze/blob/main/docs/support.md), [GitHub](https://github.com/indexable-inc/blaze).")
+    }
+
+    Section next(title: "Where it is going") {
+      Say: {"[thoughtful] So where is it going? blaze is a superset of Rust, and what it adds, it adds in the open. The charter says what it holds to, and the RFCs are designs still being argued about. [warm] Sign in with GitHub, and you can comment on any paragraph."}
+      P charter("blaze is a superset of Rust. What it adds, it adds in the open: the [charter](/charter) says what we hold to, and [the RFCs](/rfcs) are the designs being argued about. Sign in with GitHub to comment on any paragraph.")
+    }
+
+    Section credits(title: "Credits") {
+      Say: {"[warm, grateful] And credit where it's due. blaze includes code from rust-analyzer, Cranelift, LLVM and inkwell, salsa, object, Rust, and DioxusLabs' rustd. Thank you to the people who built them; none of them endorses blaze. It's made at ix, for den's native app. [small laugh] And this site? It's Flecs scripts, running under Flecs compiled to wasm."}
+      Dim thanks("blaze stands on the shoulders of giants. Thank you to the people who built [rust-analyzer](https://github.com/rust-lang/rust-analyzer), [Cranelift](https://cranelift.dev), [LLVM](https://llvm.org) and [inkwell](https://github.com/TheDan64/inkwell), [salsa](https://github.com/salsa-rs/salsa), [object](https://github.com/gimli-rs/object), [Rust](https://github.com/rust-lang/rust), and [rustd](https://github.com/DioxusLabs/rustd) (DioxusLabs), whose code blaze includes. None of these projects endorses blaze. blaze was called ra-jit until 2026-10-24, and `cargo ra-jit` still works. Made at [ix](https://ix.dev) for den's native app. MIT or Apache-2.0. This site is [Flecs](https://github.com/SanderMertens/flecs) scripts, run under Flecs compiled to wasm.")
+    }
+  }
+
+  updates : Page {
+    Narrow
+    Title: {"Tell us you use blaze"}
+    Nav: {"Updates", 4}
+    Description: {"Leave your email and why you want to use blaze."}
+    Lede lede("Leave your email and why you want it. It helps us see who uses blaze.")
+    SignupForm form
+    Dim privacy("We keep your email and answers to see who uses blaze, and may write to you about it. We don't share them.")
+  }
+
+  rfcs : Page {
+    Title: {"RFCs"}
+    Nav: {"RFCs", 2}
+    Description: {"Designs for what blaze adds to Rust, open for comment."}
+    Lede lede("Designs for what blaze adds to Rust. Each one is a draft until it is not: sign in with GitHub and comment on any paragraph, or on the RFC as a whole.")
+    P charter("Read the [charter](/charter) first: it says what every RFC has to keep.")
+    RfcIndex list
+    Dim source("Each RFC is a Flecs script in [site/content/rfcs](https://github.com/indexable-inc/blaze/tree/main/site/content/rfcs). To propose one, open a pull request with a new file.")
+  }
+
+  "404" : Page {
+    Title: {"Not found"}
+    P gone("Nothing here. Try the [home page](/) or [the RFCs](/rfcs).")
+  }
+}
+
+// The top bar: pages with Nav, then these outside links, sorted together by order.
+nav {
+  Link github("GitHub", "https://github.com/indexable-inc/blaze", 9)
+}

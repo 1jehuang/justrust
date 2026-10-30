@@ -1,0 +1,10 @@
+{
+  "row": "`RUSTFLAGS=-C overflow-checks=off` over the profile",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "env": {
+    "RUSTFLAGS": "-C overflow-checks=off"
+  }
+}

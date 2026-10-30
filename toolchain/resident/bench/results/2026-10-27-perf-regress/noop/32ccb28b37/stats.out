@@ -1,0 +1,14 @@
+    Finished `dev` profile [ra-jit] target(s) in 0.00s
+ra-jit time: 3.6 ms: client start 1.3 (38%), daemon↔worker 0.8 (22%), client checks 0.4 (11%), client↔daemon 0.2 (7%), client write state 0.2 (6%), daemon read request 0.2 (6%)
+ra-jit where the time went:
+ra-jit   client start                       1.3 ms  37.5%
+ra-jit   unaccounted                        0.0 ms   1.1%
+ra-jit   client read state                  0.1 ms   3.8%
+ra-jit   client checks                      0.4 ms  11.1%
+ra-jit   client↔daemon                      0.2 ms   6.9%
+ra-jit   daemon read request                0.2 ms   5.8%
+ra-jit   daemon                             0.2 ms   5.4%
+ra-jit   daemon↔worker                      0.8 ms  21.5%
+ra-jit   client settle                      0.0 ms   0.8%
+ra-jit   client write state                 0.2 ms   6.0%
+ra-jit   total                              3.6 ms 100.0%

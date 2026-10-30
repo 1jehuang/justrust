@@ -1,0 +1,14 @@
+{
+  "row": "`lto = \"off\"`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ]
+}

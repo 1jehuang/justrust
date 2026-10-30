@@ -1,0 +1,95 @@
+// The site's element types. Every page is an entity under `site` and its path is its URL
+// (site.rfcs.capabilities is /rfcs/capabilities, site.index is /). A page's children, in order, are
+// its content, the way HTML nests: a node's kind is a component (P, Li, Code, Section ...), its links
+// are pairs ((Cites, refs.zig_io), (DependsOn, site.charter)), and pages are instances of the
+// prefabs at the end (Page, Doc, Rfc).
+//
+// Text fields take inline markup: `code`, **strong**, *emphasis*, [label](https://...), and [[name]]
+// or [label][name] for a reference in refs.flecs. Prose is a "string" on one line; a code block is a
+// backtick string, its indent stripped. Strings interpolate, so write \{ and \$ for { and $, and \` in
+// a backtick string.
+//
+// Read by gen/ (TS), which turns the tree into HTML: render/render.ts says what each type becomes.
+using flecs.meta
+
+// Page metadata, set on the page entity.
+struct Title(text: string)              // <title> and the page's <h1>
+struct Tab(text: string)                // the <title>, when it is not Title
+struct Description(text: string)        // <meta name="description">
+struct Number(value: i32)               // an RFC's number
+struct Nav(label: string, order: i32)   // a page linked from the top bar, left to right by order
+struct Link(label: string, href: string, order: i32) // an outside link in the top bar (children of nav)
+// Where the site is served, set on `site`: the origin and the path every page sits under (no trailing slash, or
+// empty for the root). A link written /rfcs/x becomes <base>/rfcs/x; canonical and og:url are origin + base + path.
+struct Served(origin: string, base: string)
+
+// Blocks. In a Doc, every block has a name: its path under the page is the anchor comments use.
+struct Lede(text: string)               // the opening paragraph, larger
+struct P(text: string)
+struct Dim(text: string)                // a quieter paragraph
+struct H3(text: string)
+struct Li(text: string)
+struct Th(text: string)
+struct Td(text: string)
+struct Code(lang: string, text: string) // a code block; lang is rust, toml, bash or empty
+struct Command(text: string)            // one shell command with a copy button
+struct Img(src: string, alt: string, width: i32, height: i32)
+
+// Containers: their children are their content, in order.
+struct Section(title: string)           // <section> with an <h2>
+struct Issue(title: string)             // an open question in an RFC, with (Status, Open|Resolved)
+Ul {}
+Ol {}
+Table {}
+Tr {}
+Section { (With, flecs.core.OrderedChildren) }
+Issue { (With, flecs.core.OrderedChildren) }
+Ul { (With, flecs.core.OrderedChildren) }
+Ol { (With, flecs.core.OrderedChildren) }
+Table { (With, flecs.core.OrderedChildren) }
+Tr { (With, flecs.core.OrderedChildren) }
+
+// Things the TS layer builds itself, placed like any block.
+RfcIndex {}                             // the list of RFCs (children of site.rfcs)
+References {}                           // every reference the page cites, in order of first use
+SignupForm {}                           // the /updates form (worker/updates.ts handles the POST)
+BenchHistory {}                         // /bench's charts, from docs/benchmarks/history
+
+// The spoken version (renderer core spoken.rs; audio/README.md). Each block has a line derived from it by default:
+// prose without its markup, section titles as transitions, tables read row by row, code skipped. Say replaces a
+// block's line, and on a container (Section, Issue, Li, Ul, Ol) its whole subtree: the children are not read (Drama 3
+// directions like [warm] allowed). Silent drops the block and everything under it. On a page, Intro is said first
+// (default: the title) and Outro last.
+struct Say(text: string)
+struct Intro(text: string)
+struct Outro(text: string)
+Silent {}
+
+// A reference: a page elsewhere that a block cites.
+struct Ref(href: string, label: string, note: string)
+
+// Relationships.
+Status { Exclusive }                    // one status per page or issue
+Draft {}                                // an RFC being written; anything in it may change
+Discussing {}                           // an RFC ready for comments
+Accepted {}
+Rejected {}
+Open {}                                 // an issue nobody has settled
+Resolved {}
+Cites {}                                // (Cites, ref): a block leans on that reference
+DependsOn {}                            // (DependsOn, page): read that page first
+
+// Page kinds.
+Discussable {}                          // signed-in readers comment on each block
+Narrow {}                               // a 560px column instead of 720px
+Wide {}                                 // a 960px column
+
+prefab Page {
+  OrderedChildren
+}
+prefab Doc : Page {                     // a page people discuss, block by block
+  Discussable
+}
+prefab Rfc : Doc {
+  (Status, Draft)
+}

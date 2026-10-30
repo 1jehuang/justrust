@@ -1,0 +1,10 @@
+{
+  "row": "per-dependency `opt-level` (`[profile.dev.package.\"*\"]`)",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

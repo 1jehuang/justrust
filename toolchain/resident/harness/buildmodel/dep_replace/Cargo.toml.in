@@ -1,0 +1,6 @@
+[workspace]
+members = ["app"]
+resolver = "2"
+
+[replace]
+"registry+file://@HERE@/registry/index#dep@0.1.0" = { path = "replaced" }

@@ -1,0 +1,16 @@
+{
+  "row": "`--features` enabling a dependency's feature (`lib/fancy`)",
+  "package": "app",
+  "crates": [
+    "app",
+    "lib"
+  ],
+  "cargo": [
+    "--features",
+    "fancy"
+  ],
+  "ra-jit": [
+    "--features",
+    "fancy"
+  ]
+}

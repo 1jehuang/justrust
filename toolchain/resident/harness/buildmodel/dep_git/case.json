@@ -1,0 +1,7 @@
+{
+  "row": "git dependency",
+  "package": "app",
+  "crates": [
+    "app"
+  ]
+}

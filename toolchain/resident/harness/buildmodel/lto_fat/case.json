@@ -1,0 +1,19 @@
+{
+  "row": "`lto = true`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ],
+  "link": [
+    "--config",
+    "profile.release.lto=\"off\""
+  ],
+  "says": "lto: accepted, no cross-function optimization"
+}

@@ -1,0 +1,15 @@
+{
+  "row": "examples",
+  "package": "app",
+  "crates": [
+    "app",
+    "examples/demo.rs"
+  ],
+  "select": [
+    "--example",
+    "demo"
+  ],
+  "ra-jit": [
+    "--dev-deps"
+  ]
+}

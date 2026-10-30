@@ -1,0 +1,15 @@
+{
+  "row": "build script: generated code through `OUT_DIR`",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "steps": [
+    {
+      "what": "`rerun-if-changed` input gains a row",
+      "write": {
+        "table.txt": "a\nb\nc\n"
+      }
+    }
+  ]
+}

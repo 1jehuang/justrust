@@ -1,0 +1,58 @@
+[package]
+name = "ra-jit-wasm"
+version = "0.1.0"
+description = "Spike: ra-jit's compiler as a library that emits WebAssembly, to run in a browser"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+# A workspace of its own: the `wasm` feature of `hir-ty-codegen` swaps what it emits, and in
+# the main workspace cargo would turn it on for native `ra-jit` as well.
+[workspace]
+
+[lib]
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+object = { version = "0.37", default-features = false, features = ["read", "std", "elf"] }
+rustc-hash = "2.1.1"
+wasm-encoder = { version = "0.244", default-features = false, features = ["std"] }
+triomphe = { version = "0.1.14", default-features = false, features = ["std"] }
+
+hir = { path = "../../vendor/rust-analyzer/crates/hir", version = "0.0.0" }
+hir-def = { path = "../../vendor/rust-analyzer/crates/hir-def", version = "0.0.0" }
+hir-ty = { path = "../../vendor/rust-analyzer/crates/hir-ty", version = "0.0.0" }
+hir-ty-codegen = { path = "../hir-ty-codegen", features = ["wasm"] }
+ide-db = { path = "../../vendor/rust-analyzer/crates/ide-db", version = "0.0.0" }
+vfs = { path = "../../vendor/rust-analyzer/crates/vfs", version = "0.0.0" }
+cfg = { path = "../../vendor/rust-analyzer/crates/cfg", version = "0.0.0", features = ["tt", "syntax"] }
+intern = { path = "../../vendor/rust-analyzer/crates/intern", version = "0.0.0" }
+span = { path = "../../vendor/rust-analyzer/crates/span", version = "0.0.0" }
+stdx = { path = "../../vendor/rust-analyzer/crates/stdx", version = "0.0.0" }
+hir-expand = { path = "../../vendor/rust-analyzer/crates/hir-expand", version = "0.0.0" }
+syntax-bridge = { path = "../../vendor/rust-analyzer/crates/syntax-bridge", version = "0.0.0" }
+tt = { path = "../../vendor/rust-analyzer/crates/tt", version = "0.0.0" }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+rustc-demangle = "0.1.28"
+gimli = { version = "0.33", default-features = false, features = ["read", "std"] }
+anyhow = "1.0.98"
+syntax = { path = "../../vendor/rust-analyzer/crates/syntax", version = "0.0.0" }
+dioxus-rsx = "=0.7.10"
+core-macro = { path = "core-macro", version = "0.0.0" }
+proc-macro2 = "1"
+quote = "1"
+syn = "2"
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+load-cargo = { path = "../../vendor/rust-analyzer/crates/load-cargo", version = "0.0.0" }
+project-model = { path = "../../vendor/rust-analyzer/crates/project-model", version = "0.0.0" }
+wasmparser = "0.244"
+
+[profile.release]
+debug = 0
+
+[patch.crates-io]
+# As in the main workspace: rustc's layout code, from the tag of the stable it is pinned to.
+ra-ap-rustc_abi = { path = "../../vendor/rustc_abi" }
+cranelift-object = { path = "../../vendor/cranelift-object" }

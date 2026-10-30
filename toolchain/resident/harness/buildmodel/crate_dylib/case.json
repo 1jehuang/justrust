@@ -1,0 +1,8 @@
+{
+  "row": "crate type `dylib`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ]
+}

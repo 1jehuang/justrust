@@ -1,0 +1,13 @@
+{
+  "row": "`panic = \"abort\"` in release",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "row": "`overflow-checks = false` in dev",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

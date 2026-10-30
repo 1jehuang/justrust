@@ -1,0 +1,7 @@
+{
+  "row": "build script: `cargo:rustc-link-lib` and `rustc-link-search`",
+  "package": "app",
+  "crates": [
+    "app"
+  ]
+}

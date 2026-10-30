@@ -1,0 +1,14 @@
+[package]
+name = "ra-jit-live"
+version = "0.1.0"
+description = "Applies ra-jit's edits to a program while it runs"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Indexable, Inc."]
+repository = "https://github.com/indexable-inc/blaze"
+homepage = "https://ix.dev/blaze"
+readme = "README.md"
+keywords = ["hot-reload", "live-reload", "jit", "compiler"]
+categories = ["development-tools"]
+
+[dependencies]

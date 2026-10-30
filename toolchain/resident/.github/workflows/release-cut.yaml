@@ -1,0 +1,42 @@
+# Cuts a release of main by hand while the train runs by hand only (train.yaml): the train's
+# release job alone, without waiting for a green train. `train_release.py prepare --push` makes
+# the commit `release: v0.YYYYMMDD.N` and dispatches pgo.yaml, whose pin job tags it, which runs
+# release.yaml. Run it on a main whose merge gate (`ci`) is green:
+#
+#     gh workflow run release-cut.yaml
+name: release cut
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-cut
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: release
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RA_JIT_BOT_TOKEN || github.token }}
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-flakehub: false
+          use-gha-cache: true
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 .github/scripts/train_release.py prepare --push
+        env:
+          GH_TOKEN: ${{ github.token }}

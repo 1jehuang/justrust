@@ -1,0 +1,14 @@
+noop 161ms
+noop 55ms
+noop 54ms
+noop 54ms
+noop 53ms
+cargo-ra-jit direct 15134ms
+cargo-ra-jit direct 209ms
+cargo-ra-jit direct 89ms
+rustup cargo --version 
+rustup cargo --version 
+rustup cargo --version 
+plain cargo metadata 
+plain cargo metadata 
+plain cargo metadata 

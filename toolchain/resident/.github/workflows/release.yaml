@@ -1,0 +1,170 @@
+name: release
+
+# A tag `v0.YYYYMMDD.N` (a dated version, .github/scripts/release_notes.py) builds blaze for
+# Linux (x86_64, aarch64) and macOS (aarch64) and makes a GitHub release of that name: one tarball per target, a `.sha256` per tarball, SHA256SUMS, and the
+# tag's CHANGELOG.md section as the notes. The tag must match the workspace version. A tag
+# pushed by hand starts it; the release train's tags start it by dispatch on the tag (pgo.yaml's
+# pin job, .github/scripts/train_release.py), since a tag the workflow's own token makes starts
+# no workflow. A manual run on a branch builds and checks the same archives without releasing.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: 10
+
+jobs:
+  notes:
+    name: version and notes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.notes.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      # On a tag: the tag is the workspace version and CHANGELOG.md has its section.
+      # By hand: the workspace version needs a section.
+      - id: notes
+        run: python3 -I .github/scripts/release_notes.py --tag "${{ github.ref_type == 'tag' && github.ref_name || '' }}" --out "$RUNNER_TEMP/notes.md"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notes
+          path: ${{ runner.temp }}/notes.md
+          if-no-files-found: error
+
+  build:
+    name: ${{ matrix.target }}
+    needs: notes
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: aarch64-apple-darwin, os: macos-15 }
+          # The oldest hosted Ubuntu, so that the binaries ask for an old glibc.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
+    env:
+      # `cargo binstall` and install.sh find the archive and its binaries by this name
+      # ([package.metadata.binstall] in crates/ra-jit/Cargo.toml).
+      NAME: blaze-v${{ needs.notes.outputs.version }}-${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+      # rust-src: blaze's proc-macro server and the standard library are compiled from it.
+      - run: tc=$(cat harness/toolchain) && rustup toolchain install "$tc" --profile minimal --component rust-src && rustup default "$tc"
+      # `cargo blaze --version` names the commit, as the flake's build does.
+      - run: echo "RA_JIT_GIT_SHA=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+      # A release's builds fetch the standard library from the release's assets (the step
+      # `Standard library` below; crates/ra-jit/src/shipped.rs).
+      - if: github.ref_type == 'tag'
+        run: echo "RA_JIT_RELEASE=$GITHUB_REF_NAME" >> "$GITHUB_ENV"
+      # No build cache: release binaries come from a clean build. With the `llvm` feature, so
+      # every user gets the LLVM tiers: build_release.py fetches the LLVM llvm.json pins and
+      # links it in statically, and refuses a binary that loads libLLVM or a C++ runtime. The recipe the flake's build runs too, with the profile pgo/profiles.json pins; a
+      # release refuses a profile trained on other crates (Cargo.lock or the toolchain moved
+      # since the pgo workflow last ran). The ra-jit it built then builds blaze's
+      # proc-macro server (`--server`), which the archive has beside it: the server that
+      # expands with the proc-macro libraries ra-jit links, so no user's machine builds it.
+      - run: python3 .github/scripts/build_release.py --target ${{ matrix.target }} --out shipped --strict --server
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "13.0"
+      - name: Archive
+        run: |
+          mkdir "$NAME"
+          cp LICENSE-APACHE LICENSE-MIT README.md CHANGELOG.md "$NAME"
+          cp shipped/* "$NAME"
+          "$NAME/ra-jit" --version | tee /dev/stderr | grep -F "blaze ${{ needs.notes.outputs.version }} "
+          # `blaze`, what cargo runs for `cargo blaze`, and the name it had before, run the one beside them.
+          "$NAME/blaze" --version | grep -F "blaze ${{ needs.notes.outputs.version }} "
+          "$NAME/cargo-blaze" blaze --version | grep -F "blaze ${{ needs.notes.outputs.version }} "
+          "$NAME/cargo-ra-jit" ra-jit --version | grep -F "blaze ${{ needs.notes.outputs.version }} "
+          RUST_ANALYZER_INTERNALS_DO_NOT_USE=1 "$NAME/blaze-proc-macro-srv" --version | grep -F "rust-analyzer-proc-macro-srv "
+          tar czf "$NAME.tar.gz" "$NAME"
+          shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ env.NAME }}
+          path: ${{ env.NAME }}.tar.gz*
+          if-no-files-found: error
+      # The standard library a build with nothing of rustc's starts from, made by the binary
+      # just archived for the toolchain the README pins, so that no user's first build makes
+      # it. The release's assets are the remote its builds fetch it from: each file of the
+      # remote under its path with `.` for `/`. A release without them builds it on the
+      # user's machine, so this does not hold the release up.
+      - name: Standard library
+        continue-on-error: true
+        run: |
+          shipped/ra-jit std "$RUNNER_TEMP/std" "$(rustc +"$(cat harness/toolchain)" --print sysroot)"
+          mkdir std-assets
+          cd "$RUNNER_TEMP/std"
+          find manifests packs keys -type f ! -name '*.lock' | while read -r file; do
+            cp "$file" "$GITHUB_WORKSPACE/std-assets/${file//\//.}"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: std-${{ matrix.target }}
+          path: std-assets/*
+          if-no-files-found: warn
+
+  # cargo-blaze and the forks it depends on (`ra-jit-hir`, `ra-jit-rustc_abi`, ...) on crates.io, as
+  # its own job so it can be rerun alone: versions already published are skipped. Each crate is
+  # built first; crates.io's limit on new crates is waited out (a first release takes hours).
+  crates:
+    name: crates.io
+    needs: [notes, build]
+    # Off: it would publish 60 permanent `ra-jit-*` names and `cargo-blaze`, both retired (#270);
+    # whether and under which names blaze goes to crates.io is decided after the rename.
+    if: false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 340
+    steps:
+      - uses: actions/checkout@v7
+      - run: tc=$(cat harness/toolchain) && rustup toolchain install "$tc" --profile minimal && rustup default "$tc"
+      - run: python3 -I .github/scripts/publish_crates.py --publish --max-hours 5
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  publish:
+    name: GitHub release
+    needs: [notes, build]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: out
+          merge-multiple: true
+      - name: Checksums
+        working-directory: out
+        run: sha256sum blaze-*.tar.gz | tee SHA256SUMS
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          # GitHub refuses a release body over 125,000 characters; the full section stays in CHANGELOG.md.
+          python3 - <<'EOF'
+          import os
+          p = "out/notes.md"; text = open(p).read(); cap = 120_000
+          if len(text) > cap:
+              url = f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/blob/{os.environ['GITHUB_REF_NAME']}/CHANGELOG.md"
+              text = text[: text.rfind("\n", 0, cap)] + f"\n\n... The full notes are in [CHANGELOG.md]({url}).\n"
+              open(p, "w").write(text)
+          EOF
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "blaze $GITHUB_REF_NAME" --notes-file out/notes.md \
+            out/blaze-*.tar.gz out/blaze-*.tar.gz.sha256 out/SHA256SUMS \
+            out/manifests.* out/packs.* out/keys.*

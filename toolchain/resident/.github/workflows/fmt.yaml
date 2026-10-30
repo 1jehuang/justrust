@@ -1,0 +1,47 @@
+# Formatting, after the merge instead of before it: no check refuses a pull request for it. On
+# each push to main, `cargo fmt --all` (vendor/ too: the forks' rustfmt.toml files are read for
+# their code, and a fork's own edits are held to them like ra-jit's), and when that changes a
+# file, a commit `fmt` on main. The token that pushes is the one pgo.yaml's pin uses: the
+# ruleset on main refuses a push from the workflow's own token (docs/harness.md, "CI"). Its
+# push starts the train again, on the formatted commit, which is the newest; the run of this
+# workflow it starts finds nothing to format.
+name: fmt
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+# A newer push formats everything this one would have.
+concurrency:
+  group: fmt
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fmt:
+    name: cargo fmt
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          token: ${{ secrets.RA_JIT_BOT_TOKEN || github.token }}
+      - uses: ./.github/actions/toolchain
+        with:
+          components: rustfmt
+      - run: cargo fmt --all
+      - name: commit and push
+        run: |
+          git diff --quiet && { echo "formatted already"; exit 0; }
+          git diff --stat
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -qam fmt
+          for attempt in 1 2 3 4 5; do
+            git pull -q --rebase origin main && git push origin HEAD:main && exit 0
+            sleep $((attempt * 10))
+          done
+          echo "::error::main kept moving; five pushes of the fmt commit failed"
+          exit 1

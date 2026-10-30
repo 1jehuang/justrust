@@ -1,0 +1,19 @@
+{
+  "row": "unit tests",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "select": [
+    "--lib"
+  ],
+  "verb": "test",
+  "ra-jit": [
+    "--cfg-test",
+    "--profile",
+    "test"
+  ],
+  "args": [
+    "--test-threads=1"
+  ]
+}

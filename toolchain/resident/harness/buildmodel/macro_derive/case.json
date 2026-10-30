@@ -1,0 +1,7 @@
+{
+  "row": "proc macro: derive, with a dependency of its own",
+  "package": "app",
+  "crates": [
+    "app"
+  ]
+}

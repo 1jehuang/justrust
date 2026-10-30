@@ -1,0 +1,19 @@
+// /bench: the benchmark history. The tables and charts are the BenchHistory widget (gen/bench/), drawn from
+// docs/benchmarks/history at build time.
+site {
+  bench : Page {
+    Wide
+    Title: {"Benchmark history"}
+    Nav: {"Bench", 3}
+    Description: {"blaze's build and live-edit benchmarks over every run, next to plain cargo on the same machine."}
+
+    Lede lede("How long blaze takes to build after an edit, next to plain cargo on the same machine, on real projects at pinned commits ([how it is measured](https://github.com/indexable-inc/blaze/blob/main/docs/benchmarks.md)), and how soon a live edit runs. Each platform, macOS arm64, Linux aarch64 and Linux x86-64, is measured on a machine of its own, so compare its numbers with each other, not with another platform's. It updates after every push to main and every night.")
+
+    BenchHistory charts
+
+    Section regressions(title: "Regressions") {
+      P compared("Each run is compared with the runs before it on the same machine. A number that goes above its noise band opens an issue labelled [bench-regression](https://github.com/indexable-inc/blaze/issues?q=label%3Abench-regression).")
+      Dim data("The data: [docs/benchmarks/history](https://github.com/indexable-inc/blaze/tree/main/docs/benchmarks/history), one line per run.")
+    }
+  }
+}

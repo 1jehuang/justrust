@@ -1,0 +1,21 @@
+{
+  "row": "integration tests",
+  "package": "app",
+  "crates": [
+    "app",
+    "tests/it.rs"
+  ],
+  "select": [
+    "--test",
+    "it"
+  ],
+  "verb": "test",
+  "ra-jit": [
+    "--dev-deps",
+    "--profile",
+    "test"
+  ],
+  "args": [
+    "--test-threads=1"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "row": "`lto = \"thin\"`, and what ra-jit links against built with it",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ],
+  "expect": "refused"
+}

@@ -1,0 +1,7 @@
+{
+  "row": "vendored dependency (`[source] directory`)",
+  "package": "app",
+  "crates": [
+    "app"
+  ]
+}

@@ -1,0 +1,11 @@
+{
+  "row": "`.cargo/config.toml`: `[env]` under a variable of the process, and `force`",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "env": {
+    "FROM_CONFIG": "process",
+    "FORCED": "process"
+  }
+}

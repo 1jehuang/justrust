@@ -1,0 +1,5 @@
+target*/
+__pycache__/
+# Built: `crates/ra-jit-wasm/web/build.sh` and `build-site.sh`.
+/crates/ra-jit-wasm/web/pkg/
+/site/playground/ra-jit/

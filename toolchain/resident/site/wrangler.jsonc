@@ -1,0 +1,55 @@
+{
+  "name": "ra-jit",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": false,
+  // The site is https://ix.dev/blaze/ (Served in content/site.flecs). worker/ takes every request: it redirects the old
+  // hosts, strips /blaze (worker/base.ts), handles sign-in, comments, discussable pages and the /updates form, and serves
+  // everything else from dist/ (bun gen/build.ts) through ASSETS.
+  "main": "worker/index.ts",
+  // `wrangler dev` rebuilds dist/ and .gen/ when a page, style or client script changes. The renderer's wasm modules
+  // come from renderer/fetch.py or renderer/build.py (README.md), which this does not run.
+  "build": { "command": "bun gen/build.ts", "watch_dir": ["content", "gen", "client", "styles", "static"] },
+  // worker/renderer.ts imports .gen/site.wasm (CompiledWasm, wrangler's default for .wasm) and the snapshot
+  // .gen/site.cbor as bytes.
+  "rules": [{ "type": "Data", "globs": ["**/*.cbor"], "fallthrough": false }],
+  "assets": {
+    "directory": "dist",
+    "binding": "ASSETS",
+    // Every path reaches the worker first: dist/ is laid out without the /blaze base, which the worker strips, and the
+    // old hosts are redirected whatever the path. Asset responses get their CSP from worker/http.ts assetHeaders.
+    "run_worker_first": true,
+    "not_found_handling": "404-page"
+  },
+  // The deployed version's id is part of the cache key of anonymous discussable pages (worker/pages.ts), so a deploy
+  // (new code or new vars) never serves pages rendered by the one before.
+  "version_metadata": { "binding": "CF_VERSION" },
+  // ix.dev/blaze* on the ix.dev zone: more specific than ix-web's ix.dev/* (indexable-inc/ix,
+  // nix/terraform/cloudflare/template.json), so it wins. One pattern with the trailing *, because a pattern without
+  // one does not match a query (`ix.dev/blaze` missed /blaze?x=1); /blazefoo also lands here and gets a 404. ra-jit.ix.dev (the old home) and blaze.ix.dev are custom
+  // domains of this worker, which answers them with a 301 to the same path under https://ix.dev/blaze.
+  "routes": [
+    { "pattern": "ix.dev/blaze*", "zone_name": "ix.dev" },
+    { "pattern": "ra-jit.ix.dev", "custom_domain": true },
+    { "pattern": "blaze.ix.dev", "custom_domain": true }
+  ],
+  "vars": {
+    // Turnstile site key (public). Empty skips the widget and verification, so dev works.
+    // The secret is set with `wrangler secret put TURNSTILE_SECRET_KEY`.
+    "TURNSTILE_SITE_KEY": "",
+    // GitHub OAuth App client id (public). Empty turns sign-in off. Secret: GITHUB_CLIENT_SECRET.
+    "GITHUB_CLIENT_ID": "",
+    // Comma-separated numeric GitHub user ids (https://api.github.com/users/<login> -> "id") that may delete any
+    // comment. Ids, not logins: a login can be renamed and then registered by someone else.
+    "COMMENT_ADMINS": "7644264"
+  },
+  // Narration files (audio/README.md): content-hashed .webm, uploaded from the Mac after audio/generate.py.
+  "r2_buckets": [{ "binding": "AUDIO", "bucket_name": "ra-jit-audio" }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "ra-jit-updates",
+      "database_id": "c8d4a72a-3d01-48d5-9af5-46ce7b0f4670",
+      "migrations_dir": "migrations"
+    }
+  ]
+}

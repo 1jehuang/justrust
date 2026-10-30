@@ -1,0 +1,244 @@
+/**
+ * Builds the site into dist/ with the Rust renderer's two wasm modules (renderer/README.md), so the static pages and
+ * the worker's per-request pages come from the same renderer. Nothing here is native: the modules are
+ * platform-independent build outputs (`uv run --script renderer/build.py`, or fetched with renderer/fetch.py).
+ *
+ * 1. Runs content/*.flecs under Flecs (flecs/flecs-doc.wasm, gen/tree.ts) to bake what the renderer leaves to TS:
+ *    highlighted code (highlight.js) and the bench widget, by entity path.
+ * 2. site-snapshot.wasm runs the same scripts with the baked HTML set and returns the snapshot.
+ * 3. site.wasm loads it and renders every page without comments, anonymous, into dist/; it also lists the pages and
+ *    the discussable blocks.
+ *    Narration (audio/README.md): it asks site.wasm for each page's spoken lines (`.gen/spoken.json`, what
+ *    audio/generate.py voices). A page whose manifest (audio/manifests/<doc>.json) matches those lines, and whose
+ *    audio files are at hand (.audio/files/, or served from R2 when SITE_AUDIO_REMOTE=1), gets `Audio {manifest}` in a
+ *    second snapshot, and the renderer adds the player; its manifest and files are copied to dist/audio/. Any other
+ *    page simply has no player, so the build never needs audio.
+ * 4. Bundles client/*.ts, concatenates styles/, copies static/. For the worker, under .gen/:
+ *
+ *      site.wasm, site.cbor   the renderer and the snapshot (worker/renderer.ts)
+ *      pages.json             every page: [{url, file, doc, discussable}] (what the worker routes)
+ *      discussable.json       doc -> title and each block's text (what comments may attach to)
+ *      build.json             {hash} of the module, the snapshot and the client scripts (part of the cache key)
+ *      spoken.json            every page's spoken lines and their hash (the input of audio/generate.py)
+ *      site.json              {origin, base}: where the site is served (`Served` on `site` in content/site.flecs)
+ *
+ *    and dist/sitemap.xml, every page but the 404 at its full URL (origin + base + path), and dist/install.sh, the
+ *    repo's installer.
+ *
+ * SITE_WASM_DIR names another directory holding site.wasm and site-snapshot.wasm (default renderer/target/site/).
+ *
+ *   bun gen/build.ts           # once
+ *   bun gen/build.ts --watch   # again on every change under content/, gen/, client/, styles/
+ */
+import { createHash } from 'node:crypto';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, watch, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { Site, snapshot, type Page, type SnapshotInput, type SpokenLine } from '../worker/site-wasm';
+import { benchHistory } from './bench';
+import { highlight } from './highlight';
+import { dedent, load, prose, type Node } from './tree';
+
+const root = path.join(import.meta.dirname, '..');
+const content = path.join(root, 'content');
+const dist = path.join(root, 'dist');
+const gen = path.join(root, '.gen');
+const modules = process.env.SITE_WASM_DIR ? path.resolve(process.env.SITE_WASM_DIR) : path.join(root, 'renderer/target/site');
+
+/** Every .flecs file under content/, relative to it: schema.flecs first, then refs.flecs, then the rest in path order. */
+function scripts(): string[] {
+	const files = readdirSync(content, { recursive: true, encoding: 'utf8' }).filter((f) => f.endsWith('.flecs'));
+	const rank = (f: string) => (f === 'schema.flecs' ? 0 : f === 'refs.flecs' ? 1 : 2);
+	return files.sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
+}
+
+const audioDir = path.join(root, 'audio');
+/** Generated audio files, content-addressed (gitignored; audio/generate.py writes them). */
+const audioFiles = path.join(root, '.audio', 'files');
+
+/** A page's narration as audio/generate.py writes it (audio/README.md has the format). */
+type Manifest = {
+	doc: string;
+	/** The hash of the spoken lines it was generated from (`spokenHash`). */
+	hash: string;
+	lines: { id: string; block: string; src: string; duration: number; words: [string, number, number][] }[];
+};
+
+/** The hash a manifest must carry to match the page: over each line's id, block and text, in order. */
+function spokenHash(lines: SpokenLine[]): string {
+	const h = createHash('sha256');
+	for (const l of lines) h.update(`${l.id}\t${l.block}\t${l.text}\n`);
+	return h.digest('hex').slice(0, 16);
+}
+
+/** The page's entity path: `/rfcs/capabilities` is `site.rfcs.capabilities`, `/` is `site.index`. */
+const entityOf = (p: Page) => `site.${p.doc.replaceAll('/', '.')}`;
+
+/**
+ * Which pages can have the player: those whose manifest matches their spoken lines and whose files are available.
+ * Copies their manifests (content-addressed names) and files into dist/audio/ and returns the bakes that set
+ * `Audio {manifest}` on them.
+ */
+function narration(pages: Page[], spoken: Map<string, { hash: string; lines: SpokenLine[] }>): Baked {
+	const bakes: Baked = {};
+	const remote = process.env.SITE_AUDIO_REMOTE === '1';
+	for (const p of pages) {
+		const file = path.join(audioDir, 'manifests', `${p.doc}.json`);
+		if (!existsSync(file)) continue;
+		const raw = readFileSync(file);
+		const m = JSON.parse(raw.toString('utf8')) as Manifest;
+		const want = spoken.get(p.url)!;
+		if (m.hash !== want.hash) {
+			console.warn(`audio: ${p.url}: the manifest is for other spoken lines (run audio/generate.py); no player`);
+			continue;
+		}
+		const missing = m.lines.filter((l) => !existsSync(path.join(audioFiles, l.src)));
+		if (missing.length && !remote) {
+			console.warn(`audio: ${p.url}: ${missing.length} of ${m.lines.length} audio files missing from .audio/files (run audio/generate.py, or SITE_AUDIO_REMOTE=1); no player`);
+			continue;
+		}
+		mkdirSync(path.join(dist, 'audio'), { recursive: true });
+		for (const l of m.lines) {
+			const src = path.join(audioFiles, l.src);
+			if (existsSync(src)) cpSync(src, path.join(dist, 'audio', l.src));
+		}
+		const name = `${p.doc.replaceAll('/', '-')}.${createHash('sha256').update(raw).digest('hex').slice(0, 12)}.json`;
+		writeFileSync(path.join(dist, 'audio', name), raw);
+		bakes[entityOf(p)] = { audio: `/audio/${name}` };
+	}
+	return bakes;
+}
+
+const STYLES = ['fonts.css', 'tokens.css', 'doc-code.css', 'base.css', 'site.css'];
+
+type Baked = SnapshotInput['bakes'];
+
+/**
+ * What the renderer leaves to TS: highlighting (Code and Command, set as `Highlighted {html}`) and widgets that read
+ * the build's files (BenchHistory, set as `Baked {html}`). By entity path.
+ */
+function bake(all: Map<string, Node>): Baked {
+	const baked: Baked = {};
+	for (const n of all.values()) {
+		const code = n.values.get('Code');
+		if (code) {
+			const lang = String(code.lang ?? '');
+			const text = dedent(String(code.text ?? ''));
+			if (lang === 'rust' || lang === 'toml' || lang === 'bash') (baked[n.path] ??= {}).highlighted = highlight(text, lang);
+		}
+		const cmd = n.values.get('Command');
+		if (cmd) (baked[n.path] ??= {}).highlighted = highlight(prose(String(cmd.text ?? '')), 'bash');
+		if (n.tags.has('BenchHistory')) (baked[n.path] ??= {}).baked = benchHistory();
+	}
+	return baked;
+}
+
+/**
+ * Every discussable page's URL must reach the worker first (wrangler.jsonc `assets.run_worker_first`), or it would be
+ * served as the static, comment-less file. `true` sends every request to the worker (it strips the base, worker/base.ts).
+ */
+function checkRoutes(urls: string[]) {
+	const config = readFileSync(path.join(root, 'wrangler.jsonc'), 'utf8');
+	if (/"run_worker_first"\s*:\s*true\b/.test(config)) return;
+	const m = /"run_worker_first"\s*:\s*\[([^\]]*)\]/.exec(config);
+	if (!m) throw new Error('wrangler.jsonc: no assets.run_worker_first');
+	const patterns = [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]);
+	const matches = (p: string, u: string) => (p.endsWith('/*') ? u.startsWith(p.slice(0, -1)) : p === u);
+	for (const u of urls) {
+		if (!patterns.some((p) => matches(p, u))) throw new Error(`wrangler.jsonc: run_worker_first has no pattern for the discussable page ${u}`);
+	}
+}
+
+/** A module from renderer/build.py, or the command that gets it. */
+function wasmModule(file: string): WebAssembly.Module {
+	const p = path.join(modules, file);
+	if (!existsSync(p)) {
+		throw new Error(
+			`${p}: missing. These are build outputs of the Rust renderer, not built on this machine. Fetch them (from site/):\n` +
+				'  uv run --script renderer/fetch.py                 # from the latest green CI run of the site workflow\n' +
+				'  uv run --script renderer/fetch.py --scp HOST:DIR  # or from a machine that ran renderer/build.py\n' +
+				'or build them with the Rust toolchain: uv run --script renderer/build.py',
+		);
+	}
+	return new WebAssembly.Module(readFileSync(p));
+}
+
+/** `Served` on `site` (content/site.flecs): the origin and the base path every page sits under; empty when unset. */
+function served(tree: Map<string, Node>): { origin: string; base: string } {
+	const v = tree.get('site')?.values.get('Served');
+	return { origin: String(v?.origin ?? ''), base: String(v?.base ?? '') };
+}
+
+const xmlEsc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+function write(file: string, data: string | Uint8Array) {
+	mkdirSync(path.dirname(file), { recursive: true });
+	writeFileSync(file, data);
+}
+
+async function build() {
+	const t0 = performance.now();
+	const files = scripts();
+	const tree = await load(content, files.map((f) => path.join(content, f)), ['site', 'refs', 'nav']);
+	const input: SnapshotInput = {
+		scripts: files.map((name) => ({ name, code: readFileSync(path.join(content, name), 'utf8') })),
+		bakes: bake(tree),
+	};
+	let snap = snapshot(wasmModule('site-snapshot.wasm'), input);
+	let site = Site.load(wasmModule('site.wasm'), snap);
+	const pages = site.pages();
+	checkRoutes(pages.filter((p) => p.discussable).map((p) => p.url));
+
+	const spoken = new Map(pages.map((p) => {
+		const lines = site.spoken(p.url);
+		return [p.url, { hash: spokenHash(lines), lines }] as const;
+	}));
+	write(path.join(gen, 'spoken.json'), JSON.stringify(pages.map((p) => ({ ...p, ...spoken.get(p.url)! })), null, '\t'));
+	rmSync(path.join(dist, 'audio'), { recursive: true, force: true });
+	const audio = narration(pages, spoken);
+	if (Object.keys(audio).length) {
+		for (const [k, v] of Object.entries(audio)) input.bakes[k] = { ...input.bakes[k], ...v };
+		snap = snapshot(wasmModule('site-snapshot.wasm'), input);
+		site = Site.load(wasmModule('site.wasm'), snap);
+	}
+
+	const client = readdirSync(path.join(root, 'client')).filter((f) => f.endsWith('.ts')).map((f) => path.join(root, 'client', f));
+	const bundled = await Bun.build({ entrypoints: client, outdir: path.join(dist, 'js'), minify: true, target: 'browser' });
+	if (!bundled.success) throw new AggregateError(bundled.logs, 'client bundle failed');
+
+	rmSync(path.join(dist, 'rfcs'), { recursive: true, force: true });
+	for (const p of pages) write(path.join(dist, p.file), site.render(p.url, [], { viewer: null, signIn: true }));
+	writeFileSync(path.join(dist, 'site.css'), STYLES.map((s) => readFileSync(path.join(root, 'styles', s), 'utf8')).join('\n'));
+	cpSync(path.join(root, 'static'), dist, { recursive: true });
+	// The installer, at <base>/install.sh, from the repo root; the worker also answers <base>/ with it for curl
+	// (`curl -fsSL https://ix.dev/blaze | sh`).
+	cpSync(path.join(root, '..', 'install.sh'), path.join(dist, 'install.sh'));
+
+	write(path.join(gen, 'site.cbor'), snap);
+	cpSync(path.join(modules, 'site.wasm'), path.join(gen, 'site.wasm'));
+	write(path.join(gen, 'pages.json'), JSON.stringify(pages, null, '\t'));
+	const at = served(tree);
+	write(path.join(gen, 'site.json'), JSON.stringify(at, null, '\t'));
+	if (at.origin) {
+		const urls = pages.filter((p) => p.url !== '/404').map((p) => `<url><loc>${xmlEsc(at.origin + at.base + p.url)}</loc></url>`);
+		write(path.join(dist, 'sitemap.xml'), `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${urls.join('\n')}\n</urlset>\n`);
+	}
+	write(path.join(gen, 'discussable.json'), JSON.stringify(site.discussable(), null, '\t'));
+	const hash = createHash('sha256');
+	for (const f of ['site.cbor', 'site.wasm']) hash.update(f).update(readFileSync(path.join(gen, f)));
+	for (const f of readdirSync(path.join(dist, 'js')).sort()) hash.update(f).update(readFileSync(path.join(dist, 'js', f)));
+	write(path.join(gen, 'build.json'), JSON.stringify({ hash: hash.digest('hex').slice(0, 16) }));
+	const narrated = Object.keys(audio).length ? `, ${Object.keys(audio).length} with audio` : '';
+	console.log(`built ${pages.length} pages${narrated} (snapshot ${snap.length} bytes) in ${Math.round(performance.now() - t0)} ms`);
+}
+
+await build();
+if (process.argv.includes('--watch')) {
+	let timer: Timer | undefined;
+	for (const dir of ['content', 'gen', 'client', 'styles', 'static', 'audio/manifests']) {
+		if (!existsSync(path.join(root, dir))) continue;
+		watch(path.join(root, dir), { recursive: true }, () => {
+			clearTimeout(timer);
+			timer = setTimeout(() => build().catch((e) => console.error(String(e))), 50);
+		});
+	}
+}

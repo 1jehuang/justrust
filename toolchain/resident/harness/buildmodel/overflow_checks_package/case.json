@@ -1,0 +1,11 @@
+{
+  "row": "per-package `overflow-checks`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [],
+  "ra-jit": [],
+  "expect": "supported"
+}

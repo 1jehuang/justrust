@@ -1,0 +1,78 @@
+{
+ "rss": {
+  "total_mb": 4386,
+  "groups": {
+   "ra-jit-other:ra-jit build": {
+    "n": 1,
+    "rss_mb": 2,
+    "pss_mb": 0,
+    "anon_mb": 0
+   },
+   "ra-jit-other:cargo build": {
+    "n": 1,
+    "rss_mb": 50,
+    "pss_mb": 32,
+    "anon_mb": 31
+   },
+   "daemon": {
+    "n": 1,
+    "rss_mb": 20,
+    "pss_mb": 8,
+    "anon_mb": 7
+   },
+   "ra-jit-other:/root/fixcold/empty-fix-ripgrep/src/ --own-target": {
+    "n": 1,
+    "rss_mb": 40,
+    "pss_mb": 15,
+    "anon_mb": 13
+   },
+   "cargo": {
+    "n": 1,
+    "rss_mb": 28,
+    "pss_mb": 27,
+    "anon_mb": 11
+   },
+   "ra-jit-other:rustc-wrapper /root/.rustup/toolchains/nightly-2026-10-25-aarch64-unknown-linux-gnu/bin/rustc": {
+    "n": 7,
+    "rss_mb": 120,
+    "pss_mb": 43,
+    "anon_mb": 38
+   },
+   "script-build": {
+    "n": 7,
+    "rss_mb": 4153,
+    "pss_mb": 3933,
+    "anon_mb": 3905
+   }
+  }
+ },
+ "pss": {
+  "total_mb": 4184,
+  "groups": {
+   "ra-jit-other:ra-jit build": {
+    "n": 1,
+    "rss_mb": 2,
+    "pss_mb": 0,
+    "anon_mb": 0
+   },
+   "ra-jit-other:cargo build": {
+    "n": 1,
+    "rss_mb": 29,
+    "pss_mb": 16,
+    "anon_mb": 9
+   },
+   "daemon": {
+    "n": 1,
+    "rss_mb": 16,
+    "pss_mb": 7,
+    "anon_mb": 3
+   },
+   "ra-jit-other:/root/fixcold/empty-fix-ripgrep/src/ --own-target": {
+    "n": 1,
+    "rss_mb": 4173,
+    "pss_mb": 4160,
+    "anon_mb": 4130
+   }
+  }
+ }
+}

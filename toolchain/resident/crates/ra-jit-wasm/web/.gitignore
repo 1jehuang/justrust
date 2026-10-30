@@ -1,0 +1,5 @@
+# Built by `build.sh`.
+/pkg/
+# Built by `build-playground.sh`.
+/assets/
+/playground/target/

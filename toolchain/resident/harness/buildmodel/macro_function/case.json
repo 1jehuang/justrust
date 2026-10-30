@@ -1,0 +1,7 @@
+{
+  "row": "proc macro: function-like",
+  "package": "app",
+  "crates": [
+    "app"
+  ]
+}

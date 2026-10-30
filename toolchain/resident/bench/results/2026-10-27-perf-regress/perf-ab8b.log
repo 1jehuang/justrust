@@ -1,0 +1,52 @@
+== cold
+exit 0
+noop 37ms
+noop 33ms
+noop 33ms
+noop 34ms
+noop 35ms
+cargo-ra-jit direct 5591ms
+cargo-ra-jit direct 42ms
+cargo-ra-jit direct 41ms
+rustup cargo --version 12ms
+rustup cargo --version 12ms
+rustup cargo --version 11ms
+plain cargo metadata 
+plain cargo metadata 
+plain cargo metadata 
+done
+== cold
+exit 0
+noop 33ms
+noop 32ms
+noop 31ms
+noop 59ms
+noop 32ms
+cargo-ra-jit direct 5729ms
+cargo-ra-jit direct 41ms
+cargo-ra-jit direct 43ms
+rustup cargo --version 11ms
+rustup cargo --version 11ms
+rustup cargo --version 11ms
+plain cargo metadata 
+plain cargo metadata 
+plain cargo metadata 
+done
+== cold
+exit 0
+noop 88ms
+noop 68ms
+noop 99ms
+noop 71ms
+noop 66ms
+cargo-ra-jit direct 6040ms
+cargo-ra-jit direct 129ms
+cargo-ra-jit direct 100ms
+rustup cargo --version 13ms
+rustup cargo --version 10ms
+rustup cargo --version 10ms
+plain cargo metadata 
+plain cargo metadata 
+plain cargo metadata 
+done
+AB8B DONE

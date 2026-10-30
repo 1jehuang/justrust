@@ -1,0 +1,78 @@
+# Microbenchmarks of the store's hot paths (crates/ra-jit-bench), run by tango in pairs: on a
+# pull request the binary of the change against the binary of its base, interleaved on one
+# runner, so that the runner's own drift cancels out. A benchmark fails the run only when it
+# is slower beyond doubt (tango's z-score) and by more than NOISE percent, twice in a row.
+# On main they are run alone, for the times.
+name: bench
+on:
+  push:
+    branches: ["main"]
+    paths-ignore: ["site/**", "**.md", "harness/**"]
+  pull_request:
+    paths-ignore: ["site/**", "**.md", "harness/**"]
+  workflow_dispatch:
+
+concurrency:
+  # As ra-jit.yaml: a pull request's newer push cancels its run, every push to main finishes.
+  group: bench-${{ github.event_name }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  # Seconds each benchmark runs for, and the slowdown in percent below which it is noise.
+  TIME: 3
+  NOISE: 10
+
+defaults:
+  run:
+    # With pipefail, so that a build or a comparison that fails is not hidden by the pipe.
+    shell: bash
+
+jobs:
+  tango:
+    name: tango
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: tc=$(cat harness/toolchain) && rustup toolchain install "$tc" --profile minimal && rustup default "$tc"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      # The base first, in the same checkout, so that the change's build reuses whatever of
+      # it the change did not touch. A base without the benchmarks has nothing to pair with.
+      - name: Build the base
+        if: github.event_name == 'pull_request'
+        run: |
+          git checkout -q --detach ${{ github.event.pull_request.base.sha }}
+          if [ -d crates/ra-jit-bench ]; then
+            cargo bench -p ra-jit-bench --bench store --no-run --message-format=json \
+              | jq -r 'select(.executable != null and .target.name == "store") | .executable' \
+              | xargs -I{} cp {} "$RUNNER_TEMP/bench-base"
+          fi
+          git checkout -q --detach ${{ github.sha }}
+      - name: Build the change
+        run: |
+          cargo bench -p ra-jit-bench --bench store --no-run --message-format=json \
+            | jq -r 'select(.executable != null and .target.name == "store") | .executable' \
+            | xargs -I{} cp {} "$RUNNER_TEMP/bench-head"
+      - name: Compare with the base
+        if: github.event_name == 'pull_request'
+        run: |
+          [ -x "$RUNNER_TEMP/bench-base" ] || { echo "The base has no benchmarks: nothing to compare."; exit 0; }
+          compare() { "$RUNNER_TEMP/bench-head" --color never compare "$RUNNER_TEMP/bench-base" -t "$TIME" --noise-threshold "$NOISE" -o | tee -a "$RUNNER_TEMP/bench.txt"; }
+          { echo '### tango: change against base'; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          status=0
+          compare || { echo "A slowdown over ${NOISE}%: measuring again" | tee -a "$RUNNER_TEMP/bench.txt"; compare || status=$?; }
+          { cat "$RUNNER_TEMP/bench.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          [ "$status" = 0 ] || echo "::error::a benchmark is over ${NOISE}% slower than on the base, twice"
+          exit "$status"
+      # On main, and on a pull request whose base has no benchmarks.
+      - name: Times
+        run: |
+          [ ! -x "$RUNNER_TEMP/bench-base" ] || exit 0
+          "$RUNNER_TEMP/bench-head" --color never solo -t "$TIME" | tee "$RUNNER_TEMP/bench.txt"
+          { echo '### tango'; echo '```'; cat "$RUNNER_TEMP/bench.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"

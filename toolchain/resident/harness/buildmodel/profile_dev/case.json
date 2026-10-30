@@ -1,0 +1,9 @@
+{
+  "row": "profile: dev",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

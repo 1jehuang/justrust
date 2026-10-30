@@ -1,0 +1,10 @@
+{
+  "row": "crate type `staticlib`",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "run": "run.sh",
+  "artifact": "app",
+  "archive": true
+}

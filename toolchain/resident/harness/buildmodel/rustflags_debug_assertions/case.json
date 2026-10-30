@@ -1,0 +1,18 @@
+{
+  "row": "`RUSTFLAGS=-C debug-assertions=off` over the profile",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "env": {
+    "RUSTFLAGS": "-C debug-assertions=off"
+  },
+  "steps": [
+    {
+      "what": "`RUSTFLAGS` of the client is another",
+      "env": {
+        "RUSTFLAGS": "-C debug-assertions=on"
+      }
+    }
+  ]
+}

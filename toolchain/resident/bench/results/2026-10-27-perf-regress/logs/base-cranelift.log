@@ -1,0 +1,15 @@
+ripgrep cranelift (/root/perf/bin/base/ra-jit; work /root/perf/work/base-cranelift)
+  standard library for cranelift, as a release ships it: 26.0s
+  cold 1/1  ra-jit 39.00s + ready 0.03s  cargo 5.54s  
+  cold       ra-jit   39.034s  cargo    5.535s  peak ra-jit   5435 MB  cargo   1157 MB  daemon   3495 MB  daemon  
+  no-op      ra-jit    0.054s  cargo    0.029s  peak ra-jit   3501 MB  cargo     41 MB  daemon   3367 MB  daemon  
+  body       ra-jit    0.193s  cargo    0.411s  peak ra-jit   3254 MB  cargo    543 MB  daemon   2966 MB  daemon  spliced
+  signature  ra-jit    0.238s  cargo    0.521s  peak ra-jit   3258 MB  cargo    541 MB  daemon   2967 MB  daemon  spliced
+  leaf       ra-jit    0.187s  cargo    0.713s  peak ra-jit   3236 MB  cargo    557 MB  daemon   2966 MB  daemon  spliced
+  generic    ra-jit    0.179s  cargo    0.690s  peak ra-jit   3245 MB  cargo    554 MB  daemon   2966 MB  daemon  spliced
+  struct     ra-jit    0.217s  cargo    1.044s  peak ra-jit   3263 MB  cargo    579 MB  daemon   2970 MB  daemon  spliced
+  newfn      ra-jit    0.208s  cargo    0.697s  peak ra-jit   3264 MB  cargo    548 MB  daemon   2969 MB  daemon  spliced
+  warm store 1/1  ra-jit 9.84s + ready 0.02s  peak 2172 MB  daemon 1480 MB
+  store 432 MB, 432 MB of it not stored by a project before
+  runtime    ra-jit 2.258s 220 MB  cargo debug 0.405s 220 MB  cargo release 0.050s 220 MB
+wrote /root/perf/res/base-cranelift.json.tmp; wrong: 0; failed: none

@@ -1,0 +1,15 @@
+{
+  "row": "profile: custom (`--profile fast`, inherits release)",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [
+    "--profile",
+    "fast"
+  ],
+  "ra-jit": [
+    "--profile",
+    "fast"
+  ]
+}

@@ -1,0 +1,201 @@
+/* Page layout and the blocks render/render.ts writes (were the Svelte components' styles). */
+main { max-width: 720px; margin: 0 auto; padding: 64px 20px 96px; }
+main.narrow { max-width: 560px; }
+main.wide { max-width: 960px; }
+h1 { margin: 0 0 0.2em; font-size: 44px; font-weight: 700; letter-spacing: -0.03em; color: var(--ink-1); line-height: 1.15; }
+.doc .lede { font-size: 20px; line-height: 1.45; color: var(--ink-1); }
+main > img, .doc img { display: block; width: 100%; height: auto; margin: 0 0 1.5em; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); background: var(--code-bg); }
+.back { margin: 0 0 1.5em; font-size: 14px; color: var(--ink-4); }
+.meta { margin: 0 0 2em; font-size: 14px; color: var(--ink-3); }
+.meta span { color: var(--ink-4); }
+.doc h2 a.hash { color: inherit; text-decoration: none; }
+
+.status { display: inline-block; padding: 0.05em 0.55em; border-radius: 999px; background: var(--s-tint); color: var(--ink-2); font-size: 12px; font-weight: 500; letter-spacing: 0.02em; vertical-align: 0.12em; }
+.status-accepted, .status-resolved { color: var(--ok); }
+.status-rejected { color: var(--danger); }
+
+.issue { margin: 0 0 1.4em; padding: 2px 18px 4px; border-radius: 12px; box-shadow: inset 0 0 0 1px var(--line); }
+.issue h3 { margin-top: 0.9em; }
+
+.rfc-index { list-style: none; padding: 0; }
+.rfc-index li { margin: 0 0 1em; }
+.rfc-index .num { color: var(--ink-3); margin-right: 0.3em; }
+.references { font-size: 14px; }
+.references li { margin: 0 0 0.5em; }
+sup.cite { font-size: 0.7em; margin-left: 0.15em; }
+.doc sup.cite a { text-decoration: none; color: var(--ink-3); }
+
+/* Code (was lib/Code.svelte and lib/Copy.svelte). */
+.codeblock { position: relative; min-width: 0; margin: 0 0 1.3em; border-radius: 12px; background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--line); overflow: hidden; }
+.codeblock pre { margin: 0; padding: 14px 16px; overflow-x: auto; font-size: 13.5px; line-height: 1.6; tab-size: 4; }
+.codeblock code, .cmd code { font-family: var(--font-mono); font-size: inherit; background: none; padding: 0; }
+.cmd { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 1.3em; padding: 4px 8px 4px 16px; border-radius: 12px; background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--line); }
+.cmd pre { margin: 0; padding: 10px 0; overflow-x: auto; font-size: 14px; }
+.cmd button, .c-btn, .c-form button, .c-del { flex: none; padding: 6px 12px; border: 0; border-radius: 8px; background: var(--s-tint); color: var(--ink-1); font: inherit; font-size: 13px; cursor: pointer; }
+.cmd button:hover, .c-form button:hover { background: var(--bg-4); }
+@media (max-width: 480px) { .codeblock pre { font-size: 12px; padding: 12px; } }
+
+/* The /updates form (was routes/updates/+page.svelte). */
+form.signup { display: flex; flex-direction: column; gap: 18px; margin: 1.5em 0 2em; }
+form.signup label { display: flex; flex-direction: column; gap: 6px; }
+form.signup label span { font-size: 14px; font-weight: 500; color: var(--ink-1); }
+form.signup label em { font-style: normal; font-weight: 400; color: var(--ink-3); }
+input, textarea { width: 100%; padding: 10px 14px; border: 0; border-radius: 10px; background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-1); font: inherit; font-size: 15px; resize: vertical; }
+input:focus, textarea:focus { outline: none; box-shadow: inset 0 0 0 1px var(--ink-3); }
+form.signup button[type=submit] { align-self: flex-start; padding: 10px 18px; border: 0; border-radius: 10px; background: var(--ink-1); color: var(--bg); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; }
+form.signup button[type=submit]:hover { background: var(--g-12); }
+form.signup button:disabled { opacity: 0.6; cursor: default; }
+.error { margin: 0; color: var(--danger); font-size: 14px; }
+
+/* Inline comments, rendered by the worker (render/comments.ts) and enhanced by client/comments.ts. A block with
+   comments, or under the pointer, shows its button in the left margin (code blocks and tables: their top-right
+   corner; images: below, right-aligned); on a narrow screen the button sits after the block's text.
+   Without JS a thread shows when it (or a comment in it) is the URL's target: the button links to it. Once the
+   script runs (main.c-live) it shows and hides threads with `hidden` instead. */
+main[data-doc]:not(.c-live) .c-thread:not(.c-page):not(:target):not(:has(:target)) { display: none; }
+.doc a.c-btn { display: inline-block; text-align: center; text-decoration: none; color: var(--ink-3); }
+.doc a.c-btn.has, .doc a.c-btn[aria-expanded=true] { color: var(--ink-1); }
+.c-delform { display: inline; }
+[data-block] { position: relative; }
+.c-btn { position: absolute; left: -46px; top: 0.15em; min-width: 30px; padding: 2px 8px; font-size: 12px; line-height: 1.5; color: var(--ink-3); opacity: 0; transition: opacity 0.12s; }
+h2 > .c-btn, h3 > .c-btn { font-weight: 400; letter-spacing: 0; }
+li > .c-btn { left: -66px; }
+.codeblock > .c-btn, .ref > .c-btn { left: auto; right: 8px; top: 8px; }
+img + .c-btn { position: static; display: block; margin: -1.2em 0 1.2em auto; }
+[data-block]:hover > .c-btn, img[data-block]:hover + .c-btn, .c-btn:hover, .c-btn.has, .c-btn:focus-visible, .c-btn[aria-expanded=true] { opacity: 1; }
+.c-btn.has, .c-btn[aria-expanded=true] { color: var(--ink-1); }
+.c-btn:hover { background: var(--bg-4); }
+@media (max-width: 860px) {
+	.c-btn { position: static; margin-left: 0.5em; opacity: 0.55; vertical-align: 0.1em; }
+	.codeblock > .c-btn, .ref > .c-btn { position: absolute; }
+}
+.c-thread { margin: -0.4em 0 1.3em; padding: 12px 16px; border-radius: 12px; background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--line); font-size: 14.5px; line-height: 1.6; color: var(--ink-2); font-weight: 400; letter-spacing: 0; }
+li > .c-thread { margin: 0.5em 0 0.8em; }
+.c-thread[hidden] { display: none; }
+.discussion .c-thread { margin-top: 0.6em; }
+.c-item { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 4px 10px; padding: 8px 0; border-bottom: 1px solid var(--line); scroll-margin: 80px; }
+.c-item:last-child { border-bottom: 0; }
+.c-item.c-target { margin: 0 -8px; padding: 8px; border-radius: 8px; background: var(--s-tint); }
+.c-item > img, .doc .c-item > img { width: 24px; height: 24px; margin: 2px 0 0; border-radius: 50%; box-shadow: none; background: var(--line); }
+.c-head { font-size: 13px; color: var(--ink-3); }
+.c-head a { color: var(--ink-1); font-weight: 600; text-decoration: none; }
+.doc .c-head a.c-when { color: var(--ink-3); font-weight: 400; }
+.c-head a:hover { text-decoration: underline; }
+.c-quote { margin: 2px 0 4px; padding-left: 10px; border-left: 2px solid var(--line-2); color: var(--ink-3); font-size: 13px; white-space: pre-line; }
+.c-body { color: var(--ink-1); }
+.c-body p { margin: 0 0 0.6em; }
+.c-body p:last-child { margin: 0; }
+.c-body code { font-family: var(--font-mono); font-size: 0.9em; }
+.c-del { margin-left: 8px; padding: 0 6px; background: none; color: var(--ink-4); font-size: 12px; }
+.c-del:hover, .c-del:focus-visible { color: var(--danger); }
+.c-list:not(:empty) + .c-form { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.c-form form { display: flex; flex-direction: column; gap: 8px; }
+.c-form textarea { font-size: 14px; background: var(--bg); }
+.c-form .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--ink-3); }
+.c-form button.c-signout { padding: 0; background: none; color: var(--ink-3); font-size: 13px; text-decoration: underline; }
+.c-form button.c-signout:hover { background: none; color: var(--ink-1); }
+.c-form button:disabled { opacity: 0.6; cursor: default; }
+.c-form .error { font-size: 13.5px; }
+.c-empty { margin: 0; color: var(--ink-3); font-size: 13.5px; }
+
+/* /bench (the BenchHistory widget, gen/bench/view.ts; was routes/bench and lib/bench/{Chart,Choice}.svelte). */
+.bench .note { font-size: 14px; line-height: 1.55; }
+.bench .run { margin: 4px 0 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.bench .charts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0 0 1.3em; }
+.bench .ref th, .bench .ref td { white-space: nowrap; }
+.bench .ref .num { text-align: right; }
+/* With the setups the table scrolls sideways; the edit stays in view. */
+.bench .sticky th:first-child, .bench .sticky td:first-child { position: sticky; left: 0; z-index: 1; background: var(--bg); box-shadow: inset -1px 0 0 var(--line); }
+.bench .sticky th:first-child { background: color-mix(in srgb, var(--ink-1) 6%, var(--bg)); }
+.bench .ref td.best { color: var(--ink-1); font-weight: 600; }
+.bench .ref td.ratio { color: var(--ink-3); }
+.bench .ref abbr { text-decoration: none; cursor: help; }
+.bench .mark { color: var(--ink-3); font-weight: 400; }
+@media (max-width: 620px) {
+	.bench .charts { grid-template-columns: minmax(0, 1fr); }
+	.bench .ref td:first-child { white-space: normal; min-width: 8.5em; }
+	.bench .sticky td:first-child { max-width: 9.5em; }
+	.bench .ref th, .bench .ref td { padding-left: 10px; padding-right: 10px; }
+}
+.bench .choice { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+.bench .choice button { padding: 5px 12px; border: 0; border-radius: 999px; background: transparent; box-shadow: inset 0 0 0 1px var(--line); color: var(--ink-2); font: inherit; font-size: 14px; line-height: 1.4; text-align: left; cursor: pointer; transition: background 0.15s, color 0.15s, box-shadow 0.15s; }
+.bench .choice button:hover { box-shadow: inset 0 0 0 1px var(--line-2); color: var(--ink-1); }
+.bench .choice button[aria-pressed='true'] { background: var(--ink-1); box-shadow: none; color: var(--bg); font-weight: 500; }
+.chart { margin: 0; padding: 12px 12px 6px; border-radius: 12px; background: var(--code-bg); box-shadow: inset 0 0 0 1px var(--line); min-width: 0; }
+.chart figcaption { display: flex; flex-direction: column; gap: 2px; margin: 0 2px 6px; }
+.chart .title { color: var(--ink-1); font-size: 14px; font-weight: 600; line-height: 1.35; }
+.chart .values { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 13px; line-height: 1.5; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.chart .value { white-space: nowrap; }
+.chart .value b { font-weight: 500; }
+.chart .value b.ours { color: var(--ink-1); }
+.chart .value b.other { color: var(--ink-2); }
+.chart .key { display: inline-block; width: 14px; height: 6px; margin-right: 3px; vertical-align: middle; overflow: visible; }
+.chart svg[role='slider'] { display: block; width: 100%; height: auto; touch-action: pan-y; cursor: crosshair; border-radius: 6px; }
+.chart svg[role='slider']:focus-visible { outline-offset: 4px; }
+.chart .gridline { stroke: var(--line); stroke-width: 1; }
+.chart .tick { fill: var(--ink-3); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .guide { stroke: var(--line-2); stroke-width: 1; }
+.chart .line, .chart .key line { fill: none; stroke-width: 1.75; stroke-linejoin: round; stroke-linecap: round; }
+.chart .dashed { stroke-dasharray: 4 3; }
+.chart .line.ours, .chart .key .ours { stroke: var(--ink-1); }
+.chart .line.other, .chart .key .other { stroke: var(--ink-3); }
+.chart .band { stroke: none; }
+.chart .band.ours { fill: color-mix(in srgb, var(--ink-1) 13%, transparent); }
+.chart .band.other { fill: color-mix(in srgb, var(--ink-3) 18%, transparent); }
+.chart .whisker { stroke-width: 1; }
+.chart .whisker.ours { stroke: color-mix(in srgb, var(--ink-1) 55%, transparent); }
+.chart .whisker.other { stroke: color-mix(in srgb, var(--ink-3) 70%, transparent); }
+.chart .dot { stroke: var(--code-bg); stroke-width: 1.25; }
+.chart .dot.ours { fill: var(--ink-1); }
+.chart .dot.other { fill: var(--ink-3); }
+.chart .dot.on { stroke-width: 2; }
+.chart a { cursor: pointer; }
+.chart .empty { display: grid; place-items: center; aspect-ratio: 340 / 168; margin: 0; color: var(--ink-3); font-size: 14px; }
+
+/* The top bar (render/render.ts topbar): the site's name, then pages with Nav and nav's Links. */
+.topbar { position: sticky; top: 0; z-index: 10; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); box-shadow: inset 0 -1px 0 var(--line); }
+.topbar nav { display: flex; align-items: center; gap: 20px; max-width: 960px; margin: 0 auto; padding: 0 20px; height: 52px; font-size: 14px; }
+.topbar a { color: var(--ink-3); text-decoration: none; white-space: nowrap; }
+.topbar a:hover, .topbar a[aria-current="page"] { color: var(--ink-1); }
+.topbar .home { font-weight: 700; color: var(--ink-1); letter-spacing: -0.01em; }
+.topbar .links { display: flex; gap: 18px; margin-left: auto; overflow-x: auto; scrollbar-width: none; }
+.topbar .out::after { content: "↗"; margin-left: 0.2em; color: var(--ink-4); }
+main { padding-top: 48px; }
+
+/* Narration (client/listen.ts, audio/README.md): the player under the title, "play from here" beside each block's
+   comment button, the block being read and the word being said. */
+.listen { margin: 0.25em 0 2.25em; min-height: 36px; }
+.listen-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.listen button { box-sizing: border-box; height: 36px; border: 0; border-radius: 8px; background: var(--s-tint); color: var(--ink-1); font: inherit; font-size: 14px; cursor: pointer; }
+.listen button:hover { background: var(--bg-4); }
+.listen button:focus-visible, .say-btn:focus-visible { outline: 2px solid var(--ink-2); outline-offset: 2px; }
+.listen-play { display: inline-flex; align-items: center; gap: 8px; padding: 0 16px 0 13px; font-weight: 600; }
+.listen.playing .listen-play { background: var(--ink-1); color: var(--bg); }
+.listen.playing .listen-play:hover { background: var(--g-12); }
+.listen-skip { display: inline-flex; align-items: center; justify-content: center; width: 36px; padding: 0; }
+.listen-icon { width: 14px; height: 14px; fill: currentColor; }
+.listen-time { margin: 0 8px 0 4px; font-size: 14px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.listen-speed { display: inline-flex; padding: 2px; gap: 2px; border-radius: 8px; background: var(--s-tint); }
+.listen .listen-rate { height: 32px; padding: 0 8px; border-radius: 6px; background: transparent; color: var(--ink-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.listen .listen-rate:hover { background: var(--bg-4); color: var(--ink-1); }
+.listen .listen-rate[aria-pressed="true"] { background: var(--bg-4); color: var(--ink-1); font-weight: 600; }
+.listen-status { font-size: 13px; color: var(--ink-3); }
+.listen-credit { margin-left: auto; font-size: 12px; color: var(--ink-4); }
+[data-say] { position: relative; }
+.say-btn { position: absolute; left: -46px; top: 0.2em; display: inline-flex; align-items: center; justify-content: center; min-width: 30px; padding: 4px 8px; border: 0; border-radius: 8px; background: var(--s-tint); color: var(--ink-3); cursor: pointer; opacity: 0; transition: opacity 0.12s; }
+.say-btn:has(+ .c-btn) { left: -82px; }
+li > .say-btn { left: -66px; }
+li > .say-btn:has(+ .c-btn) { left: -102px; }
+.codeblock > .say-btn, .cmd > .say-btn, .ref > .say-btn { left: auto; right: 52px; top: 8px; }
+.say-btn .listen-icon { width: 10px; height: 10px; }
+[data-say]:hover > .say-btn, .say-btn:hover, .say-btn:focus-visible { opacity: 1; }
+.say-btn:hover { background: var(--bg-4); color: var(--ink-1); }
+@media (max-width: 860px) {
+	.say-btn, .say-btn:has(+ .c-btn), li > .say-btn, li > .say-btn:has(+ .c-btn) { position: static; margin-left: 0.5em; opacity: 0.55; vertical-align: 0.1em; }
+	.codeblock > .say-btn, .cmd > .say-btn, .ref > .say-btn { position: absolute; }
+}
+.say-now { border-radius: 6px; background: var(--s-tint); box-shadow: 0 0 0 6px var(--s-tint); transition: background 0.2s, box-shadow 0.2s; }
+::highlight(say-word) { background-color: var(--line-2); color: var(--ink-1); }
+@media (prefers-reduced-motion: reduce) {
+	.say-now, .say-btn { transition: none; }
+}

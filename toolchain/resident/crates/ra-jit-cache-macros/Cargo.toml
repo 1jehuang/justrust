@@ -1,0 +1,14 @@
+[package]
+name = "ra-jit-cache-macros"
+version = "0.1.0"
+description = "The #[cache] attribute of ra-jit-cache"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Indexable, Inc."]
+repository = "https://github.com/indexable-inc/blaze"
+homepage = "https://ix.dev/blaze"
+keywords = ["cache", "memoize", "jit"]
+categories = ["development-tools", "caching"]
+
+[lib]
+proc-macro = true

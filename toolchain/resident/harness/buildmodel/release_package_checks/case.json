@@ -1,0 +1,15 @@
+{
+  "row": "per-package checks turned on in release",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ],
+  "expect": "supported"
+}

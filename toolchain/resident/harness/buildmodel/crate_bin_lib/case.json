@@ -1,0 +1,8 @@
+{
+  "row": "crate types `bin` and `lib`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ]
+}

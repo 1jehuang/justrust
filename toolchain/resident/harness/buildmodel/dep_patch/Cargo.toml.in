@@ -1,0 +1,6 @@
+[workspace]
+members = ["app"]
+resolver = "2"
+
+[patch."file://@HERE@/upstream"]
+dep = { path = "patched" }

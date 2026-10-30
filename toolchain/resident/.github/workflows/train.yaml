@@ -1,0 +1,158 @@
+# The release train: everything the merge gate (ra-jit.yaml) leaves out, on main after the merge,
+# and a release of main when it is all green. What runs where, and how long it takes, is in
+# docs/harness.md ("CI").
+#
+#   every harness of harness/ci.py's full tier, on Linux x86-64, Linux AArch64, macOS arm64 and
+#       Windows x86-64, under both producers; Bun's fixtures, rustc's borrow-check tests and the
+#       pinned run-pass tests (Linux x86-64; those on macOS too); `fork alone`; `cargo ra-jit` on
+#       small projects (Linux x86-64, macOS) and the larger ones (AArch64); harness/wasm32.py,
+#       programs built for wasm32 and run under wasmtime (Linux x86-64); and the ripgrep
+#       bench (not blocking). nix-live.yaml (the flake's builds, the demo and live edits on macOS)
+#       runs on the same pushes in a workflow of its own: a cold nix build takes up to two hours,
+#       and in the train's run it held main's next train that long
+#   green: when main has changes since the last release, a commit `release: v0.YYYYMMDD.N`
+#       (the version of today's next release, N from 0, and a CHANGELOG.md section of what was
+#       merged) and the pgo workflow, whose pin job tags v0.YYYYMMDD.N when the profiles are
+#       trained, which runs release.yaml (.github/scripts/train_release.py)
+#   red: one issue, "Release train is red", opened or added to with the jobs that failed and the
+#       commits since the last green train; the next green train closes it
+#
+# When it runs on pushes to main (off for now, see `on:`), one train runs at a time; a push while it runs waits, and a
+# newer push replaces the one waiting, so the train runs on the newest commit of main as soon
+# as the one before is done. A run cancelled by each push (`cancel-in-progress`) would never end
+# while main takes a merge every few minutes, and a train takes about 45. The group is per ref:
+# a train run by hand on a branch (contributing.md: before landing what the fast tier does not
+# cover) neither waits behind main's nor takes the place of main's waiting one.
+name: train
+# By hand only for now (2026-10-27): on every push it never finished (a run waited hours on
+# nushell while every newer one was cancelled) and was red for reasons the merge gate (`ci`)
+# does not share. Releases are cut by hand until it is turned back on.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: train-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-x64:
+    name: linux x64
+    uses: ./.github/workflows/ra-jit-platform.yaml
+    with:
+      platform: linux-x64
+      os: ubuntu-24.04
+      tier: full
+      borrowck: true
+      pinned-ui: true
+      cargo-ra-jit: true
+      bench: true
+      bun-e2e: true
+      wasm32: true
+
+  linux-arm64:
+    name: linux arm64
+    uses: ./.github/workflows/ra-jit-platform.yaml
+    with:
+      platform: linux-arm64
+      os: ubuntu-24.04-arm
+      tier: full
+      projects: true
+
+  macos:
+    name: macos arm64
+    uses: ./.github/workflows/ra-jit-platform.yaml
+    with:
+      platform: macos-arm64
+      os: macos-15
+      tier: full
+      pinned-ui: true
+      cargo-ra-jit: true
+
+  windows:
+    name: windows x64
+    uses: ./.github/workflows/ra-jit-platform.yaml
+    with:
+      platform: windows-x64
+      os: windows-2025
+      tier: full
+
+  # vendor/rust-analyzer as the fork has it, built and tested outside this repository, so that
+  # the subtree cannot come to depend on crates/ (docs/architecture-split.md, step 5). The
+  # tests of ide-diagnostics are the verdict's (the daemon's errors are its diagnostics), and
+  # add about 15 s to the job.
+  fork:
+    name: fork alone
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+      - run: cp -r vendor/rust-analyzer vendor/rustc_type_ir vendor/rustc_next_trait_solver vendor/rustc_abi vendor/salsa vendor/salsa-macros vendor/salsa-macro-rules "$RUNNER_TEMP/"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ runner.temp }}/rust-analyzer
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - working-directory: ${{ runner.temp }}/rust-analyzer
+        run: cargo test -p hir-ty -p hir-ty-borrowck -p hir-ty-wfcheck -p ide-diagnostics && cargo check -p hir
+
+  # The train's verdict: every job above.
+  train:
+    name: train
+    needs: [linux-x64, linux-arm64, macos, windows, fork]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.value.result)\t\(.key)"'
+          ! echo "$NEEDS" | jq -e 'any(.[]; .result != "success")' > /dev/null
+
+  # Main's changes since the last release, as a release commit, when the train is green
+  # (.github/scripts/train_release.py). The token that pushes to main is the one pgo.yaml's pin
+  # uses: the ruleset on main refuses a push from the workflow's own (docs/harness.md, "CI").
+  release:
+    name: release
+    needs: train
+    if: needs.train.result == 'success' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RA_JIT_BOT_TOKEN || github.token }}
+      # cargo and nix/unit_graph.py from the flake's dev shell, as nix-live.yaml's unit graphs.
+      - uses: DeterminateSystems/nix-installer-action@v23
+      - uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          use-flakehub: false
+          use-gha-cache: true
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          python3 .github/scripts/train_release.py prepare --push
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  issue:
+    name: train issue
+    needs: [train, release]
+    if: always() && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/train-issue
+        with:
+          verdict: ${{ (needs.train.result == 'success' && needs.release.result != 'failure') && 'green' || 'red' }}

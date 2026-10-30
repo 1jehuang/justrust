@@ -1,0 +1,6 @@
+[workspace]
+members = ["app", "dep"]
+resolver = "2"
+
+[profile.dev.package.dep]
+debug-assertions = false

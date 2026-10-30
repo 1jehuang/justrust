@@ -1,0 +1,1516 @@
+//! Proc macros compiled to WebAssembly and run under Wasmtime in ra-jit's own process, as
+//! dtolnay's watt runs them.
+//!
+//! ra-jit compiles a proc-macro crate for `wasm32-wasip1` with [`GUEST`] in place of the
+//! standard library's `proc_macro`: the same API, whose token streams live in the module's
+//! memory and whose spans are numbers the host gives out, so syn, quote and proc-macro2 build
+//! against it unchanged. Each expansion is a fresh instance of the module ([`Wasm::run`]): it
+//! is given its input encoded ([`wire`]), asks the host what only the host knows (what a span
+//! joins to, a string lexed), and hands back its output, encoded the same way.
+//!
+//! What a module can learn of the machine is what it is given: its package's directory to
+//! read, at a path that is the same everywhere ([`wasi::PACKAGE`]), and cargo's variables for
+//! its package. Every read of the package is recorded, and an expansion is kept under what it
+//! was given and what it read ([`keyed`]), so that what one machine expanded every other
+//! finds, whatever it runs on: neither the module, which is the same bytes for every host, nor
+//! its expansions are kept under anything of the host's. An expansion that asked the database
+//! (a span's text, file or line) is not kept, as `ra-jit-expand` keeps none.
+
+pub mod bench;
+mod keyed;
+mod lex;
+mod wasi;
+mod wire;
+
+use std::{
+    any::Any,
+    fmt,
+    panic::AssertUnwindSafe,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
+    time::{Duration, Instant},
+};
+
+use base_db::{Env, SourceDatabase};
+use hir_expand::proc_macro::{
+    ProcMacro, ProcMacroExpander, ProcMacroExpansionError, ProcMacroKind, ProcMacroLoadResult,
+};
+use intern::Symbol;
+use load_cargo::{SubRequest, SubResponse};
+use paths::AbsPath;
+use rustc_hash::FxHashMap;
+use span::{
+    EditionedFileId, ErasedFileAstId, FIXUP_ERASED_FILE_AST_ID_MARKER, Span, SpanAnchor,
+    SyntaxContext, TextRange, TextSize,
+};
+use wasmtime::{
+    Caller, Config, Engine, Extern, Instance, InstancePre, Linker, Memory, Module, Store,
+    StoreLimits, StoreLimitsBuilder,
+};
+
+use crate::wire::{Reader, Spans, Tree, Writer};
+
+/// The `proc_macro` crate a proc macro compiled to WebAssembly is built against.
+pub const GUEST: &str = include_str!("../guest/proc_macro.rs");
+
+/// The functions a module of proc macros exports, which ra-jit puts in the crate
+/// (`crates/ra-jit/src/macro_list.rs`).
+pub mod exports {
+    /// `(len) -> ptr`: room for an input of `len` bytes.
+    pub const ALLOC: &str = "blaze_proc_macro_alloc";
+    /// `()`: the list of the crate's macros, as output, a line each: kind (0 derive, 1
+    /// attribute, 2 function-like), name and a derive's helper attributes, tab-separated.
+    pub const LIST: &str = "blaze_proc_macro_list";
+    /// `(index, attr_ptr, attr_len, ptr, len)`: expands the macro at `index` of the list.
+    pub const EXPAND: &str = "blaze_proc_macro_expand";
+    /// The custom section that holds what [`LIST`] gives, for the host to read without
+    /// compiling the module.
+    pub const LIST_SECTION: &str = "blaze_proc_macros";
+}
+
+/// The host's functions the module imports.
+const HOST: &str = "blaze_proc_macro";
+
+/// What the first key of an expansion starts with: another when the key or the value is made
+/// otherwise.
+const DOMAIN: &str = "ra-jit wasm proc-macro expansion 1";
+
+/// The most memory one instance may have.
+const MEMORY: usize = 4 << 30;
+
+fn engine() -> &'static Engine {
+    static ENGINE: OnceLock<Engine> = OnceLock::new();
+    ENGINE.get_or_init(|| {
+        let mut config = Config::new();
+        config.cranelift_nan_canonicalization(true);
+        config.parallel_compilation(true);
+        Engine::new(&config).expect("Wasmtime's configuration for proc macros")
+    })
+}
+
+/// The database a running expansion asks, for as long as it runs.
+#[derive(Clone, Copy)]
+struct Db(*const (dyn SourceDatabase + 'static));
+
+// SAFETY: a `Db` is only read on the thread that expands, while `Wasm::run` holds the
+// database it points to.
+unsafe impl Send for Db {}
+unsafe impl Sync for Db {}
+
+/// What an instance has while it runs.
+pub(crate) struct State {
+    spans: Spans,
+    files: wasi::Files,
+    env: Vec<(String, String)>,
+    /// What a function that gives text or a stream back put there, for the module's `take`.
+    buffer: Vec<u8>,
+    output: Option<Vec<u8>>,
+    panic: Option<String>,
+    /// Whether the expansion asked the database, or learned of a span what its key does not
+    /// say: then it is not kept.
+    asked: bool,
+    db: Option<Db>,
+    limits: StoreLimits,
+}
+
+impl State {
+    pub(crate) fn empty() -> State {
+        State {
+            spans: Spans::default(),
+            files: wasi::Files::new(None),
+            env: Vec::new(),
+            buffer: Vec::new(),
+            output: None,
+            panic: None,
+            asked: false,
+            db: None,
+            limits: StoreLimitsBuilder::new().memory_size(MEMORY).build(),
+        }
+    }
+
+    fn ask(&mut self, req: SubRequest) -> Option<SubResponse> {
+        self.asked = true;
+        let db = self.db?;
+        // SAFETY: see `Db`.
+        Some(load_cargo::answer(unsafe { &*db.0 }, req))
+    }
+
+    fn span(&self, number: u32) -> Option<Span> {
+        self.spans.get(number)
+    }
+
+    fn give(&mut self, text: Option<String>) -> i32 {
+        match text {
+            Some(text) => {
+                self.buffer = text.into_bytes();
+                self.buffer.len() as i32
+            }
+            None => -1,
+        }
+    }
+}
+
+fn memory(caller: &mut Caller<'_, State>) -> wasmtime::Result<Memory> {
+    match caller.get_export("memory") {
+        Some(Extern::Memory(memory)) => Ok(memory),
+        _ => Err(wasmtime::Error::msg("the module exports no memory")),
+    }
+}
+
+fn read_bytes(caller: &mut Caller<'_, State>, ptr: u32, len: u32) -> wasmtime::Result<Vec<u8>> {
+    let memory = memory(caller)?;
+    let mut bytes = vec![0; len as usize];
+    memory.read(&*caller, ptr as usize, &mut bytes)?;
+    Ok(bytes)
+}
+
+fn read_text(caller: &mut Caller<'_, State>, ptr: u32, len: u32) -> wasmtime::Result<String> {
+    Ok(String::from_utf8_lossy(&read_bytes(caller, ptr, len)?).into_owned())
+}
+
+fn subspan(span: Span, start: u64, end: u64) -> Option<Span> {
+    if span.anchor.ast_id == FIXUP_ERASED_FILE_AST_ID_MARKER {
+        return Some(span);
+    }
+    let length: u32 = span.range.len().into();
+    let bound = |it: u64, unbounded: u32, included_end: bool| -> Option<u32> {
+        let at = u32::try_from(it / 4).ok()?;
+        match (it, it % 4) {
+            (0, _) => Some(unbounded),
+            (_, 1) if included_end => at.checked_add(1),
+            (_, 1) => Some(at),
+            (_, 3) if included_end => Some(at),
+            (_, 3) => at.checked_add(1),
+            _ => None,
+        }
+    };
+    let start = bound(start, 0, false)?;
+    let end = bound(end, length, true)?;
+    let span_start: u32 = span.range.start().into();
+    if (u32::MAX - start) < span_start
+        || (u32::MAX - end) < span_start
+        || start >= end
+        || end > length
+    {
+        return None;
+    }
+    let range = TextRange::new(TextSize::from(start), TextSize::from(end)) + span.range.start();
+    Some(Span { range, ..span })
+}
+
+fn join(state: &mut State, first: Span, second: Span) -> Option<Span> {
+    if first.anchor.ast_id == FIXUP_ERASED_FILE_AST_ID_MARKER {
+        return Some(second);
+    }
+    if second.anchor.ast_id == FIXUP_ERASED_FILE_AST_ID_MARKER {
+        return Some(first);
+    }
+    if first.anchor != second.anchor {
+        if first.anchor.file_id != second.anchor.file_id {
+            return None;
+        }
+        let req = SubRequest::SpanJoin {
+            file_id: first.anchor.file_id.as_u32(),
+            ast_id_first: first.anchor.ast_id.into_raw(),
+            start_first: first.range.start().into(),
+            end_first: first.range.end().into(),
+            ctx_first: first.ctx.into_u32(),
+            ast_id_second: second.anchor.ast_id.into_raw(),
+            start_second: second.range.start().into(),
+            end_second: second.range.end().into(),
+            ctx_second: second.ctx.into_u32(),
+        };
+        let Some(SubResponse::SpanJoinResult { span: Some(it) }) = state.ask(req) else {
+            return None;
+        };
+        let anchor = SpanAnchor {
+            file_id: first.anchor.file_id,
+            ast_id: ErasedFileAstId::from_raw(it.ast_id),
+        };
+        // SAFETY: the context is one the database gave.
+        let ctx = unsafe { SyntaxContext::from_u32(it.ctx) };
+        return Some(Span { range: range(it.start, it.end), anchor, ctx });
+    }
+    if first.ctx != second.ctx {
+        return Some(first);
+    }
+    Some(Span { range: first.range.cover(second.range), anchor: second.anchor, ctx: second.ctx })
+}
+
+fn range(start: u32, end: u32) -> TextRange {
+    TextRange::new(TextSize::new(start), TextSize::new(end.max(start)))
+}
+
+fn spanned(file_id: u32, ast_id: u32, start: u32, end: u32, ctx: u32) -> Span {
+    let anchor = SpanAnchor {
+        file_id: EditionedFileId::from_raw(file_id),
+        ast_id: ErasedFileAstId::from_raw(ast_id),
+    };
+    // SAFETY: the context is one the database gave.
+    Span { range: range(start, end), anchor, ctx: unsafe { SyntaxContext::from_u32(ctx) } }
+}
+
+fn line_column(state: &mut State, span: Span) -> Option<(u32, u32)> {
+    let req = SubRequest::LineColumn {
+        file_id: span.anchor.file_id.as_u32(),
+        ast_id: span.anchor.ast_id.into_raw(),
+        offset: span.range.start().into(),
+    };
+    match state.ask(req)? {
+        SubResponse::LineColumnResult { line, column } => Some((line, column)),
+        _ => None,
+    }
+}
+
+/// Adds the host's functions to `linker`.
+fn add_host(linker: &mut Linker<State>) -> wasmtime::Result<()> {
+    linker.func_wrap(HOST, "def_site", || 1u32)?;
+    linker.func_wrap(HOST, "call_site", || 2u32)?;
+    linker.func_wrap(HOST, "mixed_site", || 3u32)?;
+    linker.func_wrap(HOST, "span_join", |mut caller: Caller<'_, State>, a: u32, b: u32| {
+        let state = caller.data_mut();
+        let (Some(first), Some(second)) = (state.span(a), state.span(b)) else { return 0 };
+        join(state, first, second).map_or(0, |it| state.spans.number(it))
+    })?;
+    linker.func_wrap(
+        HOST,
+        "span_resolved_at",
+        |mut caller: Caller<'_, State>, a: u32, at: u32| {
+            let state = caller.data_mut();
+            let (Some(span), Some(at)) = (state.span(a), state.span(at)) else { return a };
+            state.spans.number(Span { ctx: at.ctx, ..span })
+        },
+    )?;
+    linker.func_wrap(
+        HOST,
+        "span_located_at",
+        |mut caller: Caller<'_, State>, a: u32, b: u32| {
+            let state = caller.data_mut();
+            let (Some(span), Some(other)) = (state.span(a), state.span(b)) else { return b };
+            state.spans.number(Span { ctx: span.ctx, ..other })
+        },
+    )?;
+    linker.func_wrap(HOST, "span_parent", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return 0 };
+        let req = SubRequest::SpanParent {
+            file_id: span.anchor.file_id.as_u32(),
+            ast_id: span.anchor.ast_id.into_raw(),
+            start: span.range.start().into(),
+            end: span.range.end().into(),
+            ctx: span.ctx.into_u32(),
+        };
+        match state.ask(req) {
+            Some(SubResponse::SpanParentResult { parent_span: Some(it) }) => {
+                state.spans.number(spanned(it.file_id, it.ast_id, it.start, it.end, it.ctx))
+            }
+            _ => 0,
+        }
+    })?;
+    linker.func_wrap(HOST, "span_source", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return a };
+        let req = SubRequest::SpanSource {
+            file_id: span.anchor.file_id.as_u32(),
+            ast_id: span.anchor.ast_id.into_raw(),
+            start: span.range.start().into(),
+            end: span.range.end().into(),
+            ctx: span.ctx.into_u32(),
+        };
+        match state.ask(req) {
+            Some(SubResponse::SpanSourceResult { file_id, ast_id, start, end, ctx }) => {
+                state.spans.number(spanned(file_id, ast_id, start, end, ctx))
+            }
+            _ => a,
+        }
+    })?;
+    linker.func_wrap(HOST, "span_start", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return a };
+        if span.anchor.ast_id == FIXUP_ERASED_FILE_AST_ID_MARKER {
+            return a;
+        }
+        state.spans.number(Span { range: TextRange::empty(span.range.start()), ..span })
+    })?;
+    linker.func_wrap(HOST, "span_end", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return a };
+        if span.anchor.ast_id == FIXUP_ERASED_FILE_AST_ID_MARKER {
+            return a;
+        }
+        state.spans.number(Span { range: TextRange::empty(span.range.end()), ..span })
+    })?;
+    linker.func_wrap(
+        HOST,
+        "span_subspan",
+        |mut caller: Caller<'_, State>, a: u32, start: u64, end: u64| {
+            let state = caller.data_mut();
+            let Some(span) = state.span(a) else { return 0 };
+            subspan(span, start, end).map_or(0, |it| state.spans.number(it))
+        },
+    )?;
+    linker.func_wrap(
+        HOST,
+        "span_byte_range",
+        |mut caller: Caller<'_, State>, a: u32, out: u32| -> wasmtime::Result<()> {
+            let state = caller.data_mut();
+            let Some(span) = state.span(a) else { return Ok(()) };
+            let req = SubRequest::ByteRange {
+                file_id: span.anchor.file_id.as_u32(),
+                ast_id: span.anchor.ast_id.into_raw(),
+                start: span.range.start().into(),
+                end: span.range.end().into(),
+            };
+            let range = match state.ask(req) {
+                Some(SubResponse::ByteRangeResult { range }) => range,
+                _ => usize::from(span.range.start())..usize::from(span.range.end()),
+            };
+            let mut bytes = [0u8; 8];
+            bytes[..4].copy_from_slice(&(range.start as u32).to_le_bytes());
+            bytes[4..].copy_from_slice(&(range.end as u32).to_le_bytes());
+            let memory = memory(&mut caller)?;
+            memory.write(&mut caller, out as usize, &bytes)?;
+            Ok(())
+        },
+    )?;
+    linker.func_wrap(HOST, "span_line", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let span = state.span(a);
+        span.and_then(|span| line_column(state, span)).map_or(1, |(line, _)| line)
+    })?;
+    linker.func_wrap(HOST, "span_column", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let span = state.span(a);
+        span.and_then(|span| line_column(state, span)).map_or(1, |(_, column)| column)
+    })?;
+    linker.func_wrap(HOST, "span_debug", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        // What it says is of the database's numbering, which the key does not have.
+        state.asked = true;
+        let text = state.span(a).map(|it| format!("{it:?}"));
+        state.give(text)
+    })?;
+    linker.func_wrap(HOST, "span_file", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return -1 };
+        let req = SubRequest::FilePath { file_id: span.anchor.file_id.file_id().index() };
+        let name = match state.ask(req) {
+            Some(SubResponse::FilePathResult { name }) => name,
+            _ => String::new(),
+        };
+        state.give(Some(name))
+    })?;
+    linker.func_wrap(HOST, "span_local_file", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return -1 };
+        let req = SubRequest::LocalFilePath { file_id: span.anchor.file_id.file_id().index() };
+        let name = match state.ask(req) {
+            Some(SubResponse::LocalFilePathResult { name }) => name,
+            _ => None,
+        };
+        state.give(name)
+    })?;
+    linker.func_wrap(HOST, "span_source_text", |mut caller: Caller<'_, State>, a: u32| {
+        let state = caller.data_mut();
+        let Some(span) = state.span(a) else { return -1 };
+        let req = SubRequest::SourceText {
+            file_id: span.anchor.file_id.as_u32(),
+            ast_id: span.anchor.ast_id.into_raw(),
+            start: span.range.start().into(),
+            end: span.range.end().into(),
+        };
+        let text = match state.ask(req) {
+            Some(SubResponse::SourceTextResult { text }) => text,
+            _ => None,
+        };
+        state.give(text)
+    })?;
+    linker.func_wrap(
+        HOST,
+        "ts_from_str",
+        |mut caller: Caller<'_, State>, ptr: u32, len: u32| -> wasmtime::Result<i32> {
+            let text = read_text(&mut caller, ptr, len)?;
+            let state = caller.data_mut();
+            let call_site = state.span(2).expect("the call site is numbered first");
+            Ok(match lex::stream(&text, call_site) {
+                Ok(trees) => {
+                    let mut writer = Writer { out: Vec::new(), spans: &mut state.spans };
+                    writer.trees(&trees);
+                    state.buffer = writer.out;
+                    state.buffer.len() as i32
+                }
+                Err(e) => {
+                    let e = format!("failed to parse str to token stream: {e}");
+                    -1 - state.give(Some(e))
+                }
+            })
+        },
+    )?;
+    linker.func_wrap(
+        HOST,
+        "literal_from_str",
+        |mut caller: Caller<'_, State>, ptr: u32, len: u32| -> wasmtime::Result<i32> {
+            let text = read_text(&mut caller, ptr, len)?;
+            let state = caller.data_mut();
+            let call_site = state.span(2).expect("the call site is numbered first");
+            Ok(match lex::literal_from_str(&text, call_site) {
+                Some(literal) => {
+                    let mut writer = Writer { out: Vec::new(), spans: &mut state.spans };
+                    writer.trees(&[Tree::Leaf(tt::Leaf::Literal(literal))]);
+                    state.buffer = writer.out;
+                    state.buffer.len() as i32
+                }
+                None => -1,
+            })
+        },
+    )?;
+    linker.func_wrap(
+        HOST,
+        "take",
+        |mut caller: Caller<'_, State>, to: u32| -> wasmtime::Result<()> {
+            let buffer = std::mem::take(&mut caller.data_mut().buffer);
+            let memory = memory(&mut caller)?;
+            memory.write(&mut caller, to as usize, &buffer)?;
+            Ok(())
+        },
+    )?;
+    // What a macro tracks it read without the host: its reads are recorded where they happen.
+    linker.func_wrap(HOST, "track_path", |_: u32, _: u32| {})?;
+    linker.func_wrap(HOST, "track_env_var", |_: u32, _: u32| {})?;
+    // As rust-analyzer's proc-macro server, which shows no diagnostic of a macro's.
+    linker.func_wrap(HOST, "diagnostic", |_: u32, _: u32, _: u32, _: u32| {})?;
+    linker.func_wrap(
+        HOST,
+        "output",
+        |mut caller: Caller<'_, State>, ptr: u32, len: u32| -> wasmtime::Result<()> {
+            let bytes = read_bytes(&mut caller, ptr, len)?;
+            caller.data_mut().output = Some(bytes);
+            Ok(())
+        },
+    )?;
+    linker.func_wrap(
+        HOST,
+        "panicked",
+        |mut caller: Caller<'_, State>, ptr: u32, len: u32| -> wasmtime::Result<()> {
+            let text = read_text(&mut caller, ptr, len)?;
+            caller.data_mut().panic = Some(text);
+            Ok(())
+        },
+    )?;
+    Ok(())
+}
+
+/// A module of proc macros, compiled for this host.
+pub struct Wasm {
+    path: PathBuf,
+    digest: [u8; 32],
+    /// What its expansions are kept under: what it was built of, when the file beside it says
+    /// (`crates/ra-jit/src/cargo/own_script.rs`, `MADE_OF`), since two builds of the same
+    /// source are not the same bytes; its digest otherwise.
+    identity: [u8; 32],
+    pre: InstancePre<State>,
+    /// How long Cranelift took to compile it.
+    pub compiled_in: Duration,
+    /// Whether the store has its machine code.
+    kept: std::sync::atomic::AtomicBool,
+}
+
+impl fmt::Debug for Wasm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Wasm").field("path", &self.path).finish_non_exhaustive()
+    }
+}
+
+/// A macro of a module, as [`Wasm::macros`] lists them.
+#[derive(Debug, Clone)]
+pub struct Listed {
+    pub kind: ProcMacroKind,
+    pub name: String,
+    pub helpers: Vec<String>,
+}
+
+/// What an expansion is given.
+pub struct Call<'a> {
+    pub subtree: &'a tt::TopSubtree,
+    pub attrs: Option<&'a tt::TopSubtree>,
+    pub env: &'a Env,
+    pub def_site: Span,
+    pub call_site: Span,
+    pub mixed_site: Span,
+}
+
+/// How an expansion went: what it made, whether it was found kept, and the times.
+pub struct Ran {
+    pub output: Result<tt::TopSubtree, ProcMacroExpansionError>,
+    pub found: bool,
+    pub took: Duration,
+}
+
+impl Wasm {
+    /// The module at `path`, compiled once a process, and its machine code kept beside it and
+    /// in `store` under [`code_key`], which says the host it is for: unlike the module, the
+    /// code is for one kind of host.
+    pub fn at(path: &Path, store: Option<&ra_jit_store::Store>) -> Result<Arc<Wasm>, String> {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let known = Known { digest: keyed::sha256(&bytes), identity: None };
+        Wasm::known(path, known, Some(&bytes), store)
+    }
+
+    /// As [`Wasm::at`], of a module whose digest is known: its bytes are read only if its
+    /// machine code is not beside it.
+    fn known(
+        path: &Path,
+        known: Known,
+        bytes: Option<&[u8]>,
+        store: Option<&ra_jit_store::Store>,
+    ) -> Result<Arc<Wasm>, String> {
+        // A module being compiled (`prepare_soon`) is waited for, not compiled again.
+        type Once = Arc<OnceLock<Result<Arc<Wasm>, String>>>;
+        static COMPILED: Mutex<Option<FxHashMap<[u8; 32], Once>>> = Mutex::new(None);
+        let once = {
+            let mut compiled = COMPILED.lock().unwrap();
+            compiled.get_or_insert_default().entry(known.digest).or_default().clone()
+        };
+        let compiled = once.get_or_init(|| Wasm::compile(path, known, bytes, store).map(Arc::new));
+        let wasm = compiled.clone()?;
+        wasm.keep_code(store);
+        Ok(wasm)
+    }
+
+    fn compile(
+        path: &Path,
+        Known { digest, identity }: Known,
+        given: Option<&[u8]>,
+        store: Option<&ra_jit_store::Store>,
+    ) -> Result<Wasm, String> {
+        let start = Instant::now();
+        let failed = |e: wasmtime::Error| format!("{}: {e:#}", path.display());
+        let read = std::cell::OnceCell::new();
+        let bytes = || module_bytes(path, &digest, given, &read);
+        let key = code_key(&digest);
+        let file = code_file(path, &key);
+        let stats = std::env::var_os("RA_JIT_STATS").is_some();
+        // SAFETY: the file beside the module and what the store has under the key are what
+        // `serialize` wrote for this key, the store's checked against its checksum when read;
+        // Wasmtime refuses code of another version, configuration or CPU.
+        let beside = unsafe { Module::deserialize_file(engine(), &file) }.ok();
+        let (module, was_kept) = match beside {
+            // Written beside it by the process that compiled it, which kept it in the store.
+            Some(module) => (module, true),
+            None => match store
+                .and_then(|it| it.get_lasting(&key))
+                .and_then(|it| unsafe { Module::deserialize(engine(), &it) }.ok().map(|m| (m, it)))
+            {
+                Some((module, code)) => {
+                    write_whole(&file, &code);
+                    (module, true)
+                }
+                None => {
+                    let module = Module::new(engine(), bytes()?).map_err(failed)?;
+                    if stats {
+                        eprintln!(
+                            "blaze: Cranelift compiled the proc-macro module {} in {:.1?}",
+                            path.display(),
+                            start.elapsed()
+                        );
+                    }
+                    let code = module.serialize().map_err(failed)?;
+                    write_whole(&file, &code);
+                    if let Some(store) = store {
+                        store.insert_lasting(&key, &code);
+                        store.flush();
+                    }
+                    (module, store.is_some())
+                }
+            },
+        };
+        let mut linker = Linker::new(engine());
+        wasi::add(&mut linker).map_err(failed)?;
+        add_host(&mut linker).map_err(failed)?;
+        wasi::rest(&mut linker, &module).map_err(failed)?;
+        let pre = linker.instantiate_pre(&module).map_err(failed)?;
+        let identity = match identity {
+            Some(identity) => identity,
+            None => made_of(path, bytes()?).unwrap_or(digest),
+        };
+        let compiled_in = start.elapsed();
+        let kept = was_kept.into();
+        let wasm = Wasm { path: path.to_owned(), digest, identity, pre, compiled_in, kept };
+        wasm.keep_code(store);
+        Ok(wasm)
+    }
+
+    /// Keeps its machine code in `store`, if it has not: a module compiled before the daemon
+    /// told the store the toolchain is kept once it has.
+    fn keep_code(&self, store: Option<&ra_jit_store::Store>) {
+        use std::sync::atomic::Ordering;
+        let Some(store) = store else { return };
+        if self.kept.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        if let Ok(code) = self.pre.module().serialize() {
+            store.insert_lasting(&code_key(&self.digest), &code);
+            store.flush();
+            if std::env::var_os("RA_JIT_STATS").is_some() {
+                eprintln!("blaze: the store keeps the machine code of {}", self.path.display());
+            }
+        }
+    }
+
+    /// An instance, its C library set up: a module linked as a library (a WASI reactor) is
+    /// started by its `_initialize`.
+    fn instance(&self, store: &mut Store<State>) -> wasmtime::Result<Instance> {
+        let instance = self.pre.instantiate(&mut *store)?;
+        if let Ok(initialize) = instance.get_typed_func::<(), ()>(&mut *store, "_initialize") {
+            initialize.call(&mut *store, ())?;
+        }
+        Ok(instance)
+    }
+
+    /// The module's macros.
+    pub fn macros(&self) -> Result<Vec<Listed>, String> {
+        Ok(listed(&self.list()?))
+    }
+
+    /// What its list export says: a line per macro, kind, name and helpers by tabs.
+    fn list(&self) -> Result<String, String> {
+        let mut store = Store::new(engine(), State::empty());
+        store.limiter(|state| &mut state.limits);
+        let instance = self.instance(&mut store).map_err(|e| format!("{e:#}"))?;
+        let list = instance
+            .get_typed_func::<(), ()>(&mut store, exports::LIST)
+            .map_err(|e| format!("{e:#}"))?;
+        list.call(&mut store, ()).map_err(|e| format!("{e:#}"))?;
+        let text = store.data_mut().output.take().unwrap_or_default();
+        String::from_utf8(text).map_err(|e| e.to_string())
+    }
+}
+
+/// The macros of a module's list ([`Wasm::list`]).
+fn listed(text: &str) -> Vec<Listed> {
+    let mut macros = Vec::new();
+    for line in text.lines() {
+        let mut fields = line.split('\t');
+        let kind = match fields.next() {
+            Some("0") => ProcMacroKind::CustomDerive,
+            Some("1") => ProcMacroKind::Attr,
+            _ => ProcMacroKind::Bang,
+        };
+        let name = fields.next().unwrap_or_default().to_owned();
+        let helpers = fields.next().unwrap_or_default();
+        let helpers = helpers.split(',').filter(|it| !it.is_empty()).map(str::to_owned);
+        macros.push(Listed { kind, name, helpers: helpers.collect() });
+    }
+    macros
+}
+
+impl Wasm {
+    /// Expands the macro at `index` of [`Wasm::macros`]: what is kept of it when the store
+    /// has it, else by running it, and keeps what it made unless `store` is `None`.
+    pub fn expand(
+        &self,
+        index: u32,
+        listed: &Listed,
+        db: Option<&dyn SourceDatabase>,
+        call: &Call<'_>,
+        store: Option<&ra_jit_store::Store>,
+    ) -> Ran {
+        let start = Instant::now();
+        let root = package_dir(call.env);
+        let env = guest_env(call.env);
+        // The module's `def_site`, `call_site` and `mixed_site` are 1, 2 and 3, the same
+        // spans or not.
+        let mut spans = Spans::default();
+        for span in [call.def_site, call.call_site, call.mixed_site] {
+            spans.push(span);
+        }
+        let mut writer = Writer { out: Vec::new(), spans: &mut spans };
+        writer.top(call.subtree);
+        let input = std::mem::take(&mut writer.out);
+        let attr = call.attrs.map(|it| {
+            writer.top(it);
+            std::mem::take(&mut writer.out)
+        });
+        // rust-analyzer gives an attribute written without arguments (`#[twice]`) none.
+        let attr = match listed.kind {
+            ProcMacroKind::Attr => Some(attr.unwrap_or_else(|| 0u32.to_le_bytes().to_vec())),
+            _ => attr,
+        };
+        let shapes = Shapes::of(spans.all());
+        let mut first = keyed::Key::new(DOMAIN);
+        first.field(&self.identity).field(listed.name.as_bytes()).field(&[listed.kind as u8]);
+        first.field(&input).field(attr.as_deref().unwrap_or(b"-")).field(&shapes.bytes);
+        for (name, value) in &env {
+            first.field(name.as_bytes()).field(value.as_bytes());
+        }
+        let first = first.done();
+        let restore = |trees: Vec<Tree>| {
+            let trees = match &root {
+                Some(root) => placed(trees, root),
+                None => trees,
+            };
+            wire::top_subtree(trees, call.call_site)
+        };
+        // A module given no package has nothing to read.
+        let now = |read: &str| root.as_deref().map_or("-".to_owned(), |it| keyed::now(it, read));
+        if let Some(store) = store
+            && let Some(kept) = keyed::find(store, &first, &now)
+            && let Some(trees) = shapes.read(&kept)
+        {
+            return Ran { output: Ok(restore(trees)), found: true, took: start.elapsed() };
+        }
+        let ran = self.run(index, root.as_deref(), env, spans, db, &input, attr.as_deref());
+        let output = ran.and_then(|(state, output)| {
+            let trees = Reader::new(&output, &state.spans)
+                .stream()
+                .map_err(|e| ProcMacroExpansionError::System(format!("`{}`: {e}", listed.name)))?;
+            if let Some(store) = store
+                && !state.asked
+                && let Some(value) = shapes.written(&state.spans, &output)
+            {
+                let reads: Vec<(String, String)> = state.files.reads.into_iter().collect();
+                keyed::keep(store, &first, &reads, &value);
+                KEPT.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            Ok(restore(trees))
+        });
+        Ran { output, found: false, took: start.elapsed() }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run(
+        &self,
+        index: u32,
+        root: Option<&Path>,
+        env: Vec<(String, String)>,
+        spans: Spans,
+        db: Option<&dyn SourceDatabase>,
+        input: &[u8],
+        attr: Option<&[u8]>,
+    ) -> Result<(State, Vec<u8>), ProcMacroExpansionError> {
+        // SAFETY: the pointer is dropped with the store, before this returns.
+        let db = db.map(|db| {
+            Db(unsafe {
+                std::mem::transmute::<
+                    *const dyn SourceDatabase,
+                    *const (dyn SourceDatabase + 'static),
+                >(db)
+            })
+        });
+        let mut state = State::empty();
+        state.spans = spans;
+        state.files = wasi::Files::new(root);
+        state.env = env;
+        state.db = db;
+        let mut store = Store::new(engine(), state);
+        store.limiter(|state| &mut state.limits);
+        let system = |e: wasmtime::Error| ProcMacroExpansionError::System(format!("{e:#}"));
+        let instance = self.instance(&mut store).map_err(system)?;
+        let alloc =
+            instance.get_typed_func::<u32, u32>(&mut store, exports::ALLOC).map_err(system)?;
+        let expand = instance
+            .get_typed_func::<(u32, u32, u32, u32, u32), ()>(&mut store, exports::EXPAND)
+            .map_err(system)?;
+        let memory = instance.get_memory(&mut store, "memory").ok_or_else(|| {
+            ProcMacroExpansionError::System("the module exports no memory".to_owned())
+        })?;
+        let mut put = |bytes: &[u8]| -> Result<u32, ProcMacroExpansionError> {
+            let at = alloc.call(&mut store, bytes.len() as u32).map_err(system)?;
+            memory.write(&mut store, at as usize, bytes).map_err(|e| system(e.into()))?;
+            Ok(at)
+        };
+        let input_at = put(input)?;
+        let attr_at = attr.map(&mut put).transpose()?.unwrap_or(0);
+        let attr_len = attr.map_or(0, |it| it.len() as u32);
+        let called =
+            expand.call(&mut store, (index, attr_at, attr_len, input_at, input.len() as u32));
+        let mut state = store.into_data();
+        state.db = None;
+        if let Err(trap) = called {
+            let printed = String::from_utf8_lossy(&state.files.output).into_owned();
+            return Err(match state.panic.take() {
+                Some(message) => ProcMacroExpansionError::Panic(message),
+                None => ProcMacroExpansionError::System(format!("{trap:#}\n{printed}")),
+            });
+        }
+        let output = state.output.take().ok_or_else(|| {
+            ProcMacroExpansionError::System("the macro gave no output".to_owned())
+        })?;
+        Ok((state, output))
+    }
+}
+
+/// What the store keeps the machine code of the module of `digest` under: the module's bytes
+/// and what Wasmtime says code must match to load (its version, its configuration, the
+/// target and the CPU features it compiled for), and nothing of the checkout, the build of
+/// ra-jit or the toolchain, so every checkout and every host of the same kind shares it.
+fn code_key(digest: &[u8; 32]) -> [u8; 32] {
+    use std::hash::Hash as _;
+    struct Fields<'a>(&'a mut keyed::Key);
+    impl std::hash::Hasher for Fields<'_> {
+        fn write(&mut self, bytes: &[u8]) {
+            self.0.field(bytes);
+        }
+        fn finish(&self) -> u64 {
+            0
+        }
+    }
+    let mut key = keyed::Key::new("wasmtime machine code of a proc-macro module 2");
+    key.field(digest).field(std::env::consts::ARCH.as_bytes());
+    engine().precompile_compatibility_hash().hash(&mut Fields(&mut key));
+    key.done()
+}
+
+/// The file beside the module at `path` its machine code of `key` is kept in, for a process to
+/// map rather than read.
+fn code_file(path: &Path, key: &[u8; 32]) -> PathBuf {
+    let hex: String = key[..8].iter().map(|it| format!("{it:02x}")).collect();
+    let mut named = path.as_os_str().to_owned();
+    named.push(format!(".{hex}.cwasm"));
+    PathBuf::from(named)
+}
+
+/// Writes `bytes` to `path` whole or not at all: a process that reads it while it is written
+/// sees the old file or none.
+fn write_whole(path: &Path, bytes: &[u8]) {
+    let new = path.with_extension(format!("{}.new", std::process::id()));
+    if std::fs::write(&new, bytes).is_err() || std::fs::rename(&new, path).is_err() {
+        _ = std::fs::remove_file(&new);
+    }
+}
+
+/// Readies the module at `path` for the processes that expand with it, in the build that
+/// made it: compiles it with Cranelift (or finds its machine code in `store`), keeps the code
+/// beside it and in `store`, and writes the list of its macros beside it, so that a load
+/// compiles nothing and reads the list without running it.
+pub fn prepare(path: &Path, store: Option<&ra_jit_store::Store>) -> Result<(), String> {
+    let start = Instant::now();
+    if let Some((known, _)) = listing(path)
+        && code_file(path, &code_key(&known.digest)).is_file()
+    {
+        return Ok(());
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let known = Known { digest: keyed::sha256(&bytes), identity: None };
+    let wasm = Wasm::known(path, known, Some(&bytes), store)?;
+    list(path, &wasm, &wasm.list()?);
+    if std::env::var_os("RA_JIT_STATS").is_some() {
+        eprintln!(
+            "blaze: the proc-macro module {} ready in {:.1?}",
+            path.display(),
+            start.elapsed()
+        );
+    }
+    Ok(())
+}
+
+/// As [`prepare`], but a module that carries its list of macros ([`exports::LIST_SECTION`]) is
+/// compiled on a thread of its own: its list is written now, and the first of its macros to
+/// expand in this process waits for the compile.
+pub fn prepare_soon(
+    path: &Path,
+    store: Option<&'static ra_jit_store::Store>,
+) -> Result<(), String> {
+    if let Some((known, _)) = listing(path)
+        && code_file(path, &code_key(&known.digest)).is_file()
+    {
+        return Ok(());
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let Some(text) = carried_list(&bytes) else { return prepare(path, store) };
+    let digest = keyed::sha256(&bytes);
+    let identity = made_of(path, &bytes).unwrap_or(digest);
+    list_known(path, &digest, &identity, &text);
+    let path = path.to_owned();
+    let known = Known { digest, identity: Some(identity) };
+    std::thread::spawn(move || {
+        let start = Instant::now();
+        let done = Wasm::known(&path, known, Some(&bytes), store);
+        if std::env::var_os("RA_JIT_STATS").is_some() {
+            let how = done.map_or_else(|e| format!("failed: {e}"), |_| "ready".to_owned());
+            eprintln!(
+                "blaze: the proc-macro module {} {how} in {:.1?}",
+                path.display(),
+                start.elapsed()
+            );
+        }
+    });
+    Ok(())
+}
+
+/// What the module of `bytes` carries in its [`exports::LIST_SECTION`] custom section, read
+/// without compiling it: `None` for a module built before modules carried one.
+fn carried_list(bytes: &[u8]) -> Option<String> {
+    fn leb(bytes: &[u8], at: &mut usize) -> Option<usize> {
+        let mut value = 0usize;
+        for shift in (0..35).step_by(7) {
+            let byte = *bytes.get(*at)?;
+            *at += 1;
+            value |= usize::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(value);
+            }
+        }
+        None
+    }
+    if bytes.get(..4)? != b"\0asm" {
+        return None;
+    }
+    let mut at = 8;
+    while at < bytes.len() {
+        let id = bytes[at];
+        at += 1;
+        let size = leb(bytes, &mut at)?;
+        let end = at.checked_add(size).filter(|it| *it <= bytes.len())?;
+        if id == 0 {
+            let mut named = at;
+            let len = leb(bytes, &mut named)?;
+            let name = bytes.get(named..named.checked_add(len)?)?;
+            if name == exports::LIST_SECTION.as_bytes() {
+                return String::from_utf8(bytes.get(named + len..end)?.to_vec()).ok();
+            }
+        }
+        at = end;
+    }
+    None
+}
+
+/// What is known of a module without reading it: its digest, and what its expansions are kept
+/// under ([`Wasm`]'s `identity`) when the file beside it says.
+#[derive(Clone, Copy)]
+struct Known {
+    digest: [u8; 32],
+    identity: Option<[u8; 32]>,
+}
+
+/// The bytes of the module at `path` of `digest`: `given`, or read into `read` once.
+fn module_bytes<'a>(
+    path: &Path,
+    digest: &[u8; 32],
+    given: Option<&'a [u8]>,
+    read: &'a std::cell::OnceCell<Result<Vec<u8>, String>>,
+) -> Result<&'a [u8], String> {
+    if let Some(given) = given {
+        return Ok(given);
+    }
+    let read = read.get_or_init(|| {
+        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        match keyed::sha256(&bytes) == *digest {
+            true => Ok(bytes),
+            false => Err(format!("{} changed while it was loaded", path.display())),
+        }
+    });
+    read.as_deref().map_err(Clone::clone)
+}
+
+/// What tells that the module at `path` and the file beside it that says what it was built of
+/// are the files a list was written for: each one's length, time of writing and inode. Both
+/// are written whole under a new name when they change.
+fn stamp(path: &Path) -> Option<String> {
+    let one = |path: &Path| -> Option<String> {
+        let Ok(meta) = std::fs::metadata(path) else { return Some("-".to_owned()) };
+        let written = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
+        #[cfg(unix)]
+        let inode = std::os::unix::fs::MetadataExt::ino(&meta);
+        #[cfg(not(unix))]
+        let inode = 0;
+        Some(format!("{}.{}.{inode}", meta.len(), written.as_nanos()))
+    };
+    let mut made_of = path.as_os_str().to_owned();
+    made_of.push(".made-of");
+    Some(format!("{}:{}", one(path)?, one(Path::new(&made_of))?))
+}
+
+/// What the list file beside the module at `path` knows of it, and its list of macros, when
+/// it was written for the files there now ([`stamp`]): then the module need not be read.
+fn listing(path: &Path) -> Option<(Known, String)> {
+    let text = std::fs::read_to_string(list_file(path)).ok()?;
+    let (digest, rest) = text.split_once('\n')?;
+    let (head, list) = rest.split_once('\n').unwrap_or((rest, ""));
+    let (identity, stamped) = head.strip_prefix("@ ")?.split_once(' ')?;
+    (stamp(path)? == stamped).then_some(())?;
+    let known = Known { digest: unhex(digest)?, identity: Some(unhex(identity)?) };
+    Some((known, list.to_owned()))
+}
+
+/// Writes the list file of the module at `path`, compiled as `wasm`, whose macros `text` lists.
+fn list(path: &Path, wasm: &Wasm, text: &str) {
+    list_known(path, &wasm.digest, &wasm.identity, text);
+}
+
+fn list_known(path: &Path, digest: &[u8; 32], identity: &[u8; 32], text: &str) {
+    let Some(stamp) = stamp(path) else { return };
+    let (digest, identity) = (hex(digest), hex(identity));
+    write_whole(&list_file(path), format!("{digest}\n@ {identity} {stamp}\n{text}").as_bytes());
+}
+
+fn hex(digest: &[u8; 32]) -> String {
+    digest.iter().map(|it| format!("{it:02x}")).collect()
+}
+
+fn unhex(text: &str) -> Option<[u8; 32]> {
+    let mut out = [0; 32];
+    if text.len() != 64 {
+        return None;
+    }
+    for (at, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(text.get(at * 2..at * 2 + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// What the module of `bytes` at `path` was built of, as the file beside it says, when that
+/// file was written for these bytes.
+fn made_of(path: &Path, bytes: &[u8]) -> Option<[u8; 32]> {
+    let mut named = path.as_os_str().to_owned();
+    named.push(".made-of");
+    let text = std::fs::read_to_string(PathBuf::from(named)).ok()?;
+    let (key, file) = text.trim_end().split_once(' ')?;
+    let mut identity = keyed::Key::new("a proc-macro module built of");
+    identity.field(key.as_bytes());
+    (keyed::digest_bytes(bytes) == file).then(|| identity.done())
+}
+
+/// The package directory of the crate a macro expands in, from its `CARGO_MANIFEST_DIR`.
+fn package_dir(env: &Env) -> Option<PathBuf> {
+    env.get("CARGO_MANIFEST_DIR").map(PathBuf::from).filter(|it| it.is_absolute())
+}
+
+/// What a module is told of its environment: cargo's variables for a crate's compilation
+/// that the crate's env has, each with what it says on every machine, sorted. No other
+/// variable, of the crate's or of the process's.
+fn guest_env(env: &Env) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = env
+        .iter()
+        .filter_map(|(name, value)| {
+            let value = match name {
+                "CARGO_MANIFEST_DIR" => wasi::PACKAGE.to_owned(),
+                "CARGO_MANIFEST_PATH" => format!("{}/Cargo.toml", wasi::PACKAGE),
+                "OUT_DIR" => wasi::OUT_DIR.to_owned(),
+                "CARGO_CRATE_NAME" | "CARGO_PRIMARY_PACKAGE" | "CARGO_BIN_NAME" => value.to_owned(),
+                _ if name.starts_with("CARGO_PKG_") => value.to_owned(),
+                _ => return None,
+            };
+            Some((name.to_owned(), value))
+        })
+        .collect();
+    out.sort();
+    out
+}
+
+/// `trees` with the package's path where the module put [`wasi::PACKAGE`] in a string, as
+/// a path `include_str!` is to read.
+fn placed(trees: Vec<Tree>, root: &Path) -> Vec<Tree> {
+    let root = root.to_string_lossy();
+    trees
+        .into_iter()
+        .map(|tree| match tree {
+            Tree::Group { kind, open, close, entire, trees } => {
+                Tree::Group { kind, open, close, entire, trees: placed(trees, Path::new(&*root)) }
+            }
+            Tree::Leaf(tt::Leaf::Literal(literal))
+                if matches!(literal.kind, tt::LitKind::Str | tt::LitKind::StrRaw(_))
+                    && literal.text().contains(wasi::PACKAGE) =>
+            {
+                let (text, suffix) = literal.text_and_suffix();
+                let text = text.replace(wasi::PACKAGE, &root);
+                Tree::Leaf(tt::Leaf::Literal(tt::Literal::new(
+                    &text,
+                    literal.span,
+                    literal.kind,
+                    suffix,
+                )))
+            }
+            other => other,
+        })
+        .collect()
+}
+
+/// The spans of an expansion's input as its key has them: each its byte range and which of
+/// the input's anchors and contexts it has, numbered as they first appear. A kept output's
+/// spans are written the same way, so the next call, with other anchors and contexts in the
+/// same places, is given them back as its own.
+struct Shapes {
+    anchors: Vec<SpanAnchor>,
+    contexts: Vec<SyntaxContext>,
+    bytes: Vec<u8>,
+}
+
+fn position<T: PartialEq>(all: &mut Vec<T>, it: T) -> u32 {
+    let at = all.iter().position(|known| *known == it).unwrap_or_else(|| {
+        all.push(it);
+        all.len() - 1
+    });
+    at as u32
+}
+
+impl Shapes {
+    fn of(spans: &[Span]) -> Shapes {
+        let mut shapes = Shapes { anchors: Vec::new(), contexts: Vec::new(), bytes: Vec::new() };
+        for span in spans {
+            let anchor = position(&mut shapes.anchors, span.anchor);
+            let context = position(&mut shapes.contexts, span.ctx);
+            for it in [span.range.start().into(), span.range.end().into(), anchor, context] {
+                shapes.bytes.extend_from_slice(&u32::to_le_bytes(it));
+            }
+        }
+        shapes
+    }
+
+    /// What is kept of an output: the shapes of every span the expansion numbered, then the
+    /// output. `None` when one has an anchor or a context the input has not.
+    fn written(&self, spans: &Spans, output: &[u8]) -> Option<Vec<u8>> {
+        let mut value = Vec::new();
+        value.extend_from_slice(&(spans.all().len() as u32).to_le_bytes());
+        for span in spans.all() {
+            let anchor = self.anchors.iter().position(|it| *it == span.anchor)? as u32;
+            let context = self.contexts.iter().position(|it| *it == span.ctx)? as u32;
+            for it in [span.range.start().into(), span.range.end().into(), anchor, context] {
+                value.extend_from_slice(&u32::to_le_bytes(it));
+            }
+        }
+        value.extend_from_slice(output);
+        Some(value)
+    }
+
+    fn read(&self, value: &[u8]) -> Option<Vec<Tree>> {
+        let count = u32::from_le_bytes(value.get(..4)?.try_into().ok()?) as usize;
+        let table = value.get(4..4 + count.checked_mul(16)?)?;
+        let mut spans = Spans::default();
+        for shape in table.as_chunks::<16>().0 {
+            let field = |at: usize| u32::from_le_bytes(shape[at..at + 4].try_into().unwrap());
+            let span = Span {
+                range: range(field(0), field(4)),
+                anchor: *self.anchors.get(field(8) as usize)?,
+                ctx: *self.contexts.get(field(12) as usize)?,
+            };
+            spans.push(span);
+        }
+        Reader::new(&value[4 + count * 16..], &spans).stream().ok()
+    }
+}
+
+/// A macro of a module, as rust-analyzer expands it.
+pub struct Expander {
+    wasm: AssertUnwindSafe<Arc<Lazy>>,
+    index: u32,
+    listed: Listed,
+}
+
+/// A module compiled when it first expands, by when the store can give its machine code.
+struct Lazy {
+    path: PathBuf,
+    known: Known,
+    compiled: OnceLock<Result<Arc<Wasm>, String>>,
+}
+
+impl Lazy {
+    fn get(&self) -> Result<&Arc<Wasm>, String> {
+        let compiled =
+            self.compiled.get_or_init(|| Wasm::known(&self.path, self.known, None, store()));
+        let wasm = compiled.as_ref().map_err(Clone::clone)?;
+        wasm.keep_code(store());
+        Ok(wasm)
+    }
+}
+
+/// The file beside a module that has its list of macros, for the module whose digest is on
+/// its first line, with what its expansions are kept under and the [`stamp`] of the files it
+/// was written for on the second: a load reads it there and compiles nothing.
+fn list_file(path: &Path) -> PathBuf {
+    let mut named = path.as_os_str().to_owned();
+    named.push(".macros");
+    PathBuf::from(named)
+}
+
+impl fmt::Debug for Expander {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Expander").field("name", &self.listed.name).finish_non_exhaustive()
+    }
+}
+
+/// Whether an expansion was kept since [`flush`].
+static KEPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Writes out the expansions kept since the last call, for the next process to find: the
+/// store holds what is added in memory until it is flushed.
+pub fn flush() {
+    if KEPT.swap(false, std::sync::atomic::Ordering::Relaxed)
+        && let Some(store) = store()
+    {
+        store.flush();
+    }
+}
+
+/// The store, once the daemon has told it the toolchain.
+fn store() -> Option<&'static ra_jit_store::Store> {
+    if matches!(std::env::var("RA_JIT_PROC_MACRO_CACHE").as_deref(), Ok("off" | "0")) {
+        return None;
+    }
+    ra_jit_store::toolchain()?;
+    ra_jit_store::Store::global()
+}
+
+impl ProcMacroExpander for Expander {
+    fn expand(
+        &self,
+        db: &dyn SourceDatabase,
+        subtree: &tt::TopSubtree,
+        attrs: Option<&tt::TopSubtree>,
+        env: &Env,
+        def_site: Span,
+        call_site: Span,
+        mixed_site: Span,
+        _current_dir: String,
+    ) -> Result<tt::TopSubtree, ProcMacroExpansionError> {
+        let call = Call { subtree, attrs, env, def_site, call_site, mixed_site };
+        match self.wasm.get() {
+            Ok(wasm) => wasm.expand(self.index, &self.listed, Some(db), &call, store()).output,
+            Err(e) => Err(ProcMacroExpansionError::System(e)),
+        }
+    }
+
+    fn eq_dyn(&self, other: &dyn ProcMacroExpander) -> bool {
+        (other as &dyn Any).downcast_ref::<Expander>().is_some_and(|other| {
+            self.wasm.known.digest == other.wasm.known.digest && self.index == other.index
+        })
+    }
+}
+
+/// The tokens of `text`, each at `span`'s anchor and context over its range of the text, as
+/// rust-analyzer's proc-macro server lexes a string: a macro's input for a test or a bench.
+pub fn tokens(text: &str, span: Span) -> Result<tt::TopSubtree, String> {
+    Ok(wire::top_subtree(lex::stream(text, span)?, span))
+}
+
+/// The macros of the module at `path`, for rust-analyzer: what ra-jit registers with
+/// [`load_cargo::wasm_macros_with`].
+pub fn load(path: &AbsPath) -> ProcMacroLoadResult {
+    let failed = |e: String| {
+        base_db::ProcMacroLoadingError::ProcMacroSrvError(
+            format!("proc macros compiled to WebAssembly: {e}").into(),
+        )
+    };
+    let path: &Path = path.as_ref();
+    let (lazy, text) = match listing(path) {
+        Some((known, text)) => {
+            (Lazy { path: path.to_owned(), known, compiled: OnceLock::new() }, text)
+        }
+        None => {
+            let wasm = Wasm::at(path, store()).map_err(failed)?;
+            let text = wasm.list().map_err(failed)?;
+            list(path, &wasm, &text);
+            let known = Known { digest: wasm.digest, identity: Some(wasm.identity) };
+            let lazy = Lazy { path: path.to_owned(), known, compiled: OnceLock::new() };
+            _ = lazy.compiled.set(Ok(wasm));
+            (lazy, text)
+        }
+    };
+    let lazy = Arc::new(lazy);
+    Ok(listed(&text)
+        .into_iter()
+        .enumerate()
+        .map(|(index, listed)| ProcMacro {
+            name: Symbol::intern(&listed.name),
+            kind: listed.kind,
+            expander: Arc::new(Expander {
+                wasm: AssertUnwindSafe(lazy.clone()),
+                index: index as u32,
+                listed,
+            }),
+            disabled: false,
+        })
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span(start: u32, end: u32) -> Span {
+        let file_id = EditionedFileId::new(span::FileId::from_raw(7), span::Edition::CURRENT);
+        Span {
+            range: range(start, end),
+            anchor: SpanAnchor { file_id, ast_id: span::ROOT_ERASED_FILE_AST_ID },
+            ctx: SyntaxContext::root(span::Edition::CURRENT),
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("ra-jit-macro-wasm-{name}-{}", std::process::id()));
+        _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn text_is_lexed_as_the_proc_macro_server_lexes_it() {
+        let lexed = tokens("fn f<'a>(x: &'a u8) -> r#u8 { x.0 + -1i32 } /// doc", span(0, 0));
+        assert_eq!(
+            lexed.unwrap().to_string(),
+            "fn f <'a >(x : &'a u8) -> r#u8 {x . 0 + - 1i32} # [doc = \" doc\"]"
+        );
+        assert!(tokens("(]", span(0, 0)).is_err());
+        assert!(tokens("a ` b", span(0, 0)).is_err());
+        let one = lex::literal_from_str("-1.5f32", span(0, 0)).unwrap();
+        assert_eq!(one.text_and_suffix(), ("-1.5", "f32"));
+        assert!(lex::literal_from_str("-\"no\"", span(0, 0)).is_none());
+    }
+
+    #[test]
+    fn a_stream_comes_back_as_it_went() {
+        let text =
+            "#[derive(Debug)] struct S<T> { a: [u8; 3], b: (T, \"s\", b'x', r#\"raw\"#, 2.5e3) }";
+        let top = tokens(text, span(3, 9)).unwrap();
+        let mut spans = Spans::default();
+        let mut writer = Writer { out: Vec::new(), spans: &mut spans };
+        writer.top(&top);
+        let bytes = writer.out;
+        let trees = Reader::new(&bytes, &spans).stream().unwrap();
+        assert_eq!(wire::top_subtree(trees, span(3, 9)).to_string(), top.to_string());
+    }
+
+    #[test]
+    fn a_module_carries_its_list_in_a_custom_section() {
+        let custom = |name: &str, payload: &[u8]| {
+            let mut body = vec![name.len() as u8];
+            body.extend_from_slice(name.as_bytes());
+            body.extend_from_slice(payload);
+            let mut section = vec![0, body.len() as u8];
+            section.extend(body);
+            section
+        };
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        // A type section of no types, then a custom section of another name.
+        module.extend_from_slice(&[1, 1, 0]);
+        module.extend(custom("name", b"\0\0"));
+        assert_eq!(carried_list(&module), None);
+        module.extend(custom(exports::LIST_SECTION, b"0\tSerialize\tserde\n"));
+        assert_eq!(carried_list(&module).as_deref(), Some("0\tSerialize\tserde\n"));
+        module.truncate(module.len() - 1);
+        assert_eq!(carried_list(&module), None, "a section that runs past the end");
+    }
+
+    #[test]
+    fn a_prepared_module_is_loaded_without_compiling_or_reading_it() {
+        let dir = scratch("prepared");
+        ra_jit_store::compiles_against("ra-jit-macro-wasm tests");
+        let store: &'static ra_jit_store::Store =
+            Box::leak(Box::new(ra_jit_store::Store::open_at(&dir.join("store")).unwrap()));
+        let path = dir.join("m.wasm");
+        let list = "0\tSerialize\tserde\n";
+        let mut module = b"\0asm\x01\0\0\0".to_vec();
+        let name = exports::LIST_SECTION.as_bytes();
+        module.extend_from_slice(&[0, (1 + name.len() + list.len()) as u8, name.len() as u8]);
+        module.extend_from_slice(name);
+        module.extend_from_slice(list.as_bytes());
+        std::fs::write(&path, &module).unwrap();
+        prepare_soon(&path, Some(store)).unwrap();
+        let (known, text) = listing(&path).expect("the list is written before the compile ends");
+        assert_eq!(text, list);
+        assert_eq!(known.digest, keyed::sha256(&module));
+        // Waits for the compile `prepare_soon` started, which keeps the code beside the module
+        // and in the store, under a key of no path.
+        Wasm::known(&path, known, None, Some(store)).unwrap();
+        let key = code_key(&known.digest);
+        assert!(code_file(&path, &key).is_file());
+        store.seal();
+        assert!(store.get_lasting(&key).is_some());
+        // Another write of the module, even of the same bytes, is listed again.
+        std::fs::write(&path, &module).unwrap();
+        let later = std::time::SystemTime::now() + Duration::from_secs(5);
+        std::fs::File::options().write(true).open(&path).unwrap().set_modified(later).unwrap();
+        assert!(listing(&path).is_none());
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_subspan_is_of_the_span_and_within_it() {
+        let it = span(10, 20);
+        // Unbounded, included and excluded bounds as the module writes them.
+        assert_eq!(subspan(it, 0, 0).unwrap().range, range(10, 20));
+        assert_eq!(subspan(it, 1 + 4 * 2, 3 + 4 * 5).unwrap().range, range(12, 15));
+        assert_eq!(subspan(it, 3 + 4 * 2, 1 + 4 * 5).unwrap().range, range(13, 16));
+        assert!(subspan(it, 1 + 4 * 5, 3 + 4 * 5).is_none());
+        assert!(subspan(it, 0, 3 + 4 * 11).is_none());
+    }
+
+    #[test]
+    fn a_module_reads_its_package_and_nothing_else() {
+        let dir = scratch("files");
+        std::fs::create_dir_all(dir.join("package/src")).unwrap();
+        std::fs::write(dir.join("package/src/a.txt"), "a").unwrap();
+        std::fs::write(dir.join("outside.txt"), "o").unwrap();
+        let files = wasi::Files::new(Some(&dir.join("package")));
+        let resolve = |rel: &str, path: &str| files_resolve(&files, rel, path);
+        assert_eq!(resolve("", "src/./a.txt").unwrap(), "src/a.txt");
+        assert_eq!(resolve("src", "../src/a.txt").unwrap(), "src/a.txt");
+        assert_eq!(resolve("", "../outside.txt"), Err(76));
+        assert_eq!(resolve("", "/etc/passwd"), Err(76));
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(dir.join("outside.txt"), dir.join("package/link")).unwrap();
+            assert_eq!(resolve("", "link"), Err(76));
+        }
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn files_resolve(files: &wasi::Files, rel: &str, path: &str) -> Result<String, i32> {
+        files.resolve_for_test(rel, path)
+    }
+
+    #[test]
+    fn an_expansion_is_found_while_what_it_read_is_as_it_was() {
+        let dir = scratch("keyed");
+        let package = dir.join("package");
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("schema.json"), "1").unwrap();
+        ra_jit_store::compiles_against("ra-jit-macro-wasm tests");
+        let open = || ra_jit_store::Store::open_at(&dir.join("store")).unwrap();
+        let first = keyed::Key::new("test").done();
+        let now = |read: &str| keyed::now(&package, read);
+        let reads = vec![
+            ("schema.json".to_owned(), keyed::digest_of(&package.join("schema.json"))),
+            (keyed::kind("missing"), "-".to_owned()),
+        ];
+        {
+            let store = open();
+            assert!(keyed::find(&store, &first, &now).is_none());
+            keyed::keep(&store, &first, &reads, b"one");
+            store.flush();
+        }
+        assert_eq!(keyed::find(&open(), &first, &now).unwrap(), b"one");
+        std::fs::write(package.join("schema.json"), "2").unwrap();
+        assert!(keyed::find(&open(), &first, &now).is_none(), "a file it read changed");
+        std::fs::write(package.join("schema.json"), "1").unwrap();
+        std::fs::create_dir_all(package.join("missing")).unwrap();
+        assert!(keyed::find(&open(), &first, &now).is_none(), "what it found missing is there");
+        std::fs::remove_dir_all(package.join("missing")).unwrap();
+        // The same package elsewhere, as on another machine, finds it.
+        let moved = dir.join("moved");
+        std::fs::rename(&package, &moved).unwrap();
+        let now = |read: &str| keyed::now(&moved, read);
+        assert_eq!(keyed::find(&open(), &first, &now).unwrap(), b"one");
+        _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_environment_is_cargos_and_the_same_on_every_machine() {
+        let mut env = Env::default();
+        env.set("CARGO_MANIFEST_DIR", "/home/someone/pkg");
+        env.set("CARGO_PKG_NAME", "pkg");
+        env.set("OUT_DIR", "/home/someone/target/out");
+        env.set("AWS_SECRET_ACCESS_KEY", "no");
+        env.set("PATH", "/usr/bin");
+        let names: Vec<_> = guest_env(&env).into_iter().collect();
+        assert_eq!(
+            names,
+            [
+                ("CARGO_MANIFEST_DIR".to_owned(), wasi::PACKAGE.to_owned()),
+                ("CARGO_PKG_NAME".to_owned(), "pkg".to_owned()),
+                ("OUT_DIR".to_owned(), wasi::OUT_DIR.to_owned()),
+            ]
+        );
+    }
+}

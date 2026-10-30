@@ -1,0 +1,468 @@
+# One platform of ra-jit.yaml: its unit tests, one build of ra-jit with both producers, and the
+# harnesses of the tier against that build, split into parts (harness/ci.py) that each run on a
+# machine of their own. The tiers `gate` (the merge gate's, ra-jit.yaml) and `warm` (a push to
+# main, which writes the caches the other runs read) are the unit tests and the build alone;
+# `full` is the release train's (train.yaml). Each platform builds on its own kind of machine,
+# so nothing is cross-compiled or emulated but what `buildmodel.py` builds for other targets.
+name: ra-jit platform
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: the name of the platform in artifacts and job names
+        type: string
+        required: true
+      os:
+        description: the hosted runner
+        type: string
+        required: true
+      tier:
+        description: "`fast` (the fast tier's harnesses), `full` (every harness), as in harness/ci.py, or `gate` and `warm` (none)"
+        type: string
+        required: true
+      borrowck:
+        description: rustc's borrow-check tests, against this build
+        type: boolean
+        default: false
+      pinned-ui:
+        description: the run-pass tests of rustc's in harness/ui-pinned.txt, against this build
+        type: boolean
+        default: false
+      cargo-ra-jit:
+        description: "`cargo ra-jit` against cargo on small projects at pinned commits"
+        type: boolean
+        default: false
+      projects:
+        description: "`cargo ra-jit` against cargo on the larger projects (an hour of machines)"
+        type: boolean
+        default: false
+      bench:
+        description: harness/bench.py on ripgrep against the stored baseline (not required)
+        type: boolean
+        default: false
+      bun-e2e:
+        description: the reduced fixtures of what kept Bun from building
+        type: boolean
+        default: false
+      wasm32:
+        description: harness/wasm32.py, programs built for wasm32 and run under wasmtime against cargo's
+        type: boolean
+        default: false
+
+env:
+  CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  CARGO_TERM_COLOR: always
+  # Every test `cargo ra-jit test` runs is in a sandbox, which Windows does not have yet.
+  RA_JIT_SANDBOX: ${{ startsWith(inputs.os, 'windows') && 'off' || '' }}
+  # Git Bash on Windows has `python` and no `python3`.
+  PYTHON: ${{ startsWith(inputs.os, 'windows') && 'python' || 'python3' }}
+  # sccache keeps what rustc compiled in the Actions cache, for the steps that set RUSTC_WRAPPER:
+  # rust-cache keeps the dependencies from crates.io and drops the crates of this repository and
+  # vendor/, which are most of a build. The harnesses run without it, since cargo_ra_jit.py
+  # tests a user's own wrapper.
+  SCCACHE_GHA_ENABLED: "true"
+  # Main alone writes it, as with rust-cache: what a pull request or a merge-queue entry writes
+  # is kept for that ref alone, which nothing reads again, and it pushes main's out of the 10 GB.
+  SCCACHE_GHA_RW_MODE: ${{ github.ref == 'refs/heads/main' && 'READ_WRITE' || 'READ_ONLY' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    name: tests
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+      # Caches are written by main alone: a pull request reads main's and writes none.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      - run: $PYTHON harness/unittests.py
+        env:
+          RUSTC_WRAPPER: sccache
+      - run: sccache --show-stats
+      # On a push to main, rustc's tests into the cache for the borrowck and pinned-ui jobs of
+      # the runs after it, which then need not fetch them.
+      - if: inputs.tier == 'warm' && (inputs.borrowck || inputs.pinned-ui)
+        uses: ./.github/actions/rust-tests
+
+  build:
+    name: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    outputs:
+      parts: ${{ steps.parts.outputs.parts }}
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: build
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: build
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: mozilla-actions/sccache-action@v0.0.11
+      # In the flake's dev shell, against the LLVM it pins. On Windows, which has no Nix, the
+      # build is against the static C runtime, and names libraries of the SDK that the linker is
+      # not otherwise shown.
+      - name: cargo build -p ra-jit --release --features llvm
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            sdk=$(ls -d "/c/Program Files (x86)/Windows Kits/10/Lib/"*/um/x64 | tail -n 1)
+            export CARGO_ENCODED_RUSTFLAGS=$(printf '%s\x1f%s\x1f%s\x1f%s' -C target-feature=+crt-static -L "native=$(cygpath -w "$sdk")")
+            cargo build -p ra-jit --release --features llvm --locked
+          else
+            nix develop --command cargo build -p ra-jit --release --features llvm --locked
+          fi
+        env:
+          RUSTC_WRAPPER: sccache
+      - run: sccache --show-stats
+      # blaze's proc-macro server beside ra-jit, as a release has it: a load into ra-jit's own
+      # target directory has ra-jit link every proc macro for that server, and fails without
+      # one ("ra-jit did not build the proc macro", docs/no-rustc.md, J). Not on Windows, whose
+      # release blaze does not build yet.
+      - name: blaze's proc-macro server
+        if: runner.os != 'Windows'
+        run: nix develop --command python3 .github/scripts/build_release.py --server-beside target/release/ra-jit
+      # The binaries run each other from next to themselves (`ra-jit enable` links `cargo fmt`
+      # and `cargo clippy` to the cargo-blaze beside it, and fails without one; a load finds
+      # blaze-proc-macro-srv beside ra-jit). A tar keeps them executable.
+      - name: Pack
+        working-directory: target/release
+        run: |
+          exe=$([ "$RUNNER_OS" = Windows ] && echo .exe || true)
+          server=$([ -f blaze-proc-macro-srv ] && echo blaze-proc-macro-srv || true)
+          tar -cf ra-jit.tar ra-jit$exe cargo-ra-jit$exe cargo-blaze$exe blaze$exe ra-jit-rustc$exe ra-jit-rustc-first$exe $server
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release/ra-jit.tar
+          retention-days: 3
+      - id: parts
+        if: (inputs.tier == 'fast' || inputs.tier == 'full')
+        run: echo "parts=$($PYTHON harness/ci.py --parts ${{ inputs.tier }})" >> "$GITHUB_OUTPUT"
+
+  harness:
+    name: harness (${{ matrix.backend }}, ${{ matrix.part }})
+    if: (inputs.tier == 'fast' || inputs.tier == 'full')
+    needs: build
+    runs-on: ${{ inputs.os }}
+    # A fast part is about four minutes of harnesses: one that hangs ends here, not at the hour.
+    timeout-minutes: ${{ inputs.tier == 'fast' && 25 || 60 }}
+    strategy:
+      fail-fast: false
+      # {"include": [{"backend", "part", "apt"}, ...]}: each backend has parts of its own.
+      matrix: ${{ fromJSON(needs.build.outputs.parts) }}
+    env:
+      RA_JIT_BACKEND: ${{ matrix.backend }}
+      RA_JIT_OPT: 2
+      RA_JIT_EMIT: fast
+    steps:
+      - if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+          # What `buildmodel.py` builds for besides the host.
+          targets: ${{ matrix.part == 'buildmodel' && inputs.os == 'ubuntu-24.04' && 'aarch64-unknown-linux-gnu x86_64-unknown-linux-musl' || '' }}
+      # What ci.py says the part's harnesses use (valgrind, gdb), and the cross tools of buildmodel.
+      - name: Linux tools
+        if: runner.os == 'Linux' && (matrix.apt != '' || (matrix.part == 'buildmodel' && runner.arch == 'X64'))
+        uses: ./.github/actions/apt
+        with:
+          packages: ${{ matrix.part == 'buildmodel' && 'gcc-aarch64-linux-gnu musl-tools qemu-user' || matrix.apt }}
+      # `debuginfo.py` has perf unwind what ra-jit built, which it says it did not run where
+      # there is no perf or the kernel does not let this user sample.
+      - name: perf
+        if: runner.os == 'Linux' && startsWith(matrix.part, 'core-')
+        continue-on-error: true
+        run: |
+          sudo apt-get install -y linux-tools-common "linux-tools-$(uname -r)" || sudo apt-get install -y linux-tools-generic
+          perf --version || sudo ln -sf "$(ls /usr/lib/linux-tools/*/perf | tail -n 1)" /usr/local/bin/perf
+          perf --version
+          sudo sysctl kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+      # MinIO as one program in the home directory, which is where remote.py looks for it and
+      # needs it: it kills the service and starts it again. The image is the one that is still
+      # published, for both architectures; the runner's docker takes a file out of it without
+      # root.
+      - name: MinIO
+        if: runner.os == 'Linux' && matrix.part == 'daemon'
+        run: |
+          image=cgr.dev/chainguard/minio@sha256:c93745c56fccdaf0e5dcb88999a96a65a136428beb045ef5d546255a80d747a7
+          mkdir -p "$HOME/s3tools"
+          container=$(docker create "$image")
+          docker cp "$container:/usr/bin/minio" "$HOME/s3tools/minio"
+          docker rm "$container"
+          "$HOME/s3tools/minio" --version
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - name: ra-jit
+        working-directory: target/release
+        run: |
+          tar -xf ra-jit.tar
+          if [ "$RUNNER_OS" = Windows ]; then bin="$(cygpath -w "$PWD")\\ra-jit.exe"; else bin="$PWD/ra-jit"; fi
+          echo "RA_JIT_BIN=$bin" >> "$GITHUB_ENV"
+      - run: $PYTHON harness/ci.py ${{ matrix.part }}
+      # What the daemons said when a harness failed (each harness keeps its daemon's log in a
+      # temporary directory of its own), and the report of a process that crashed on macOS.
+      - name: Daemon logs
+        if: failure()
+        run: |
+          find "${TMPDIR:-/tmp}" /tmp -maxdepth 2 -name daemon.log 2>/dev/null | sort -u | while read -r log; do
+            echo "::group::$log"; tail -n 60 "$log"; echo "::endgroup::"
+          done
+          for report in "$HOME"/Library/Logs/DiagnosticReports/ra-jit*; do
+            [ -f "$report" ] && { echo "::group::$report"; head -c 20000 "$report"; echo; echo "::endgroup::"; }
+          done
+          true
+
+  bun-e2e:
+    name: Bun E2E fixtures
+    if: inputs.bun-e2e && (inputs.tier == 'fast' || inputs.tier == 'full')
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - name: ra-jit
+        working-directory: target/release
+        run: |
+          tar -xf ra-jit.tar
+          echo "RA_JIT_BIN=$PWD/ra-jit" >> "$GITHUB_ENV"
+      - run: $PYTHON harness/bun_repros.py
+
+  # wasm32 with ra-jit's own wasm lowering (docs/platforms.md, "wasm32"): this build compiles for
+  # the target and the programs run under the wasmtime of the flake's `wasm` shell.
+  wasm32:
+    name: wasm32
+    if: inputs.wasm32 && (inputs.tier == 'fast' || inputs.tier == 'full')
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+          targets: wasm32-wasip1 wasm32-unknown-unknown
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - name: ra-jit
+        working-directory: target/release
+        run: |
+          tar -xf ra-jit.tar
+          echo "RA_JIT_BIN=$PWD/ra-jit" >> "$GITHUB_ENV"
+      - run: nix develop .#wasm --command python3 harness/wasm32.py
+
+  # The borrow checker against rustc's own borrow-check tests (docs/borrowck.md), at the
+  # commit of the pinned toolchain whose verdicts they are scored by, with a floor under the passes.
+  borrowck:
+    name: borrowck
+    if: inputs.borrowck && (inputs.tier == 'fast' || inputs.tier == 'full')
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - run: tar -xf ra-jit.tar
+        working-directory: target/release
+      - uses: ./.github/actions/rust-tests
+      - run: python3 harness/borrowck_ui.py "$RUNNER_TEMP/rust" --bin target/release/ra-jit --jobs 4 --mode both --min-pass 1538  # TODO(rjn): re-measure at the new pin
+      # Crates rustc accepts: an error is a false one, and a file the checker panics on (which
+      # fails `ra-jit borrowck`) would have none of its errors reported.
+      - name: the corpus and mixfutures
+        run: |
+          for crate in corpus mixfutures; do
+            (cd harness/$crate && ../../target/release/ra-jit borrowck --project .) > "$RUNNER_TEMP/$crate.json" || true
+            python3 -c 'import json, sys
+          lines = [json.loads(it) for it in open(sys.argv[1])]
+          bad = [it for it in lines if "error" in it or "panic" in it]
+          print(sys.argv[2], *bad, lines[-1] if lines else "no output", sep="\n")
+          sys.exit(bool(bad) or not lines or "files" not in lines[-1])' "$RUNNER_TEMP/$crate.json" $crate
+          done
+
+  # The few run-pass tests of rustc's that claims.yaml's full run, or a run on another
+  # platform, once caught ra-jit failing (harness/ui-pinned.txt), from the tests of the pinned
+  # toolchain. Their workspaces are under a link, as they are under /tmp on macOS: rustc's
+  # dep-info names their files where they are, and ra-jit is given them through the link.
+  pinned-ui:
+    name: pinned run-pass tests
+    if: inputs.pinned-ui && (inputs.tier == 'fast' || inputs.tier == 'full')
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - run: tar -xf ra-jit.tar
+        working-directory: target/release
+      - uses: ./.github/actions/rust-tests
+      - name: pinned run-pass tests
+        run: |
+          mkdir "$RUNNER_TEMP/ui-real"
+          ln -s "$RUNNER_TEMP/ui-real" "$RUNNER_TEMP/ui"
+          cd "$GITHUB_WORKSPACE"
+          cd harness
+          RA_JIT_BIN="$GITHUB_WORKSPACE/target/release/ra-jit" python3 uitest.py "$RUNNER_TEMP/rust" --tests ui-pinned.txt --jobs 4 --work "$RUNNER_TEMP/ui"
+
+  # `cargo ra-jit` in place of cargo on projects at pinned commits, and the flags, the daemon's
+  # life and plain cargo after `ra-jit enable`. Incremental compilation is left to the profile,
+  # as on a developer's machine: with it off the tests of every project are cargo's (the
+  # harness has that case among the flags).
+  cargo-ra-jit:
+    name: cargo ra-jit (${{ matrix.backend }}, ${{ matrix.group }})
+    if: inputs.cargo-ra-jit
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [cranelift, llvm]
+        group: ["ripgrep hyperfine", "fd", "checks"]
+    env:
+      RA_JIT_BACKEND: ${{ matrix.backend }}
+      RA_JIT_OPT: 2
+      RA_JIT_EMIT: fast
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - run: tar -xf ra-jit.tar
+        working-directory: target/release
+      - name: cargo ra-jit against cargo
+        working-directory: harness
+        # Under the job's limit, so that a run that hangs leaves time to keep what it logged.
+        timeout-minutes: 40
+        run: |
+          if [ "${{ matrix.group }}" = checks ]; then what=--only-checks; else what="--only-projects ${{ matrix.group }}"; fi
+          RA_JIT_BIN="$GITHUB_WORKSPACE/target/release/ra-jit" env -u CARGO_INCREMENTAL $PYTHON cargo_ra_jit.py $what
+      - name: what was running, and the daemons' logs
+        if: failure()
+        run: ps -eo pid,ppid,etime,args > /tmp/ra-jit-cargo-processes.txt
+      - if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: cargo-ra-jit-logs-${{ inputs.platform }}-${{ matrix.backend }}-${{ strategy.job-index }}
+          path: |
+            /tmp/ra-jit-cargo-processes.txt
+            /tmp/ra-jit-cargo-*/home-*/*.log
+            /tmp/ra-jit-cargo-*/home-*/*/*/log
+          if-no-files-found: ignore
+
+  # The larger projects as they are published, natively on AArch64: what the programs print and
+  # what every test says has to be what cargo gives. The ten after these take more than a hosted
+  # runner's three hours, and it was shut down loading rust-analyzer.
+  projects:
+    name: projects (${{ matrix.backend }}, ${{ matrix.projects }})
+    if: inputs.projects
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 120
+    # Known to fail until https://github.com/indexable-inc/blaze/issues/26 is fixed: a test of
+    # axum's example-testing crashes in the test binary the daemon builds. nushell's cold build
+    # needs about 16 GB, more than the hosted AArch64 runner has, until
+    # https://github.com/indexable-inc/blaze/issues/734 is fixed.
+    continue-on-error: ${{ matrix.projects == 'axum' || matrix.projects == 'nushell' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [cranelift, llvm]
+        projects: ["ripgrep fd", "bat hyperfine", "just", "axum", "nushell", "checks"]
+    env:
+      RA_JIT_BACKEND: ${{ matrix.backend }}
+      RA_JIT_OPT: 2
+      RA_JIT_EMIT: fast
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - run: tar -xf ra-jit.tar
+        working-directory: target/release
+      - name: cargo ra-jit
+        working-directory: harness
+        run: |
+          if [ "${{ matrix.projects }}" = checks ]; then what=--only-checks; else what="--only-projects ${{ matrix.projects }}"; fi
+          status=0
+          RA_JIT_BIN="$GITHUB_WORKSPACE/target/release/ra-jit" $PYTHON cargo_ra_jit.py $what || status=$?
+          cat CARGO-RA_JIT*.md
+          exit $status
+
+  # Not required to pass yet: the baseline was measured on another machine than the runner, so
+  # the threshold on times is wide, and what it holds exactly is who built each step, whether
+  # it was spliced and how many functions were compiled.
+  bench:
+    name: bench (ripgrep)
+    if: inputs.bench
+    needs: build
+    runs-on: ${{ inputs.os }}
+    timeout-minutes: 60
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/toolchain
+        with:
+          llvm: run
+      - uses: actions/download-artifact@v8
+        with:
+          name: ra-jit-${{ inputs.platform }}
+          path: target/release
+      - run: tar -xf ra-jit.tar
+        working-directory: target/release
+      - name: Bench
+        working-directory: harness
+        run: |
+          export RA_JIT_BIN="$GITHUB_WORKSPACE/target/release/ra-jit" RA_JIT_LLVM_BIN="$GITHUB_WORKSPACE/target/release/ra-jit"
+          $PYTHON bench.py ripgrep --out "$RUNNER_TEMP/bench.json"
+          $PYTHON bench.py --compare bench-baseline.json "$RUNNER_TEMP/bench.json" --threshold 200
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: bench
+          path: ${{ runner.temp }}/bench.json

@@ -1,0 +1,60 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 296K of event 'cpu-clock:ppp'
+# Event count (approx.): 59290455720
+#
+# Overhead  Command          Shared Object                                 
+# ........  ...............  ..............................................
+#
+    46.23%  ra-jit           ra-jit                                        
+            |          
+            |--4.51%--sha2::sha256::compress256
+            |          |          
+            |          |--1.27%--<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<bool>>::initialize<<std::sync::once_lock::OnceLock<bool>>::get_or_init<<ra_jit_store::Store>::checked::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}
+            |          |          <std::sys::sync::once::futex::Once>::call
+            |          |          <std::sync::once_lock::OnceLock<bool>>::initialize::<<std::sync::once_lock::OnceLock<bool>>::get_or_init<<ra_jit_store::Store>::checked::{closure#0}>::{closure#0}, !>
+            |          |          |          
+            |          |           --1.23%--std::sys::backtrace::__rust_begin_short_backtrace::<<ra_jit_store::Store>::check::{closure#0}, ()>
+            |          |                     <std::thread::lifecycle::spawn_unchecked<<ra_jit_store::Store>::check::{closure#0}, ()>::{closure#1} as core::ops::function::FnOnce<()>>::call_once::{shim:vtable#0}
+            |          |                     <std::sys::thread::unix::Thread>::new::thread_start
+            |          |                     start_thread
+            |          |                     thread_start
+            |          |          
+            |          |--0.88%--ra_jit::cargo::sandboxed::digest
+            |          |          |          
+            |          |           --0.70%--ra_jit::cargo::keyed::digest
+            |          |                     |          
+            |          |                      --0.68%--ra_jit::cargo::own_script::made_of
+            |          |                                ra_jit::cargo::script::script_of
+            |          |                                ra_jit::cargo::script::run_as_cargo_does::<core::iter::adapters::skip::Skip<std::env::ArgsOs>>::{closure#14}
+            |          |                                ra_jit::cargo::script::run_as_cargo_does::<core::iter::adapters::skip::Skip<std::env::ArgsOs>>
+            |          |                                ra_jit::cargo::script::command::<core::iter::adapters::skip::Skip<std::env::ArgsOs>>
+            |          |                                ra_jit::main
+            |          |                                std::sys::backtrace::__rust_begin_short_backtrace::<fn() -> core::result::Result<(), anyhow::Error>, core::result::Result<(), anyhow::Error>>
+            |          |                                std::rt::lang_start::<core::result::Result<(), anyhow::Error>>::{closure#0}
+            |          |                                std::rt::lang_start_internal
+            |          |                                main
+            |          |                                __libc_start_call_main
+            |          |                                __libc_start_main@@GLIBC_2.34
+            |          |                                _start
+            |          |          
+            |          |--0.60%--<cranelift_codegen::incremental_cache::CacheKey as core::hash::Hash>::hash::<cranelift_codegen::incremental_cache::compute_cache_key::Sha256Hasher>
+            |          |          cranelift_codegen::incremental_cache::compute_cache_key
+            |          |          <cranelift_codegen::context::Context>::compile_with_cache
+            |          |          hir_ty_codegen::emit
+            |          |          <hir_ty_codegen::backend::Backend>::emit
+            |          |          
+            |           --0.57%--cranelift_codegen::incremental_cache::compute_cache_key
+            |                     <cranelift_codegen::context::Context>::compile_with_cache
+            |                     hir_ty_codegen::emit
+            |                     <hir_ty_codegen::backend::Backend>::emit
+            |          
+            |--1.13%--__aarch64_ldadd8_relax
+            |          
+            |--0.82%--__aarch64_ldadd8_rel
+            |          
+            |--0.79%--<intern::intern_slice::InternedSlice<hir_ty::next_solver::generic_arg::GenericArgsStorage>>::from_header_and_slice
+            |          

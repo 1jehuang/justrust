@@ -1,0 +1,24 @@
+[package]
+name = "ra-jit-bench"
+description = "Microbenchmarks of ra-jit's hot paths, run by tango in pairs: a change against its base"
+publish = false
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]
+hir-ty-codegen.workspace = true
+ra-jit-store.workspace = true
+tango-bench = "0.9"
+
+[[bench]]
+name = "store"
+harness = false
+
+[lints]
+workspace = true

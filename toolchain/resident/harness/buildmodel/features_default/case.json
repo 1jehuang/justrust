@@ -1,0 +1,10 @@
+{
+  "row": "`[features]`: defaults, `default-features = false` on a dependency",
+  "package": "app",
+  "crates": [
+    "app",
+    "lib"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

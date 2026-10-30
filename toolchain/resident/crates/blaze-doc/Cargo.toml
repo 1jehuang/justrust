@@ -1,0 +1,38 @@
+[package]
+name = "blaze-doc"
+description = "HTML documentation of a workspace and its dependencies, written by blaze from rust-analyzer's HIR, with no rustdoc"
+publish = false
+
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+
+[lib]
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+base-db.workspace = true
+either.workspace = true
+hir.workspace = true
+hir-def.workspace = true
+hir-expand.workspace = true
+ide-db.workspace = true
+intern.workspace = true
+parser.workspace = true
+pulldown-cmark.workspace = true
+rayon.workspace = true
+rustc-hash.workspace = true
+serde_json.workspace = true
+span.workspace = true
+syntax.workspace = true
+vfs.workspace = true
+
+[dev-dependencies]
+test-fixture.workspace = true
+
+[lints]
+workspace = true

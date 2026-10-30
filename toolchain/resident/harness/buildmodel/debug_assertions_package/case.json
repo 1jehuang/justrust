@@ -1,0 +1,10 @@
+{
+  "row": "per-package `debug-assertions`",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

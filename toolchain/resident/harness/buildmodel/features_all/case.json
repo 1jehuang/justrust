@@ -1,0 +1,15 @@
+{
+  "row": "`--all-features`",
+  "package": "app",
+  "crates": [
+    "app",
+    "lib",
+    "opt"
+  ],
+  "cargo": [
+    "--all-features"
+  ],
+  "ra-jit": [
+    "--all-features"
+  ]
+}

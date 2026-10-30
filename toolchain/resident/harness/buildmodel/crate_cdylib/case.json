@@ -1,0 +1,9 @@
+{
+  "row": "crate type `cdylib`",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "run": "run.sh",
+  "artifact": "app"
+}

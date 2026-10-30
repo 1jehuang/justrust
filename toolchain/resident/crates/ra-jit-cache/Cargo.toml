@@ -1,0 +1,24 @@
+[package]
+name = "ra-jit-cache"
+version = "0.1.0"
+description = "#[ra_jit::cache]: results of pure functions kept across runs, dropped when the code they reach changes"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+authors = ["Indexable, Inc."]
+repository = "https://github.com/indexable-inc/blaze"
+homepage = "https://ix.dev/blaze"
+readme = "README.md"
+keywords = ["cache", "memoize", "jit", "incremental"]
+categories = ["development-tools", "caching"]
+
+[lib]
+# Written `#[ra_jit::cache]`, as the attribute is ra-jit's.
+name = "ra_jit"
+
+[dependencies]
+ra-jit-cache-macros = { version = "0.1.0", path = "../ra-jit-cache-macros" }
+serde = { version = "1.0.219", default-features = false, features = ["std"] }
+postcard = { version = "1.1.3", default-features = false, features = ["alloc"] }
+
+[dev-dependencies]
+serde = { version = "1.0.219", features = ["derive"] }

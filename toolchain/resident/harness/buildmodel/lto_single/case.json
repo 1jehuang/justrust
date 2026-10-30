@@ -1,0 +1,19 @@
+{
+  "row": "`lto = true` in a program of one crate, ra-jit given the link line",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ],
+  "link": [
+    "--config",
+    "profile.release.lto=\"off\""
+  ],
+  "handed": true,
+  "says": "lto: accepted, no cross-function optimization"
+}

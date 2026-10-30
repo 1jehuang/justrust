@@ -1,0 +1,9 @@
+{
+  "row": "`opt-level = 3` in dev",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

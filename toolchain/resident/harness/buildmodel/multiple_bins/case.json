@@ -1,0 +1,12 @@
+{
+  "row": "multiple `[[bin]]` targets",
+  "package": "app",
+  "crates": [
+    "app",
+    "src/bin/second.rs"
+  ],
+  "select": [
+    "--bin",
+    "second"
+  ]
+}

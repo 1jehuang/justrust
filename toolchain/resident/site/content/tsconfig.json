@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "types": [],
+    "lib": [
+      "es2024"
+    ]
+  },
+  "contentMappers": [
+    {
+      "package": "flecs-content-mapper",
+      "extensions": [
+        ".flecs"
+      ],
+      "options": {
+        "scripts": ".",
+        "wasm": "../flecs/flecs-doc.wasm"
+      }
+    }
+  ],
+  "include": [
+    "**/*.flecs"
+  ]
+}

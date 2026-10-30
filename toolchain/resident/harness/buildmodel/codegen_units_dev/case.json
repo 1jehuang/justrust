@@ -1,0 +1,10 @@
+{
+  "row": "`codegen-units = 1` in dev",
+  "package": "app",
+  "crates": [
+    "app",
+    "dep"
+  ],
+  "cargo": [],
+  "ra-jit": []
+}

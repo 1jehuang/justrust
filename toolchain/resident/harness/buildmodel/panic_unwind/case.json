@@ -1,0 +1,7 @@
+{
+  "row": "`panic = \"unwind\"` (the default)",
+  "package": "app",
+  "crates": [
+    "app"
+  ]
+}

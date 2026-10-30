@@ -1,0 +1,3 @@
+[workspace]
+members = ["blocker", "runner", "tool"]
+resolver = "3"

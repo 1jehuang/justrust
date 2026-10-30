@@ -1,0 +1,13 @@
+{
+  "row": "`overflow-checks = true` in release",
+  "package": "app",
+  "crates": [
+    "app"
+  ],
+  "cargo": [
+    "--release"
+  ],
+  "ra-jit": [
+    "--release"
+  ]
+}

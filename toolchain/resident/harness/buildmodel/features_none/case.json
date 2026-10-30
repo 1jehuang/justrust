@@ -1,0 +1,14 @@
+{
+  "row": "`--no-default-features`",
+  "package": "app",
+  "crates": [
+    "app",
+    "lib"
+  ],
+  "cargo": [
+    "--no-default-features"
+  ],
+  "ra-jit": [
+    "--no-default-features"
+  ]
+}
