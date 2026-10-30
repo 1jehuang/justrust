@@ -28,6 +28,11 @@ identity for our modified compiler. Exact frozen artifact SHA-256 values are:
 | clippy-driver | `a053ad57cc123544ba694d4735aa565803d865d2079af9f6b4b6941ea9c367d6` |
 | cargo-clippy | `99ef9b1854d35b8a091098c16510ee15d99f88123a227e4e9dd672765a130369` |
 | jr-cargo | `ea7f219a5283f26b2dfe59938c9706b9ab9233cb03d13ff9ab5f77e37027b0a6` |
+| frozen justrust client | `1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9` |
+
+The client executable is copied into the private scratch root as well, so
+unrelated agents reinstalling the shipping client cannot change a measurement
+halfway through the pair. The benchmark records and checks its binary hash.
 
 These artifacts are private experimental inputs, not published under an existing
 shipping compiler cache identity. The dependency artifact cache and local result
@@ -46,6 +51,7 @@ session-weighted edit-loop sample and must be reported separately if cited.
 
 ```sh
 export JUSTRUST_HOME="$HOME/.jcode/scratch/query-retention-bench-20261030/home"
+export JUSTRUST="$HOME/.jcode/scratch/query-retention-bench-20261030/justrust-client"
 export JUSTRUST_BENCH_WORK="$HOME/.justrust/bench/work"
 export JUSTRUST_VERSUS_WORK="$HOME/.justrust/bench/versus"
 python3 bench/versus.py run --synth 1 -n 1 --only none \
@@ -61,6 +67,16 @@ overrides: the runner reads quiet-mode test summaries from its own
 its first unmeasured prebuild to correct that provenance issue. It produced no
 accepted comparison. Reusing completed dependency artifacts from that cancelled
 prebuild does not replace any point's required prebuild.
+
+Further launches were interrupted during source probing by the tool's supplied
+timeout cap and by unrelated Jcode server reloads. None produced an accepted
+measurement. The pair now runs in a private OS-detached process with a locked,
+atomically updated state file. It survived an immediate server reload. That
+launcher does not change workload commands: it serially invokes the commands
+above, rejects blocked/incomplete results before starting the next mode, and
+runs `bench/suite.py compare` only after both complete. The native compiler and
+driver hashes are checked before each mode and after the pair. Other local
+native benchmarking was coordinated to avoid overlapping timing windows.
 
 ## Current evidence and decision
 
