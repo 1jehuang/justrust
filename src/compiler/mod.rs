@@ -2,6 +2,7 @@
 mod associated_constant_graph;
 pub mod backend;
 mod borrow;
+mod build_cache;
 pub mod c_abi;
 pub mod cache;
 #[cfg(test)]
@@ -2517,6 +2518,58 @@ impl Provider for CompilerProvider {
                         )?;
                         return cx.publish_fact(0, object);
                     }
+                    // This identity is deliberately broader than a CFG key:
+                    // it includes every immutable source input and option, so
+                    // callee-body edits invalidate an inlined machine object.
+                    // It restores no proof. The current opaque, ownership,
+                    // cleanup and C ABI gates above are still mandatory.
+                    let object_meter = ssa::meter::Meter::new(&this.0.budget);
+                    let exact_key = if c_boundary.is_none() {
+                        match &this.0.input {
+                            Input::File(path) => {
+                                build_cache::identity(path, &this.0.source_options, &this.0.budget)
+                                    .map_err(Error::new)?
+                            }
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    };
+                    let exact_key = match exact_key {
+                        Some(namespace) => {
+                            // ANALYZE already owns the exact closed target.
+                            // Do not decode the potentially large instance key
+                            // again just to look up an object cache entry.
+                            let target = proof.concrete.facts().target().ok_or_else(|| {
+                                Error::new("object proof omitted its closed instance target")
+                            })?;
+                            let symbol = instances::symbol_of(target, &types, &this.0.budget)
+                                .map_err(Error::new)?;
+                            Some(
+                                cache::exact_object_key(&namespace, &symbol, &object_meter)
+                                    .map_err(Error::new)?,
+                            )
+                        }
+                        None => None,
+                    };
+                    if let Some(exact_key) = &exact_key
+                        && let Some(object) = cache::exact_object_load(
+                            &this.0.source_options,
+                            exact_key,
+                            proof.concrete.function(),
+                            &object_meter,
+                        )
+                        .map_err(Error::new)?
+                    {
+                        cx.publish_fact(
+                            1,
+                            cache::ObjectUse {
+                                stage: cache::ObjectStage::ExactInputs,
+                                outcome: link_cache::Outcome::Hit,
+                            },
+                        )?;
+                        return cx.publish_fact(0, object);
+                    }
                     // panic=unwind reserves r15 as the panic flag, which the
                     // SSA register allocator does not yet preserve.
                     if this.0.source_options.opt != ssa::OptMode::Off
@@ -2538,13 +2591,21 @@ impl Provider for CompilerProvider {
                             // admitted before the receipt Arc is allocated.
                             let (mut object, receipt) = object.seal(&meter).map_err(Error::new)?;
                             object.receipt = Some(Arc::new(receipt));
-                            cx.publish_fact(
-                                1,
-                                cache::ObjectUse {
-                                    stage: cache::ObjectStage::Ssa,
-                                    outcome,
-                                },
-                            )?;
+                            let (stage, outcome) = match &exact_key {
+                                Some(exact_key) => (
+                                    cache::ObjectStage::ExactInputs,
+                                    cache::exact_object_store(
+                                        &this.0.source_options,
+                                        exact_key,
+                                        proof.concrete.function(),
+                                        &object,
+                                        &meter,
+                                    )
+                                    .map_err(Error::new)?,
+                                ),
+                                None => (cache::ObjectStage::Ssa, outcome),
+                            };
+                            cx.publish_fact(1, cache::ObjectUse { stage, outcome })?;
                             return cx.publish_fact(0, object);
                         }
                     }
@@ -2563,13 +2624,21 @@ impl Provider for CompilerProvider {
                             .map_err(Error::new)?;
                         c_abi::attach_export(&mut object, wrapper, symbol).map_err(Error::new)?;
                     }
-                    cx.publish_fact(
-                        1,
-                        cache::ObjectUse {
-                            stage: cache::ObjectStage::Native,
-                            outcome,
-                        },
-                    )?;
+                    let (stage, outcome) = match &exact_key {
+                        Some(exact_key) => (
+                            cache::ObjectStage::ExactInputs,
+                            cache::exact_object_store(
+                                &this.0.source_options,
+                                exact_key,
+                                proof.concrete.function(),
+                                &object,
+                                &object_meter,
+                            )
+                            .map_err(Error::new)?,
+                        ),
+                        None => (cache::ObjectStage::Native, outcome),
+                    };
+                    cx.publish_fact(1, cache::ObjectUse { stage, outcome })?;
                     cx.publish_fact(0, object)
                 }
                 SSA => {
@@ -3674,6 +3743,9 @@ fn compile_input_configured(
                             cache_report.native_objects.record(used.outcome)
                         }
                         cache::ObjectStage::Ssa => cache_report.ssa_objects.record(used.outcome),
+                        cache::ObjectStage::ExactInputs => {
+                            cache_report.exact_input_objects.record(used.outcome)
+                        }
                     }
                 }
             }

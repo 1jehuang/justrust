@@ -447,3 +447,114 @@ fn standalone_processes_reuse_outputs_despite_distinct_output_arguments() {
         }
     }
 }
+
+#[test]
+fn exact_source_objects_skip_optimizer_but_not_checks() {
+    use compiler::{source::SourceSnapshot, ssa::OptMode};
+    let scratch = Scratch::new();
+    let root = scratch.0.join("inputs");
+    fs::create_dir(&root).unwrap();
+    let entry = root.join("main.rs");
+    let text = "fn identity<T>(x:T)->T {x} fn twice(x:i32)->i32 {identity(x*2)} fn main(){ println!(\"{}\",twice(21)); }";
+    let stock_output = |text: &str| {
+        fs::write(&entry, text).unwrap();
+        let executable = scratch.0.join("exact-stock");
+        let result = Command::new("rustc")
+            .arg(&entry)
+            .args(["--edition=2024", "-Cpanic=abort", "-o"])
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        Command::new(executable).output().unwrap()
+    };
+    let stock = stock_output(text);
+    for workers in [1, 8] {
+        let directory = scratch.0.join(format!("exact-{workers}"));
+        let build = |text: &str, sibling: Option<&str>, cached: bool, check: bool| {
+            let mut config = options(&directory);
+            config.opt = OptMode::Final;
+            let mut files = vec![(PathBuf::from("main.rs"), text.as_bytes().to_vec())];
+            if let Some(sibling) = sibling {
+                files.push((PathBuf::from("optional.rs"), sibling.as_bytes().to_vec()));
+            }
+            config.source_snapshot = Some(SourceSnapshot::new(root.clone(), files).unwrap());
+            if !cached {
+                config.local_cache = None;
+            }
+            compiler::compile_file_observed_with_options(entry.clone(), workers, check, config)
+        };
+        let clean = build(text, None, false, false).unwrap();
+        let cold = build(text, None, true, false).unwrap();
+        assert!(
+            cold.cache.exact_input_objects.stored > 0,
+            "{:?}",
+            cold.cache
+        );
+        assert!(cold.report.published_kind(133));
+        let warm = build(text, None, true, false).unwrap();
+        assert!(warm.cache.exact_input_objects.hits > 0, "{:?}", warm.cache);
+        assert_eq!(warm.cache.exact_input_objects.misses, 0);
+        assert!(!warm.report.published_kind(130), "hit demanded SSA");
+        assert!(!warm.report.published_kind(133), "hit demanded IPO_OPT");
+        for kind in [104, 109, 126, 128, 142] {
+            assert!(
+                warm.report.published_kind(kind),
+                "hit omitted proof kind {kind}"
+            );
+        }
+        assert_eq!(warm.executable, clean.executable);
+        assert_eq!(cold.executable, clean.executable);
+        let actual = execute(
+            &scratch.0.join(format!("exact-run-{workers}")),
+            warm.executable.as_ref().unwrap(),
+        );
+        assert_eq!(actual.status.code(), stock.status.code());
+        assert_eq!(actual.stdout, stock.stdout);
+        assert_eq!(actual.stderr, stock.stderr);
+        // Even an unused file's absence is part of this conservative identity.
+        let changed_namespace = build(text, Some("fn helper() {}"), true, false).unwrap();
+        assert_eq!(changed_namespace.cache.exact_input_objects.hits, 0);
+        assert!(changed_namespace.cache.exact_input_objects.stored > 0);
+        let edited = text.replace("x*2", "x*3");
+        let changed_body = build(&edited, None, true, false).unwrap();
+        assert_eq!(changed_body.cache.exact_input_objects.hits, 0);
+        assert_eq!(
+            changed_body.executable,
+            build(&edited, None, false, false).unwrap().executable
+        );
+        let invalid = format!("{text} fn unused(){{ let x:bool=1; }}");
+        assert!(build(&invalid, None, true, false).is_err());
+        let check = build(text, None, true, true).unwrap();
+        assert!(check.executable.is_none());
+        assert!(!check.report.published_kind(103));
+        for entry in fs::read_dir(&directory).unwrap() {
+            fs::write(entry.unwrap().path(), b"corrupt").unwrap();
+        }
+        let repaired = build(text, None, true, false).unwrap();
+        assert_eq!(repaired.cache.exact_input_objects.hits, 0);
+        assert!(repaired.cache.exact_input_objects.stored > 0);
+        assert_eq!(repaired.executable, clean.executable);
+        let nominal = "struct Pair { x:i32,y:i32 } fn total(p:Pair)->i32 {p.x+p.y} fn main(){println!(\"{}\",total(Pair{x:20,y:22}));}";
+        let nominal_cold = build(nominal, None, true, false).unwrap();
+        assert!(nominal_cold.cache.exact_input_objects.stored > 0);
+        let nominal_warm = build(nominal, None, true, false).unwrap();
+        assert!(nominal_warm.cache.exact_input_objects.hits > 0);
+        assert_eq!(
+            nominal_warm.executable,
+            build(nominal, None, false, false).unwrap().executable
+        );
+        let expected = stock_output(nominal);
+        let actual = execute(
+            &scratch.0.join(format!("nominal-run-{workers}")),
+            nominal_warm.executable.as_ref().unwrap(),
+        );
+        assert_eq!(actual.status.code(), expected.status.code());
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.stderr, expected.stderr);
+    }
+}

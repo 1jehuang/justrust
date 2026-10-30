@@ -1450,7 +1450,7 @@ def cmd_compare(args) -> None:
     if "native_cache" in a or "native_cache" in b:
         import native_cache
         try:
-            print(native_cache.compare(a, b))
+            print(native_cache.compare(a, b, allow_binary_change=getattr(args, "allow_native_binary_change", False)))
         except ValueError as error:
             sys.exit(f"bench: {error}")
         return
@@ -1599,6 +1599,8 @@ def main() -> None:
     c = sub.add_parser("compare")
     c.add_argument("a")
     c.add_argument("b")
+    c.add_argument("--allow-native-binary-change", action="store_true",
+                   help="compare native-cache compiler revisions, requiring all other pins to match")
     c.add_argument("--floor", type=float, default=10.0, metavar="PCT",
                    help="minimum median change to call a difference (default 10%%)")
     c.set_defaults(fn=cmd_compare)
