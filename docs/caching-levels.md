@@ -202,6 +202,17 @@ These are verification observations under concurrent work, not matched suite
 speedup evidence. Source validation and admission still prevent a demonstrated
 subsecond result. Full shipping tests passed 834 cases with eight ignored.
 
+The follow-up `edce4013a` bulk-builds freshly observed manifests with tested
+last-observation duplicate semantics, and `2966ee5a2` overlaps two fresh,
+read-only Git discovery queries with synchronous spawn/panic fallback. Neither
+adds a persistent source-stamp cache. Both are installed in the shipping client
+(SHA-256 `15a4e8525174df5d63b277d47e052632a565802d5cf4ceb3d86aaed7aa48e2bc`).
+Bulk construction passed hosted gates. Final concurrent-discovery gates ran
+locally during an explicitly coordinated hosted maintenance pause. Its final
+real hosted cached/edit acceptance is pending that pause's release, not assumed
+from local tests. See `remote-sync-bulk-scan.md` and
+`remote-sync-concurrent-discovery.md` for bounded component evidence.
+
 ## Primary design references
 
 The implementation inventory above comes from this checkout. These independent
