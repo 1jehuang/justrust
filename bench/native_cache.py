@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import random
+import re
 import statistics
 import subprocess
 import tempfile
@@ -41,12 +42,36 @@ def checked_summary(process, workers):
     return summary
 
 
-def compare(a, b):
+def compare(a, b, *, allow_binary_change=False):
+    """Compare matched runs, optionally allowing only the compiler hash to differ.
+
+    The opt-in is deliberately an API argument, not a field trusted from either
+    result file. The suite runner must explicitly forward any CLI opt-in.
+    """
     if a.get('native_cache') != SCHEMA or b.get('native_cache') != SCHEMA:
         raise ValueError('compare native cache results only with native cache results')
-    if not a.get('contract') or a['contract'] != b.get('contract'):
+    contracts = [result.get('contract') for result in (a, b)]
+    if any(not isinstance(contract, dict) or not contract for contract in contracts):
+        raise ValueError('cache measurement contracts differ')
+    hashes = [contract.get('binary_sha256') for contract in contracts]
+    if any(not isinstance(value, str) or re.fullmatch(r'[0-9a-fA-F]{64}', value) is None
+           for value in hashes):
+        raise ValueError('invalid compiler binary_sha256')
+    identities = [{key: value for key, value in contract.items()
+                   if not (allow_binary_change and key == 'binary_sha256')}
+                  for contract in contracts]
+    if identities[0] != identities[1]:
         raise ValueError('cache measurement contracts differ')
     contract = a['contract']
+    fixtures = contract.get('fixtures')
+    if (not isinstance(fixtures, list) or not fixtures
+            or any(not isinstance(fixture, str) or not fixture for fixture in fixtures)
+            or len(set(fixtures)) != len(fixtures)
+            or type(contract.get('samples')) is not int or contract['samples'] < 3
+            or type(contract.get('warmups')) is not int or contract['warmups'] < 1
+            or contract.get('workers') != [1, 8]
+            or contract.get('opts') != ['off', 'final']):
+        raise ValueError('invalid benchmark coverage contract')
     expected = [(f, w, o) for f in contract['fixtures'] for w in (1, 8)
                 for o in ('off', 'final')]
     for result in (a, b):
@@ -54,16 +79,22 @@ def compare(a, b):
             raise ValueError('incomplete benchmark run')
         if result.get('state') not in STATES:
             raise ValueError('invalid cache state')
-        if [(c['fixture'], c['workers'], c['opt']) for c in result['cells']] != expected:
+        cells = result.get('cells')
+        if (not isinstance(cells, list)
+                or any(not isinstance(cell, dict) for cell in cells)
+                or [(c.get('fixture'), c.get('workers'), c.get('opt')) for c in cells] != expected):
             raise ValueError('missing or duplicate benchmark cells')
         for cell in result['cells']:
             for field, count in (('samples', contract['samples']), ('warmups', contract['warmups'])):
                 samples = cell.get(field, [])
-                if len(samples) != count or any(s.get('ok') is not True
+                if not isinstance(samples, list) or len(samples) != count or any(
+                        not isinstance(s, dict) or s.get('ok') is not True
                         or type(s.get('wall_ns')) is not int or s['wall_ns'] <= 0
                         for s in samples):
                     raise ValueError('failed or incomplete samples')
     lines = [f'Scoped native cache only: {a["state"]} -> {b["state"]}.',
+             f'Compiler binary_sha256: {hashes[0]} -> {hashes[1]} '
+             f'({"binary change explicitly allowed" if allow_binary_change else "strict identity"}).',
              'Warm filesystem, fresh processes, local contended/uncontrolled. Not general agent-wait evidence.']
     for ca, cb in zip(a['cells'], b['cells']):
         ma, mb = (statistics.median(s['wall_ns'] for s in c['samples']) for c in (ca, cb))
