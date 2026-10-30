@@ -2116,7 +2116,9 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       rseq registration, which would admit asynchronously kernel-written CPU
       identity fields into child memory. Architecture control admits only the
       loader's ARCH_SET_FS TLS setup, not feature queries, address queries or
-      unrelated architecture-control changes.
+      unrelated architecture-control changes. Raw poll/select/pselect6/ppoll
+      are denied: they expose pipe readiness, and the timed variants also
+      rewrite timeout buffers from live clocks even with captured-file inputs.
       Hosted acceptance includes real captured GNU ld, stock/native ABI parity
       at workers 1/8, canonical metadata, first-instruction ordering, kernel-map
       removal, deterministic timestamp probes, legacy vsyscall probes, floods

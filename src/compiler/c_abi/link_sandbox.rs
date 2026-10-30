@@ -163,9 +163,11 @@ pub(super) fn confine(
     // selected auxv/vDSO/TSC inputs, not all CPU or address-layout observations.
     // set_tid_address would return a host TID and rseq can expose live CPU IDs;
     // neither is admitted by this single-threaded linker boundary.
+    // Poll/select interfaces expose host pipe readiness, and the raw timed
+    // variants update timeout buffers from live clocks. None are needed here.
     for number in [
-        0u32, 1, 3, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 32, 33, 35, 40,
-        60, 74, 75, 77, 202, 230, 231, 270, 271, 273, 436,
+        0u32, 1, 3, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 24, 25, 26, 32, 33, 35, 40, 60, 74,
+        75, 77, 202, 230, 231, 273, 436,
     ] {
         filter.push(instruction(0x15, 0, 1, number));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));

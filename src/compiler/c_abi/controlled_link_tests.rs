@@ -529,7 +529,7 @@ static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall"
 static long call6(long n,long a,long b,long c,long d,long e,long f){{register long x __asm__("r10")=d;register long y __asm__("r8")=e;register long z __asm__("r9")=f;long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c),"r"(x),"r"(y),"r"(z):"rcx","r11","memory");return r;}}
 static const unsigned char readonly_stat[144]={{0}};
 static void die(long code){{call(60,code,0,0);__builtin_unreachable();}}
-void _start(void){{
+__attribute__((force_align_arg_pointer)) void _start(void){{
  char byte;
  if(call(2,(long){secret:?},0,0)!=-13)die(1);
  if(call(2,(long){secret:?},1,0)!=-13)die(15);
@@ -569,6 +569,23 @@ void _start(void){{
  if(call(1,{leaked},(long)"x",1)!=-9)die(30);
  if(call(77,{leaked},0,0)!=-9)die(31);
  long fd=call(2,(long)"input",0,0);if(fd<0||call(0,fd,(long)&byte,1)!=1||byte!='f')die(3);
+ // A regular captured file is ready, so a regressed allow rule cannot stall.
+ // Raw Linux wait syscalls would otherwise overwrite these nonzero timeouts.
+ if(fd>=1024)die(107);
+ unsigned long readiness[16]={{0}};readiness[fd/64]=1UL<<(fd%64);
+ long timeout[2]={{7,123456}};
+ if(call6(23,fd+1,(long)readiness,0,0,(long)timeout,0)!=-1)die(108);
+ if(timeout[0]!=7||timeout[1]!=123456)die(109);
+ timeout[1]=123456789;
+ if(call6(270,fd+1,(long)readiness,0,0,(long)timeout,0)!=-1)die(110);
+ if(timeout[0]!=7||timeout[1]!=123456789)die(111);
+ struct {{int fd;short events,revents;}} ready_poll={{(int)fd,1,0}};
+ if(call6(271,(long)&ready_poll,1,(long)timeout,0,8,0)!=-1)die(112);
+ if(timeout[0]!=7||timeout[1]!=123456789||ready_poll.revents!=0)die(113);
+ if(call(7,(long)&ready_poll,1,0)!=-1||ready_poll.revents!=0)die(115);
+ ready_poll.fd=1;ready_poll.events=4;
+ if(call(7,(long)&ready_poll,1,0)!=-1||ready_poll.revents!=0)die(116);
+ for(long i=0;i<16;i++)if(readiness[i]!=(i==fd/64?(1UL<<(fd%64)):0))die(114);
  if(call(72,fd,4,0x4000)!=-1)die(83);
  if(call(72,fd,4,0x2000)!=-1)die(84);
  if(call(72,fd,4,0)!=-1)die(85);
@@ -651,6 +668,7 @@ void _start(void){{
     let compiled = Command::new("cc")
         .args([
             "-nostdlib",
+            "-ffreestanding",
             "-static",
             "-fno-stack-protector",
             "-no-pie",
