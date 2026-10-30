@@ -1,0 +1,245 @@
+{
+ "started": "2026-10-29T20:06:00-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "justrust": "justrust 0.1.0-alpha.19",
+  "justrust_rev": "45f78786dc02",
+  "benchmark_repo_rev": "45f78786dc02",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "630e73b51ae4feff7b6c92b475ec05d72f63d9a3e66474475da8aa39e9ed02c9",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1)",
+  "toolchain": "system",
+  "optimization_env": {},
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "governor": "powersave",
+  "on_ac": "0",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "execution": "remote",
+  "hosted_early": false,
+  "target_state": "persistent remote target; first run is warmup"
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "desktop-noop-test": {
+   "what": "no edit: pure overhead of a fresh `test` (cargo startup, fingerprints, test run)",
+   "cmd": [
+    "test",
+    "-p",
+    "jcode-desktop-ui",
+    "--lib",
+    "--",
+    "fps_counter"
+   ],
+   "samples": [
+    {
+     "id": "20261029-200658199-1867542262",
+     "wall": 1.688,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.266,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 518.599013,
+      "client_wall": 1.685735412,
+      "host_wall": 0.2657456398010254,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.29,
+     "startup": 0.256,
+     "compile": 0.0,
+     "test_run": 0.004,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 0.62,
+     "foreign_rustc_before": 0,
+     "load_before": 14.95,
+     "noisy": false,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261029-200659912-1867542365",
+     "wall": 0.843,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.251,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 49.294554999999995,
+      "client_wall": 0.840420511,
+      "host_wall": 0.2511327266693115,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.28,
+     "startup": 0.24,
+     "compile": 0.0,
+     "test_run": 0.004,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 0.71,
+     "foreign_rustc_before": 0,
+     "load_before": 14.95,
+     "noisy": false,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    },
+    {
+     "id": "20261029-200700774-1867542292",
+     "wall": 0.917,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 0.262,
+     "remote": {
+      "machine": "hosted",
+      "sync_ms": 41.846458000000005,
+      "client_wall": 0.914451306,
+      "host_wall": 0.26227355003356934,
+      "toolchain": "system",
+      "target_state": "persistent remote target"
+     },
+     "admission_transport": "curl",
+     "cpu": 0.28,
+     "startup": 0.253,
+     "compile": 0.0,
+     "test_run": 0.005,
+     "units": 0,
+     "local_units": 0,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 0,
+      "fresh": 744,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 0.0,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.0,
+      "other": 0.0
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 3,
+     "tests_failed": 0,
+     "other_cores": 0.54,
+     "foreign_rustc_before": 0,
+     "load_before": 14.95,
+     "noisy": false,
+     "top_unit": null,
+     "workspace_frontend_threads": null
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 0.917,
+    "min": 0.843,
+    "max": 1.688,
+    "quiet_n": 3,
+    "quiet_median": 0.917,
+    "phases": {
+     "startup": 0.253,
+     "compile": 0.0,
+     "test_run": 0.004,
+     "cpu": 0.28,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 0.0,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.0,
+     "other": 0.0
+    },
+    "units": 0
+   }
+  }
+ },
+ "finished": "2026-10-29T20:07:01-0700"
+}

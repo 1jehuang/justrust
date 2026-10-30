@@ -122,10 +122,11 @@ fn ignored_lockfiles(root: &Path) -> Vec<PathBuf> {
             "-o",
             "-i",
             "--exclude-standard",
+            // Collapse ignored directories before walking them ourselves. A
+            // Cargo.lock pathspec makes git descend through every target/
+            // artifact even though skip() discards those results afterward.
+            "--directory",
             "-z",
-            "--",
-            "Cargo.lock",
-            "**/Cargo.lock",
         ])
         .current_dir(root)
         .stderr(Stdio::null())
@@ -136,12 +137,28 @@ fn ignored_lockfiles(root: &Path) -> Vec<PathBuf> {
     if !o.status.success() {
         return Vec::new();
     }
-    o.stdout
-        .split(|b| *b == 0)
-        .filter(|p| !p.is_empty())
-        .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
-        .filter(|p| !skip(p))
-        .collect()
+    let mut locks = Vec::new();
+    for entry in o.stdout.split(|b| *b == 0).filter(|p| !p.is_empty()) {
+        let rel = PathBuf::from(String::from_utf8_lossy(entry).into_owned());
+        if skip(&rel) {
+            continue;
+        }
+        if entry.ends_with(b"/") {
+            // walk does not follow symlinks and prunes target, .git and
+            // .justrust at every depth, just like the original result filter.
+            if let Ok(files) = walk(&root.join(&rel)) {
+                locks.extend(
+                    files
+                        .into_iter()
+                        .filter(|p| p.file_name().is_some_and(|n| n == "Cargo.lock"))
+                        .map(|p| rel.join(p)),
+                );
+            }
+        } else if rel.file_name().is_some_and(|n| n == "Cargo.lock") {
+            locks.push(rel);
+        }
+    }
+    locks
 }
 
 fn skip(rel: &Path) -> bool {
@@ -1167,6 +1184,68 @@ mod tests {
         }
         assert!(!keys.contains(&PathBuf::from("x.log")));
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn ignored_lockfile_discovery_matches_git_without_build_trees() {
+        let d = std::env::temp_dir().join(format!("jr-scan-ignored-dirs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let git = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(args)
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{:?}", out.stderr);
+            out
+        };
+        git(&["init", "-q"]);
+        std::fs::write(
+            d.join(".gitignore"),
+            "Cargo.lock\ncache/\ntarget/\n.justrust/\n*.log\n",
+        )
+        .unwrap();
+        for rel in [
+            "Cargo.lock",
+            "sub/Cargo.lock",
+            "cache/nested/Cargo.lock",
+            "cache/target/deep/Cargo.lock",
+            "target/deep/Cargo.lock",
+            ".justrust/Cargo.lock",
+            "cache/.justrust/Cargo.lock",
+            "cache/private.log",
+        ] {
+            let path = d.join(rel);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "fixture").unwrap();
+        }
+        let oracle = git(&[
+            "ls-files",
+            "-o",
+            "-i",
+            "--exclude-standard",
+            "-z",
+            "--",
+            "Cargo.lock",
+            "**/Cargo.lock",
+        ]);
+        let expected: BTreeSet<_> = oracle
+            .stdout
+            .split(|b| *b == 0)
+            .filter(|p| !p.is_empty())
+            .map(|p| PathBuf::from(String::from_utf8_lossy(p).into_owned()))
+            .filter(|p| !skip(p))
+            .collect();
+        let actual: BTreeSet<_> = ignored_lockfiles(&d).into_iter().collect();
+        assert_eq!(actual, expected);
+        assert_eq!(actual.len(), 3);
+        let scanned = scan(&d).unwrap();
+        assert!(actual.iter().all(|p| scanned.files.contains_key(p)));
+        assert!(!scanned.files.contains_key(Path::new("cache/private.log")));
+        std::fs::remove_file(d.join("cache/nested/Cargo.lock")).unwrap();
+        assert!(!ignored_lockfiles(&d).contains(&PathBuf::from("cache/nested/Cargo.lock")));
+        std::fs::remove_dir_all(d).unwrap();
     }
 
     /// Read-only focused diagnostic, not a substitute for bench/suite.py.
