@@ -41,6 +41,30 @@ fn closure_shared_argument_results_match_stock() {
 }
 
 #[test]
+fn stored_vector_reference_elements_retain_source_loans() {
+    oracle::check(
+        "stored-vector-reference-loans",
+        &[
+            Case {
+                name: "shared_string_element_blocks_owner_mutation",
+                source: "fn main(){let mut owner=String::from(\"a\");let mut values:Vec<&String>=Vec::new();values.push(&owner);owner.push('x');println!(\"{}\",values[0].len());}",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "exclusive_elements_cannot_alias_one_owner",
+                source: "fn main(){let mut owner=1i32;let mut values:Vec<&mut i32>=Vec::new();values.push(&mut owner);values.push(&mut owner);println!(\"{}\",values.len());}",
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "independent_shared_elements_remain_usable",
+                source: "fn main(){let first=7i32;let second=9i32;let values=vec![&first,&second];println!(\"{} {}\",*values[0],*values[1]);}",
+                expect: Expect::Run("7 9\n"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn nested_scalar_closures_use_outer_source_publication() {
     oracle::check(
         "nested_scalar_publication",
