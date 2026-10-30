@@ -11,6 +11,7 @@ use hir::def_id::{LocalDefIdMap, LocalDefIdSet};
 use rustc_abi::FieldIdx;
 use rustc_attr_ir::find_attr;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet, FxIndexSet};
+use rustc_data_structures::unord::ExtendUnord;
 use rustc_errors::{ErrorGuaranteed, MultiSpan};
 use rustc_hir::def::{CtorOf, DefKind, Res};
 use rustc_hir::def_id::{DefId, LocalDefId, LocalModId};
@@ -19,7 +20,9 @@ use rustc_hir::{self as hir, ForeignItemId, ItemId, Node, PatKind, QPath};
 use rustc_lint_defs::builtin::{DEAD_CODE, DEAD_CODE_PUB_IN_BINARY};
 use rustc_lint_defs::{self as lint, Lint, StableLintExpectationId};
 use rustc_middle::middle::codegen_fn_attrs::CodegenFnAttrFlags;
-use rustc_middle::middle::dead_code::{DeadCodeLivenessSnapshot, DeadCodeLivenessSummary};
+use rustc_middle::middle::dead_code::{
+    DeadCodeItemUsage, DeadCodeLivenessSnapshot, DeadCodeLivenessSummary, DeadCodeWorkItem,
+};
 use rustc_middle::middle::privacy::Level;
 use rustc_middle::query::Providers;
 use rustc_middle::ty::{self, AssocTag, TyCtxt};
@@ -438,7 +441,44 @@ impl<'tcx> MarkSymbolVisitor<'tcx> {
                 continue;
             }
 
-            self.visit_node(self.tcx.hir_node_by_def_id(id))?;
+            if self.tcx.sess.opts.unstable_opts.jr_cache_dead_code_items {
+                let usage = match propagated {
+                    ComesFromAllowExpect::No => self.tcx.jr_dead_code_item_usage(id),
+                    ComesFromAllowExpect::Yes => self.tcx.jr_dead_code_item_usage_allow_expect(id),
+                };
+                let usage = match usage {
+                    Ok(usage) => usage,
+                    Err(guar) => return ControlFlow::Break(guar),
+                };
+                self.worklist.extend(usage.worklist.iter().map(|work| WorkItem {
+                    id: work.id,
+                    propagated: if work.propagated_allow_expect {
+                        ComesFromAllowExpect::Yes
+                    } else {
+                        ComesFromAllowExpect::No
+                    },
+                    own: if work.own_allow_expect {
+                        ComesFromAllowExpect::Yes
+                    } else {
+                        ComesFromAllowExpect::No
+                    },
+                }));
+                self.live_symbols.extend_unord(usage.live_symbols.items().copied());
+                // Different ADT keys are independent. Preserve the existing
+                // insertion order of traits within each ADT's IndexSet.
+                if !usage.ignored_derived_traits.is_empty() {
+                    self.tcx.with_stable_hashing_context(|mut hcx| {
+                        for (&adt, traits) in usage.ignored_derived_traits.to_sorted(&mut hcx, false) {
+                            self.ignored_derived_traits
+                                .entry(adt)
+                                .or_default()
+                                .extend(traits.iter().copied());
+                        }
+                    });
+                }
+            } else {
+                self.visit_node(self.tcx.hir_node_by_def_id(id))?;
+            }
         }
 
         ControlFlow::Continue(())
@@ -1061,6 +1101,60 @@ fn create_and_seed_worklist(tcx: TyCtxt<'_>) -> SeedWorklists {
     SeedWorklists { worklist, deferred_seeds, unsolved_items }
 }
 
+fn scan_dead_code_item(
+    tcx: TyCtxt<'_>,
+    id: LocalDefId,
+    propagated: ComesFromAllowExpect,
+) -> Result<DeadCodeItemUsage, ErrorGuaranteed> {
+    // A node scan never consults the global worklist, scanned set, unsolved
+    // items, or existing live membership. Its temporary visitor state starts
+    // exactly as it does between successful scans in the global visitor.
+    let mut visitor = MarkSymbolVisitor {
+        worklist: vec![],
+        tcx,
+        maybe_typeck_results: None,
+        scanned: Default::default(),
+        live_symbols: Default::default(),
+        repr_unconditionally_treats_fields_as_live: false,
+        repr_has_repr_simd_or_scalable: false,
+        in_pat: false,
+        ignore_variant_stack: vec![],
+        ignored_derived_traits: Default::default(),
+        propagated_comes_from_allow_expect: propagated,
+        unsolved_items: vec![],
+    };
+    if let ControlFlow::Break(guar) = visitor.visit_node(tcx.hir_node_by_def_id(id)) {
+        return Err(guar);
+    }
+    Ok(DeadCodeItemUsage {
+        worklist: visitor
+            .worklist
+            .into_iter()
+            .map(|work| DeadCodeWorkItem {
+                id: work.id,
+                propagated_allow_expect: work.propagated == ComesFromAllowExpect::Yes,
+                own_allow_expect: work.own == ComesFromAllowExpect::Yes,
+            })
+            .collect(),
+        live_symbols: visitor.live_symbols,
+        ignored_derived_traits: visitor.ignored_derived_traits,
+    })
+}
+
+fn jr_dead_code_item_usage(
+    tcx: TyCtxt<'_>,
+    id: LocalDefId,
+) -> Result<DeadCodeItemUsage, ErrorGuaranteed> {
+    scan_dead_code_item(tcx, id, ComesFromAllowExpect::No)
+}
+
+fn jr_dead_code_item_usage_allow_expect(
+    tcx: TyCtxt<'_>,
+    id: LocalDefId,
+) -> Result<DeadCodeItemUsage, ErrorGuaranteed> {
+    scan_dead_code_item(tcx, id, ComesFromAllowExpect::Yes)
+}
+
 fn live_symbols_and_ignored_derived_traits(
     tcx: TyCtxt<'_>,
     (): (),
@@ -1574,6 +1668,11 @@ fn lint_dead_codes<'tcx>(
 }
 
 pub(crate) fn provide(providers: &mut Providers) {
-    *providers =
-        Providers { live_symbols_and_ignored_derived_traits, check_mod_deathness, ..*providers };
+    *providers = Providers {
+        live_symbols_and_ignored_derived_traits,
+        jr_dead_code_item_usage,
+        jr_dead_code_item_usage_allow_expect,
+        check_mod_deathness,
+        ..*providers
+    };
 }

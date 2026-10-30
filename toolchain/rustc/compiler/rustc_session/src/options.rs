@@ -2602,6 +2602,8 @@ options! {
         "a default MIR inlining threshold (default: 50)"),
     input_stats: bool = (false, parse_bool, [UNTRACKED],
         "print some statistics about AST and HIR (default: no)"),
+    jr_cache_dead_code_items: bool = (false, parse_bool, [TRACKED],
+        "cache per-item dead-code usage scans in the native query cache (default: no)"),
     jr_cache_associated_items: bool = (false, parse_bool, [TRACKED],
         "justrust: experimentally persist associated-item lookup values (default: no)"),
     jr_cache_small_query_values: bool = (false, parse_bool, [TRACKED],

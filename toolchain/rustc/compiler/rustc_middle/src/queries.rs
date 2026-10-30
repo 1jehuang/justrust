@@ -1242,6 +1242,22 @@ rustc_queries! {
         desc { "checking liveness of variables in `{}`", tcx.def_path_str(key.to_def_id()) }
     }
 
+    /// Scan one item with ordinary reachability context. Only consumed when
+    /// the tracked jr-cache-dead-code-items experiment is enabled.
+    query jr_dead_code_item_usage(key: LocalDefId) -> Result<&'tcx crate::middle::dead_code::DeadCodeItemUsage, ErrorGuaranteed> {
+        arena_cache
+        cache_on_disk
+        desc { "scanning dead-code uses in `{}`", tcx.def_path_str(key) }
+    }
+
+    /// Separate LocalDefId key space keeps the propagated allow/expect context
+    /// in the dependency-node identity while retaining native key recovery.
+    query jr_dead_code_item_usage_allow_expect(key: LocalDefId) -> Result<&'tcx crate::middle::dead_code::DeadCodeItemUsage, ErrorGuaranteed> {
+        arena_cache
+        cache_on_disk
+        desc { "scanning dead-code uses under allow/expect in `{}`", tcx.def_path_str(key) }
+    }
+
     /// Return dead-code liveness summary for the crate.
     query live_symbols_and_ignored_derived_traits(_: ()) -> Result<&'tcx DeadCodeLivenessSummary, ErrorGuaranteed> {
         arena_cache
