@@ -189,7 +189,13 @@ fn build(
     result.leaves.reserve_exact(leaves);
     result.fields.reserve_exact(parts.len());
     let mut private = 0usize;
-    for part in parts {
+    for (index, part) in parts.into_iter().enumerate() {
+        // C field placement and private transport placement are independent.
+        // Do not reconstruct private aggregate offsets by concatenating sizes.
+        if matches!(ty, ir::Ty::Struct(_)) {
+            private = usize::try_from(backend::field_offset(ty, index, budget)?.0)
+                .map_err(|_| "invalid private field offset")?;
+        }
         budget.charge_work(part.leaves.len() + 1)?;
         result.size = align_up(result.size, part.align)?;
         result.fields.push(result.size);
@@ -216,6 +222,60 @@ fn build(
 mod packed_array_tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn wide_nominal_private_offsets_follow_backend_not_c_or_concatenation() {
+        use crate::compiler::frontend;
+        let program = frontend::parse("#[repr(C)]struct Wide{a:u8,b:u8,c:u128,d:u8}fn make()->Wide{Wide{a:1,b:2,c:3,d:4}}fn main(){}").unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let index = program
+            .functions
+            .iter()
+            .position(|function| {
+                function.name.anchor() == frontend::PathAnchor::Crate
+                    && function.name.len() == 1
+                    && program.names.spelling(function.name.segments()[0]).unwrap() == "make"
+            })
+            .unwrap();
+        let checked =
+            frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+        let ty = checked.result.clone();
+        let ir::Ty::Struct(structure) = &ty else {
+            panic!("nominal result required")
+        };
+        let owner = structure.def().source_decl;
+        let budget = ir::PlanBudget::default();
+        assert!(of(&ty, &|_| false, &budget).is_err());
+        let layout = of(&ty, &|decl| decl == owner, &budget).unwrap();
+        assert_eq!(
+            (layout.size, layout.align, layout.private_size),
+            (48, 16, 48)
+        );
+        assert_eq!(layout.fields, [0, 1, 16, 32]);
+        let offsets: Vec<_> = layout
+            .leaves
+            .iter()
+            .map(|leaf| (leaf.c_offset, leaf.private_offset))
+            .collect();
+        assert_eq!(offsets, [(0, 0), (1, 8), (16, 16), (24, 24), (32, 32)]);
+        for index in 0..4 {
+            let (offset, _) = backend::field_offset(&ty, index, &budget).unwrap();
+            assert_eq!(offset as usize, [0, 8, 16, 32][index]);
+        }
+        let array = ir::Ty::Array {
+            element: Arc::new(ty),
+            len: 2,
+        };
+        let layout = of(&array, &|decl| decl == owner, &budget).unwrap();
+        assert_eq!(
+            (layout.size, layout.align, layout.private_size),
+            (96, 16, 96)
+        );
+        for (index, leaf) in layout.leaves.iter().enumerate() {
+            assert_eq!(leaf.c_offset, offsets[index % 5].0 + index / 5 * 48);
+            assert_eq!(leaf.private_offset, offsets[index % 5].1 + index / 5 * 48);
+        }
+    }
 
     #[test]
     fn packed_array_private_leaves_follow_memory_not_carrier_extents() {

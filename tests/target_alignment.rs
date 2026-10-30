@@ -321,6 +321,120 @@ fn main(){
 }
 
 #[test]
+fn physical_nominal_wide_field_exact_wrong_code_regression() {
+    physical_matches_stock(
+        r#"
+struct S { a: u8, b: u128 }
+fn observe(s: &S) { println!("{} {}", (&s.b as *const u128 as usize) % 16, s.b); }
+fn main() { let value = S { a: 1, b: 7 }; observe(&value); assert_eq!(value.a, 1); }
+"#,
+        "nominal-wide-exact",
+    );
+}
+
+#[test]
+fn physical_nominal_tuple_enum_fields_copies_owners_and_drop_match_stock() {
+    physical_matches_stock(
+        r#"
+#[derive(Clone, Copy)]
+struct Wide { head: u8, value: u128, tail: u8 }
+#[derive(Clone, Copy)]
+struct Nest { head: u8, inner: Wide, tail: (u8, u128, u8) }
+fn aligned(value: &u128) { assert_eq!(value as *const u128 as usize % 16usize, 0usize); }
+fn inspect(value: &Wide) {
+    aligned(&value.value);
+    assert_eq!(value.head, 3u8);
+    assert_eq!(value.value, 18446744073709551623u128);
+    assert_eq!(value.tail, 5u8);
+}
+fn relay(value: Nest, guard: u64) -> Nest {
+    assert_eq!(guard, 123u64);
+    assert_eq!(&value as *const Nest as usize % 16usize, 0usize);
+    assert_eq!(&value.inner as *const Wide as usize % 16usize, 0usize);
+    inspect(&value.inner);
+    aligned(&value.tail.1);
+    assert_eq!(value.tail.0, 7u8);
+    assert_eq!(value.tail.1, 36893488147419103241u128);
+    assert_eq!(value.tail.2, 11u8);
+    value
+}
+enum Choice { Empty, Data(u8, Wide, u128, u8) }
+fn enum_relay(value: Choice, guard: u64) -> Choice { assert_eq!(guard, 97u64); value }
+struct Dropped { head: u8, value: u128, tail: u8 }
+impl Drop for Dropped {
+    fn drop(&mut self) {
+        aligned(&self.value);
+        assert_eq!(self.head, 13u8);
+        assert_eq!(self.value, 55340232221128654859u128);
+        assert_eq!(self.tail, 17u8);
+        println!("drop aligned");
+    }
+}
+enum Owned { Empty, Data(u8, Dropped, u128, u8) }
+fn owned(value: Owned) -> Owned { value }
+fn main() {
+    let before = 71u64;
+    let value = Wide { head: 3, value: 18446744073709551623u128, tail: 5 };
+    inspect(&value);
+    assert_eq!(&value as *const Wide as usize % 16usize, 0usize);
+    let nested = Nest { head: 19, inner: value, tail: (7, 36893488147419103241u128, 11) };
+    let copied = relay(nested, 123);
+    inspect(&nested.inner);
+    inspect(&copied.inner);
+    assert_eq!(copied.head, 19u8);
+    let array = [value; 3];
+    let dynamic = 1usize;
+    inspect(&array[0]); inspect(&array[dynamic]); inspect(&array[2]);
+    let boxed = Box::new(copied); inspect(&boxed.inner); aligned(&boxed.tail.1);
+    let shared = std::rc::Rc::new(value); let cloned = shared.clone();
+    inspect(&*shared); inspect(&*cloned);
+    let mut values = Vec::new(); values.push(value); values.push(value); values.push(value);
+    inspect(&values[0]); inspect(&values[dynamic]); inspect(&values[2]);
+    match enum_relay(Choice::Data(23, value, 73786976294838206477u128, 29), 97) {
+        Choice::Empty => panic!("wrong tag"),
+        Choice::Data(ref head, ref inner, ref wide, ref tail) => {
+            assert_eq!(*head, 23u8); inspect(inner); aligned(wide);
+            assert_eq!(*wide, 73786976294838206477u128); assert_eq!(*tail, 29u8);
+        }
+    }
+    match enum_relay(Choice::Empty, 97) { Choice::Empty => {}, Choice::Data(_,_,_,_) => panic!("wrong tag") }
+    {
+        let aggregate = owned(Owned::Data(31, Dropped { head: 13, value: 55340232221128654859u128, tail: 17 }, 41u128, 43));
+        match &aggregate {
+            Owned::Empty => panic!("wrong owner tag"),
+            Owned::Data(head, inner, wide, tail) => {
+                assert_eq!(*head, 31u8); aligned(&inner.value); aligned(wide);
+                assert_eq!(*wide, 41u128); assert_eq!(*tail, 43u8);
+            }
+        }
+    }
+    {
+        let boxed_drop = Box::new(Dropped { head: 13, value: 55340232221128654859u128, tail: 17 });
+        // Drop observes the wide field in its original Box allocation.
+    }
+    {
+        let shared_drop = std::rc::Rc::new(Dropped { head: 13, value: 55340232221128654859u128, tail: 17 });
+        let _cloned_drop = shared_drop.clone();
+        // The final Rc owner must run Drop at the original aligned address.
+    }
+    {
+        let mut dropped_values = Vec::new();
+        dropped_values.push(Dropped { head: 13, value: 55340232221128654859u128, tail: 17 });
+        dropped_values.push(Dropped { head: 13, value: 55340232221128654859u128, tail: 17 });
+        // Both Vec elements run Drop in place after growth and transport.
+    }
+    let _empty = owned(Owned::Empty);
+    let after = 73u64;
+    assert_eq!(before, 71u64); assert_eq!(after, 73u64);
+    println!("nominal tuple enum aligned");
+}
+
+"#,
+        "nominal-wide-transport",
+    );
+}
+
+#[test]
 fn physical_u16_byte_reinterpretation_matches_stock() {
     physical_matches_stock(
         r#"fn main(){let a=[257u16,513u16];let p=&a[0]as *const u16;let bytes=p as *const u8;unsafe{println!("{} {} {} {}",*bytes,*bytes.add(1usize),*bytes.add(2usize),*bytes.add(3usize));}}"#,

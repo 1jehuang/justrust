@@ -18,8 +18,9 @@
 //! interoperability ABI.
 //! Aggregate layout is private: ordinary scalar/unit leaves occupy eight bytes,
 //! wide integer leaves occupy sixteen bytes,
-//! tuples and nominal structs concatenate their fields. Payload enums contain
-//! an eight-byte tag followed by the largest variant's concatenated fields.
+//! tuples and nominal structs align fields and round their extent to their
+//! maximum alignment. Payload enums contain an eight-byte tag followed by
+//! aligned variant fields, rounded to the maximum variant alignment.
 //! Any non-unit variant shape makes the entire enum use aggregate transport,
 //! including unit variants of that enum and zero-field tuple/struct variants.
 //! Arrays are always indirect and concatenate exact scalar/nested-array memory
@@ -278,30 +279,30 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
             .ok_or_else(|| "unsupported: array exceeds the native 1 MiB frame limit".into());
     }
     if let ir::Ty::Enum(ty) = ty {
-        let payload = ty
-            .def()
-            .variants
-            .iter()
-            .try_fold(0_i32, |largest, variant| {
-                let fields = variant.fields.read(budget)?;
-                let size = fields.iter().try_fold(0_i32, |size, field| {
-                    size.checked_add(value_size(&field.ty, budget)?)
-                        .filter(|size| *size <= MAX_FRAME_BYTES - 8)
-                        .ok_or_else(|| "enum payload exceeds private frame limit".to_string())
-                })?;
-                Ok::<_, String>(largest.max(size))
-            })?;
-        return Ok(8 + payload);
+        let mut size = 8;
+        for variant in ty.def().variants.iter() {
+            let fields = variant.fields.read(budget)?;
+            let mut end = 8;
+            for field in fields.iter() {
+                end = private_field_end(end, &field.ty, budget)?;
+            }
+            size = size.max(end);
+        }
+        return align_frame(
+            size,
+            frame_value_alignment(&ir::Ty::Enum(ty.clone()), budget)?,
+        );
     }
     match ty.field_count() {
-        Some(fields) => (0..fields).try_fold(0_i32, |size, index| {
-            let field = ty
-                .field_ty(index, budget)?
-                .ok_or("invalid checked aggregate field")?;
-            size.checked_add(value_size(&field, budget)?)
-                .filter(|size| *size <= MAX_FRAME_BYTES)
-                .ok_or_else(|| "aggregate exceeds private frame limit".to_string())
-        }),
+        Some(fields) => {
+            let size = (0..fields).try_fold(0_i32, |size, index| {
+                let field = ty
+                    .field_ty(index, budget)?
+                    .ok_or("invalid checked aggregate field")?;
+                private_field_end(size, &field, budget)
+            })?;
+            align_frame(size, frame_value_alignment(ty, budget)?)
+        }
         None => match ty {
             ir::Ty::Int(_)
             | ir::Ty::Float(_)
@@ -371,7 +372,7 @@ fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     }
 }
 
-fn field_offset(
+pub(super) fn field_offset(
     ty: &ir::Ty,
     index: usize,
     budget: &ir::PlanBudget,
@@ -383,11 +384,12 @@ fn field_offset(
         let ty = ty
             .field_ty(index, budget)?
             .ok_or("invalid checked aggregate field")?;
-        offset
-            .checked_add(value_size(&ty, budget)?)
-            .ok_or_else(|| "aggregate layout too large".to_string())
+        private_field_end(offset, &ty, budget)
     })?;
-    Ok((offset, field))
+    Ok((
+        align_frame(offset, frame_value_alignment(&field, budget)?)?,
+        field,
+    ))
 }
 
 fn array_offset(
@@ -408,15 +410,59 @@ fn array_offset(
     Ok((offset, element.as_ref().clone()))
 }
 
-/// Only primitive/recursive-array frame alignment is claimed here. Nominal
-/// field offsets still follow the independent private aggregate layout.
+/// Private carrier field placement, not public Rust size or ABI layout.
+fn private_field_end(offset: i32, ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    align_frame(offset, frame_value_alignment(ty, budget)?)?
+        .checked_add(value_size(ty, budget)?)
+        .filter(|end| *end <= MAX_FRAME_BYTES)
+        .ok_or_else(|| "aggregate exceeds private frame limit".into())
+}
+
+fn enum_field_offset(
+    fields: &[ir::FieldDef],
+    index: usize,
+    budget: &ir::PlanBudget,
+) -> Result<i32, String> {
+    let field = fields.get(index).ok_or("invalid enum payload field")?;
+    let end = fields[..index].iter().try_fold(8, |offset, field| {
+        private_field_end(offset, &field.ty, budget)
+    })?;
+    align_frame(end, frame_value_alignment(&field.ty, budget)?)
+}
+
+/// Recursively align owning carriers, retaining eight-byte minimum storage.
 fn frame_value_alignment(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
-    let mut leaf = ty;
-    loop {
-        budget.charge_work(1)?;
-        match leaf {
-            ir::Ty::Array { element, .. } => leaf = element,
-            _ => return Ok(if wide_integer(leaf) { 16 } else { 8 }),
+    private_alignment(ty, budget, 0)
+}
+
+fn private_alignment(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<i32, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    if wide_integer(ty) {
+        return Ok(16);
+    }
+    match ty {
+        ir::Ty::Array { element, .. } => private_alignment(element, budget, depth + 1),
+        ir::Ty::Enum(enumeration) => {
+            let mut alignment = 8;
+            for variant in enumeration.def().variants.iter() {
+                for field in variant.fields.read(budget)?.iter() {
+                    alignment = alignment.max(private_alignment(&field.ty, budget, depth + 1)?);
+                }
+            }
+            Ok(alignment)
+        }
+        _ => {
+            let mut alignment = 8;
+            if let Some(count) = ty.field_count() {
+                for index in 0..count {
+                    let field = ty
+                        .field_ty(index, budget)?
+                        .ok_or("invalid checked aggregate field")?;
+                    alignment = alignment.max(private_alignment(&field, budget, depth + 1)?);
+                }
+            }
+            Ok(alignment)
         }
     }
 }
@@ -829,11 +875,8 @@ impl<'a> Emitter<'a> {
                     };
                     let fields = definition.fields.read(self.concrete.facts().budget())?;
                     let field = fields.get(*index).ok_or("invalid downcast payload field")?;
-                    let offset = fields[..*index].iter().try_fold(8_i32, |offset, field| {
-                        offset
-                            .checked_add(value_size(&field.ty, self.concrete.facts().budget())?)
-                            .ok_or_else(|| "enum projection offset too large".to_string())
-                    })?;
+                    let offset =
+                        enum_field_offset(&fields, *index, self.concrete.facts().budget())?;
                     (offset, field.ty.clone())
                 }
             };
@@ -1296,11 +1339,11 @@ impl<'a> Emitter<'a> {
                     for (index, field) in fields {
                         let field_definitions =
                             definition.fields.read(self.concrete.facts().budget())?;
-                        let offset =
-                            field_definitions[..*index].iter().try_fold(8_i32, |o, f| {
-                                o.checked_add(value_size(&f.ty, self.concrete.facts().budget())?)
-                                    .ok_or_else(|| "enum payload too large".to_string())
-                            })?;
+                        let offset = enum_field_offset(
+                            &field_definitions,
+                            *index,
+                            self.concrete.facts().budget(),
+                        )?;
                         self.drop_at_offset(offset, field)?;
                     }
                     let here = self.position();
@@ -1572,16 +1615,10 @@ impl<'a> Emitter<'a> {
                         let field_definitions =
                             definition.fields.read(self.concrete.facts().budget())?;
                         for (index, field) in fields {
-                            let offset = field_definitions[..*index].iter().try_fold(
-                                8_i32,
-                                |offset, field| {
-                                    offset
-                                        .checked_add(value_size(
-                                            &field.ty,
-                                            self.concrete.facts().budget(),
-                                        )?)
-                                        .ok_or_else(|| "enum payload too large".to_string())
-                                },
+                            let offset = enum_field_offset(
+                                &field_definitions,
+                                *index,
+                                self.concrete.facts().budget(),
                             )?;
                             self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x05]);
                             self.i32(offset);
@@ -1802,16 +1839,17 @@ impl<'a> Emitter<'a> {
         }
         self.immediate(tag);
         self.store_value(scratch, &ir::Ty::Int(ir::IntTy::I32))?;
-        let mut offset = scratch
-            .checked_add(8)
-            .ok_or("enum payload offset too large")?;
         let field_definitions = definition.fields.read(self.concrete.facts().budget())?;
-        for (operand, field) in fields.iter().zip(field_definitions.iter()) {
+        for (index, (operand, field)) in fields.iter().zip(field_definitions.iter()).enumerate() {
+            let offset = scratch
+                .checked_add(enum_field_offset(
+                    &field_definitions,
+                    index,
+                    self.concrete.facts().budget(),
+                )?)
+                .ok_or("enum payload offset too large")?;
             self.operand(operand)?;
             self.store_value(offset, &field.ty)?;
-            offset = offset
-                .checked_add(value_size(&field.ty, self.concrete.facts().budget())?)
-                .ok_or("enum payload offset too large")?;
         }
         self.address(scratch);
         Ok(())
@@ -5666,18 +5704,18 @@ mod tests {
             assert_eq!(indirect(&reference, &ir::PlanBudget::default()), Ok(false));
             let tuple =
                 ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U8), ty.clone(), ir::Ty::Bool].into());
-            assert_eq!(value_size(&tuple, &ir::PlanBudget::default()), Ok(32));
+            assert_eq!(value_size(&tuple, &ir::PlanBudget::default()), Ok(48));
             assert_eq!(
                 field_offset(&tuple, 1, &ir::PlanBudget::default())
                     .unwrap()
                     .0,
-                8
+                16
             );
             assert_eq!(
                 field_offset(&tuple, 2, &ir::PlanBudget::default())
                     .unwrap()
                     .0,
-                24
+                32
             );
             let array = ir::Ty::Array {
                 element: std::sync::Arc::new(ty.clone()),
@@ -5703,7 +5741,7 @@ mod tests {
                 element: std::sync::Arc::new(empty.clone()),
                 len: 2,
             };
-            for aligned in [&ty, &array, &empty, &nested] {
+            for aligned in [&ty, &tuple, &array, &empty, &nested] {
                 for initial in 0..16 {
                     let budget = ir::PlanBudget::default();
                     let mut frame = initial;
@@ -5713,6 +5751,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn private_nominal_enum_layout_aligns_fields_extent_and_owning_base() {
+        let program = frontend::parse("struct Wide{a:u8,b:u128}enum E{Empty,Data(u8,Wide,u128,u8)}fn make()->E{E::Empty}fn main(){}").unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let index = authored_function(&program, "make");
+        let checked =
+            frontend::type_function_with_signatures(&program, index, &signatures).unwrap();
+        let ty = checked.result.clone();
+        let ir::Ty::Enum(enumeration) = &ty else {
+            panic!("enum result required")
+        };
+        let budget = ir::PlanBudget::default();
+        let fields = enumeration.def().variants[1].fields.read(&budget).unwrap();
+        assert_eq!(frame_value_alignment(&ty, &budget).unwrap(), 16);
+        assert_eq!(value_size(&ty, &budget).unwrap(), 80);
+        for (index, expected) in [8, 16, 48, 64].into_iter().enumerate() {
+            assert_eq!(
+                enum_field_offset(&fields, index, &budget).unwrap(),
+                expected
+            );
+        }
+        assert_eq!(value_size(&fields[1].ty, &budget).unwrap(), 32);
+        assert_eq!(field_offset(&fields[1].ty, 1, &budget).unwrap().0, 16);
+        let nested = ir::Ty::Tuple(vec![ir::Ty::Bool, ty.clone(), ir::Ty::Bool].into());
+        assert_eq!(value_size(&nested, &budget).unwrap(), 112);
+        assert_eq!(field_offset(&nested, 1, &budget).unwrap().0, 16);
+        assert_eq!(field_offset(&nested, 2, &budget).unwrap().0, 96);
+        for aligned in [&ty, &nested] {
+            for initial in 0..16 {
+                let mut frame = initial;
+                let offset = allocate_value(&mut frame, aligned, &budget).unwrap();
+                assert_eq!(offset % 16, 0);
+                assert!(-offset >= initial + value_size(aligned, &budget).unwrap());
+            }
+        }
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 0,
+            ..Default::default()
+        });
+        assert!(frame_value_alignment(&nested, &limited).is_err());
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(frame_value_alignment(&nested, &limited).is_err());
     }
 
     #[test]
@@ -6183,8 +6268,10 @@ mod tests {
             (ir::Ty::Float(ir::FloatTy::F32), 4),
             (ir::Ty::Bool, 1),
             (
+                // Sixteen-byte wide field, eight-byte bool carrier, then
+                // eight-byte tail padding so every tuple element is aligned.
                 ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U128), ir::Ty::Bool].into()),
-                24,
+                32,
             ),
             (
                 ir::Ty::Array {
@@ -6389,8 +6476,18 @@ mod tests {
             Some(42)
         );
         let tuple = ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U128), ir::Ty::Bool].into());
+        // Private tuple extent is 32, not the old concatenated 24 bytes.
+        // Initialize both tail-padding words distinctly and check the full
+        // second snapshot after the helper destroys all original backing.
         assert_eq!(
-            run_typed_slice_helper(&tuple, &[3, 4, 1, 5, 6, 0], &[5, 6, 0], 1, 2, None),
+            run_typed_slice_helper(
+                &tuple,
+                &[3, 4, 1, 0x1111, 5, 6, 0, 0x2222],
+                &[5, 6, 0, 0x2222],
+                1,
+                2,
+                None
+            ),
             Some(42)
         );
         let large = ir::Ty::Array {
