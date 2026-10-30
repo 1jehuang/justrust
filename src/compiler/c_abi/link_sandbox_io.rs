@@ -507,6 +507,19 @@ impl Broker {
         };
         let bytes = canonical_stat(identity, mode, size);
         let destination = request.data.args[1];
+        self.copy_output(listener, request, destination, &bytes)
+    }
+
+    /// Both metadata and virtual uname are policy bytes, never host syscall
+    /// results. Keep the same pinned-process writable-range and notification
+    /// checks for every emulated output-bearing syscall.
+    fn copy_output(
+        &self,
+        listener: i32,
+        request: &Notification,
+        destination: u64,
+        bytes: &[u8],
+    ) -> io::Result<()> {
         let mappings = self.mappings()?;
         if !permitted_range(&mappings, destination, bytes.len(), true) {
             return respond(listener, request.id, 14);
@@ -550,6 +563,9 @@ impl Broker {
         }
         if request.data.number == 5 {
             return self.stat_descriptor(fd, &request);
+        }
+        if request.data.number == 63 {
+            return self.copy_output(fd, &request, request.data.args[0], &canonical_uname());
         }
         let (pointer, flags, mode, dirfd) = match request.data.number {
             59 => return respond(fd, request.id, 13),
@@ -703,6 +719,29 @@ fn virtual_identity(kind: &[u8], name: &[u8]) -> [u8; 16] {
     hash.update(&[0]);
     hash.update(name);
     hash.finalize().as_bytes()[..16].try_into().unwrap()
+}
+
+// The captured glibc loader may require uname when the vDSO is sealed. This
+// describes the virtual linker environment, not the running host. The Linux
+// 3.2 release is a fixed virtual ABI baseline, not a grant of additional
+// syscalls or a claim about the host. Changing these bytes requires changing
+// ControlledToolchain::policy.
+fn canonical_uname() -> [u8; 390] {
+    let mut bytes = [0; 390];
+    for (field, value) in [
+        b"Linux".as_slice(),
+        b"justrust-link",
+        b"3.2.0",
+        b"justrust-controlled-v17",
+        b"x86_64",
+        b"(none)",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        bytes[field * 65..field * 65 + value.len()].copy_from_slice(value);
+    }
+    bytes
 }
 
 fn canonical_stat(identity: [u8; 16], mode: u32, size: u64) -> [u8; 144] {

@@ -99,7 +99,7 @@ pub(super) fn confine(
     // Even denied Landlock opens distinguish missing host paths from existing
     // ones. Never issue them in the child: the parent copies and resolves the
     // request solely beneath captured directory handles, then injects the fd.
-    for number in [2, 5, 59, 257] {
+    for number in [2, 5, 59, 63, 257] {
         filter.extend([
             instruction(0x15, 0, 1, number),
             instruction(0x06, 0, 0, 0x7fc00000),

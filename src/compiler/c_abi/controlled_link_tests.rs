@@ -632,6 +632,7 @@ __attribute__((force_align_arg_pointer)) void _start(void){{
  if(call(10,region+4096,4096,0)!=0)die(62);
  char *edge=(char*)(region+4090);edge[0]='i';edge[1]='n';edge[2]='p';edge[3]='u';edge[4]='t';edge[5]=0;
  if(call(2,region+4096,0,0)!=-14)die(63);
+ if(call(63,region+4090,0,0)!=-14)die(107);
  long edgefd=call(2,(long)edge,0,0);if(edgefd<0)die(64);
  if(call(28,region,4096,100)!=-1||call(28,region,4096,101)!=-1)die(67);
  if(call(28,region,4096,9999)!=-1)die(68);
@@ -650,7 +651,18 @@ __attribute__((force_align_arg_pointer)) void _start(void){{
  if(call(302,1,0,0)!=-1)die(13);
  // Raw syscalls deliberately bypass libc/vDSO. Valid writable output buffers
  // and invalid arguments must both receive uniform EPERM without writes.
- static const long observations[]={{39,63,79,95,96,97,98,99,100,102,104,107,108,110,115,118,120,121,124,125,186,201,204,228,229,309}};
+ // uname is broker-synthesized policy data, never a host observation.
+ unsigned char uts[400];
+ for(long i=0;i<400;i++)uts[i]=0xa5;
+ if(call(63,(long)uts,0,0)!=0)die(108);
+ const char *fields[]={{"Linux","justrust-link","3.2.0","justrust-controlled-v17","x86_64","(none)"}};
+ for(long f=0;f<6;f++){{
+  long n=0;while(fields[f][n]){{if(uts[f*65+n]!=(unsigned char)fields[f][n])die(109);n++;}}
+  for(;n<65;n++)if(uts[f*65+n])die(110);
+ }}
+ for(long i=390;i<400;i++)if(uts[i]!=0xa5)die(111);
+ if(call(63,0,0,0)!=-14||call(63,(long)readonly_stat,0,0)!=-14)die(112);
+ static const long observations[]={{39,79,95,96,97,98,99,100,102,104,107,108,110,115,118,120,121,124,125,186,201,204,228,229,309}};
  volatile unsigned char observation[512];
  for(long i=0;i<512;i++)observation[i]=0xa5;
  for(long i=0;i<(long)(sizeof observations/sizeof observations[0]);i++){{
