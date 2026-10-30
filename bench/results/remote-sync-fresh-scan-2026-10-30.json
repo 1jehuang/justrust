@@ -1,0 +1,40 @@
+{
+  "experiment": "fresh-source-scan-components",
+  "date": "2026-10-30",
+  "profile": "unoptimized test",
+  "scope": "Component diagnostics only, not broad or end-to-end build claims",
+  "bulk_builder": {
+    "samples": 7,
+    "inputs": "Same captured observation rows per paired builder, cloning outside timers, exact map equality each pair",
+    "vendored": {"files": 68226, "oversized": 4, "insert_median_ns": 194609398, "bulk_median_ns": 58952783, "run": "20261029-212244253-2843888"},
+    "jcode": {"files": 2659, "oversized": 7, "insert_median_ns": 5022622, "bulk_median_ns": 2358281, "run": "20261029-212333422-2850094"}
+  },
+  "discovery_before_production_integration": {
+    "samples": 7,
+    "equality": "Exact raw primary NUL bytes and ignored lockfile vectors each pair",
+    "vendored": {"serial_median_ns": 624263379, "parallel_median_ns": 431569108, "run": "20261029-212602272-2872756"},
+    "jcode": {"serial_median_ns": 17103358, "parallel_median_ns": 11585332, "run": "20261029-212624106-2876465"}
+  },
+  "discovery_production_helper": {
+    "samples": 7,
+    "equality": "Exact raw primary NUL bytes and ignored lockfile vectors each pair",
+    "vendored": {"serial_median_ns": 720369584, "parallel_median_ns": 568181677, "run": "20261029-212754243-2896909"},
+    "jcode": {"serial_median_ns": 27628927, "parallel_median_ns": 19970789, "run": "20261029-212825733-2904953"}
+  },
+  "whole_scans": {
+    "original": {"files": 68225, "elapsed_ns": [853529943, 865847243, 778138343]},
+    "bulk_only": {"files": 68226, "elapsed_ns": [772257018, 751795896, 664273909]},
+    "bulk_and_concurrent_discovery": {"files": 68227, "elapsed_ns": [832636954, 639168500, 627087818], "run": "20261029-212827676-2906128"},
+    "limitation": "Discovery counts and CPU contention changed between batches. These are observations, not controlled overall speed ratios."
+  },
+  "validation": {
+    "bulk_hosted_check": "20261029-212423809-2855980",
+    "bulk_hosted_16_tests": "20261029-212427325-2855979",
+    "bulk_hosted_clippy": "20261029-212352187-2840750",
+    "final_local_maintenance_exception": true,
+    "final_check": "20261029-212747947-2895882",
+    "final_17_tests": "20261029-212754478-2896996",
+    "final_clippy": "20261029-212902917-2922505",
+    "final_hosted_verification": "Coordinator after scheduled fleet maintenance"
+  }
+}

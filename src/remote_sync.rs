@@ -44,11 +44,7 @@ pub struct Scan {
 /// files that are not gitignored (or a plain walk outside git).
 pub fn scan(root: &Path) -> Result<Scan> {
     let mut out = Scan::default();
-    let listed = Command::new("git")
-        .args(["ls-files", "-co", "--exclude-standard", "-z"])
-        .current_dir(root)
-        .stderr(Stdio::null())
-        .output();
+    let (listed, locks) = discover_source_entries(root);
     let rels: Vec<PathBuf> = match listed {
         Ok(o) if o.status.success() => o
             .stdout
@@ -63,7 +59,7 @@ pub fn scan(root: &Path) -> Result<Scan> {
     // libraries gitignore theirs, and a machine without it resolves the
     // newest versions: different code than the local build, and nothing
     // shared with the local dependency cache. Mirror them regardless.
-    for lock in ignored_lockfiles(root) {
+    for lock in locks {
         if !rels.contains(&lock) {
             rels.push(lock);
         }
@@ -98,6 +94,31 @@ pub fn scan(root: &Path) -> Result<Scan> {
     }
     out.files = manifest_from_observed_files(files);
     Ok(out)
+}
+
+fn discover_source_entries(root: &Path) -> (std::io::Result<std::process::Output>, Vec<PathBuf>) {
+    // Both queries are fresh and read-only. Neither query depends on the other,
+    // and metadata is still observed after both complete. A source tree changing
+    // during discovery has never been an atomic snapshot, even when sequential.
+    std::thread::scope(|scope| {
+        let locks = std::thread::Builder::new().spawn_scoped(scope, || ignored_lockfiles(root));
+        let listed = Command::new("git")
+            .args(["ls-files", "-co", "--exclude-standard", "-z"])
+            .current_dir(root)
+            .stderr(Stdio::null())
+            .output();
+        (listed, complete_ignored_lockfiles(root, locks))
+    })
+}
+
+fn complete_ignored_lockfiles(
+    root: &Path,
+    pending: std::io::Result<std::thread::ScopedJoinHandle<'_, Vec<PathBuf>>>,
+) -> Vec<PathBuf> {
+    match pending {
+        Ok(job) => job.join().unwrap_or_else(|_| ignored_lockfiles(root)),
+        Err(_) => ignored_lockfiles(root),
+    }
 }
 
 fn manifest_from_observed_files(files: Vec<(PathBuf, Stamp)>) -> Manifest {
@@ -1488,6 +1509,79 @@ mod tests {
         std::fs::remove_file(d.join("cache/nested/Cargo.lock")).unwrap();
         assert!(!ignored_lockfiles(&d).contains(&PathBuf::from("cache/nested/Cargo.lock")));
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn ignored_lockfile_thread_failures_rescan_fresh() {
+        let d =
+            std::env::temp_dir().join(format!("jr-scan-thread-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&d)
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::write(d.join(".gitignore"), "Cargo.lock\n").unwrap();
+        std::fs::write(d.join("Cargo.lock"), "fresh").unwrap();
+        let expected = vec![PathBuf::from("Cargo.lock")];
+        assert_eq!(
+            complete_ignored_lockfiles(&d, Err(std::io::Error::other("injected spawn failure"))),
+            expected
+        );
+        std::thread::scope(|scope| {
+            let pending = std::thread::Builder::new()
+                .spawn_scoped(scope, || panic!("injected worker failure"));
+            assert_eq!(complete_ignored_lockfiles(&d, pending), expected);
+        });
+        std::fs::remove_file(d.join("Cargo.lock")).unwrap();
+        assert!(
+            complete_ignored_lockfiles(&d, Err(std::io::Error::other("injected spawn failure")))
+                .is_empty()
+        );
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    #[ignore = "compares fresh Git discovery scheduling on a real source tree"]
+    fn concurrent_discovery_diagnostic() {
+        use std::time::Instant;
+        let root = std::env::var_os("JUSTRUST_SCAN_BENCH_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let list = || {
+            let out = Command::new("git")
+                .args(["ls-files", "-co", "--exclude-standard", "-z"])
+                .current_dir(&root)
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            out.stdout
+        };
+        let mut serial_times = Vec::new();
+        let mut parallel_times = Vec::new();
+        for _ in 0..7 {
+            let start = Instant::now();
+            let serial_list = list();
+            let serial_locks = ignored_lockfiles(&root);
+            serial_times.push(start.elapsed().as_nanos());
+            let start = Instant::now();
+            let (parallel_list, parallel_locks) = discover_source_entries(&root);
+            let parallel_list = parallel_list.unwrap();
+            assert!(parallel_list.status.success());
+            parallel_times.push(start.elapsed().as_nanos());
+            assert_eq!(serial_list, parallel_list.stdout);
+            assert_eq!(serial_locks, parallel_locks);
+        }
+        serial_times.sort_unstable();
+        parallel_times.sort_unstable();
+        println!(
+            "fresh_discovery serial_median_ns={} parallel_median_ns={} samples=7",
+            serial_times[3], parallel_times[3]
+        );
     }
 
     /// Read-only focused diagnostic, not a substitute for bench/suite.py.
