@@ -1,0 +1,3536 @@
+{
+  "schema": 1,
+  "scope": "query-value-retention-correctness-only-no-speedup-claim",
+  "flag": "-Zjr-cache-associated-items",
+  "verify_ich": true,
+  "verdict": "passed",
+  "planned_cases": 34,
+  "completed_cases": 34,
+  "observations": [
+    {
+      "name": "initial",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "unchanged",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "body-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 8 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "1713849b420caa4acf4189f215ea99bb5aff04f39698e8c0f00a97fbc4ad5b50",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "006fa069440905d07fab0d432c83fbe7fd7a0d9d64553f21d92fe2ebd58cc5f2",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "body-revert",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "nonconst",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nfn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "const-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "ordinary-from-async",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nfn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "async-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "async-closure",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let unused = async || 9u32; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": "warning: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:4:28\n  |\n4 | fn ordinary() -> u32 { let unused = async || 9u32; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\n  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+          },
+          "artifact_sha256": "8261154b55db7b284a03e93d7bbdcb09ae28c7e3b1b86c03b2c5732792d5c50b",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": "warning: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:4:28\n  |\n4 | fn ordinary() -> u32 { let unused = async || 9u32; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\n  = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default\n\nwarning: 1 warning emitted\n\n"
+          },
+          "artifact_sha256": "59b187ae6188dde4192e6404be7d128de7ef20c4b19bdf7d4dcf1dd29bff0645",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "nested-owner-add",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } fn extra() -> u32 { 1 } nested() + extra() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "9be11c7602d1bbb73d53750376e20bed65f7ac9ce0def97757170ee50a3fe201",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "5b76589e13d7fb7197d67b75f1de94a3fa6962713ade8baeabaf6128251050fa",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "owner-remove",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "447928e843c3238394edd10494a4280beb74c91f79d562fb1a3657cd36a220df",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "b06aacd89f1c57eefe58d938926b5cbbc7183bfca8834cddd0c7aa371a96fb7b",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "owner-add",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n\nmod added { pub const fn item() -> u32 { 12 } }\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "owner-reorder",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nasync fn asynchronous() -> u32 { 3 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nconst fn value() -> u32 { 7 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "macro-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 5u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "b2fd31d6b80524803923de35c494161092dead7c4c1b734419b896cbbba659cf",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "25f5f4817cd88199314196f76b31c55d107e639c8fe7595a9c775b5636cacd5f",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "macro-revert",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "lint-error",
+      "expected_stdout": null,
+      "source": "#![deny(unused_variables)]\n#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let unused = 0; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:5:28\n  |\n5 | fn ordinary() -> u32 { let unused = 0; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\nnote: the lint level is defined here\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:1:9\n  |\n1 | #![deny(unused_variables)]\n  |         ^^^^^^^^^^^^^^^^\n\nerror: aborting due to 1 previous error\n\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error: unused variable: `unused`\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:5:28\n  |\n5 | fn ordinary() -> u32 { let unused = 0; let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\n  |                            ^^^^^^ help: if this is intentional, prefix it with an underscore: `_unused`\n  |\nnote: the lint level is defined here\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:1:9\n  |\n1 | #![deny(unused_variables)]\n  |         ^^^^^^^^^^^^^^^^\n\nerror: aborting due to 1 previous error\n\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "lint-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "type-error",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { \"wrong\" }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:3:27\n  |\n3 | const fn value() -> u32 { \"wrong\" }\n  |                     ---   ^^^^^^^ expected `u32`, found `&str`\n  |                     |\n  |                     expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:3:27\n  |\n3 | const fn value() -> u32 { \"wrong\" }\n  |                     ---   ^^^^^^^ expected `u32`, found `&str`\n  |                     |\n  |                     expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "type-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "dependency-signature",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u64) as u32); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u64) -> u64 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ae48b7f69a64ed9b665ffa1e268f829d5674f1ada40644172bb96d2d0c3e5149",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "f4d5115e14606884fc1c62a72b2b9460c0ad7e6d9a79220bb6ab111b846b72ab",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "dependency-mismatch",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u64) -> u64 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:7:138\n  |\n7 | ... Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                      --------------------- ^^^^ expected `u64`, found `u32`\n  |                                      |\n  |                                      arguments to this function are incorrect\n  |\nnote: function defined here\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs:1:8\n  |\n1 | pub fn number(x: u64) -> u64 { x + 1 }\n  |        ^^^^^^\nhelp: change the type of the numeric literal from `u32` to `u64`\n  |\n7 - fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u64)); }\n  |\n\nerror[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:7:116\n  |\n7 | ...2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `u64`\n\nerror[E0277]: cannot add `u64` to `u32`\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:7:114\n  |\n7 | ...(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                                   ^ no implementation for `u32 + u64`\n  |\n  = help: the trait `Add<u64>` is not implemented for `u32`\nhelp: the following other types implement trait `Add<Rhs>`\n --> library/core/src/ops/arith.rs:98:8\n  |\n  = note: `u32` implements `Add`\n ::: library/core/src/ops/arith.rs:113:0\n  |\n  = note: in this macro invocation\n --> library/core/src/internal_macros.rs:22:8\n  |\n  = note: `&u32` implements `Add<u32>`\n ::: library/core/src/internal_macros.rs:33:8\n  |\n  = note: `u32` implements `Add<&u32>`\n ::: library/core/src/internal_macros.rs:44:8\n  |\n  = note: `&u32` implements `Add`\n  = note: this error originates in the macro `add_impl` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 3 previous errors\n\nSome errors have detailed explanations: E0277, E0308.\nFor more information about an error, try `rustc --explain E0277`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:7:138\n  |\n7 | ... Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                      --------------------- ^^^^ expected `u64`, found `u32`\n  |                                      |\n  |                                      arguments to this function are incorrect\n  |\nnote: function defined here\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs:1:8\n  |\n1 | pub fn number(x: u64) -> u64 { x + 1 }\n  |        ^^^^^^\nhelp: change the type of the numeric literal from `u32` to `u64`\n  |\n7 - fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u64)); }\n  |\n\nerror[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:7:116\n  |\n7 | ...2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u32`, found `u64`\n\nerror[E0277]: cannot add `u64` to `u32`\n --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:7:114\n  |\n7 | ...(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1u32)); }\n  |                                                   ^ no implementation for `u32 + u64`\n  |\n  = help: the trait `Add<u64>` is not implemented for `u32`\nhelp: the following other types implement trait `Add<Rhs>`\n --> library/core/src/ops/arith.rs:98:8\n  |\n  = note: `u32` implements `Add`\n ::: library/core/src/ops/arith.rs:113:0\n  |\n  = note: in this macro invocation\n --> library/core/src/internal_macros.rs:22:8\n  |\n  = note: `&u32` implements `Add<u32>`\n ::: library/core/src/internal_macros.rs:33:8\n  |\n  = note: `u32` implements `Add<&u32>`\n ::: library/core/src/internal_macros.rs:44:8\n  |\n  = note: `&u32` implements `Add`\n  = note: this error originates in the macro `add_impl` (in Nightly builds, run with -Z macro-backtrace for more info)\n\nerror: aborting due to 3 previous errors\n\nSome errors have detailed explanations: E0277, E0308.\nFor more information about an error, try `rustc --explain E0277`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "dependency-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "trait-method-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 3 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "3c3d98f192aaf19e8464dbb2213e0ed7d1bb9924513bf6a9d2220394dd1e4da2",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "84a10c58bcdddd77fc4c181c66d56986a71256aae518c2136bcdead1437c6205",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "trait-method-revert",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-type-edit",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u64;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-const-edit",
+      "expected_stdout": "16\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 1;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "3c3d98f192aaf19e8464dbb2213e0ed7d1bb9924513bf6a9d2220394dd1e4da2",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "84a10c58bcdddd77fc4c181c66d56986a71256aae518c2136bcdead1437c6205",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "16\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-add",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output; fn added(&self) -> u8 { 4 }\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-reorder",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    const BIAS: u32;\n    type Output;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "rpitit-edit",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u16 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "symbol-churn",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\n#[allow(dead_code)] mod churn { struct Zebra; struct Alpha; }\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "5cf0e72a7391b9c156c0fd089bff638a382bd6b4acc6336b5a925875813ca3c7",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "e9aa8f61398f184f9a524516ef536d3161fe422ca87586d9f1dc380885052e36",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    },
+    {
+      "name": "missing-associated-item",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    \n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0046]: not all trait items implemented, missing: `Output`\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:16:1\n   |\n10 |     type Output;\n   |     ----------- `Output` from trait\n...\n16 | impl Dispatch for Widget {\n   | ^^^^^^^^^^^^^^^^^^^^^^^^ missing `Output` in implementation\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0046`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0046]: not all trait items implemented, missing: `Output`\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:16:1\n   |\n10 |     type Output;\n   |     ----------- `Output` from trait\n...\n16 | impl Dispatch for Widget {\n   | ^^^^^^^^^^^^^^^^^^^^^^^^ missing `Output` in implementation\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0046`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "duplicate-associated-item",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32; type Output = u64;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0201]: duplicate definitions with name `Output`:\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:17:24\n   |\n 9 | trait Dispatch {\n10 |     type Output;\n   |     ------------ item in trait\n...\n16 | impl Dispatch for Widget {\n17 |     type Output = u32; type Output = u64;\n   |     ------------------ ^^^^^^^^^^^^^^^^^^ duplicate definition\n   |     |\n   |     previous definition here\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0201`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0201]: duplicate definitions with name `Output`:\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:17:24\n   |\n 9 | trait Dispatch {\n10 |     type Output;\n   |     ------------ item in trait\n...\n16 | impl Dispatch for Widget {\n17 |     type Output = u32; type Output = u64;\n   |     ------------------ ^^^^^^^^^^^^^^^^^^ duplicate definition\n   |     |\n   |     previous definition here\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0201`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "ambiguous-method",
+      "expected_stdout": null,
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0034]: multiple applicable items in scope\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:7:58\n   |\n 7 | fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |                                                          ^^^^^^ multiple `number` found\n   |\nnote: candidate #1 is defined in an impl of the trait `Dispatch` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:19:5\n   |\n19 |     fn number(&self) -> u32 { 2 + Self::BIAS }\n   |     ^^^^^^^^^^^^^^^^^^^^^^^\nnote: candidate #2 is defined in an impl of the trait `Other` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs:22:25\n   |\n22 | impl Other for Widget { fn number(&self) -> u32 { 90 } }\n   |                         ^^^^^^^^^^^^^^^^^^^^^^^\nhelp: disambiguate the method for candidate #1\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\nhelp: disambiguate the method for candidate #2\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Other::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0034`.\n"
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0034]: multiple applicable items in scope\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:7:58\n   |\n 7 | fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |                                                          ^^^^^^ multiple `number` found\n   |\nnote: candidate #1 is defined in an impl of the trait `Dispatch` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:19:5\n   |\n19 |     fn number(&self) -> u32 { 2 + Self::BIAS }\n   |     ^^^^^^^^^^^^^^^^^^^^^^^\nnote: candidate #2 is defined in an impl of the trait `Other` for the type `Widget`\n  --> /home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs:22:25\n   |\n22 | impl Other for Widget { fn number(&self) -> u32 { 90 } }\n   |                         ^^^^^^^^^^^^^^^^^^^^^^^\nhelp: disambiguate the method for candidate #1\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\nhelp: disambiguate the method for candidate #2\n   |\n 7 - fn main() { println!(\"{}\", value() + ordinary() + Widget.number() - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n 7 + fn main() { println!(\"{}\", value() + ordinary() + Other::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n   |\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0034`.\n"
+          }
+        }
+      }
+    },
+    {
+      "name": "associated-recovery",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + Dispatch::number(&Widget) - 2 + Widget::inherent() + amount!() + retention_dep::number(1)); }\n\ntrait Dispatch {\n    type Output;\n    const BIAS: u32;\n    fn number(&self) -> u32;\n    fn opaque(&self) -> impl Copy { 1u8 }\n}\nstruct Widget;\nimpl Dispatch for Widget {\n    type Output = u32;\n    const BIAS: u32 = 0;\n    fn number(&self) -> u32 { 2 + Self::BIAS }\n}\ntrait Other { fn number(&self) -> u32; }\nimpl Other for Widget { fn number(&self) -> u32 { 90 } }\nmacro_rules! define_inherent { () => { impl Widget { fn inherent() -> u32 { 0 } } }; }\ndefine_inherent!();\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "cb95fe0827a894aa109560f8086ef08eacd90183cf25e044c8038a9cac23e070",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/dep-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/main-incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-associated-items"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "ca1cd05157cef9434ec53784db369d0a1db7fa93877f1ae56e649bbb90466d43",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/real-associated-retention-20261030/native/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        }
+      }
+    }
+  ],
+  "compiler": {
+    "path": "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+    "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "version": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+        "-vV"
+      ],
+      "status": 0,
+      "stdout": "rustc 1.101.0-nightly (4fb57f3c1 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 4fb57f3c14a7ae129fdb98ed91c2f90a1571b33e\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "stderr": ""
+    }
+  },
+  "sysroot_query": {
+    "command": [
+      "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+      "--print",
+      "sysroot"
+    ],
+    "status": 0,
+    "stdout": "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot\n",
+    "stderr": ""
+  },
+  "drivers": [
+    {
+      "path": "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "8cfb723e9ffb482bdd9518251f281c5169aae7211804e9d12ff5bbb29f321569"
+    }
+  ]
+}

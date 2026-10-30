@@ -1,0 +1,13 @@
+{
+  "scope": "Read-only snapshot of retained baseline target after its body-edit run. Not a per-step baseline storage series.",
+  "files": [
+    {
+      "path": "debug/incremental/justrust-3pjduvgcb2neo/s-hnop06ai92-14wchj7-cqlrgz05rqjbt1sv3bltdk6kn/query-cache.bin",
+      "logical": 13539731,
+      "allocated": 13541376,
+      "sha256": "9c5a7b565b1b733d762d892638e923803dea69f07da1a996ab2e8cf25ae2250f"
+    }
+  ],
+  "logical": 13539731,
+  "allocated": 13541376
+}

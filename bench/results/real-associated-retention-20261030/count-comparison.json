@@ -1,0 +1,237 @@
+{
+  "schema": 1,
+  "allow_unmapped_event_labels": true,
+  "scope": "Per-invocation resolved labels and native named markers only. No numeric ID joins across invocations. No elapsed comparisons or avoided-work inference.",
+  "captures": [
+    {
+      "mode": "off",
+      "epoch": "prepare",
+      "profile_sha256": "8d57ec2e755dbdcabc36595caf69a4fb8c08e61ccf3310c1beb9f9c758c0a1d9",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "associated_items_records_by_kind": {
+        "IncrementalResultHashing": 1314,
+        "Query": 1314,
+        "QueryCacheHitCount": 1035
+      },
+      "associated_items_native_markers": {},
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 478342,
+        "IncrementalResultHashing": 325622,
+        "Query": 308560,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 186866
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": null
+    },
+    {
+      "mode": "off",
+      "epoch": "unchanged",
+      "profile_sha256": "502a8398f972976cd4363fbf9fb530baf50d9d79204621d3c8911fe09ecb4b22",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "associated_items_records_by_kind": {
+        "Query": 641
+      },
+      "associated_items_native_markers": {
+        "jr_incremental_green_recompute": 641,
+        "jr_incremental_green_query": 641
+      },
+      "unknown_records_by_kind": {
+        "QueryCacheHitCount": 12337,
+        "IncrementalLoadResult": 60754
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 412759,
+        "IncrementalResultHashing": 29630,
+        "Query": 33322,
+        "IncrementalLoadResult": 74170,
+        "QueryCacheHitCount": 43248,
+        "ArtifactSize": 3
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": null
+    },
+    {
+      "mode": "off",
+      "epoch": "body-edit",
+      "profile_sha256": "9f693e25b61d115869b5ee2f1b4ce4f9c8ffb952b578e8910bb7fbeb2a27bf71",
+      "source_sha256": "380d2c460c21db44000355fda5628eec49a9411fb59b1a0af79de662950d6786",
+      "associated_items_records_by_kind": {
+        "Query": 757,
+        "QueryCacheHitCount": 72
+      },
+      "associated_items_native_markers": {
+        "jr_incremental_green_recompute": 757,
+        "jr_incremental_green_query": 757
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 8178,
+        "IncrementalLoadResult": 3454
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 527453,
+        "IncrementalResultHashing": 31747,
+        "Query": 58014,
+        "IncrementalLoadResult": 74040,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 84480
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": null
+    },
+    {
+      "mode": "on",
+      "epoch": "prepare",
+      "profile_sha256": "6f7a089ebd9d125f1e1e1cd3620aa1a17d1c3ef202c04c204e8e512209423732",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "associated_items_records_by_kind": {
+        "IncrementalResultHashing": 1314,
+        "Query": 1314,
+        "QueryCacheHitCount": 1035
+      },
+      "associated_items_native_markers": {},
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 478342,
+        "IncrementalResultHashing": 325622,
+        "Query": 308560,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 186866
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3pjduvgcb2neo/s-hnopa33nqh-0x4bros-2gybjl2j2dbvsyvpc40prbgtz/query-cache.bin",
+            "logical": 13754779,
+            "allocated": 13758464,
+            "sha256": "4428d9b5f09ca1aaa31e70bda348ae7174a2867d5c0b47ef486fce06190efc18"
+          }
+        ],
+        "logical": 13754779,
+        "allocated": 13758464
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "unchanged",
+      "profile_sha256": "43f1759184f8a30547514ca6d474f5508d1fa1bab17468345f44fdcfcb14ffcc",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "associated_items_records_by_kind": {
+        "IncrementalLoadResult": 641
+      },
+      "associated_items_native_markers": {
+        "jr_incremental_green_query": 641
+      },
+      "unknown_records_by_kind": {
+        "QueryCacheHitCount": 12337,
+        "IncrementalLoadResult": 62237
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 411307,
+        "IncrementalResultHashing": 29630,
+        "Query": 32681,
+        "IncrementalLoadResult": 75484,
+        "QueryCacheHitCount": 42298,
+        "ArtifactSize": 3
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3pjduvgcb2neo/s-hnopagkf9x-1ugxzt8-2gybjl2j2dbvsyvpc40prbgtz/query-cache.bin",
+            "logical": 13728430,
+            "allocated": 13729792,
+            "sha256": "85b1dcafd007913db64466a378f30b9e28f65aaf0795e7699edfb5700bf5a474"
+          }
+        ],
+        "logical": 13728430,
+        "allocated": 13729792
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "body-edit",
+      "profile_sha256": "37540c9c3dda3a2388dc145e4a814a5db0635b578c52f2612a0c67294189b9c7",
+      "source_sha256": "380d2c460c21db44000355fda5628eec49a9411fb59b1a0af79de662950d6786",
+      "associated_items_records_by_kind": {
+        "IncrementalLoadResult": 757,
+        "QueryCacheHitCount": 72
+      },
+      "associated_items_native_markers": {
+        "jr_incremental_green_query": 757
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 8178,
+        "IncrementalLoadResult": 4011
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 522598,
+        "IncrementalResultHashing": 31747,
+        "Query": 55891,
+        "IncrementalLoadResult": 75354,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 83776
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3pjduvgcb2neo/s-hnopax7p0i-1ul5gr7-32rqgta3s7468b4icap8elq67/query-cache.bin",
+            "logical": 13770346,
+            "allocated": 13770752,
+            "sha256": "98fbdebe74bfe81f0e93ac1de2ce8482e526fb44b829295b948b2ee3b2b2788e"
+          }
+        ],
+        "logical": 13770346,
+        "allocated": 13770752
+      }
+    },
+    {
+      "mode": "on",
+      "epoch": "restored",
+      "profile_sha256": "86a6c765aab22f2de1e6496f772c4dda997ec56c2dccc90924341fd3e7d0ce09",
+      "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+      "associated_items_records_by_kind": {
+        "IncrementalLoadResult": 757,
+        "QueryCacheHitCount": 72
+      },
+      "associated_items_native_markers": {
+        "jr_incremental_green_query": 757
+      },
+      "unknown_records_by_kind": {
+        "IncrementalResultHashing": 1,
+        "QueryCacheHitCount": 8178,
+        "IncrementalLoadResult": 4011
+      },
+      "all_records_by_kind": {
+        "GenericActivity": 522522,
+        "IncrementalResultHashing": 31725,
+        "Query": 55843,
+        "IncrementalLoadResult": 75349,
+        "ArtifactSize": 4,
+        "QueryCacheHitCount": 83750
+      },
+      "absent_labels": "unobserved, not proof of zero work",
+      "query_cache": {
+        "files": [
+          {
+            "path": "debug/incremental/justrust-3pjduvgcb2neo/s-hnopbnx7iy-1yw29i6-2gybjl2j2dbvsyvpc40prbgtz/query-cache.bin",
+            "logical": 13769974,
+            "allocated": 13770752,
+            "sha256": "b1ae5db68a86720238ef041432ea29ab4861a731d9631813a2e4222f1b251129"
+          }
+        ],
+        "logical": 13769974,
+        "allocated": 13770752
+      }
+    }
+  ]
+}

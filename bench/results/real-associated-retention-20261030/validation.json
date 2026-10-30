@@ -1,0 +1,52 @@
+{
+  "checks": [
+    {
+      "capture": "baseline-prepare",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "capture": "baseline-unchanged",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "capture": "baseline-body-edit",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "capture": "prepare",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "capture": "unchanged",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "capture": "body-edit",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "capture": "restored",
+      "strict_exception_type": "ValueError",
+      "strict_exception": "unmapped virtual string ID"
+    },
+    {
+      "selected_counts": "all seven captures match explicit Query/load/green/recompute observations",
+      "query_label_coverage": "no unresolved Query records in any capture",
+      "missing_markers": "unobserved only, not proof of zero work"
+    },
+    {
+      "native": "34/34 passed",
+      "real_checks": "4/4 passed",
+      "isolated_exports": "4/4 passed",
+      "baseline_identities": "all three binary/source identity comparisons match",
+      "strict_clis": "all associated captures exit 2",
+      "explicit_unknown_clis": "all associated captures exit 0"
+    }
+  ]
+}
