@@ -16,6 +16,156 @@ use test_utils::{MiniCore, assert_eq_text, extract_annotations};
 
 use crate::{DiagnosticsConfig, Severity};
 
+/// Compare every Debug-visible diagnostic field, including fixes and main-node pointers.
+/// Diagnostic deliberately has no PartialEq implementation.
+fn resident_semantic_subphases_compare(selection: usize, disabled: bool) {
+    use std::{cell::RefCell, time::Instant};
+
+    let (db, file_id) = RootDatabase::with_single_file(
+        r#"
+fn first() { let _: u32 = "first"; }
+fn second() { let _: bool = 42; }
+"#,
+    );
+    let file_id = file_id.file_id(&db);
+    let mut config = DiagnosticsConfig::test_sample();
+    if disabled {
+        config.disabled.insert("E0308".into());
+    }
+    hir::attach_db(&db, || {
+        let old_calls = RefCell::new(Vec::new());
+        let old = super::semantic_diagnostics_of_bodies(
+            &db,
+            &config,
+            &AssistResolveStrategy::All,
+            file_id,
+            None,
+            &|body| {
+                let mut calls = old_calls.borrow_mut();
+                calls.push(body);
+                match selection {
+                    0 => false,
+                    1 => true,
+                    _ => calls.len() % 2 == 1,
+                }
+            },
+        );
+        let new_calls = RefCell::new(Vec::new());
+        let callback_intervals = RefCell::new(Vec::new());
+        let before = Instant::now();
+        let mut intervals = vec![("sentinel", before, before)];
+        let new = super::semantic_diagnostics_of_bodies_with_timings(
+            &db,
+            &config,
+            &AssistResolveStrategy::All,
+            file_id,
+            None,
+            &|body| {
+                let start = Instant::now();
+                let mut calls = new_calls.borrow_mut();
+                calls.push(body);
+                let selected = match selection {
+                    0 => false,
+                    1 => true,
+                    _ => calls.len() % 2 == 1,
+                };
+                callback_intervals.borrow_mut().push((start, Instant::now()));
+                selected
+            },
+            Some(&mut intervals),
+        );
+        let after = Instant::now();
+        assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
+        assert_eq!(*old_calls.borrow(), *new_calls.borrow());
+        assert!(!new_calls.borrow().is_empty());
+        if selection == 1 && !disabled {
+            assert!(new.iter().any(|diag| diag.code.as_str() == "E0308"));
+        }
+        if disabled {
+            assert!(new.iter().all(|diag| diag.code.as_str() != "E0308"));
+        }
+        assert_eq!(intervals[0], ("sentinel", before, before));
+        let intervals = &intervals[1..];
+        assert_eq!(
+            intervals.iter().map(|it| it.0).collect::<Vec<_>>(),
+            [
+                "diagnostics.semantic.prepare_parse",
+                "diagnostics.semantic.syntax_walk",
+                "diagnostics.semantic.module_context",
+                "diagnostics.semantic.collect",
+                "diagnostics.semantic.render_and_filter",
+            ]
+        );
+        for &(_, start, end) in intervals {
+            assert!(before <= start && start <= end && end <= after);
+        }
+        for pair in intervals.windows(2) {
+            assert_eq!(pair[0].2, pair[1].1);
+        }
+        let (_, collect_start, collect_end) = intervals[3];
+        assert!(collect_start < collect_end);
+        for &(start, end) in callback_intervals.borrow().iter() {
+            assert!(collect_start <= start && end <= collect_end);
+        }
+    });
+}
+
+#[test]
+fn resident_semantic_subphases_all_bodies_exact() {
+    resident_semantic_subphases_compare(1, false);
+}
+
+#[test]
+fn resident_semantic_subphases_no_bodies_exact() {
+    resident_semantic_subphases_compare(0, false);
+}
+
+#[test]
+fn resident_semantic_subphases_selective_bodies_exact() {
+    resident_semantic_subphases_compare(2, false);
+}
+
+#[test]
+fn resident_semantic_subphases_disabled_diagnostic_exact() {
+    resident_semantic_subphases_compare(1, true);
+}
+
+#[test]
+fn resident_semantic_subphases_disabled_clockfree_api_exact() {
+    let (db, file_id) = RootDatabase::with_single_file("fn f() { let _: u32 = true; }");
+    let file_id = file_id.file_id(&db);
+    let config = DiagnosticsConfig::test_sample();
+    hir::attach_db(&db, || {
+        let old = super::semantic_diagnostics_of_bodies(
+            &db,
+            &config,
+            &AssistResolveStrategy::All,
+            file_id,
+            None,
+            &|_| true,
+        );
+        let new = super::semantic_diagnostics_of_bodies_with_timings(
+            &db,
+            &config,
+            &AssistResolveStrategy::All,
+            file_id,
+            None,
+            &|_| true,
+            None,
+        );
+        assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
+        assert!(new.iter().any(|diag| diag.code.as_str() == "E0308"));
+    });
+    let mut phases = super::SemanticDiagnosticPhases::new(None);
+    assert!(phases.output.is_none() && phases.started.is_none());
+    phases.next("diagnostics.semantic.syntax_walk");
+    phases.next("diagnostics.semantic.module_context");
+    phases.next("diagnostics.semantic.collect");
+    phases.next("diagnostics.semantic.render_and_filter");
+    assert!(phases.output.is_none() && phases.started.is_none());
+    drop(phases);
+}
+
 /// Takes a multi-file input fixture with annotated cursor positions,
 /// and checks that:
 ///  * a diagnostic is produced

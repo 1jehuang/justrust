@@ -393,7 +393,7 @@ pub fn semantic_diagnostics_within(
     file_id: FileId,
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
 ) -> Vec<Diagnostic> {
-    semantic_diagnostics_asked(db, config, resolve, file_id, within, None)
+    semantic_diagnostics_asked(db, config, resolve, file_id, within, None, None)
 }
 
 /// [`semantic_diagnostics_within`], of the bodies only those `bodies` asks for, for a caller
@@ -407,7 +407,56 @@ pub fn semantic_diagnostics_of_bodies(
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
     bodies: &dyn Fn(hir::DefWithBody) -> bool,
 ) -> Vec<Diagnostic> {
-    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies))
+    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), None)
+}
+
+/// [`semantic_diagnostics_of_bodies`] with optional actual caller-thread phase intervals.
+/// Passing `None` reads no clock. Intervals include body-selection callbacks and append
+/// to rather than replace the output. An early return records only phases reached.
+pub fn semantic_diagnostics_of_bodies_with_timings(
+    db: &RootDatabase,
+    config: &DiagnosticsConfig,
+    resolve: &AssistResolveStrategy,
+    file_id: FileId,
+    within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
+    bodies: &dyn Fn(hir::DefWithBody) -> bool,
+    timings: Option<&mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
+) -> Vec<Diagnostic> {
+    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), timings)
+}
+
+/// Caller-local recorder, including the active phase on an early return.
+/// The disabled path never reads the clock or allocates interval storage.
+struct SemanticDiagnosticPhases<'a> {
+    output: Option<&'a mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
+    name: &'static str,
+    started: Option<std::time::Instant>,
+}
+
+impl<'a> SemanticDiagnosticPhases<'a> {
+    fn new(
+        output: Option<&'a mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
+    ) -> Self {
+        let started = output.as_ref().map(|_| std::time::Instant::now());
+        Self { output, name: "diagnostics.semantic.prepare_parse", started }
+    }
+
+    fn next(&mut self, name: &'static str) {
+        if let (Some(output), Some(started)) = (&mut self.output, self.started) {
+            let end = std::time::Instant::now();
+            output.push((self.name, started, end));
+            self.started = Some(end);
+        }
+        self.name = name;
+    }
+}
+
+impl Drop for SemanticDiagnosticPhases<'_> {
+    fn drop(&mut self) {
+        if let (Some(output), Some(started)) = (&mut self.output, self.started) {
+            output.push((self.name, started, std::time::Instant::now()));
+        }
+    }
 }
 
 fn semantic_diagnostics_asked(
@@ -417,8 +466,10 @@ fn semantic_diagnostics_asked(
     file_id: FileId,
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
     bodies: Option<&dyn Fn(hir::DefWithBody) -> bool>,
+    timings: Option<&mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
 ) -> Vec<Diagnostic> {
     let _p = tracing::info_span!("semantic_diagnostics").entered();
+    let mut phases = SemanticDiagnosticPhases::new(timings);
     let sema = match within {
         Some(crates) => Semantics::new_within(db, crates),
         None => Semantics::new(db),
@@ -430,6 +481,7 @@ fn semantic_diagnostics_asked(
 
     let parse = sema.parse(editioned_file_id);
 
+    phases.next("diagnostics.semantic.syntax_walk");
     // FIXME: This iterates the entire file which is a rather expensive operation.
     // We should implement these differently in some form?
     // Salsa caching + incremental re-parse would be better here
@@ -446,6 +498,7 @@ fn semantic_diagnostics_asked(
         );
     }
 
+    phases.next("diagnostics.semantic.module_context");
     let module = sema.file_to_module_def(file_id);
 
     let is_nightly = matches!(
@@ -466,6 +519,7 @@ fn semantic_diagnostics_asked(
     let display_target = krate.to_display_target(db);
     let ctx = DiagnosticsContext { config, sema, resolve, edition, is_nightly, display_target };
 
+    phases.next("diagnostics.semantic.collect");
     let mut diags = Vec::new();
     match module {
         // A bunch of parse errors in a file indicate some bigger structural parse changes in the
@@ -483,6 +537,7 @@ fn semantic_diagnostics_asked(
         None => handlers::unlinked_file::unlinked_file(&ctx, &mut res, editioned_file_id),
     }
 
+    phases.next("diagnostics.semantic.render_and_filter");
     for diag in diags {
         let d = match diag {
             AnyDiagnostic::AwaitOutsideOfAsync(d) => handlers::await_outside_of_async::await_outside_of_async(&ctx, &d),

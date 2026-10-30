@@ -7003,14 +7003,33 @@ fn errors_of(
         asked
     };
     let semantic_phase = DiagnosticsPhase::new("diagnostics.semantic_inclusive_asked");
-    let diagnostics = ide_diagnostics::semantic_diagnostics_of_bodies(
-        db,
-        config,
-        &ide_db::assists::AssistResolveStrategy::None,
-        file,
-        within,
-        &asked,
-    );
+    let diagnostics = if diagnostics_telemetry_enabled() {
+        let mut intervals = Vec::with_capacity(5);
+        let diagnostics = ide_diagnostics::semantic_diagnostics_of_bodies_with_timings(
+            db,
+            config,
+            &ide_db::assists::AssistResolveStrategy::None,
+            file,
+            within,
+            &asked,
+            Some(&mut intervals),
+        );
+        // Convert on the same caller thread as the actual measured intervals.
+        let mut details = DIAGNOSTICS_DETAILS.lock().unwrap_or_else(|it| it.into_inner());
+        for (name, start, end) in intervals {
+            details.push(trace::span(name, None, start, end));
+        }
+        diagnostics
+    } else {
+        ide_diagnostics::semantic_diagnostics_of_bodies(
+            db,
+            config,
+            &ide_db::assists::AssistResolveStrategy::None,
+            file,
+            within,
+            &asked,
+        )
+    };
     drop(semantic_phase);
     let filter_phase = DiagnosticsPhase::new("diagnostics.filter_cache_update");
     let found: Vec<_> = diagnostics
