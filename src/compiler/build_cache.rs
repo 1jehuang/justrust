@@ -317,6 +317,64 @@ mod tests {
     }
 
     #[test]
+    fn framed_lists_and_cfg_fields_cannot_alias() {
+        let base = options();
+        let mut left = base.clone();
+        let mut right = base.clone();
+        left.test_filter.filters = vec!["ab".into(), "c".into()];
+        right.test_filter.filters = vec!["a".into(), "bc".into()];
+        assert_ne!(key(&left), key(&right));
+        right = base.clone();
+        right.test_filter.skip = left.test_filter.filters.clone();
+        assert_ne!(key(&left), key(&right));
+        left = base.clone();
+        right = base;
+        left.cfg.values.insert("ab".into(), ["c".into()].into());
+        right.cfg.values.insert("a".into(), ["bc".into()].into());
+        assert_ne!(key(&left), key(&right));
+    }
+
+    #[test]
+    fn set_insertion_order_and_cache_location_do_not_change_identity() {
+        let mut left = options();
+        let mut right = left.clone();
+        for name in ["alpha", "beta"] {
+            left.cfg.names.insert(name.into());
+        }
+        for name in ["beta", "alpha"] {
+            right.cfg.names.insert(name.into());
+        }
+        left.cfg
+            .values
+            .insert("feature".into(), ["first".into(), "second".into()].into());
+        right
+            .cfg
+            .values
+            .insert("feature".into(), ["second".into(), "first".into()].into());
+        right.local_cache = Some(LocalCache::new("/different-unused-cache".into()));
+        assert_eq!(key(&left), key(&right));
+        assert!(key(&left).is_some());
+    }
+
+    #[test]
+    fn encoding_counter_overflow_and_huge_counts_fail_closed() {
+        let budget = ir::PlanBudget::default();
+        let mut encoding = Encoding {
+            key: KeyBuilder::new(DOMAIN, &[0; 32]),
+            work: usize::MAX,
+            budget: &budget,
+        };
+        assert!(matches!(
+            encoding.field(b"x"),
+            Err(EncodingError::Ineligible)
+        ));
+        assert!(matches!(
+            encoding.count(usize::MAX),
+            Err(EncodingError::Ineligible)
+        ));
+    }
+
+    #[test]
     fn uncontrolled_inputs_are_ineligible() {
         let base = options();
         for mutation in 0..9 {
