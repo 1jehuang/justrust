@@ -3,6 +3,8 @@
   "scope": "native-profiling-correctness-not-reuse-ceiling",
   "acceptance_sha256": "899c4180ad302e221e4c84dfe4a8308e918764efcb3751b4b9adcea9b2927c6a",
   "compiler_source_file_sha256": "13befd8528381cd12ecc0f2850ef7ca26ab0f72109aad31d5d9ce5cc6411b00f",
+  "rustc_executable_sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "rustc_driver_sha256": "892ce29ebb8b8115486cc7e32b07b45b50e6c27ab82032edd4290f55fb2c8f62",
   "compiler_build": "./x build --stage 1 compiler/rustc; ./x build --stage 1 library",
   "capture_command": "python3 bench/reuse-native-accept.py --rustc toolchain/rustc/build/host/stage1/bin/rustc --output PRIVATE_NEW_DIRECTORY",
   "incremental_verify_ich": true,

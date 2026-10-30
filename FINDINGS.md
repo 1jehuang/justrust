@@ -18,6 +18,14 @@ verify-ich, artifact caches off and explicit proc-macro caching enabled passed:
 These describe one diagnostic's states, not a before/after speedup, production
 latency, or the general reuse ceiling. Profiles are retained in private scratch.
 
+The macro-cache-enabled warm library profile observes 119,322 proven-green
+value-acquisition scopes and 70,506 provider-recomputation scopes. On profiler
+thread 3 their separate interval unions are 248.143496ms and 110.519125ms.
+These nested scope sets must not be added. The latter is a measured candidate
+for retained-value investigation, not 110ms of guaranteed removable build time
+or the complete maximum reuse gap. Expansion, HIR lowering, resolution and
+other non-green/nonquery work remain separate opportunities.
+
 The comprehensive hosted baseline first failed source-activity protection for
 benchmark roots (`bench/results/versus-synth1-20261029-191138-4bfa081ce4fc-dirty.json`).
 Commit `33900e534` fixes receipt enrollment without making private/cache roots
