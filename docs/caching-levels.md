@@ -221,8 +221,11 @@ A reversible real body edit rebuilt the expected units and passed 837 tests
 (`20261029-214107578-3052277`), with one parallel DirectoryNotEmpty cleanup
 failure that passed the runner's isolated retry. Restored strict all-target
 Clippy passed (`20261029-214114111-3052815`). No temporary source edit remains.
-The comprehensive matched synthetic gate remains blocked by another benchmark's
-snapshot lock. Native experiments therefore remain default off. See
+The comprehensive matched synthetic gate is still incomplete. The earlier
+snapshot lock holder has exited, but the separate retained baseline stopped
+at 22/40 points with seven context/pinned-source failures, not a valid baseline
+(`query-retention-benchmark-20261030.md`). No partial result permits default
+promotion of the native experiments. See
 `remote-sync-bulk-scan.md` and `remote-sync-concurrent-discovery.md` for bounded
 component evidence.
 
