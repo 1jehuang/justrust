@@ -26,19 +26,35 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def measurement_environment(locality):
+    environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
+    if locality == 'llc':
+        environment['JR_GRAPH_LOCALITY'] = 'llc'
+    elif locality != 'inherit':
+        raise ValueError('unknown graph worker locality')
+    return environment
+
+
 def invoke(command, cwd, env, timeout):
     start = time.perf_counter_ns()
     process = subprocess.run(command, cwd=cwd, env=env, capture_output=True, timeout=timeout)
     return process, time.perf_counter_ns() - start
 
 
-def checked_summary(process, workers):
+def checked_summary(process, workers, locality='inherit'):
     summary = json.loads(process.stdout)
     if (process.returncode != 0 or summary.get('mode') != 'build'
             or summary.get('workers') != workers or summary.get('failures') != 0
             or summary.get('capture_complete') is not True
             or summary.get('events_dropped') != 0):
         raise ValueError(f'compiler failed: {process.stdout!r} {process.stderr!r}')
+    if locality == 'llc':
+        cpus = summary.get('locality_cpus')
+        if (summary.get('locality_workers') != workers or not isinstance(cpus, list)
+                or len(cpus) < workers
+                or any(type(cpu) is not int or cpu < 0 for cpu in cpus)
+                or cpus != sorted(set(cpus))):
+            raise ValueError('requested shared-cache worker locality was not applied')
     return summary
 
 
@@ -112,7 +128,7 @@ def run(args):
     # Pin the whole sibling input tree because input capture sees it too.
     inputs = {str(p.relative_to(root)): digest(p) for p in sorted(next(iter(sources.values())).parent.iterdir()) if p.is_file()}
     binary_hash = digest(binary)
-    environment = {'PATH': '/usr/bin:/bin', 'LANG': 'C', 'LC_ALL': 'C'}
+    environment = measurement_environment(getattr(args, 'graph_locality', 'inherit'))
     contract = {'binary_sha256': binary_hash, 'runner_sha256': digest(__file__),
                 'suite_sha256': digest(root / 'bench/suite.py'), 'inputs': inputs,
                 'fixtures': list(FIXTURES), 'workers': [1, 8], 'opts': ['off', 'final'],
@@ -186,7 +202,8 @@ def run(args):
                         if digest(binary) != binary_hash:
                             raise ValueError('binary changed during measurement')
                         process, wall = invoke(command, work, environment, args.timeout)
-                        summary = checked_summary(process, workers)
+                        summary = checked_summary(process, workers,
+                                                  getattr(args, 'graph_locality', 'inherit'))
                         actual, _ = invoke([str(output)], work, environment, args.timeout)
                         if (actual.returncode, actual.stdout, actual.stderr) != (expected.returncode, expected.stdout, expected.stderr):
                             raise ValueError(f'cached output disagrees with stock: {fixture}')
@@ -228,6 +245,8 @@ def add_parser(sub):
     p.add_argument('--out-prefix', required=True)
     p.add_argument('--stock', default='/usr/bin/rustc')
     p.add_argument('--resume', action='store_true')
+    p.add_argument('--graph-locality', choices=('inherit', 'llc'), default='inherit',
+                   help='explicit worker locality experiment, pinned in measurement environment')
     p.add_argument('-n', type=int, default=9)
     p.add_argument('--warmup', type=int, default=2)
     p.add_argument('--timeout', type=float, default=120)

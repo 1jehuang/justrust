@@ -31,6 +31,7 @@ use std::task::{Context as PollContext, Poll, Wake, Waker};
 use std::time::Instant;
 
 mod cycle;
+mod locality;
 pub use cycle::{DependencyCycle, DependencyCycleEdge};
 
 const SHARDS: usize = 64;
@@ -468,6 +469,12 @@ pub struct Report {
     pub wait_ns: u64,
     pub elapsed_ns: u64,
     pub workers: usize,
+    /// Selected inherited CPU subset for the explicit locality experiment.
+    /// Empty means no placement restriction was selected.
+    pub locality_cpus: Vec<usize>,
+    /// Workers that successfully applied the selected subset. Placement is
+    /// best-effort and never changes graph success or the caller's affinity.
+    pub locality_workers: usize,
     pub capture_complete: bool,
     pub node_evaluations: Vec<(Key, usize)>,
     /// Node IDs in exactly the same order as `node_evaluations`.
@@ -1049,22 +1056,27 @@ impl Engine {
         }
         let start = Instant::now();
         let mut infrastructure_error = None;
+        let locality = locality::selected(workers);
+        let mut locality_workers = 0;
         std::thread::scope(|scope| {
             let mut threads = Vec::new();
             for worker in 0..workers {
                 let shared = self.shared.clone();
+                let locality = locality.clone();
                 match std::thread::Builder::new()
                     .name(format!("graph-{worker}"))
                     .stack_size(WORKER_STACK_BYTES)
                     .spawn_scoped(scope, move || {
-                        match catch_unwind(AssertUnwindSafe(|| shared.worker())) {
+                        let applied = locality.as_ref().is_some_and(|mask| mask.apply());
+                        let result = match catch_unwind(AssertUnwindSafe(|| shared.worker())) {
                             Ok(()) => Ok(()),
                             Err(payload) => {
                                 let error = panic_error("engine worker", payload);
                                 shared.abort(error.clone());
                                 Err(error)
                             }
-                        }
+                        };
+                        (result, applied)
                     }) {
                     Ok(thread) => threads.push(thread),
                     Err(error) => {
@@ -1079,8 +1091,12 @@ impl Engine {
             }
             for thread in threads {
                 match thread.join() {
-                    Ok(Ok(())) => {}
-                    Ok(Err(error)) => infrastructure_error = Some(error),
+                    Ok((result, applied)) => {
+                        locality_workers += usize::from(applied);
+                        if let Err(error) = result {
+                            infrastructure_error = Some(error);
+                        }
+                    }
                     Err(payload) => {
                         let error = panic_error("engine worker", payload);
                         self.shared.abort(error.clone());
@@ -1133,6 +1149,9 @@ impl Engine {
         let mut accounting = lock(&self.shared.accounting);
         accounting.report.nodes = nodes.len();
         accounting.report.workers = workers;
+        accounting.report.locality_cpus =
+            locality.as_ref().map_or_else(Vec::new, |mask| mask.cpus());
+        accounting.report.locality_workers = locality_workers;
         accounting.report.elapsed_ns = nanos(start);
         accounting.report.node_evaluations = nodes
             .iter()

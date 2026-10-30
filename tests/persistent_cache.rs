@@ -56,6 +56,71 @@ fn execute(path: &Path, bytes: &[u8]) -> std::process::Output {
     }
     unreachable!()
 }
+
+#[test]
+fn explicit_worker_locality_preserves_cli_cache_and_rejection() {
+    let scratch = Scratch::new();
+    let sources = scratch.0.join("sources");
+    let cache = scratch.0.join("cache");
+    fs::create_dir_all(&sources).unwrap();
+    fs::create_dir_all(&cache).unwrap();
+    let source = sources.join("main.rs");
+    fs::write(&source, "fn main() { println!(\"locality\"); }").unwrap();
+    for workers in [1, 8] {
+        for local in [false, true] {
+            for warm in [false, true] {
+                let output = scratch.0.join(format!("out-{workers}-{local}-{warm}"));
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command
+                    .arg(&source)
+                    .arg("--workers")
+                    .arg(workers.to_string())
+                    .arg("--cache-dir")
+                    .arg(&cache)
+                    .arg("--verbose")
+                    .arg("-o")
+                    .arg(&output)
+                    .env_remove("JR_GRAPH_LOCALITY");
+                if local {
+                    command.env("JR_GRAPH_LOCALITY", "llc");
+                }
+                let built = command.output().unwrap();
+                assert!(built.status.success(), "{built:?}");
+                let summary = String::from_utf8(built.stdout).unwrap();
+                assert!(summary.contains("\"capture_complete\":true"), "{summary}");
+                if !local {
+                    assert!(summary.contains("\"locality_workers\":0"), "{summary}");
+                    assert!(summary.contains("\"locality_cpus\":[]"), "{summary}");
+                }
+                if warm {
+                    assert!(
+                        String::from_utf8(built.stderr)
+                            .unwrap()
+                            .contains("Native link cache: Hit")
+                    );
+                }
+                let executed = Command::new(output).output().unwrap();
+                assert!(executed.status.success());
+                assert_eq!(executed.stdout, b"locality\n");
+            }
+        }
+        fs::write(&source, "fn unused() -> bool { 3 } fn main() {}").unwrap();
+        let rejected = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&source)
+            .arg("--workers")
+            .arg(workers.to_string())
+            .arg("--cache-dir")
+            .arg(&cache)
+            .arg("-o")
+            .arg(scratch.0.join(format!("invalid-{workers}")))
+            .env("JR_GRAPH_LOCALITY", "llc")
+            .output()
+            .unwrap();
+        assert!(!rejected.status.success(), "{rejected:?}");
+        fs::write(&source, "fn main() { println!(\"locality\"); }").unwrap();
+    }
+}
+
 #[test]
 fn repeated_builds_edits_and_corruption_match_clean_and_stock() {
     let scratch = Scratch::new();

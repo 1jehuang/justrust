@@ -12,7 +12,7 @@ mod compiler_profile;
 static ALLOCATION_PROFILE: allocation_profile::ProfilingAllocator<std::alloc::System> =
     allocation_profile::ProfilingAllocator::new(std::alloc::System);
 
-const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON] [--verbose]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--cache-dir PATH opts into lowering, optimization, machine-code and link-output reuse in an existing trusted local directory outside source roots. Not a shared or remote cache.\n--computed-operation-export NEW_DIR exports only newly computed native-link v1 operations (<=16 MiB), requires --cache-dir. No publication authority.\n--verbose reports input-capture provenance and native link-cache outcomes on stderr.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\n";
+const HELP: &str = "jr-rust SOURCE [-o NEW_EXECUTABLE] [--workers N] [--check] [--edition YEAR] [--debug-assertions yes|no] [--cfg NAME_OR_KEY_VALUE] [--trace NEW_TRACE] [--profile NEW_JSON] [--verbose]\n\nClean-room Rust subset compiler. Direct Linux x86-64 ELF output, no rustc delegation.\nSee COMPILER.md for supported syntax and limitations. Existing files are never overwritten.\nAccounting is always enabled. --check performs semantic checks without code generation.\n--edition YEAR selects the source edition (default: 2024); only 2024 is currently supported.\n--cfg may be repeated for user names or key=\"value\" predicates; native target cfg is fixed.\n--debug-assertions yes|no sets native debug assertions (default: yes); may be supplied once.\n--opt off|adaptive|final selects the graph-native optimizer (default: off, or $JR_OPT).\n--source-lock PATH --source-item NAME adds a verified source declaration probe, not a library crate.\n--cache-dir PATH opts into lowering, optimization, machine-code and link-output reuse in an existing trusted local directory outside source roots. Not a shared or remote cache.\n--computed-operation-export NEW_DIR exports only newly computed native-link v1 operations (<=16 MiB), requires --cache-dir. No publication authority.\n--verbose reports input-capture provenance and native link-cache outcomes on stderr.\n--profile writes bounded task timings and exact first budget failure without CFG dumps.\nAllocator counters require a binary built with --features allocation-profile.\nJR_GRAPH_LOCALITY=llc opts workers into one allowed shared-cache CPU domain when it fits; default placement is unchanged. Placement is best-effort, reported in JSON.\n";
 
 fn allocator_json() -> String {
     #[cfg(feature = "allocation-profile")]
@@ -465,7 +465,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         .map(|a| a.stats.variant_proofs_killed)
         .sum();
     println!(
-        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"structs\":{},\"enums\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"analysis_variant_proof_checks\":{analysis_variant_proof_checks},\"analysis_variant_refinements\":{analysis_variant_refinements},\"analysis_variant_proofs_killed\":{analysis_variant_proofs_killed},\"workers\":{workers},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
+        "{{\"schema\":1,\"mode\":\"{}\",\"source_bytes\":{source_bytes},\"source_files\":{source_files},\"functions\":{},\"structs\":{},\"enums\":{},\"cfg_blocks\":{},\"cfg_edges\":{},\"cfg_locals\":{},\"analysis_worklist_pops\":{analysis_worklist_pops},\"analysis_move_paths\":{analysis_move_paths},\"analysis_moves\":{analysis_moves},\"analysis_variant_proof_checks\":{analysis_variant_proof_checks},\"analysis_variant_refinements\":{analysis_variant_refinements},\"analysis_variant_proofs_killed\":{analysis_variant_proofs_killed},\"workers\":{workers},\"locality_workers\":{locality_workers},\"locality_cpus\":{locality_cpus:?},\"executable_bytes\":{bytes},\"total_ns\":{},\"engine_ns\":{},\"nodes\":{},\"edges\":{},\"intern_hits\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"measurement\":\"contended/uncontrolled\"}}",
         if check { "check" } else { "build" },
         compiled.functions,
         compiled.structs,
@@ -480,7 +480,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         report.intern_hits,
         report.failures,
         report.events_dropped,
-        report.capture_complete
+        report.capture_complete,
+        locality_workers = report.locality_workers,
+        locality_cpus = report.locality_cpus
     );
     Ok(())
 }
