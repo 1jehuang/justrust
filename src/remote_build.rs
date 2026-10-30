@@ -31,6 +31,14 @@ const FORWARDED_ENV: &[&str] = &[
     "RUSTFLAGS",
     "CARGO_ENCODED_RUSTFLAGS",
     "CARGO_INCREMENTAL",
+    "CARGO_BUILD_JOBS",
+    "RUST_TEST_THREADS",
+    "JCODE_FRONTEND_THREADS",
+    "JCODE_PARALLEL_FRONTEND",
+    "JUSTRUST_FRONTEND_THREADS",
+    "JUSTRUST_TEST_PARALLEL",
+    "JUSTRUST_TEST_JOBS",
+    "JUSTRUST_TEST_SPLIT",
     "CARGO_PROFILE_RELEASE_OPT_LEVEL",
     "CARGO_PROFILE_RELEASE_DEBUG",
     "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO",
@@ -1624,11 +1632,41 @@ mod tests {
     }
 
     #[test]
+    fn hosted_preserves_parallelism_limits_and_opt_outs_verbatim() {
+        for name in [
+            "CARGO_BUILD_JOBS",
+            "RUST_TEST_THREADS",
+            "JCODE_FRONTEND_THREADS",
+            "JCODE_PARALLEL_FRONTEND",
+            "JUSTRUST_FRONTEND_THREADS",
+            "JUSTRUST_TEST_PARALLEL",
+            "JUSTRUST_TEST_JOBS",
+            "JUSTRUST_TEST_SPLIT",
+        ] {
+            for value in ["1", "8", "0", "off", ""] {
+                assert_eq!(
+                    forwarded_env(|key| (key == name).then(|| value.to_owned())),
+                    vec![(name.to_owned(), value.to_owned())],
+                    "{name}={value}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn hosted_forwards_explicit_optimization_controls_not_secrets_or_local_paths() {
         for var in [
             "JUSTRUST_RELEASE_BUILD",
             "RUSTFLAGS",
             "CARGO_ENCODED_RUSTFLAGS",
+            "CARGO_BUILD_JOBS",
+            "RUST_TEST_THREADS",
+            "JCODE_FRONTEND_THREADS",
+            "JCODE_PARALLEL_FRONTEND",
+            "JUSTRUST_FRONTEND_THREADS",
+            "JUSTRUST_TEST_PARALLEL",
+            "JUSTRUST_TEST_JOBS",
+            "JUSTRUST_TEST_SPLIT",
             "RUSTUP_TOOLCHAIN",
             "JCODE_DESKTOP_VERSION",
             "JCODE_DESKTOP_BUILD_METADATA",

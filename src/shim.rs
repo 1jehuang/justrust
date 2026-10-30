@@ -563,6 +563,16 @@ fn describe(args: &[OsString]) -> Unit {
                 i += 1;
             }
             "--test" => u.test = true,
+            "--jobs-frontend" => {
+                u.frontend_threads = next.parse().ok();
+                i += 1;
+            }
+            "-Z" => {
+                if let Some(v) = next.strip_prefix("threads=") {
+                    u.frontend_threads = v.parse().ok();
+                }
+                i += 1;
+            }
             "-C" => {
                 codegen(next);
                 i += 1;
@@ -572,7 +582,10 @@ fn describe(args: &[OsString]) -> Unit {
                     u.emit = v.to_owned();
                 } else if let Some(v) = a.strip_prefix("-C") {
                     codegen(v);
-                } else if let Some(v) = a.strip_prefix("-Zthreads=") {
+                } else if let Some(v) = a
+                    .strip_prefix("-Zthreads=")
+                    .or_else(|| a.strip_prefix("--jobs-frontend="))
+                {
                     u.frontend_threads = v.parse().ok();
                 }
             }
@@ -662,6 +675,27 @@ mod tests {
         assert!(u.test && u.incremental);
         assert_eq!(u.frontend_threads, Some(8));
         assert_eq!(u.emit, "dep-info,metadata,link");
+    }
+
+    #[test]
+    fn describes_frontend_thread_option_spellings() {
+        for flags in [
+            vec!["-Zthreads=8"],
+            vec!["-Z", "threads=8"],
+            vec!["--jobs-frontend=8"],
+            vec!["--jobs-frontend", "8"],
+        ] {
+            let args = flags.iter().map(OsString::from).collect::<Vec<_>>();
+            assert_eq!(describe(&args).frontend_threads, Some(8), "{flags:?}");
+        }
+        for flags in [
+            vec!["--jobs", "8"],
+            vec!["--jobs-backend=8"],
+            vec!["-Z", "time-passes"],
+        ] {
+            let args = flags.iter().map(OsString::from).collect::<Vec<_>>();
+            assert_eq!(describe(&args).frontend_threads, None, "{flags:?}");
+        }
     }
 
     #[test]
