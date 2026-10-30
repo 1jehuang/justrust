@@ -293,6 +293,21 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
                 outer.insert(*key, term);
             }
         }
+        // An outer `let value;` has no checked local until its first
+        // assignment. Nested solves must nevertheless share one term for its
+        // exact lexical binding across that assignment and subsequent uses.
+        for pending in &checker.pending_references {
+            checker.infer_work(0)?;
+            if pending.local.is_none()
+                && pending.scope < checker.scopes.len()
+                && let Some(key) = checker.local_key(&pending.name, true)?
+                && let std::collections::hash_map::Entry::Vacant(slot) = outer.entry(key)
+            {
+                checker.infer_storage(1)?;
+                let term = solver.fresh()?;
+                slot.insert(term);
+            }
+        }
     }
     solver.scopes.push(outer);
     let result = solver.block(block, 0)?;

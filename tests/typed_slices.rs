@@ -449,6 +449,31 @@ fn shared_reference_elements_stock_native_workers1_8() {
             true,
         ),
         (
+            "nested_deferred_tuple_binding_shares_constraints",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let row;{let rows=[(1i32,3usize)];row=first(&rows);if row.1==3usize{println!("ok");}}}"###,
+            true,
+        ),
+        (
+            "nested_deferred_tuple_binding_rejects_wrong_field_type",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let row;{let rows=[(1i32,3usize)];row=first(&rows);let wrong:bool=row.1;}}"###,
+            false,
+        ),
+        (
+            "shared_tuple_method_receiver_lexical_identity",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let text=String::from("bad");let row;{let text=String::from("ok");let rows=[(text.as_str(),3usize)];row=first(&rows);if row.1==3usize{println!("{}",row.0);}}}"###,
+            true,
+        ),
+        (
+            "shared_tuple_method_receiver_mutation_rejected",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let mut text=String::from("ok");let row;{let rows=[(text.as_str(),3usize)];row=first(&rows);}text.push_str("!");println!("{}",row.0);}"###,
+            false,
+        ),
+        (
+            "shared_tuple_method_receiver_scope_rejected",
+            r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let row;{let text=String::from("ok");let rows=[(text.as_str(),3usize)];row=first(&rows);}println!("{}",row.0);}"###,
+            false,
+        ),
+        (
             "declared_tuple_element_lifetime",
             r###"fn first<'a>(s:&[(&'a str,usize)])->(&'a str,usize){s[0]}fn main(){let text=String::from("ok");let row;{let rows=[(text.as_str(),3usize)];row=first(&rows);}if row.1==3usize{println!("{}",row.0);}}"###,
             true,

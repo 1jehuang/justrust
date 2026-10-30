@@ -237,6 +237,17 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
             source_clone::clone_vector(values, budget).map_err(|e| source_error(budget, &e))?;
             values.iter().collect()
         }
+        Expr::MethodCall {
+            receiver,
+            type_args,
+            args,
+            ..
+        } if type_args.is_empty()
+            && args.is_empty()
+            && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
+        {
+            return Ok(true);
+        }
         Expr::Struct { fields, .. } => {
             source_clone::clone_vector(fields, budget).map_err(|e| source_error(budget, &e))?;
             fields.iter().map(|(_, value)| value).collect()
@@ -409,6 +420,20 @@ pub(super) fn supported(
                 }
             }
             Ok(true)
+        }
+        Expr::MethodCall {
+            receiver,
+            type_args,
+            args,
+            ..
+        } if type_args.is_empty()
+            && args.is_empty()
+            && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
+        {
+            // This is syntax eligibility only. Replay below authenticates the
+            // exact source occurrence, declaration schema and receiver root.
+            let receiver = node.child(10, 0, budget)?;
+            Ok(inventory.operand_nodes.contains_key(&receiver.path))
         }
         Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => Ok(true),
         _ => Ok(false),
@@ -969,6 +994,202 @@ impl Replay<'_> {
             referent: Arc::new(referent),
         })
     }
+    /// A closed source method header determines this result, not its checked
+    /// receiver type or inferred call actuals. The retained source-call receipt
+    /// authenticates dispatch, and lexical authority authenticates the root.
+    #[allow(clippy::too_many_arguments)]
+    fn concrete_method_result(
+        &self,
+        source: &Expr,
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        target: &ir::Callee,
+        signature: &ir::Signature,
+        args: &[ir::ExprId],
+    ) -> Result<ir::Ty, FactsError> {
+        let Expr::MethodCall {
+            receiver,
+            name,
+            type_args,
+            args: source_args,
+        } = source
+        else {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method producer lost source syntax",
+            ));
+        };
+        let ir::Callee::Direct(direct) = target else {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "input method requires a direct source declaration",
+            ));
+        };
+        if !type_args.is_empty() || !source_args.is_empty() || !direct.type_args.is_empty() {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "input method requires a closed zero-argument declaration",
+            ));
+        }
+        if !matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "input method requires an original local receiver",
+            ));
+        }
+        validate_original_occurrence(self.original, node, self.budget)?;
+        sr::work(self.budget, self.inventory.calls.len())?;
+        let source_index = self
+            .inventory
+            .calls
+            .iter()
+            .position(|site| site.node == *node)
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "method producer source occurrence missing")
+            })?;
+        sr::work(self.budget, self.original.call_mapping.len())?;
+        let (position, (_, expression, original_target)) = self
+            .original
+            .call_mapping
+            .iter()
+            .enumerate()
+            .find(|(_, (index, _, _))| *index == source_index)
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "method producer original receipt missing")
+            })?;
+        if *expression != id {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method producer expression identity changed",
+            ));
+        }
+        validate_original_callee(original_target, target, self.budget)?;
+        let view = self
+            .original
+            .facts
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(direct.declaration))?;
+        view.validate_for(&self.original.facts)?;
+        if view.generic_env().total_arity() != 0
+            || !self.original.facts.is_source_callable(direct.declaration)?
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "input method requires a nongeneric source header",
+            ));
+        }
+        let info = self
+            .original
+            .plan
+            .registry
+            .declaration(direct.declaration)
+            .map_err(|e| source_error(self.budget, &e))?;
+        if info.path.associated.is_none()
+            || !self
+                .original
+                .plan
+                .registry
+                .source_member_equal(info.path.item, *name)
+                .map_err(|e| source_error(self.budget, &e))?
+            || !matches!(
+                info.receiver,
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Shared
+                }
+            )
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "input method requires an exact shared source receiver",
+            ));
+        }
+        let canonical = nominal_call_receipts::original_call_signature(
+            self.original,
+            position,
+            id,
+            target,
+            signature,
+            &self.original.facts,
+            self.budget,
+            &mut tr::TraitScratch::default(),
+        )?;
+        let declared = view.signature();
+        if declared.params.len() != 1
+            || canonical.params.len() != 1
+            || args.len() != 1
+            || !self.equal(&declared.params[0], &canonical.params[0])?
+            || !self.equal(&declared.result, &canonical.result)?
+            || declared.ref_contract != canonical.ref_contract
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method producer declaration signature changed",
+            ));
+        }
+        let ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent,
+        } = &declared.params[0]
+        else {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method producer source receiver is not shared",
+            ));
+        };
+        let receiver_node = node.child(10, 0, self.budget)?;
+        validate_original_occurrence(self.original, &receiver_node, self.budget)?;
+        let binding = self
+            .inventory
+            .operand_nodes
+            .get(&receiver_node.path)
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "method receiver lacks lexical authority")
+            })?;
+        validate_original_occurrence(self.original, binding, self.budget)?;
+        let binding_index = source_binding_index(&self.original.bindings, binding, self.budget)?
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "method receiver source binding missing")
+            })?;
+        let site = &self.original.bindings[binding_index];
+        if site.parameter.is_none() && !precedes(&site.node, &receiver_node) {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method receiver binding does not precede use",
+            ));
+        }
+        let local = if site.parameter.is_some() || site.statement.is_some() {
+            mapped_source_binding(self.original, binding_index, self.budget)?
+        } else {
+            // Nested lets have a distinct occurrence-and-initializer receipt,
+            // not a root statement mapping. Validate that receipt exactly.
+            initializer(self.original, binding_index, self.checked, self.budget)?.0
+        };
+        let actual = self.checked.exprs.get(args[0].0).ok_or_else(|| {
+            FactsError::invalid(self.budget, "method receiver outside checked arena")
+        })?;
+        if !matches!(&actual.kind, ir::ExprKind::Borrow {
+            kind: ir::BorrowKind::Shared, place, timing: ir::BorrowTiming::Immediate,
+        } if place.local == local && place.projection.is_empty())
+            || !self.equal(&declared.params[0], &actual.ty)?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method receiver changed its original root or adjustment",
+            ));
+        }
+        let local = self
+            .checked
+            .locals
+            .get(local.0)
+            .ok_or_else(|| FactsError::invalid(self.budget, "method receiver local missing"))?;
+        if !self.equal(referent, &local.ty)? {
+            return Err(FactsError::invalid(
+                self.budget,
+                "method receiver differs from its source declaration header",
+            ));
+        }
+        Ok(declared.result.clone())
+    }
+
     pub(super) fn expression(
         &self,
         source: &Expr,
@@ -1195,6 +1416,15 @@ impl Replay<'_> {
                     })?
                 }
             }
+            (
+                source @ Expr::MethodCall { .. },
+                ir::ExprKind::Call {
+                    target,
+                    signature,
+                    args,
+                    ..
+                },
+            ) => self.concrete_method_result(source, node, id, target, signature, args)?,
             (Expr::Var(path), ir::ExprKind::Local(local)) if is_local_shaped_path(path) => {
                 let (root, ty) = self.operand(node, depth)?;
                 if root != *local {
@@ -1644,6 +1874,77 @@ impl Replay<'_> {
 #[cfg(test)]
 mod literal_context_tests {
     use super::*;
+
+    #[test]
+    fn source_concrete_method_producer_rejects_forged_authority() {
+        for source in [
+            "struct Owner{n:i32}impl Owner{fn get(&self)->&i32{&self.n}}fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let owner=Owner{n:7};let sibling=Owner{n:9};let row;{let rows=[(owner.get(),3usize)];row=first(&rows);}}",
+            "struct Owner{n:i32}impl Owner{fn get(&self)->&i32{&self.n}}fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let sibling=Owner{n:9};let row;{let owner=Owner{n:7};let rows=[(owner.get(),3usize)];row=first(&rows);if row.1==3usize{let value=*row.0;}}}",
+        ] {
+            let program = parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected original method producer source");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+            let (method, receiver) = checked.exprs.iter().enumerate().find_map(|(index, expression)| {
+            let ir::ExprKind::Call { args, signature, .. } = &expression.kind else { return None };
+            (matches!(&signature.result, ir::Ty::Ref { referent, .. } if **referent == ir::Ty::Int(ir::IntTy::I32))
+                && args.len() == 1).then_some((ir::ExprId(index), args[0]))
+        }).unwrap();
+            let sibling = ir::LocalId(
+                checked
+                    .locals
+                    .iter()
+                    .position(|local| local.name == "sibling")
+                    .unwrap(),
+            );
+            for mutation in 0..3 {
+                let mut forged = checked.as_ref().clone();
+                match mutation {
+                    0 => {
+                        let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[receiver.0].kind
+                        else {
+                            panic!("expected autoref");
+                        };
+                        place.local = sibling;
+                    }
+                    1 => {
+                        forged.exprs[method.0].ty = ir::Ty::Ref {
+                            kind: ir::BorrowKind::Shared,
+                            referent: Arc::new(ir::Ty::Bool),
+                        };
+                    }
+                    _ => {
+                        let ir::ExprKind::Call { args, .. } = &mut forged.exprs[method.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        args.clear();
+                    }
+                }
+                let error =
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .err()
+                        .expect("forged method evidence must fail");
+                assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+            }
+            let mut forged = original.clone();
+            forged
+                .call_mapping
+                .retain(|(_, expression, _)| *expression != method);
+            let error = replay_source_body(&forged, checked, publication.facts(), &budget)
+                .err()
+                .expect("missing original method receipt must fail");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+    }
 
     #[test]
     fn source_float_arithmetic_rejects_forged_replay() {
