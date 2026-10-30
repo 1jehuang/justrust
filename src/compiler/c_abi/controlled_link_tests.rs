@@ -1,4 +1,27 @@
 use super::*;
+
+#[test]
+fn controlled_library_directory_selection_is_fixed_and_ordered() {
+    let multiarch = Path::new("/usr/lib/x86_64-linux-gnu");
+    let lib64 = Path::new("/usr/lib64");
+    let legacy = Path::new("/usr/lib");
+    for available in [multiarch, lib64, legacy] {
+        assert_eq!(
+            library_directory_with(|path| path == available.join("crt1.o")).unwrap(),
+            available
+        );
+    }
+    assert_eq!(library_directory_with(|_| true).unwrap(), multiarch);
+    assert_eq!(
+        library_directory_with(|path| path == lib64.join("crt1.o") || path == legacy.join("crt1.o")).unwrap(),
+        lib64
+    );
+    assert!(
+        library_directory_with(|_| false)
+            .unwrap_err()
+            .starts_with("infrastructure:")
+    );
+}
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[test]
 fn controlled_link_legacy_vsyscalls_cannot_observe_clock_or_cpu() {

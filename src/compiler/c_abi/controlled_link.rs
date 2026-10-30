@@ -14,6 +14,17 @@ use std::{
 const MAX_CAPSULE_IDENTITY_BYTES: usize = 12 * 1024 * 1024;
 const MAX_EXECUTABLE_BYTES: usize = 256 * 1024 * 1024;
 
+fn library_directory_with(has_crt: impl Fn(&Path) -> bool) -> Result<PathBuf, String> {
+    ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|directory| has_crt(&directory.join("crt1.o")))
+        .ok_or_else(|| {
+            "infrastructure: missing native toolchain crt1.o in fixed GNU/glibc library directories"
+                .into()
+        })
+}
+
 #[derive(Clone, Debug)]
 pub struct ControlledToolchain {
     files: BTreeMap<PathBuf, Vec<u8>>,
@@ -47,11 +58,7 @@ impl ControlledToolchain {
                 ));
             }
         }
-        let library_dir = if Path::new("/usr/lib/x86_64-linux-gnu/crt1.o").is_file() {
-            PathBuf::from("/usr/lib/x86_64-linux-gnu")
-        } else {
-            PathBuf::from("/usr/lib")
-        };
+        let library_dir = library_directory_with(|path| path.is_file())?;
         let mut this = Self {
             files: BTreeMap::new(),
             library_dir,
