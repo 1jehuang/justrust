@@ -1,0 +1,9 @@
+# Native jr-cargo frontend parallelism for this large bootstrap crate.
+# Pinned hosted full recheck: 13.43s at one thread, 6.04s at eight (n=3,
+# quiet samples). Warm incremental test edits remain within noise.
+# See ~/justrust/docs/parallelism-audit-20261030.md for recordings and limits.
+# Stock Cargo and stable rustc remain valid fallbacks: this setting adds no
+# global RUSTFLAGS or RUSTC_BOOTSTRAP. Only jr-cargo with nightly/dev rustc
+# consumes it. An explicit environment value (including 0 to disable) wins.
+[env]
+JUSTRUST_FRONTEND_THREADS = "8"
