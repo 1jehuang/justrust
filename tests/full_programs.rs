@@ -467,16 +467,28 @@ fn manifest_covers_every_fixture() {
 fn full_programs_ratchet() {
     let entries = manifest();
     let scratch = Scratch::new();
-    let results: Vec<(&Entry, Outcome)> = std::thread::scope(|s| {
-        let handles: Vec<_> = entries
-            .iter()
-            .map(|e| {
-                let scratch = &scratch;
-                s.spawn(move || (e, run_program(&e.name, scratch)))
+    // Each fixture independently exercises workers 1 and 8. Launching every
+    // fixture at once oversubscribes small hosts and turns CPU contention into
+    // false compiler timeouts. Preserve every case and its existing deadline.
+    let parallelism = std::thread::available_parallelism().map_or(1, usize::from);
+    let results: Vec<(&Entry, Outcome)> = entries
+        .chunks(parallelism)
+        .flat_map(|chunk| {
+            std::thread::scope(|s| {
+                let handles: Vec<_> = chunk
+                    .iter()
+                    .map(|e| {
+                        let scratch = &scratch;
+                        s.spawn(move || (e, run_program(&e.name, scratch)))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap())
+                    .collect::<Vec<_>>()
             })
-            .collect();
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
-    });
+        })
+        .collect();
     let mut report = String::new();
     let mut failures = Vec::new();
     let mut passing = 0;
