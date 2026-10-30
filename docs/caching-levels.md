@@ -175,6 +175,23 @@ A truly local unchanged-result hit is the way to avoid both remote admission
 and transport. That still requires complete positive/negative input receipts,
 not a source-only timestamp or a cached terminal transcript.
 
+## Shipped warm-sync follow-through
+
+Two small shipping-client changes now reuse already-proven structure without
+skipping validation: `f3a7dc752` retains derived watch-directory paths until
+manifest membership changes, and `1c3656078` merges sorted manifests instead
+of performing two sets of tree lookups. Watch registration is still retried,
+every command still rescans inputs, and the remote barrier remains mandatory.
+See `watch-directory-reuse.md` and `remote-sync-linear-diff.md` for scoped
+component diagnostics and exact-oracle coverage.
+
+After installation, real hosted all-target Clippy passed with 62 fresh units:
+`20261029-211321346-2704621` took 1.4 s (869 ms sync), followed by
+`20261029-211322726-2703167` at 1.2 s (673 ms sync), with 0.03 s Cargo in each.
+These are verification observations under concurrent work, not matched suite
+speedup evidence. Source validation and admission still prevent a demonstrated
+subsecond result. Full shipping tests passed 834 cases with eight ignored.
+
 ## Primary design references
 
 The implementation inventory above comes from this checkout. These independent
