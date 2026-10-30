@@ -138,6 +138,20 @@ struct ClippyCallbacks {
 impl rustc_driver::Callbacks for ClippyCallbacks {
     #[expect(rustc::bad_opt_access, reason = "necessary in clippy driver to set `mir_opt_level`")]
     fn config(&mut self, config: &mut interface::Config) {
+        let module_local = config
+            .crate_cfg
+            .iter()
+            .any(|cfg| cfg.trim() == "jr_clippy_module_lints");
+        if module_local {
+            // Custom cfgs alone do not invalidate green lint_mod queries if
+            // source code never reads them. Keep this pass partition in its own
+            // versioned incremental namespace, including its cached diagnostics.
+            config.opts.incremental = config
+                .opts
+                .incremental
+                .take()
+                .map(|path| path.join("jr-clippy-module-lints-v2"));
+        }
         let previous = config.register_lints.take();
         let clippy_args_var = self.clippy_args_var.take();
         config.track_state = Some(Box::new(move |sess| {
@@ -163,7 +177,7 @@ impl rustc_driver::Callbacks for ClippyCallbacks {
             list_builder.register(lint_store);
 
             let conf = clippy_config::Conf::load(sess);
-            clippy_lints::register_lint_passes(lint_store, conf);
+            clippy_lints::register_lint_passes(lint_store, conf, module_local);
 
             #[cfg(feature = "internal")]
             clippy_lints_internal::register_lints(lint_store);

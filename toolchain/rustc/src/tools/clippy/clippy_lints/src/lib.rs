@@ -446,7 +446,7 @@ pub fn explain(name: &str) -> i32 {
 /// Register all lints and lint groups with the rustc lint store
 ///
 /// Used in `./src/driver.rs`.
-pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Conf) {
+pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Conf, module_local: bool) {
     for (old_name, new_name) in deprecated_lints::RENAMED {
         store.register_renamed(old_name, new_name);
     }
@@ -475,7 +475,9 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
 
     store.register_late_lint_pass(Box::new(move |tcx: TyCtxt<'_>| {
         let skippable_lints = tcx.skippable_lints(());
-        let is_active = |lints: &rustc_lint::LintVec| is_lint_pass_required(skippable_lints, lints);
+        let is_active = |name: &str, lints: &rustc_lint::LintVec| {
+            !(module_local && is_module_local_pass(name)) && is_lint_pass_required(skippable_lints, lints)
+        };
         Box::new(CombinedLateLintPass::new(
             tcx,
             conf,
@@ -484,7 +486,37 @@ pub fn register_lint_passes(store: &mut rustc_lint::LintStore, conf: &'static Co
             &is_active,
         ))
     }));
+
+    if module_local {
+        store.register_late_lint_mod_pass(Box::new(move |tcx: TyCtxt<'_>| {
+            let skippable_lints = tcx.skippable_lints(());
+            let is_active = |_: &str, lints: &rustc_lint::LintVec| is_lint_pass_required(skippable_lints, lints);
+            Box::new(CombinedModuleLateLintPass::new(&is_active))
+        }));
+    }
 }
+
+// This deliberately small allowlist contains only zero-state passes. They read
+// HIR/typeck results through tracked queries, not shared early-pass collectors,
+// and have no crate initialization/finalization or cross-module accumulator.
+fn is_module_local_pass(name: &str) -> bool {
+    matches!(name, "NegMultiply" | "NeedlessQuestionMark")
+}
+
+const _: () = {
+    // Stateful changes require a fresh module-locality audit.
+    assert!(size_of::<neg_multiply::NegMultiply>() == 0);
+    assert!(size_of::<needless_question_mark::NeedlessQuestionMark>() == 0);
+};
+
+#[rustfmt::skip]
+rustc_lint::late_lint_methods!(
+    crate::combined_late_lint_pass,
+    [CombinedModuleLateLintPass, (), [
+        NegMultiply: neg_multiply::NegMultiply = neg_multiply::NegMultiply,
+        NeedlessQuestionMark: needless_question_mark::NeedlessQuestionMark = needless_question_mark::NeedlessQuestionMark,
+    ]]
+);
 
 // Fold every early pass into one statically-combined struct (see
 // `combined_early_pass`); the method list comes from `early_lint_methods!`.

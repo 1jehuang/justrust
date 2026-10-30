@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "date_utc": "2026-10-30",
+  "experiment": "jr_clippy_module_lints",
+  "default_enabled": false,
+  "incremental_namespace": "jr-clippy-module-lints-v2",
+  "module_passes": ["NegMultiply", "NeedlessQuestionMark"],
+  "compiler": "rustc 1.101.0-nightly (ee5254990 2026-10-14)",
+  "driver": "toolchain/rustc/build/host/stage1-tools/x86_64-unknown-linux-gnu/release/clippy-driver",
+  "sysroot": "toolchain/rustc/build/host/stage1",
+  "ordered_acceptance": {
+    "command": "python3 bench/clippy-module-accept.py --driver <driver> --sysroot <sysroot> --ui-root toolchain/rustc/src/tools/clippy/tests/ui --output <scratch>/clippy-module-accept-v2.json",
+    "compiler_invocations": 48,
+    "full_json_diagnostics_equal": true,
+    "exit_status_equal": true,
+    "top_level_emission_order_ignored": true,
+    "incremental_verify_ich": true,
+    "ordered_edit_states": 10,
+    "shared_directory_cfg_switches": 4,
+    "existing_ui_source_comparisons": 7,
+    "tested": ["cross-module body edits", "nested modules", "scoped allow", "fulfilled expectation", "unfulfilled expectation", "denied lint", "E0308 compiler error", "error recovery", "warm versus cold", "partition switching"]
+  },
+  "official_runner": {
+    "command": "cd toolchain/rustc && CLIPPY_ARGS=--cfg=jr_clippy_module_lints ./x test --stage 1 --keep-stage 0 --keep-stage-std 1 src/tools/clippy",
+    "exit_status": 0,
+    "main_ui_passed": 1877,
+    "main_ui_ignored": 5,
+    "secondary_ui_passed": 194,
+    "other_test_groups_all_passed": true,
+    "snapshots_modified": false
+  },
+  "native_self_profile": {
+    "fixture": "root module plus a.rs with NegMultiply and b.rs with NeedlessQuestionMark",
+    "flags": ["-Zincremental-verify-ich", "-Zself-profile-events=default,args"],
+    "summary_tool": "summarize summarize --json <profile>",
+    "cold_lint_mod_executions": 3,
+    "unchanged_warm_lint_mod_executions": 0,
+    "a_body_edit_lint_mod_executions": 2,
+    "diagnostics_replayed": true,
+    "missing_profile_row_interpretation": "warm profile has no lint_mod query execution row"
+  },
+  "limits": [
+    "No comprehensive session-weighted performance comparison was run. No speedup or default promotion is claimed.",
+    "Only two zero-state late passes were moved. Methods, UnusedAsync, FormatArgsStorage and AttrStorage consumers remain crate-wide.",
+    "Four-pass precursor failed two official UI snapshots due to diagnostic reordering and was narrowed rather than blessed.",
+    "Cfg-only precursor lost cached diagnostics on partition switching. Versioned native incremental namespacing fixes that regression."
+  ]
+}

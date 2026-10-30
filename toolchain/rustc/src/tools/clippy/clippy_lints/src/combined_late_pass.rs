@@ -60,13 +60,15 @@ macro_rules! combined_late_lint_pass {
     ) => {
         #[allow(non_snake_case)]
         pub struct $name<'tcx> {
+            _marker: std::marker::PhantomData<&'tcx ()>,
             $($field: Option<$fty>,)*
         }
 
         impl<'tcx> $name<'tcx> {
-            pub fn new<F: Fn(&rustc_lint::LintVec) -> bool>($($pname: $pty,)* is_active: &F) -> Self {
+            pub fn new<F: Fn(&str, &rustc_lint::LintVec) -> bool>($($pname: $pty,)* is_active: &F) -> Self {
                 Self {
-                    $($field: is_active(&<$fty>::lint_vec()).then(|| $ctor),)*
+                    _marker: std::marker::PhantomData,
+                    $($field: is_active(stringify!($field), &<$fty>::lint_vec()).then(|| $ctor),)*
                 }
             }
         }
