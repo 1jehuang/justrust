@@ -6561,9 +6561,9 @@ impl ValidatedTraitWorld {
                 }
             }
         }
-        for i in 0..count {
+        for (i, reachable) in closure.iter().take(count).enumerate() {
             for j in 0..count {
-                if closure[i] & (1u64 << j) == 0 {
+                if reachable & (1u64 << j) == 0 {
                     continue;
                 }
                 if let (Some(a), Some(b)) = (regions.normalized[i], regions.normalized[j]) {

@@ -1816,14 +1816,12 @@ impl<'a> Loader<'a> {
                 "{" => closing.push("}"),
                 "[" => closing.push("]"),
                 "(" => closing.push(")"),
-                c @ ("}" | "]" | ")") => {
-                    if closing.pop() != Some(c) {
-                        return Err(Self::error(
-                            SourceErrorKind::Syntax,
-                            anchor,
-                            "unbalanced delimiter in source file",
-                        ));
-                    }
+                c @ ("}" | "]" | ")") if closing.pop() != Some(c) => {
+                    return Err(Self::error(
+                        SourceErrorKind::Syntax,
+                        anchor,
+                        "unbalanced delimiter in source file",
+                    ));
                 }
                 _ => {}
             }
@@ -1986,10 +1984,8 @@ fn inactive_syntax(text: &str) -> Result<String, String> {
             "{" => closing.push("}"),
             "[" => closing.push("]"),
             "(" => closing.push(")"),
-            c @ ("}" | "]" | ")") => {
-                if closing.pop() != Some(c) {
-                    return Err("unbalanced delimiter in inactive item".into());
-                }
+            c @ ("}" | "]" | ")") if closing.pop() != Some(c) => {
+                return Err("unbalanced delimiter in inactive item".into());
             }
             _ => {}
         }

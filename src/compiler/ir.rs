@@ -5375,10 +5375,8 @@ pub fn by_value_contains(
                     }
                 }
             }
-            Ty::Array { element, .. } => {
-                if child(element)? {
-                    return Ok((true, height));
-                }
+            Ty::Array { element, .. } if child(element)? => {
+                return Ok((true, height));
             }
             _ => {}
         }
