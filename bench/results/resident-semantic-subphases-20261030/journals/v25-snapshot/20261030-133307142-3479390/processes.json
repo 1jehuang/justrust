@@ -1,0 +1,432 @@
+[
+  {
+    "pid": 3479426,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --manifest-path /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rust-analyzer/Cargo.toml --release --offline --locked -p ide-diagnostics --lib -j 6 -- resident_semantic_subphases --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793392387.1572785,
+    "last_seen": 1793392476.1804028,
+    "cpu_secs": 0.2,
+    "max_rss_mb": 73.0
+  },
+  {
+    "pid": 3479443,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name salsa_macros --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/salsa-macros/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type proc-macro --emit=dep-info,link -C prefer-dynamic -C embed-bitcode=no -C debug-assertions=off --cfg feature=\"default\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"persiste",
+    "kind": "rustc",
+    "first_seen": 1793392387.3656344,
+    "last_seen": 1793392387.783962,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.828125
+  },
+  {
+    "pid": 3479449,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name ra_ap_rustc_abi --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rustc_abi/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"nightly\", \"randomize\")) -C metadata=1f429e5e5d3",
+    "kind": "rustc",
+    "first_seen": 1793392387.3656344,
+    "last_seen": 1793392387.783962,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.703125
+  },
+  {
+    "pid": 3479446,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name salsa_macros --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/salsa-macros/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type proc-macro --emit=dep-info,link -C prefer-dynamic -C embed-bitcode=no -C debug-assertions=off --cfg feature=\"default\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"persistence\")) -C metadata=443d4eccacd54a3e -C extra-f",
+    "kind": "rustc",
+    "first_seen": 1793392387.3656344,
+    "last_seen": 1793392387.783962,
+    "cpu_secs": 0.6,
+    "max_rss_mb": 263.8671875
+  },
+  {
+    "pid": 3479451,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name ra_ap_rustc_abi --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rustc_abi/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"nightly\", \"randomize\")) -C metadata=1f429e5e5d319cfc -C extra-filename=-8ad27a4a13d37431 --ou",
+    "kind": "rustc",
+    "first_seen": 1793392387.3656344,
+    "last_seen": 1793392387.783962,
+    "cpu_secs": 0.55,
+    "max_rss_mb": 204.10546875
+  },
+  {
+    "pid": 3479478,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name ra_ap_rustc_type_ir --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rustc_type_ir/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"nightly\")) -C metadata=101571ff0c323fd9 -C extra-filename=-1b0e267b8ab96721 --out-dir",
+    "kind": "rustc",
+    "first_seen": 1793392387.783962,
+    "last_seen": 1793392389.6773908,
+    "cpu_secs": 2.05,
+    "max_rss_mb": 395.94921875
+  },
+  {
+    "pid": 3479475,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name ra_ap_rustc_type_ir --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rustc_type_ir/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"nightly\")) -C metadata=101571ff0c323fd9",
+    "kind": "rustc",
+    "first_seen": 1793392387.783962,
+    "last_seen": 1793392389.6773908,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.70703125
+  },
+  {
+    "pid": 3479546,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name salsa --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/salsa/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --cfg feature=\"inventory\" --cfg feature=\"macros\" --cfg feature=\"rayon\" --cfg feature=\"salsa_unstable\" --cfg feature=\"triomp",
+    "kind": "rustc",
+    "first_seen": 1793392387.994139,
+    "last_seen": 1793392391.1753676,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.70703125
+  },
+  {
+    "pid": 3479547,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name salsa --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/salsa/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --cfg feature=\"inventory\" --cfg feature=\"macros\" --cfg feature=\"rayon\" --cfg feature=\"salsa_unstable\" --cfg feature=\"triomphe\" --check-cfg cfg(docsrs,test) --check-cfg c",
+    "kind": "rustc",
+    "first_seen": 1793392387.994139,
+    "last_seen": 1793392391.1753676,
+    "cpu_secs": 5.68,
+    "max_rss_mb": 382.671875
+  },
+  {
+    "pid": 3479637,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name span --edition=2024 crates/span/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --war",
+    "kind": "rustc",
+    "first_seen": 1793392389.2539923,
+    "last_seen": 1793392391.6015823,
+    "cpu_secs": 3.1,
+    "max_rss_mb": 272.390625
+  },
+  {
+    "pid": 3479636,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name span --edition=2024 crates/span/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init",
+    "kind": "rustc",
+    "first_seen": 1793392389.2539923,
+    "last_seen": 1793392391.6015823,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.484375
+  },
+  {
+    "pid": 3479664,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name tt --edition=2024 crates/tt/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=un",
+    "kind": "rustc",
+    "first_seen": 1793392389.4655156,
+    "last_seen": 1793392391.3887503,
+    "cpu_secs": 1.97,
+    "max_rss_mb": 231.67578125
+  },
+  {
+    "pid": 3479663,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name tt --edition=2024 crates/tt/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_the",
+    "kind": "rustc",
+    "first_seen": 1793392389.4655156,
+    "last_seen": 1793392391.3887503,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.9453125
+  },
+  {
+    "pid": 3479704,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name syntax_bridge --edition=2024 crates/syntax-bridge/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allo",
+    "kind": "rustc",
+    "first_seen": 1793392389.8892436,
+    "last_seen": 1793392390.7440515,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.7734375
+  },
+  {
+    "pid": 3479721,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name cfg --edition=2024 crates/cfg/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=",
+    "kind": "rustc",
+    "first_seen": 1793392389.8892436,
+    "last_seen": 1793392391.6015823,
+    "cpu_secs": 1.73,
+    "max_rss_mb": 216.03515625
+  },
+  {
+    "pid": 3479720,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name cfg --edition=2024 crates/cfg/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_t",
+    "kind": "rustc",
+    "first_seen": 1793392389.8892436,
+    "last_seen": 1793392391.6015823,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.82421875
+  },
+  {
+    "pid": 3479705,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name syntax_bridge --edition=2024 crates/syntax-bridge/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::u",
+    "kind": "rustc",
+    "first_seen": 1793392389.8892436,
+    "last_seen": 1793392390.7440515,
+    "cpu_secs": 0.95,
+    "max_rss_mb": 223.59375
+  },
+  {
+    "pid": 3479933,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name base_db --edition=2024 crates/base-db/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::ve",
+    "kind": "rustc",
+    "first_seen": 1793392390.961993,
+    "last_seen": 1793392393.933652,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.6171875
+  },
+  {
+    "pid": 3479934,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name base_db --edition=2024 crates/base-db/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref",
+    "kind": "rustc",
+    "first_seen": 1793392390.961993,
+    "last_seen": 1793392393.933652,
+    "cpu_secs": 8.41,
+    "max_rss_mb": 339.8125
+  },
+  {
+    "pid": 3479956,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name ra_ap_rustc_next_trait_solver --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rustc_next_trait_solver/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"nightly\")) -C metad",
+    "kind": "rustc",
+    "first_seen": 1793392391.3887503,
+    "last_seen": 1793392393.2983437,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.4921875
+  },
+  {
+    "pid": 3479957,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name ra_ap_rustc_next_trait_solver --edition=2024 /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/vendor/rustc_next_trait_solver/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"nightly\")) -C metadata=949c7edf10bc383b -C extra-filename=-440942",
+    "kind": "rustc",
+    "first_seen": 1793392391.3887503,
+    "last_seen": 1793392393.2983437,
+    "cpu_secs": 1.99,
+    "max_rss_mb": 318.4609375
+  },
+  {
+    "pid": 3479951,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name mbe --edition=2024 crates/mbe/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=",
+    "kind": "rustc",
+    "first_seen": 1793392391.3887503,
+    "last_seen": 1793392392.4497871,
+    "cpu_secs": 1.84,
+    "max_rss_mb": 266.93359375
+  },
+  {
+    "pid": 3479950,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name mbe --edition=2024 crates/mbe/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_t",
+    "kind": "rustc",
+    "first_seen": 1793392391.3887503,
+    "last_seen": 1793392392.4497871,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.48828125
+  },
+  {
+    "pid": 3480066,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_expand --edition=2024 crates/hir-expand/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless",
+    "kind": "rustc",
+    "first_seen": 1793392392.0252254,
+    "last_seen": 1793392398.5882978,
+    "cpu_secs": 22.22,
+    "max_rss_mb": 530.71484375
+  },
+  {
+    "pid": 3480065,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_expand --edition=2024 crates/hir-expand/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clip",
+    "kind": "rustc",
+    "first_seen": 1793392392.0252254,
+    "last_seen": 1793392398.5882978,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.8203125
+  },
+  {
+    "pid": 3480146,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name test_fixture --edition=2024 crates/test-fixture/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::use",
+    "kind": "rustc",
+    "first_seen": 1793392393.933652,
+    "last_seen": 1793392395.415037,
+    "cpu_secs": 1.5,
+    "max_rss_mb": 228.296875
+  },
+  {
+    "pid": 3480144,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_def --edition=2024 crates/hir-def/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref",
+    "kind": "rustc",
+    "first_seen": 1793392393.933652,
+    "last_seen": 1793392418.9639308,
+    "cpu_secs": 79.87,
+    "max_rss_mb": 1314.0703125
+  },
+  {
+    "pid": 3480142,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_def --edition=2024 crates/hir-def/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::ve",
+    "kind": "rustc",
+    "first_seen": 1793392393.933652,
+    "last_seen": 1793392418.9639308,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.8359375
+  },
+  {
+    "pid": 3480143,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name test_fixture --edition=2024 crates/test-fixture/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=",
+    "kind": "rustc",
+    "first_seen": 1793392393.933652,
+    "last_seen": 1793392395.415037,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.58984375
+  },
+  {
+    "pid": 3480788,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_ty --edition=2024 crates/hir-ty/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref -",
+    "kind": "rustc",
+    "first_seen": 1793392402.1246078,
+    "last_seen": 1793392470.0470655,
+    "cpu_secs": 158.06,
+    "max_rss_mb": 2075.57421875
+  },
+  {
+    "pid": 3480787,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_ty --edition=2024 crates/hir-ty/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_",
+    "kind": "rustc",
+    "first_seen": 1793392402.1246078,
+    "last_seen": 1793392470.0470655,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.4921875
+  },
+  {
+    "pid": 3481896,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_ide --edition=2024 crates/hir-ide/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::ve",
+    "kind": "rustc",
+    "first_seen": 1793392421.2658606,
+    "last_seen": 1793392434.222406,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.70703125
+  },
+  {
+    "pid": 3481900,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_ty_wfcheck --edition=2024 crates/hir-ty-wfcheck/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy:",
+    "kind": "rustc",
+    "first_seen": 1793392421.2658606,
+    "last_seen": 1793392429.1069229,
+    "cpu_secs": 8.03,
+    "max_rss_mb": 365.3203125
+  },
+  {
+    "pid": 3481898,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_ide --edition=2024 crates/hir-ide/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref",
+    "kind": "rustc",
+    "first_seen": 1793392421.2658606,
+    "last_seen": 1793392434.222406,
+    "cpu_secs": 13.05,
+    "max_rss_mb": 455.08984375
+  },
+  {
+    "pid": 3481897,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_ty_wfcheck --edition=2024 crates/hir-ty-wfcheck/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --al",
+    "kind": "rustc",
+    "first_seen": 1793392421.2658606,
+    "last_seen": 1793392429.1069229,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.76953125
+  },
+  {
+    "pid": 3481912,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_ty_borrowck --edition=2024 crates/hir-ty-borrowck/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --",
+    "kind": "rustc",
+    "first_seen": 1793392421.6858056,
+    "last_seen": 1793392467.3078074,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.70703125
+  },
+  {
+    "pid": 3481913,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_ty_borrowck --edition=2024 crates/hir-ty-borrowck/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clipp",
+    "kind": "rustc",
+    "first_seen": 1793392421.6858056,
+    "last_seen": 1793392467.3078074,
+    "cpu_secs": 59.9,
+    "max_rss_mb": 888.9140625
+  },
+  {
+    "pid": 3482461,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir --edition=2024 crates/hir/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=",
+    "kind": "rustc",
+    "first_seen": 1793392429.3184457,
+    "last_seen": 1793392460.3084106,
+    "cpu_secs": 32.4,
+    "max_rss_mb": 765.84375
+  },
+  {
+    "pid": 3482460,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir --edition=2024 crates/hir/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_t",
+    "kind": "rustc",
+    "first_seen": 1793392429.3184457,
+    "last_seen": 1793392460.3084106,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.78125
+  },
+  {
+    "pid": 3483173,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name ide_db --edition=2024 crates/ide-db/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref -",
+    "kind": "rustc",
+    "first_seen": 1793392439.7533236,
+    "last_seen": 1793392463.4931264,
+    "cpu_secs": 28.84,
+    "max_rss_mb": 656.59765625
+  },
+  {
+    "pid": 3483172,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name ide_db --edition=2024 crates/ide-db/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_",
+    "kind": "rustc",
+    "first_seen": 1793392439.7533236,
+    "last_seen": 1793392463.4931264,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.7421875
+  },
+  {
+    "pid": 3485197,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v25-snapshot/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name ide_diagnostics --edition=2024 crates/ide-diagnostics/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy",
+    "kind": "rustc",
+    "first_seen": 1793392470.2561514,
+    "last_seen": 1793392475.9681523,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.80859375
+  },
+  {
+    "pid": 3485198,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name ide_diagnostics --edition=2024 crates/ide-diagnostics/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=unused_lifetimes --warn",
+    "kind": "rustc",
+    "first_seen": 1793392470.2561514,
+    "last_seen": 1793392475.9681523,
+    "cpu_secs": 19.99,
+    "max_rss_mb": 609.69140625
+  }
+]

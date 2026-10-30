@@ -1,0 +1,103 @@
+{
+  "scope": "Offline re-signed mutation controls and isolated relocated replay, no native calls.",
+  "baseline": "passed",
+  "mutations": [
+    {
+      "name": "reintroduced_semantic_guard",
+      "verdict": "rejected",
+      "reason": "accepted frozen source anchor: toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "altered_four_file_patch",
+      "verdict": "rejected",
+      "reason": "four-file patch anchor",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "snapshot_nonlock_delta",
+      "verdict": "rejected",
+      "reason": "private delta not lock-only",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "private_lock_corrupt",
+      "verdict": "rejected",
+      "reason": "retained lock mismatch",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "full351_count_downgrade",
+      "verdict": "rejected",
+      "reason": "native test counts/exit",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "actual_api_test_missing",
+      "verdict": "rejected",
+      "reason": "actual API test absent from journal",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "runtime_marker_missing",
+      "verdict": "rejected",
+      "reason": "runtime edit marker absent/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "type_error_false_success",
+      "verdict": "rejected",
+      "reason": "expected negative gate succeeded",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_label_missing",
+      "verdict": "rejected",
+      "reason": "same-thread five actual phases missing/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_wrong_thread",
+      "verdict": "rejected",
+      "reason": "same-thread five actual phases missing/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_outside_outer",
+      "verdict": "rejected",
+      "reason": "phase outside actual same-thread semantic outer",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_overlap",
+      "verdict": "rejected",
+      "reason": "actual phases not contiguous in label order",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "phase_duplicate",
+      "verdict": "rejected",
+      "reason": "same-thread five actual phases missing/duplicated",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "transport_drop",
+      "verdict": "rejected",
+      "reason": "profile drops/stale/retained counts",
+      "all_mutable_hashes_resigned": true
+    },
+    {
+      "name": "two_files_collapsed",
+      "verdict": "rejected",
+      "reason": "profile actual file callback rows",
+      "all_mutable_hashes_resigned": true
+    }
+  ],
+  "relocation": {
+    "verdict": "passed",
+    "independent_cwd": true,
+    "actual_validator_from_relocated_bundle": true,
+    "no_original_scratch_or_repository_reads": true
+  },
+  "verdict": "passed"
+}

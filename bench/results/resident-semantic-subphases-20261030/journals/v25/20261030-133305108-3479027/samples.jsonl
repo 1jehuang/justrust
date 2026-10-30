@@ -1,0 +1,3 @@
+{"t":1793392385.1226838,"sys_cores":0.0,"build_cores":0.0,"build_rss_mb":19.44921875,"mem_available_mb":53721,"rustc_procs":0,"foreign_rustc_procs":0,"psi_cpu_ms":0.0,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793392385.3324943,"sys_cores":4.3076923076923075,"build_cores":1.0485652760369497,"build_rss_mb":112.5859375,"mem_available_mb":53671,"rustc_procs":0,"foreign_rustc_procs":0,"psi_cpu_ms":3.012,"psi_mem_ms":0.0,"psi_io_ms":0.0}
+{"t":1793392385.3709145,"sys_cores":3.9344262295081966,"build_cores":0.0,"build_rss_mb":0.0,"mem_available_mb":53691,"rustc_procs":0,"foreign_rustc_procs":0,"psi_cpu_ms":0.893,"psi_mem_ms":0.0,"psi_io_ms":0.0}

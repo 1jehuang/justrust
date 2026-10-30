@@ -1,0 +1,219 @@
+{
+  "verdict": "passed",
+  "source": {
+    "files": 2444,
+    "private_delta": "Cargo.lock",
+    "four_path_patch_replayed": true
+  },
+  "native": [
+    {
+      "run_id": "20261030-133307142-3479390",
+      "filter": "resident_semantic_subphases",
+      "passed": 5
+    },
+    {
+      "run_id": "20261030-133436214-3485583",
+      "filter": "diagnostic_hash::tests",
+      "passed": 2
+    },
+    {
+      "run_id": "20261030-133436486-3485632",
+      "filter": "diagnostics_timing_tests",
+      "passed": 3
+    },
+    {
+      "run_id": "20261030-133436701-3485707",
+      "filter": "resident_graph_reuse",
+      "passed": 1
+    },
+    {
+      "run_id": "20261030-133436923-3485756",
+      "filter": "the_roots_of_a_listed_crate",
+      "passed": 1
+    },
+    {
+      "run_id": "20261030-133437181-3485842",
+      "filter": "telemetry",
+      "passed": 3
+    },
+    {
+      "run_id": "20261030-133629708-3652589",
+      "filter": null,
+      "passed": 351
+    }
+  ],
+  "disabled_suites": [
+    {
+      "namespace": "rsb16",
+      "rows": 22,
+      "disabled_telemetry": true
+    },
+    {
+      "namespace": "rsa22",
+      "rows": 22,
+      "disabled_telemetry": true
+    }
+  ],
+  "profile": [
+    {
+      "row": 0,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 430,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 7,
+            "diagnostics.semantic.syntax_walk": 205,
+            "diagnostics.semantic.module_context": 0,
+            "diagnostics.semantic.collect": 116165,
+            "diagnostics.semantic.render_and_filter": 1360
+          }
+        },
+        {
+          "pid": 3649083,
+          "tid": 429,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 11,
+            "diagnostics.semantic.syntax_walk": 543,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 148160,
+            "diagnostics.semantic.render_and_filter": 43
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ],
+        [
+          33,
+          231
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 1,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 435,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 11,
+            "diagnostics.semantic.syntax_walk": 255,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 254759,
+            "diagnostics.semantic.render_and_filter": 1000
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 2,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 451,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 13,
+            "diagnostics.semantic.syntax_walk": 268,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 72131,
+            "diagnostics.semantic.render_and_filter": 1103
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 3,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 468,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 14,
+            "diagnostics.semantic.syntax_walk": 251,
+            "diagnostics.semantic.module_context": 2,
+            "diagnostics.semantic.collect": 112705,
+            "diagnostics.semantic.render_and_filter": 1216
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 4,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 484,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 13,
+            "diagnostics.semantic.syntax_walk": 242,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 97967,
+            "diagnostics.semantic.render_and_filter": 1238
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    },
+    {
+      "row": 5,
+      "per_thread": [
+        {
+          "pid": 3649083,
+          "tid": 501,
+          "phases_us": {
+            "diagnostics.semantic.prepare_parse": 18,
+            "diagnostics.semantic.syntax_walk": 241,
+            "diagnostics.semantic.module_context": 1,
+            "diagnostics.semantic.collect": 100109,
+            "diagnostics.semantic.render_and_filter": 1577
+          }
+        }
+      ],
+      "file_callback_rows": [
+        [
+          540,
+          373
+        ]
+      ],
+      "file_to_thread_mapping": "not recorded, no inferred bijection",
+      "dropped": 0
+    }
+  ],
+  "scope": "Actual correctness and inclusive telemetry receipts only, no speedup verdict"
+}

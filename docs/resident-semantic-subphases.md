@@ -128,3 +128,29 @@ not additive. The profile's noise proxy explicitly does not establish a quiet
 machine. The disabled five-replicate comparison's raw -1.60% change was below the
 acceptance floor and is **not a speedup claim**. No general performance or default
 promotion claim follows from these bounded correctness and telemetry gates.
+
+## Retained offline replay
+
+The native source change was atomically committed as `90164925c`. Its evidence
+is retained under `bench/results/resident-semantic-subphases-20261030/`, including
+frozen source/originals and the four-file patch, whole 2444-file hash manifests,
+original/private locks, exact run journals and offline export metadata, 700-test
+harness regression output, both 22-row disabled suites, and all six positive
+profile traces/worker logs with the original runners. Full snapshot trees,
+targets, binaries and caches are intentionally excluded. No live Rust sources
+were recaptured during evidence retention.
+
+`validate.py` in that directory replays the patch against original backups in
+memory, ties accepted source hashes to build/snapshot receipts, and verifies
+actual native API/full-suite journals and raw runtime acceptance. It checks each
+same-thread five-phase group inside its own semantic outer interval and the
+broken-in wall. Raw callback/file rows are checked independently: trace spans do
+not carry file arguments, and worker callback lines do not carry thread IDs, so
+a first-row thread-to-file mapping cannot be proven and is not invented.
+
+The offline validator and its `test_validate.py` companion cover 15 re-signed
+semantic mutation controls and relocated replay from an independent working
+directory. Their generated receipts are `validation.json`,
+`mutation-controls.json` and `audit.json`. Replaying these Python-only checks
+does not invoke a compiler, resident daemon, Cargo, justrust, network access or
+native workloads. See the bundle README for commands and integrity limits.

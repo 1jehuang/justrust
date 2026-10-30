@@ -1,0 +1,10 @@
+request: sync at_us=1793392588703581
+change: 1 files
+check timing: FileId(540): asked_callback_calls=373 asked_callback_cumulative_ns=380263 (source/hash/selective predicate, included in semantic)
+edit (apply 10.9ms): compiled 3990 of 3990 fns (+120 instances) in 68.4ms (+947.0ns emit)
+stats: 1 of 44574 functions compiled, 44573 reused
+patch: 7 functions
+phases: compile 379.7µs, resolve 1.8ms, define 19.4µs, fallback 0.0ns, object 597.3µs, 1 rounds
+link: 978.0µs (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 115.7ms
+diagnostics transport: retained=9 stale=0 dropped=0 cap=4000

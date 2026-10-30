@@ -1,0 +1,4 @@
+419e738d0fab78976cc09415c80b57fb564c57704f6257aba07e4817edd47a1c  ./docs/resident-semantic-subphases.md
+68a9b0625158dcc201da88c5c0777cf9a2eb193d6053089ef7c1b9bf375a51a0  ./toolchain/resident/crates/ra-jit/src/main.rs
+7af1b6eb7fc616d3230a1970673165da1d9a724af72666a4b3e8d721930176b0  ./toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/lib.rs
+75695280c0733b18166d35b8acf1b943dab2d218beb6bd46cead08fde545c770  ./toolchain/resident/vendor/rust-analyzer/crates/ide-diagnostics/src/tests.rs

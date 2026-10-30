@@ -1,0 +1,30 @@
+{
+  "verdict": "passed_with_replay_chronology_recorded",
+  "accepted_source_commit": "90164925ce021dbb56a735a7d99efacab261d732",
+  "allowed_changes": ["bench/results/resident-semantic-subphases-20261030/**", "docs/resident-semantic-subphases.md"],
+  "collection": {"copied_files": 369, "copied_bytes": 20468075, "live_production_source_recaptured": false},
+  "checks": {
+    "four_file_patch_replayed_in_memory": "passed",
+    "accepted_frozen_source_and_build_snapshot_hashes": "passed",
+    "whole_2444_manifest_and_private_lock_only_delta": "passed",
+    "actual_owned_five_api_and_full351_raw_journals": "passed",
+    "all_focused_native_snapshot_gates": "passed",
+    "original_native_check_and_build_journal_identity": "passed",
+    "700_harness_regression_receipt": "passed",
+    "rsb16_rsa22_exact22_runtime_error_recovery_rows_each": "passed",
+    "positive_six_rows_actual_same_thread_subphases_and_outers": "passed",
+    "raw_file_callback_rows_kept_separate_from_thread_groups": "passed",
+    "zero_dropped_and_first_row_two_files_not_summed": "passed",
+    "no_speedup_claim": "passed"
+  },
+  "offline_replay_chronology": [
+    "Initial full baseline validator passed.",
+    "Fifteen fully re-signed semantic mutation controls rejected for intended semantic reasons, plus relocated copied-validator replay passed. Retained in mutation-controls.json.",
+    "Additional strict checks were then added for original build journal identities, selected source integrity receipts, exact export coverage, engine identity and broken-in wall nesting. The strengthened validator baseline passed, retained in validation.json.",
+    "Coordinator requested protection for v26 timing. No further mutation/relocation replay was run during protected timing. Independent final-validator replay is deferred until final-v26-snapshot.exit. Earlier controls were not represented as newly rerun against the strengthened validator."
+  ],
+  "worker_native_calls_builds_tests_workloads": 0,
+  "retained_runners_executed_by_evidence_worker": false,
+  "provenance_limit": "Trace carries pid/tid without file args; worker callbacks carry FileId without tid. No specific thread-to-file bijection is claimed.",
+  "excluded_payloads": ["full2444 source tree", "targets", "binaries", "caches"]
+}

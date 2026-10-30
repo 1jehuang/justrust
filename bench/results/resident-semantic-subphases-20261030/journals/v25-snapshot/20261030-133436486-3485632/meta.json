@@ -1,0 +1,36 @@
+{
+  "id": "20261030-133436486-3485632",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6",
+    "--",
+    "diagnostics_timing_tests",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "start": 1793392476.4866438,
+  "pid": 3485632,
+  "real_cargo": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+  "real_rustc": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+  "rustc_wrapper": null,
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "tty": false,
+  "ncpu": 16,
+  "mem_total_mb": 63795,
+  "env": {
+    "JCODE_SESSION_ID": "session_skunk_1793325801268_bca6e773d45c6a0a",
+    "JCODE_SCRATCH_DIR": "/home/jeremy/.jcode/scratch",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target"
+  },
+  "slot": null,
+  "route": "JUSTRUST_REMOTE=off",
+  "place": "local"
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "pid": 3652626,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --release --locked -p ra-jit --bin jr-engine -j 6",
+    "kind": "cargo",
+    "first_seen": 1793392589.7205737,
+    "last_seen": 1793392606.343722,
+    "cpu_secs": 0.18,
+    "max_rss_mb": 105.6953125
+  },
+  {
+    "pid": 3652680,
+    "comm": "jr_engine-93ff5",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/ra-jit/93ff5023e9192f9b/out/jr_engine-93ff5023e9192f9b -Z unstable-options --report-time",
+    "kind": "target-binary",
+    "first_seen": 1793392589.927793,
+    "last_seen": 1793392606.343722,
+    "cpu_secs": 5.19,
+    "max_rss_mb": 731.0703125
+  }
+]
