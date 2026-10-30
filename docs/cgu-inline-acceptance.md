@@ -28,8 +28,9 @@ python3 bench/reuse-cgu-inline-accept.py \
 The output directory must not exist and its parent must exist. Pass the actual
 compiler executable and its sysroot exposing the driver under
 `lib/*rustc_driver*`, not a wrapper. No installed compiler is replaced and
-`RUSTC_BOOTSTRAP` is not set by this harness. No native workloads have been run
-during harness implementation.
+`RUSTC_BOOTSTRAP` is not set by this harness. Initial implementation used only
+mocks. After root released a frozen compiler, root ran the full initial gate
+and authorized the focused fixture repair described below.
 
 ## Configuration and revision matrix
 
@@ -84,10 +85,14 @@ needed for this standalone fixture.
 
 ## Graph and observable semantics
 
-Three externally named, `inline(never)` global roots live in separate modules.
+Three externally named, `inline(never)` global roots live in two modules.
+Two roots share module `a` and a third lives in module `c`.
 All call the same inline diamond: left and right each call the shared leaf.
 This gives both shared root reachability and a repeated descendant within the
-diamond. Module-separated global roots exercise CGU partitioning under the
+diamond. The two same-module roots share an initial CGU before final merging,
+which is necessary to exercise cross-root suppression. Final codegen-units=1
+does not itself put different-module roots in the same initial traversal CGU.
+The third, module-separated global root exercises CGU isolation under the
 16-CGU setting, without asserting that every module must occupy a distinct
 final CGU. The one-CGU configuration independently stresses root sharing inside
 a single unit.
@@ -181,3 +186,27 @@ record count. Unknown virtual query labels remain unknown, never guessed into
 one of the static markers. Malformed profiles, wrong event kind/type, absent
 markers, incomplete sequences, or nonzero off controls fail the requested
 mechanism gate. All observations remain in `acceptance.json` on failure.
+
+## Native fixture calibration, October 30, 2026
+
+The initial full run passed all 672 semantic observations but correctly failed
+the independent mechanism proof: enabled cold and warm profiles each recorded
+23 traversal scopes and zero cross-root revisits. All three roots originally
+lived in different modules, so traversal ran with separate initial CGU visited
+sets. Final one-CGU merging happens afterward and cannot create cross-root
+reuse during the earlier traversal. This was a fixture limitation, not reason
+to weaken the positive proof or change native marker emission.
+
+The repaired fixture moves root_b into module `a` beside root_a while retaining
+root_c in module `c` for isolation. A root-authorized focused four-process run
+against the same immutable compiler passed exact diagnostics/runtime and the
+unchanged proof: cold off `0/0`, cold on `23/1`, warm off `0/0`, warm on `23/1`
+(traversal/revisit counts). Compiler-driver SHA-256 remained
+`29ea709935d751ce13e77995173659006c1e15683e0f0645616d12cd5a3a1665`.
+The original failed report remains at
+`/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/acceptance/acceptance.json`.
+The focused repair report and its four raw profiles remain under
+`/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/mechanism-repair-v2/`.
+The focused report is `focused-evidence.json`. These scratch paths are an audit
+trail, not a portable retained-results bundle. The repaired full matrix remains
+root-owned and must pass before source promotion. No speedup is inferred.

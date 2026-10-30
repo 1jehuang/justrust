@@ -45,6 +45,11 @@ class CguTests(unittest.TestCase):
         self.assertIn('fn left() -> u32 { leaf() + 1 }', C.BASE)
         self.assertIn('fn right() -> u32 { leaf() + 2 }', C.BASE)
         self.assertEqual(C.BASE.count('super::diamond()'), 3)
+        initial_module = C.BASE.split('mod a {', 1)[1].split('\n}', 1)[0]
+        self.assertIn('pub fn root_a()', initial_module)
+        self.assertIn('pub fn root_b()', initial_module)
+        self.assertIn('a::root_b()', C.BASE)
+        self.assertIn('mod c {', C.BASE)
         for function in ('leaf', 'left', 'right', 'diamond', 'cycle_a', 'cycle_b'):
             self.assertIn(f'#[inline(always)] fn {function}(', C.BASE)
         self.assertIn('cycle_b(n - 1)', C.BASE)
