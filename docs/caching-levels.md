@@ -143,12 +143,14 @@ The investigation now has concrete native implementations, not only proposals:
   checks rebuilt correctly. See `cargo-subtree-cache.md`. The regression and
   missing comprehensive gate prohibit default promotion. Forwarding the flag
   does not install a new Cargo binary on hosted machines.
-* **Module-local Clippy queries:** an opt-in subset of four stateless passes
-  is under acceptance testing. Switching the cfg without source edits exposed
-  stale green lint queries and missing diagnostics. The experiment therefore
-  needs a versioned incremental-cache namespace, not merely a cfg-based pass
-  switch. Until that regression and diagnostic equivalence pass, it is not a
-  validated improvement. Stateful and cross-module passes remain crate-wide.
+* **Module-local Clippy queries:** the final opt-in subset is `NegMultiply`
+  and `NeedlessQuestionMark`, with acceptance testing in progress. Switching
+  cfg without source edits exposed stale green lint queries and missing
+  diagnostics, requiring a versioned incremental-cache namespace. The initial
+  four-pass subset also reordered two official UI diagnostics, so
+  `NeedlessBool` and `BoolComparison` remain crate-wide rather than changing
+  expected output. Stateful and cross-module passes remain crate-wide too.
+  See `clippy-module-cache-experiment.md` for final acceptance status.
 
 The comprehensive baseline was unavailable because another measurement held
 its shared snapshot lock, including a ten-minute timed-out wait. These
@@ -156,7 +158,8 @@ experiments remain default-off. Focused acceptance cannot substitute for the
 session-weighted benchmark needed to promote defaults.
 
 None of these changes implements authoritative whole-command result replay.
-The reinstalled shipping client passed 20 transport tests
+The reinstalled shipping client passed 831 tests with six ignored
+(`20261029-205934738-2526594`), 20 transport tests
 (`20261029-205606640-2479618`) and all-target Clippy with warnings denied
 (`20261029-205609282-2475935`). That no-op lint still took 2.58 s on the
 client despite 0.05 s on hosted Cargo and 62 fresh units, with 1.94 s reported
