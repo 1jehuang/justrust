@@ -249,7 +249,7 @@ fn curl_with_timing(
 ) -> (Command, String) {
     let mut cmd = Command::new("curl");
     let writeout = if timing {
-        "\njustrust-admission-timing:%{http_code}\n%header{server-timing}"
+        "\njustrust-admission-timing:%{http_code}\njustrust-network-timing:%{time_namelookup},%{time_connect},%{time_appconnect},%{time_pretransfer},%{time_starttransfer},%{time_total}\n%header{server-timing}"
     } else {
         "\n%{http_code}"
     };
@@ -352,6 +352,7 @@ fn curl_response(stdout: &str, timing: bool) -> (&str, u16, Option<String>) {
             .split_once("\njustrust-admission-timing:")
             .unwrap_or((stdout, ""));
         let (code, header) = footer.split_once('\n').unwrap_or((footer, ""));
+        let header = network_footer(header).map_or(header, |(_, header)| header);
         (
             body,
             code.trim().parse().unwrap_or(0),
@@ -361,6 +362,43 @@ fn curl_response(stdout: &str, timing: bool) -> (&str, u16, Option<String>) {
         let (body, code) = stdout.rsplit_once('\n').unwrap_or(("", stdout));
         (body, code.trim().parse().unwrap_or(0), None)
     }
+}
+
+/// The first footer line is emitted by curl, before any untrusted header.
+/// Keep the legacy footer readable and never print arbitrary footer bytes.
+fn network_footer(footer: &str) -> Option<(&str, &str)> {
+    let rest = footer.strip_prefix("justrust-network-timing:")?;
+    rest.split_once('\n')
+}
+
+fn network_timing(values: &str) -> Option<String> {
+    if values.len() > 160 {
+        return None;
+    }
+    let mut times = [0.0; 6];
+    let mut fields = values.split(',');
+    for time in &mut times {
+        let value = fields.next()?;
+        if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit() || b == b'.') {
+            return None;
+        }
+        *time = value.parse::<f64>().ok()?;
+        if !time.is_finite() || !(0.0..=60.0).contains(time) {
+            return None;
+        }
+    }
+    if fields.next().is_some() {
+        return None;
+    }
+    Some(format!(
+        "dns {:.1} ms | connect {:.1} ms | tls {:.1} ms | ready {:.1} ms | first_byte {:.1} ms | total {:.1} ms (cumulative)",
+        times[0] * 1000.0,
+        times[1] * 1000.0,
+        times[2] * 1000.0,
+        times[3] * 1000.0,
+        times[4] * 1000.0,
+        times[5] * 1000.0,
+    ))
 }
 
 pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Result<Resp> {
@@ -395,6 +433,14 @@ pub fn request(c: &Creds, method: &str, path: &str, body: Option<&Value>) -> Res
     }
     if let Some(metrics) = metrics {
         eprintln!("justrust trace: admission {metrics}");
+    }
+    if timing
+        && let Some((_, footer)) = stdout.split_once("\njustrust-admission-timing:")
+        && let Some((_, footer)) = footer.split_once('\n')
+        && let Some((values, _)) = network_footer(footer)
+        && let Some(metrics) = network_timing(values)
+    {
+        eprintln!("justrust trace: network {metrics}");
     }
     Ok(Resp {
         code,
@@ -1749,6 +1795,38 @@ mod tests {
     }
 
     #[test]
+    fn admission_network_metrics_are_bounded_and_do_not_change_verdict() {
+        let values = "0.001,0.010,0.030,0.031,0.300,0.301";
+        assert_eq!(
+            network_timing(values).unwrap(),
+            "dns 1.0 ms | connect 10.0 ms | tls 30.0 ms | ready 31.0 ms | first_byte 300.0 ms | total 301.0 ms (cumulative)"
+        );
+        for bad in [
+            "",
+            "0,0,0,0,0",
+            "0,0,0,0,0,0,0",
+            "0,0,0,0,0,NaN",
+            "0,0,0,0,0,inf",
+            "0,0,0,0,0,-1",
+            "0,0,0,0,0,61",
+            "0,0,0,0,0,1\nsk-secret",
+        ] {
+            assert!(network_timing(bad).is_none(), "{bad:?}");
+        }
+        for code in [200, 401, 402, 503] {
+            for metrics in [values, "not-supported", ""] {
+                let raw = format!(
+                    "{{\"ok\":false}}\njustrust-admission-timing:{code}\njustrust-network-timing:{metrics}\njr_charge;dur=271"
+                );
+                let (body, status, admission) = curl_response(&raw, true);
+                assert_eq!(body, "{\"ok\":false}");
+                assert_eq!(status, code);
+                assert!(admission.is_some());
+            }
+        }
+    }
+
+    #[test]
     fn admission_trace_is_scoped_to_existing_charge_only() {
         assert!(admission_timing_enabled("POST", "build/runs", true));
         for (method, path, trace) in [
@@ -1884,6 +1962,10 @@ mod tests {
                 let out = child.wait_with_output().unwrap();
                 assert!(out.status.success());
                 let raw = String::from_utf8(out.stdout).unwrap();
+                let (_, footer) = raw.split_once("\njustrust-admission-timing:").unwrap();
+                let (_, footer) = footer.split_once('\n').unwrap();
+                let (values, _) = network_footer(footer).unwrap();
+                assert!(network_timing(values).is_some());
                 let (text, status, metrics) = curl_response(&raw, true);
                 assert_eq!(status, code);
                 assert_eq!(

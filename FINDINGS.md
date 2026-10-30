@@ -49,9 +49,15 @@ semantics against 1,555 sequences, with fresh filesystem mutation regressions.
 Native input-prerequisite producer `c6004a097` passes four real Cargo CLI tests
 (`20261029-211619753-2745232`) but always denies trust/command replay. It does
 not close planning, config, negative-input, toolchain or remote-mapping gaps.
-See `docs/caching-levels.md` and the linked component evidence. Further hosted
-acceptance is paused for coordinated fleet maintenance, not replaced with local
-results or described as a completed subsecond outcome.
+See `docs/caching-levels.md` and the linked component evidence. After explicit
+maintenance release, installed unchanged strict Clippy took 1.1/1.7/1.1 s with
+62 fresh units and 304–357 ms sync. Real source edit and backup restore each
+passed 837 tests, followed by strict Clippy; one parallel cleanup flake passed
+isolated retry. Exact run records are committed in `260ac5a0d`. Further tracing
+(`20261029-214313393-3063349`) observed 869 ms end to end, of which 470 ms
+preceded completed admission and 314 ms was sync. This is not a matched speedup
+or evidence of consistently subsecond operation. Client HTTP phase attribution
+is the next diagnostic, not permission to cache billing/authorization outcomes.
 
 ## 2026-10-29: Clippy's cached path still paid for ignored build-tree scans
 
