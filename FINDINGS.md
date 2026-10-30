@@ -9035,3 +9035,17 @@ or mix absolute times with br34. Earlier fresh-store LLVM failures remain.
 All 40 additional owned calls are exported under xps14-runtime-br35 directories;
 the portable `validate-complete.py --case br35` audit passes all 60 records.
 See the follow-up section of `docs/blaze-runtime-results-20261030.md`.
+
+## 2026-10-30: instrumented actual edit remains compiler-bound
+
+Six four-test workflows pass and restore all 63 pinned source files. Edit runs
+`20261030-035237630-1591346` and `20261030-035258029-1595722` explicitly disable
+and enable native procedural macro caching, respectively. Macro expansion is
+291.104 versus 161.620ms, but total harness wall is 1.332673 versus 1.351485s.
+Result-cache persistence is 106.866 versus 146.550ms. This single instrumented,
+uncontrolled pair shows no total speedup. Nested time-pass spans are not additive.
+All six runs exported and exact phase/raw evidence retained in
+`docs/owned-runtime-frontier-20261030.md`. Compiler work remains the primary
+target, not startup or the few milliseconds of test execution. Cached-family
+external-input correctness and deterministic declarative macro reuse are
+separate pending gates. No default promotion or Blaze-beating claim.
