@@ -23,6 +23,20 @@ LITERAL = '''macro_rules! literal { () => { 42 }; }
 fn body() -> i32 { 1 }
 fn main() { if literal!() + body() != 43 { std::process::exit(9); } }
 '''
+TT = '''macro_rules! tokens { ($($t:tt)*) => { $($t)* }; }
+fn body() -> i32 { 1 }
+fn main() { if tokens!(40 + 2) + body() != 43 { std::process::exit(9); } }
+'''
+TT_COMMA = '''macro_rules! list { ($($t:tt),*) => { [$( $t ),*] }; }
+fn main() { let a: [i32; 3] = list!(1,2,3); let b: [i32; 0] = list!();
+if a != [1,2,3] || b.len() != 0 { std::process::exit(9); } }
+'''
+TT_NESTED = '''macro_rules! rows { ($( [ $($t:tt),* ] );*) => { [$( [ $($t),* ] ),*] }; }
+fn main() { if rows!([1,2];[3,4]) != [[1,2],[3,4]] { std::process::exit(9); } }
+'''
+TT_MISMATCH = '''macro_rules! zip { (($($a:tt),*);($($b:tt),*)) => { [$(($a,$b)),*] }; }
+fn main() { let _ = zip!((1,2);(3)); }
+'''
 BASE = '''#![warn(unused_macros, unused_macro_rules)]
 macro_rules! unused { () => { 0 }; }
 macro_rules! value { (never) => { 99 }; ($e:expr) => {{ let private = 10; $e + private }}; }
@@ -85,6 +99,35 @@ def cases():
         case('edition-2021-pattern', 'macro_rules! p { ($p:pat) => { matches!(1, $p) }; }\nfn main() { println!("{}", p!(1 | 2)); }\n', 'true\n', edition='2021'),
         case('macro-tracing', trace=True),
         case('final-recovery'),
+    ]
+
+
+def tt_cases():
+    """Additional semantics do not replace the original 32-revision matrix."""
+    return [
+        case('tt-initial', TT, ''), case('tt-unchanged', TT, ''),
+        case('tt-body-edit', TT.replace('{ 1 }', '{ 2 }').replace('!= 43', '!= 44'), ''),
+        case('tt-definition-edit', TT.replace('{ $($t)* }', '{ ($($t)*) + 1 }').replace('!= 43', '!= 44'), ''),
+        case('tt-input-edit', TT.replace('40 + 2', '40 + 3').replace('!= 43', '!= 44'), ''),
+        case('tt-identity', TT.replace('40 + 2', '(42)'), ''),
+        case('tt-empty', TT.replace('tokens!(40 + 2)', '{ tokens!(); 42 }'), ''),
+        case('tt-comma-empty', TT_COMMA, ''),
+        case('tt-nested', TT_NESTED, ''),
+        case('tt-count-mismatch', TT_MISMATCH, None),
+        case('tt-count-recovery', TT_MISMATCH.replace('(3));', '(3,4));'), ''),
+        case('tt-invalid-input', TT.replace('40 + 2', '@'), None),
+        case('tt-error-recovery', TT, ''),
+        case('tt-span-relocation', '// relocated\n\n' + TT, ''),
+        case('tt-hygiene', '''macro_rules! local { ($t:tt) => {{ let private = 10; $t + private }}; }
+fn main() { let private = 2; if local!(private) != 12 { std::process::exit(9); } }
+''', ''),
+        case('tt-expr-interpolation-fallback', '''macro_rules! tokens { ($($t:tt)*) => { $($t)* }; }
+macro_rules! forward { ($e:expr) => { tokens!($e) }; }
+fn main() { if forward!(1 + 2) * 3 != 9 { std::process::exit(9); } }
+''', ''),
+        case('tt-edition-2021', TT, '', edition='2021'),
+        case('tt-edition-2024', TT, ''),
+        case('tt-final-recovery', TT, ''),
     ]
 
 
@@ -236,7 +279,7 @@ def profile_evidence(directory):
     return evidence
 
 
-def validate_native_markers(observations):
+def validate_native_markers(observations, family='literal'):
     """Lookup minus provider is reuse only after positive cold calibration."""
     by_name = {o['name']: o['profile']['markers'] for o in observations}
     for name in ('off-before', 'off-after'):
@@ -245,7 +288,7 @@ def validate_native_markers(observations):
     cold = by_name['cold-yes']
     eligible, rejected, lookup, provider, success = (cold[m] for m in MARKERS)
     if not (eligible > 0 and rejected == 0 and eligible == lookup == provider == success):
-        raise AssertionError('Cold literal fixture did not positively exercise native eligible/provider/success paths')
+        raise AssertionError(f'Cold {family} fixture did not positively exercise native eligible/provider/success paths')
     avoided = {}
     for name in ('warm-yes', 'body-edit-yes'):
         eligible, rejected, lookup, provider, success = (by_name[name][m] for m in MARKERS)
@@ -257,11 +300,14 @@ def validate_native_markers(observations):
                 limitation='Proves reuse of the native literal match/transcribe query, not speedup or full macro-expansion caching')
 
 
-def native_evidence(rustc, root, evidence):
+def native_evidence(rustc, root, evidence, tt=False):
     """Independent profiled processes and cache, still exact semantic comparisons."""
     evidence.update(schema=1, profile_events='default,function-args', marker_schema=list(MARKERS))
-    original = case('literal-evidence', LITERAL, '')
-    edited = case('literal-evidence-body-edit', LITERAL.replace('{ 1 }', '{ 2 }').replace('!= 43', '!= 44'), '')
+    source = TT if tt else LITERAL
+    namespace = 'tt-proof' if tt else 'native-proof'
+    fixture_name = 'tt-evidence' if tt else 'literal-evidence'
+    original = case(fixture_name, source, '')
+    edited = case(fixture_name + '-body-edit', source.replace('{ 1 }', '{ 2 }').replace('!= 43', '!= 44'), '')
     modes = [('off-before', False, 'native-proof/off-reference', original),
              ('cold-yes', True, 'native-proof/shared', original),
              ('warm-yes', True, 'native-proof/shared', original),
@@ -269,27 +315,32 @@ def native_evidence(rustc, root, evidence):
              ('off-after', False, 'native-proof/shared', edited)]
     reference = None
     for name, enabled, cache, fixture in modes:
+        cache = cache.replace('native-proof', namespace)
         observation = dict(name=name, fixture=fixture)
         evidence['observations'].append(observation)
-        profile = root / 'native-profiles' / name
+        profile = root / ('tt-profiles' if tt else 'native-profiles') / name
         observation['result'] = compile_case(rustc, root, fixture, enabled, cache, profile=profile)
         validate_expected(observation['result'], '', name)
         if reference is None:
             reference = observation['result']
         else:
             for component in ('compile', 'runtime'):
-                compare(reference[component], observation['result'][component], f'native-proof/{name}/{component}')
+                compare(reference[component], observation['result'][component], f'{namespace}/{name}/{component}')
         observation['profile'] = profile_evidence(profile)
-    evidence['proof'] = validate_native_markers(evidence['observations'])
+    evidence['proof'] = validate_native_markers(evidence['observations'], 'tt' if tt else 'literal')
+    if tt:
+        evidence['proof']['limitation'] = 'Proves reuse for pure tt repetition match/transcribe, not speedup or full macro-expansion caching'
 
 
-def capture(rustc, root, require_native_hit=False):
+def capture(rustc, root, require_native_hit=False, require_tt_hit=False):
     root.mkdir(mode=0o700, parents=False, exist_ok=False)
+    fixtures = cases() + (tt_cases() if require_tt_hit else [])
     report = dict(schema=1, flag=FLAG, scope='correctness-only-no-speedup-claim',
                   verify_ich=True, diagnostics='exact-bytes-no-normalization',
                   native_hit_required=require_native_hit, native_hit_verdict='not-requested',
+                  tt_hit_required=require_tt_hit, tt_hit_verdict='not-requested',
                   semantic_verdict='incomplete',
-                  planned_cases=len(cases()), completed_cases=0, verdict='incomplete', observations=[])
+                  planned_cases=len(fixtures), completed_cases=0, verdict='incomplete', observations=[])
     try:
         report['identity_before'] = identity(rustc)
         report['feature_probe'] = probe(rustc, root)
@@ -314,7 +365,7 @@ def capture(rustc, root, require_native_hit=False):
             raise AssertionError('Macro tracing probe failed for an unexpected reason')
         if trace_supported and b'trace_macro' not in trace_stderr:
             raise AssertionError('Tracing accepted but emitted no trace_macro diagnostic')
-        for index, fixture in enumerate(cases()):
+        for index, fixture in enumerate(fixtures):
             observation = dict(fixture=fixture, modes={})
             report['observations'].append(observation)
             if fixture['trace'] and not trace_supported:
@@ -338,11 +389,18 @@ def capture(rustc, root, require_native_hit=False):
             report['native_evidence'] = dict(observations=[])
             native_evidence(rustc, root, report['native_evidence'])
             report['native_hit_verdict'] = 'passed'
+        if require_tt_hit:
+            report['tt_hit_verdict'] = 'incomplete'
+            report['tt_evidence'] = dict(observations=[])
+            native_evidence(rustc, root, report['tt_evidence'], tt=True)
+            report['tt_hit_verdict'] = 'passed'
         report['verdict'] = 'passed'
     except Exception as error:
         report['verdict'] = 'unsupported' if isinstance(error, UnsupportedFeature) else 'failed'
         if report['native_hit_verdict'] == 'incomplete':
             report['native_hit_verdict'] = 'failed'
+        if report['tt_hit_verdict'] == 'incomplete':
+            report['tt_hit_verdict'] = 'failed'
         report['error'] = str(error)
         raise
     finally:
@@ -367,12 +425,15 @@ def main():
     parser.add_argument('--output', type=Path, required=True, help='New directory whose parent exists')
     parser.add_argument('--require-native-hit', action='store_true',
                         help='Also require cold provider execution and cross-process warm/body-edit cache-hit profile evidence')
+    parser.add_argument('--require-tt-hit', action='store_true',
+                        help='Add TT semantic revisions and independent five-process pure TT reuse proof')
     args = parser.parse_args()
     os.umask(0o077)
-    report = capture(args.rustc.resolve(), args.output.resolve(), args.require_native_hit)
+    report = capture(args.rustc.resolve(), args.output.resolve(), args.require_native_hit, args.require_tt_hit)
     print(json.dumps(dict(output=str(args.output), verdict=report['verdict'],
                           semantic_verdict=report['semantic_verdict'],
-                          native_hit_verdict=report['native_hit_verdict'], cases=report['completed_cases'])))
+                          native_hit_verdict=report['native_hit_verdict'],
+                          tt_hit_verdict=report['tt_hit_verdict'], cases=report['completed_cases'])))
 
 
 if __name__ == '__main__':

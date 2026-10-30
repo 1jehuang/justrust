@@ -340,6 +340,89 @@ class HarnessTests(unittest.TestCase):
             with self.assertRaises(FileExistsError):
                 H.capture(Path('/never/executed'), Path(temp))
 
+    def test_tt_matrix_preserves_literal_matrix(self):
+        self.assertEqual(len(H.cases()), 32)
+        fixtures = {f['name']: f for f in H.tt_cases()}
+        self.assertEqual(len(fixtures), 19)
+        self.assertIn('$($t:tt)*', H.TT)
+        self.assertNotIn('literal!', H.TT)
+        self.assertNotIn(':expr', H.TT)
+        self.assertIn('tokens!(40 + 2)', H.TT)
+        self.assertIsNone(fixtures['tt-count-mismatch']['expected'])
+        self.assertEqual(fixtures['tt-count-recovery']['expected'], '')
+        self.assertIn('tokens!($e)', fixtures['tt-expr-interpolation-fallback']['source'])
+        self.assertIn('!= 9', fixtures['tt-expr-interpolation-fallback']['source'])
+
+    def test_tt_proof_independent_of_literal_success(self):
+        with tempfile.TemporaryDirectory() as temp:
+            seen = []
+            def compile_fn(r, p, f, enabled, cache, profile=None):
+                seen.append((f, enabled, cache, profile))
+                return result(f)
+            evidence = dict(observations=[])
+            profiles = [o['profile'] for o in self.positive_observations()]
+            with patch.object(H, 'compile_case', side_effect=compile_fn), \
+                 patch.object(H, 'profile_evidence', side_effect=profiles):
+                H.native_evidence(Path('/mock/rustc'), Path(temp), evidence, tt=True)
+            self.assertEqual(len(seen), 5)
+            self.assertEqual([v[1] for v in seen], [False, True, True, True, False])
+            self.assertEqual(seen[1][0]['source'], H.TT)
+            self.assertEqual(seen[1][0], seen[2][0])
+            self.assertNotEqual(seen[2][0]['source'], seen[3][0]['source'])
+            self.assertEqual({v[2] for v in seen[1:]}, {'tt-proof/shared'})
+            self.assertTrue(all('tt-profiles' in str(v[3]) for v in seen))
+            self.assertEqual(evidence['marker_schema'], list(H.MARKERS))
+            self.assertEqual(evidence['proof']['inferred_provider_avoided'],
+                             {'warm-yes': 1, 'body-edit-yes': 1})
+
+    def test_literal_only_compiler_cannot_pass_tt_gate(self):
+        # Simulates literal-positive compiler with TT rejected. No compiler runs.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / 'accept'
+            literal_profiles = [o['profile'] for o in self.positive_observations()]
+            rejected = dict(markers=dict(zip(H.MARKERS, [0, 1, 0, 0, 0])))
+            tt_profiles = [dict(markers=dict.fromkeys(H.MARKERS, 0)), rejected,
+                           rejected, rejected, dict(markers=dict.fromkeys(H.MARKERS, 0))]
+            with patch.object(H, 'identity', return_value={'mock': True}), \
+                 patch.object(H, 'probe', return_value={'no': record(), 'yes': record()}), \
+                 patch.object(H, 'run', return_value=record(stderr=b'note: trace_macro\n')), \
+                 patch.object(H, 'compile_case', side_effect=lambda r, p, f, e, c, profile=None: result(f)), \
+                 patch.object(H, 'profile_evidence', side_effect=literal_profiles + tt_profiles), \
+                 self.assertRaisesRegex(AssertionError, 'Cold'):
+                H.capture(Path('/mock/rustc'), root, True, True)
+            report = json.loads((root / 'acceptance.json').read_text())
+            self.assertEqual(report['semantic_verdict'], 'passed')
+            self.assertEqual(report['native_hit_verdict'], 'passed')
+            self.assertEqual(report['tt_hit_verdict'], 'failed')
+            self.assertEqual(report['verdict'], 'failed')
+            self.assertEqual(report['completed_cases'], 51)
+
+    def test_tt_gate_rejects_absent_success_and_off_markers(self):
+        for name, counts in [('cold-yes', [0, 0, 0, 0, 0]),
+                             ('cold-yes', [1, 0, 1, 1, 0]),
+                             ('warm-yes', [1, 0, 1, 0, 0]),
+                             ('off-before', [1, 0, 1, 1, 1])]:
+            observations = self.positive_observations()
+            next(o for o in observations if o['name'] == name)['profile']['markers'] = dict(zip(H.MARKERS, counts))
+            with self.subTest(name=name), self.assertRaises(AssertionError):
+                H.validate_native_markers(observations)
+
+    def test_tt_only_option_runs_full_semantics_and_independent_proof(self):
+        with tempfile.TemporaryDirectory() as temp:
+            profiles = [o['profile'] for o in self.positive_observations()]
+            with patch.object(H, 'identity', return_value={'mock': True}), \
+                 patch.object(H, 'probe', return_value={'no': record(), 'yes': record()}), \
+                 patch.object(H, 'run', return_value=record(stderr=b'note: trace_macro\n')), \
+                 patch.object(H, 'compile_case', side_effect=lambda r, p, f, e, c, profile=None: result(f)) as compile_mock, \
+                 patch.object(H, 'profile_evidence', side_effect=profiles):
+                report = H.capture(Path('/mock/rustc'), Path(temp) / 'accept', require_tt_hit=True)
+            self.assertEqual(report['verdict'], 'passed')
+            self.assertEqual(report['tt_hit_verdict'], 'passed')
+            self.assertEqual(report['native_hit_verdict'], 'not-requested')
+            self.assertEqual(compile_mock.call_count, 51 * 7 + 5)
+            self.assertNotIn('native_evidence', report)
+            self.assertEqual(len(report['tt_evidence']['observations']), 5)
+
 
 if __name__ == '__main__':
     unittest.main()

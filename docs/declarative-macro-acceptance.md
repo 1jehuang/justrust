@@ -25,7 +25,7 @@ After root releases the frozen compiler, run from the repository root:
 python3 bench/reuse-declarative-macro-accept.py \
   --rustc /absolute/path/to/frozen/rustc \
   --output /absolute/path/to/new-declarative-macro-acceptance \
-  --require-native-hit
+  --require-native-hit --require-tt-hit
 ```
 
 The output directory must not exist and its parent must exist. Pass the actual
@@ -151,10 +151,59 @@ not a dedicated hit-counter measurement. Zero eligible invocations, absent
 markers, all-provider execution, a missing profile, or malformed profile data
 fails `--require-native-hit` even if every semantic case passed.
 
-This proves reuse only for the audited literal match/transcribe query, not
+The literal gate proves reuse only for the audited literal match/transcribe query, not
 full declarative expansion caching or a speedup. A wider native implementation
 or changed marker contract requires a reviewed harness schema update. The
 matrix still tests all fallback semantics outside this narrow subset.
+
+## Independent TT acceptance gate
+
+`--require-tt-hit` is independently opt-in. It does not enable, replace, or
+weaken `--require-native-hit`. Request both for candidate promotion. Without
+the TT option, the original **32 revisions times seven modes**, plus the
+optional five-process literal proof, remain unchanged. With it, 19 additional
+TT revisions run all seven modes, for **51 revisions times seven modes**.
+The added matrix covers identity and substitution, comma-separated and empty
+repetitions, nested repetitions, repetition-count mismatch diagnostics and
+recovery, definition/input/body changes, hygiene, span relocation, edition
+transitions, invalid-input recovery, and `expr` AST interpolation forwarded
+through a TT macro. The latter must preserve expression grouping, not flatten
+an interpolated AST into ordinary tokens. Existing fragment and edition
+fallback cases remain mandatory, including the parenthesized const-block
+edition fixture.
+
+The independent five-process TT proof uses only:
+
+```rust
+macro_rules! tokens { ($($t:tt)*) => { $($t)* }; }
+fn body() -> i32 { 1 }
+fn main() { if tokens!(40 + 2) + body() != 43 { std::process::exit(9); } }
+```
+
+There are no literal-only macro candidates, `expr` fragments, formatting
+macros, assertion macros, or additional invocations that could lend unrelated
+positive counters to this proof. The unrelated body edit changes `1` to `2`
+and the checked total `43` to `44`. As in the literal proof, the five processes
+are off-before, cold-on, unchanged warm-on, body-edit warm-on, and off-after.
+The last four share `tt-proof/shared`, distinct from every semantic and literal
+proof cache. Profiles live in `tt-profiles/`, separate from `native-profiles/`.
+All runtime expectations and exact comparisons remain mandatory.
+
+The **unchanged native marker schema** and strict positive calibration apply
+independently: cold eligible/lookup/provider/success must be equal and positive,
+ineligible zero. Each warm lookup must succeed, with positive lookup counts and
+strictly fewer providers. Both explicit off controls must emit zero markers.
+Absent TT support must fail, not skip or pass with reduced expectations.
+A literal-only frozen compiler is the required native negative control:
+even if its literal proof passes and all semantics agree, its absent/rejected
+TT path must fail `tt_hit_verdict` and the overall verdict. Mock tests simulate
+this exact split but do not establish that native negative control.
+
+The report records `tt_hit_required`, `tt_hit_verdict`, and `tt_evidence`
+separately from the literal evidence. A TT proof failure retains all five raw
+observations and the passed semantic/literal verdicts. Root alone runs the
+native negative control and new-frozen-compiler gates after compiler release.
+Do not lower counts or accept all-provider execution to make TT absence pass.
 
 ## Capability gates and audit trail
 
