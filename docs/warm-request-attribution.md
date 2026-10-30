@@ -28,4 +28,29 @@ unsupported numeric metrics are omitted without changing body/status parsing.
 Only numeric fixed-name metrics are printed, never arbitrary response headers.
 This is attribution, not authorization caching or a performance optimization.
 
+## Installed diagnostic acceptance
+
+Hosted check `20261029-214539335-3079312`, 27 HTTP tests
+`20261029-214542908-3079756`, strict all-target Clippy
+`20261029-214549926-3079057`, and the full 838-test suite
+`20261029-214602319-3081573` passed. The release binary was installed.
+Real trace `20261029-214718117-3088664` reconnected after installation and
+paid 13.6 s sync, so it is not a warm comparison.
+
+The following installed warm runs both kept 62 units fresh:
+
+| Run | DNS ms | TCP complete ms | TLS complete ms | First byte ms | Server ms | Client total ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `20261029-214732269-3092837` | 12.6 | 47.5 | 97.0 | 446.9 | 287 | 894.9 |
+| `20261029-214733166-3092974` | 12.3 | 41.4 | 83.9 | 445.5 | 296 | 953.3 |
+
+The first warm run sent one file; the next sent none. Both reported 62 fresh
+units. Reusing a transport connection could target the roughly 84–97 ms before
+transfer readiness, not the entire 445 ms admission request. No such persistent
+HTTP pool is implemented here. It would need endpoint/credential isolation,
+rotation, bounded lifetime, refusal/retry correctness, and a daemon-owned native
+transport. Never reuse an authorization decision as a substitute for a fresh
+admission charge. Much larger gains require authoritative whole-command reuse
+or overlapping safe preparation with admission, not more Cargo no-op tuning.
+
 Primary variable semantics: `https://curl.se/docs/manpage.html`, WRITE-OUT.
