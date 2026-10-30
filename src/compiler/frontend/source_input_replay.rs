@@ -2,6 +2,31 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+// This bounded arithmetic slice obtains its width only from authored suffixes,
+// never from checked expression types or a caller's inferred actuals.
+fn authored_float_width(
+    source: &Expr,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<Option<ir::FloatTy>, FactsError> {
+    sr::depth(budget, depth)?;
+    sr::work(budget, 1)?;
+    match source {
+        Expr::Float(literal) => Ok(literal.suffix),
+        Expr::Binary {
+            op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Rem,
+            left,
+            right,
+            ..
+        } => {
+            let left = authored_float_width(left, budget, depth + 1)?;
+            let right = authored_float_width(right, budget, depth + 1)?;
+            Ok(left.filter(|width| Some(*width) == right))
+        }
+        _ => Ok(None),
+    }
+}
+
 // Navigate the immutable AST through the same general walker used by source
 // validation. The transient pointer index only selects an exact SourceNode,
 // never a spelling or an assumed enclosing-expression shape.
@@ -264,6 +289,9 @@ pub(super) fn supported(
 ) -> Result<bool, FactsError> {
     sr::depth(budget, depth)?;
     sr::work(budget, 1)?;
+    if authored_float_width(source, budget, depth)?.is_some() {
+        return Ok(true);
+    }
     match source {
         Expr::Var(_) | Expr::Borrow { .. } => {
             sr::work(budget, node.path.len())?;
@@ -957,6 +985,59 @@ impl Replay<'_> {
             .get(id.0)
             .ok_or_else(|| FactsError::invalid(self.budget, "input expression missing"))?;
         let ty = match (source, &actual.kind) {
+            (Expr::Float(literal), ir::ExprKind::Float(value)) => {
+                let width = literal.suffix.ok_or_else(|| {
+                    FactsError::unsupported(self.budget, "input float requires authored width")
+                })?;
+                let resolved = literal
+                    .value(width, false)
+                    .map_err(|e| source_error(self.budget, &e))?;
+                if resolved != *value {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input float literal changed",
+                    ));
+                }
+                ir::Ty::Float(width)
+            }
+            (
+                Expr::Binary {
+                    op, left, right, ..
+                },
+                ir::ExprKind::Binary {
+                    op: actual_op,
+                    left: actual_left,
+                    right: actual_right,
+                },
+            ) if authored_float_width(source, self.budget, depth)?.is_some() => {
+                if op != actual_op {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input float operator changed",
+                    ));
+                }
+                let left = self.expression(
+                    left,
+                    &node.child(13, 0, self.budget)?,
+                    *actual_left,
+                    None,
+                    depth + 1,
+                )?;
+                let right = self.expression(
+                    right,
+                    &node.child(13, 1, self.budget)?,
+                    *actual_right,
+                    None,
+                    depth + 1,
+                )?;
+                if !self.equal(&left, &right)? {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input float operand width changed",
+                    ));
+                }
+                left
+            }
             (Expr::Apply { value, .. }, _) => self.expression(
                 value,
                 &node.child(7, 0, self.budget)?,
@@ -1563,6 +1644,69 @@ impl Replay<'_> {
 #[cfg(test)]
 mod literal_context_tests {
     use super::*;
+
+    #[test]
+    fn source_float_arithmetic_rejects_forged_replay() {
+        let program = parse(
+            "fn consume<T>(a:T,b:T){} fn main(){let a=0.0f64/0.0f64;let b=1.0f64;consume(&a,&b);}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected original source");
+        };
+        let checked = publication.source();
+        sr::replay_original_calls(
+            checked.clone(),
+            publication.original(),
+            publication.facts(),
+            &budget,
+        )
+        .unwrap();
+        let binary = checked
+            .exprs
+            .iter()
+            .position(|expr| matches!(expr.kind, ir::ExprKind::Binary { .. }))
+            .unwrap();
+        let literal = checked
+            .exprs
+            .iter()
+            .position(|expr| matches!(expr.kind, ir::ExprKind::Float(_)))
+            .unwrap();
+        for mutation in 0..3 {
+            let mut forged = checked.as_ref().clone();
+            if mutation == 0 {
+                let ir::ExprKind::Binary { op, .. } = &mut forged.exprs[binary].kind else {
+                    unreachable!()
+                };
+                *op = BinaryOp::Add;
+            } else {
+                let expression = &mut forged.exprs[literal];
+                let ir::ExprKind::Float(value) = &mut expression.kind else {
+                    unreachable!()
+                };
+                if mutation == 1 {
+                    value.bits = 1.0f64.to_bits();
+                } else {
+                    *value = ir::FloatValue::f32(0.0);
+                    expression.ty = ir::Ty::Float(ir::FloatTy::F32);
+                }
+            }
+            let error = sr::replay_original_calls(
+                Arc::new(forged),
+                publication.original(),
+                publication.facts(),
+                &budget,
+            )
+            .err()
+            .expect("forged float source must fail replay");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+    }
 
     #[test]
     fn source_field_integer_context_rejects_forged_literal() {

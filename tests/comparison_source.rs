@@ -62,6 +62,16 @@ fn reference_ordering_forwards_exact_pointee_traits() {
                 expect: Expect::Run("true\n"),
             },
             Case {
+                name: "authored_float_arithmetic_reference_inputs",
+                source: r#"fn less<T:PartialOrd>(a:T,b:T)->bool{a.partial_cmp(&b).unwrap().is_lt()}fn unordered<T:PartialOrd>(a:T,b:T)->bool{a.partial_cmp(&b).is_none()}fn main(){let a=(1.0f32+3.0f32)*2.0f32;let b=(20.0f32-2.0f32)/2.0f32;let c=7.0f64%4.0f64;let d=4.0f64;let nan=0.0f32/0.0f32;println!("{} {} {}",less(&a,&b),less(&c,&d),unordered(&nan,&a));}"#,
+                expect: Expect::Run("true true true\n"),
+            },
+            Case {
+                name: "authored_float_reference_arguments_keep_exact_width",
+                source: "fn same<T:PartialOrd>(a:T,b:T){}fn unused(){let a=1.0f32+2.0f32;let b=3.0f64;same(&a,&b);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
                 name: "unused_reference_without_pointee_ord",
                 source: "struct N;fn require<T:Ord>(_:T){}fn unused(){let value=N;require(&value);}fn main(){}",
                 expect: Expect::Invalid("E0277"),
@@ -74,7 +84,7 @@ fn reference_ordering_forwards_exact_pointee_traits() {
             Case {
                 name: "implementation_strengthens_invariant_input_equality",
                 source: r#"trait Compare{fn same<'a,'b>(&self,left:&mut &'a i32,right:&mut &'b i32)->bool;}struct N;impl Compare for N{fn same<'a>(&self,left:&mut &'a i32,right:&mut &'a i32)->bool{false}}fn main(){}"#,
-                expect: Expect::Invalid("error[E"),
+                expect: Expect::Invalid("signature doesn't match"),
             },
             Case {
                 name: "implementation_strengthens_input_outlives",
