@@ -6677,6 +6677,7 @@ fn broken_in(
     within: Option<Arc<FxHashSet<ide_db::base_db::Crate>>>,
     lints: bool,
 ) -> Option<errors::Said> {
+    let _phase = DiagnosticsPhase::new("diagnostics.broken_in.wall");
     let threads = std::thread::available_parallelism().map_or(1, |it| it.get());
     let config = ide_diagnostics::DiagnosticsConfig::test_sample();
     let refuse_borrowck = std::env::var_os("RA_JIT_BORROWCK_REFUSE").is_none_or(|it| it != "0");
@@ -6763,6 +6764,206 @@ type CleanKey = (vfs::FileId, Option<(usize, u64)>, (bool, bool));
 static CLEAN: std::sync::LazyLock<std::sync::Mutex<FxHashMap<CleanKey, Clean>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// Startup-only opt-in inherited from a dedicated measurement daemon by its workers.
+/// This is not a dynamically forwarded or worker-identity configuration variable.
+fn diagnostics_telemetry_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        diagnostics_telemetry_flag(std::env::var_os("RA_JIT_DIAGNOSTICS_STATS").as_deref())
+    })
+}
+
+fn diagnostics_telemetry_flag(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
+}
+
+const DIAGNOSTICS_DETAIL_CAP: usize = 4000;
+
+/// Separate from tracing's thresholded/callsite-limited recorder. Never persisted.
+#[derive(Default)]
+struct DiagnosticsDetails {
+    spans: Vec<trace::Span>,
+    dropped: usize,
+}
+
+impl DiagnosticsDetails {
+    fn push(&mut self, span: trace::Span) {
+        if self.spans.len() < DIAGNOSTICS_DETAIL_CAP {
+            self.spans.push(span);
+        } else {
+            self.dropped = self.dropped.saturating_add(1);
+        }
+    }
+
+    fn take(&mut self, since_us: u64) -> (Vec<trace::Span>, usize, usize) {
+        let mut spans = std::mem::take(&mut self.spans);
+        let before = spans.len();
+        spans.retain(|it| it.start_us.saturating_add(it.dur_us) >= since_us);
+        let stale = before - spans.len();
+        (spans, stale, std::mem::take(&mut self.dropped))
+    }
+}
+
+static DIAGNOSTICS_DETAILS: std::sync::Mutex<DiagnosticsDetails> =
+    std::sync::Mutex::new(DiagnosticsDetails { spans: Vec::new(), dropped: 0 });
+
+/// The !Send/!Sync marker keeps start, end and trace thread attribution together.
+struct DiagnosticsPhase<'a> {
+    name: &'static str,
+    started: Option<Instant>,
+    details: &'a std::sync::Mutex<DiagnosticsDetails>,
+    _same_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+
+impl DiagnosticsPhase<'static> {
+    fn new(name: &'static str) -> Self {
+        Self::in_collector(name, diagnostics_telemetry_enabled(), &DIAGNOSTICS_DETAILS)
+    }
+}
+
+impl<'a> DiagnosticsPhase<'a> {
+    fn in_collector(
+        name: &'static str,
+        enabled: bool,
+        details: &'a std::sync::Mutex<DiagnosticsDetails>,
+    ) -> Self {
+        Self {
+            name,
+            started: enabled.then(Instant::now),
+            details,
+            _same_thread: std::marker::PhantomData,
+        }
+    }
+}
+
+impl Drop for DiagnosticsPhase<'_> {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            let end = Instant::now();
+            let span = trace::span(self.name, None, started, end);
+            self.details.lock().unwrap_or_else(|it| it.into_inner()).push(span);
+        }
+    }
+}
+
+fn take_diagnostics_details(since: Instant) -> Vec<trace::Span> {
+    if !diagnostics_telemetry_enabled() {
+        return Vec::new();
+    }
+    let since_us = trace::epoch_us(since);
+    let (spans, stale, dropped) =
+        DIAGNOSTICS_DETAILS.lock().unwrap_or_else(|it| it.into_inner()).take(since_us);
+    eprintln!(
+        "diagnostics transport: retained={} stale={stale} dropped={dropped} cap={DIAGNOSTICS_DETAIL_CAP}",
+        spans.len(),
+    );
+    spans
+}
+
+/// Sum actual callback intervals, not a synthetic span or critical-path estimate.
+/// Kept local to one errors_of invocation, including its early callback returns.
+#[derive(Default)]
+struct DiagnosticsAskedTiming {
+    calls: std::cell::Cell<usize>,
+    elapsed: std::cell::Cell<Duration>,
+}
+
+impl DiagnosticsAskedTiming {
+    fn enter(&self, enabled: bool) -> DiagnosticsAskedInterval<'_> {
+        DiagnosticsAskedInterval { timing: self, started: enabled.then(Instant::now) }
+    }
+}
+
+struct DiagnosticsAskedInterval<'a> {
+    timing: &'a DiagnosticsAskedTiming,
+    started: Option<Instant>,
+}
+
+impl Drop for DiagnosticsAskedInterval<'_> {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            let elapsed = started.elapsed();
+            self.timing.calls.set(self.timing.calls.get() + 1);
+            self.timing.elapsed.set(self.timing.elapsed.get() + elapsed);
+        }
+    }
+}
+
+#[cfg(test)]
+mod diagnostics_timing_tests {
+    use super::*;
+
+    #[test]
+    fn startup_flag_requires_exact_one() {
+        use std::ffi::OsStr;
+        assert!(diagnostics_telemetry_flag(Some(OsStr::new("1"))));
+        assert!(!diagnostics_telemetry_flag(None));
+        for value in ["", "0", "true", "01", " 1", "1 ", "2"] {
+            assert!(!diagnostics_telemetry_flag(Some(OsStr::new(value))));
+        }
+    }
+
+    #[test]
+    fn disabled_interval_has_no_clock_or_accounting() {
+        let details = std::sync::Mutex::new(DiagnosticsDetails::default());
+        // A disabled phase must not acquire even a contended collector lock.
+        let held = details.lock().unwrap();
+        let phase = DiagnosticsPhase::in_collector("disabled", false, &details);
+        assert!(phase.started.is_none());
+        drop(phase);
+        assert!(held.spans.is_empty());
+        assert_eq!(held.dropped, 0);
+        drop(held);
+        let timing = DiagnosticsAskedTiming::default();
+        let interval = timing.enter(false);
+        assert!(interval.started.is_none());
+        drop(interval);
+        assert_eq!(timing.calls.get(), 0);
+        assert_eq!(timing.elapsed.get(), Duration::ZERO);
+    }
+
+    #[test]
+    fn enabled_intervals_count_early_returns_and_accumulate() {
+        let details = std::sync::Mutex::new(DiagnosticsDetails::default());
+        let before = Instant::now();
+        {
+            let _phase = DiagnosticsPhase::in_collector("actual", true, &details);
+        }
+        let after = Instant::now();
+        let mut details = details.into_inner().unwrap();
+        assert_eq!(details.spans.len(), 1);
+        let actual = details.spans[0].clone();
+        let executing = trace::span("executing", None, before, after);
+        assert_eq!(actual.name, "actual");
+        assert_eq!(actual.level, None);
+        assert_eq!((actual.pid, actual.tid), (executing.pid, executing.tid));
+        assert!(actual.dur_us <= after.duration_since(before).as_micros() as u64);
+        for _ in 1..=DIAGNOSTICS_DETAIL_CAP {
+            details.push(actual.clone());
+        }
+        assert_eq!(details.spans.len(), DIAGNOSTICS_DETAIL_CAP);
+        let (spans, stale, dropped) = details.take(0);
+        assert_eq!(spans.len(), DIAGNOSTICS_DETAIL_CAP);
+        assert_eq!((stale, dropped), (0, 1));
+        details.push(actual.clone());
+        let (spans, stale, dropped) =
+            details.take(actual.start_us.saturating_add(actual.dur_us).saturating_add(1));
+        assert!(spans.is_empty());
+        assert_eq!((stale, dropped), (1, 0));
+        assert_eq!(details.take(0), (Vec::new(), 0, 0));
+        let timing = DiagnosticsAskedTiming::default();
+        let callback = || {
+            let _interval = timing.enter(true);
+            false
+        };
+        assert!(!callback());
+        let first = timing.elapsed.get();
+        assert!(!callback());
+        assert_eq!(timing.calls.get(), 2);
+        assert!(timing.elapsed.get() >= first);
+    }
+}
+
 /// The errors the check of `file` as a module of the crates `within` finds, by the rules
 /// (lints denied, borrowck refused) of [`broken_in`]. After a check that found none, the next
 /// asks rust-analyzer only for the bodies an edit can have changed ([`Clean`]); every body is
@@ -6775,6 +6976,8 @@ fn errors_of(
     (lints, refuse_borrowck): (bool, bool),
 ) -> Vec<(ide_db::FileRange, &'static str, String)> {
     use std::hash::BuildHasher as _;
+    let telemetry = diagnostics_telemetry_enabled();
+    let skeleton_phase = DiagnosticsPhase::new("diagnostics.skeleton_key_clean");
     let crates = within.as_ref().map(|set| {
         let hashes = set.iter().map(|it| rustc_hash::FxBuildHasher.hash_one(it));
         (set.len(), hashes.fold(0, |all, it| all ^ it))
@@ -6782,9 +6985,12 @@ fn errors_of(
     let key = (file, crates, (lints, refuse_borrowck));
     let skeleton = outline::skeleton(db, file);
     let was = skeleton.and_then(|now| lock(&CLEAN).remove(&key).filter(|it| it.skeleton == now));
+    drop(skeleton_phase);
     let functions = std::cell::RefCell::new(FxHashMap::default());
     let asked_of = std::cell::Cell::new((0usize, 0usize));
+    let asked_timing = DiagnosticsAskedTiming::default();
     let asked = |body: hir::DefWithBody| {
+        let _interval = asked_timing.enter(telemetry);
         let hir::DefWithBody::Function(func) = body else { return was.is_none() };
         let written = hir::HasSource::source(func, db)
             .map(|it| rustc_hash::FxBuildHasher.hash_one(it.value.syntax().text().to_string()));
@@ -6795,35 +7001,47 @@ fn errors_of(
         asked_of.set((n + usize::from(asked), of + 1));
         asked
     };
-    let found: Vec<_> = ide_diagnostics::semantic_diagnostics_of_bodies(
+    let semantic_phase = DiagnosticsPhase::new("diagnostics.semantic_inclusive_asked");
+    let diagnostics = ide_diagnostics::semantic_diagnostics_of_bodies(
         db,
         config,
         &ide_db::assists::AssistResolveStrategy::None,
         file,
         within,
         &asked,
-    )
-    .into_iter()
-    .filter(|it| {
-        let code = it.code.as_str();
-        // rustc says nothing of most lints in what another crate's macro expands to.
-        let expanded = it.main_node.is_some_and(|it| it.file_id.is_macro());
-        it.severity == ide_db::Severity::Error
-            && (SURE.contains(&code)
-                || refuse_borrowck && BORROWCK.contains(&code)
-                || lints
-                    && !expanded
-                    && (DENIED.contains(&code)
-                        || refuse_borrowck && DENIED_BORROWCK.contains(&code)))
-    })
-    .map(|it| (it.range, it.code.as_str(), it.message))
-    .collect();
+    );
+    drop(semantic_phase);
+    let filter_phase = DiagnosticsPhase::new("diagnostics.filter_cache_update");
+    let found: Vec<_> = diagnostics
+        .into_iter()
+        .filter(|it| {
+            let code = it.code.as_str();
+            // rustc says nothing of most lints in what another crate's macro expands to.
+            let expanded = it.main_node.is_some_and(|it| it.file_id.is_macro());
+            it.severity == ide_db::Severity::Error
+                && (SURE.contains(&code)
+                    || refuse_borrowck && BORROWCK.contains(&code)
+                    || lints
+                        && !expanded
+                        && (DENIED.contains(&code)
+                            || refuse_borrowck && DENIED_BORROWCK.contains(&code)))
+        })
+        .map(|it| (it.range, it.code.as_str(), it.message))
+        .collect();
     if std::env::var_os("RA_JIT_STATS").is_some() {
         let (n, of) = asked_of.get();
         eprintln!("check: {file:?}: the bodies of {n} of {of} functions asked");
     }
     if let Some(skeleton) = skeleton.filter(|_| found.is_empty()) {
         lock(&CLEAN).insert(key, Clean { skeleton, functions: functions.into_inner() });
+    }
+    drop(filter_phase);
+    if telemetry {
+        eprintln!(
+            "check timing: {file:?}: asked_callback_calls={} asked_callback_cumulative_ns={} (source/hash/selective predicate, included in semantic)",
+            asked_timing.calls.get(),
+            asked_timing.elapsed.get().as_nanos(),
+        );
     }
     found
 }
@@ -11526,6 +11744,7 @@ fn worker_spans(
         at += took;
     }
     spans.extend(trace::take_detail(noticed));
+    spans.extend(take_diagnostics_details(noticed));
     spans
 }
 
