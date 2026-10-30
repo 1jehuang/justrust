@@ -64,6 +64,8 @@ fn main() {
 #[test]
 fn target_alignment_private_operation_rejects_foreign_source_owners() {
     for source in [
+        "mod mem {pub fn storage_alignment<T>()->usize{__justrust_align_of!(T)}} fn main(){let value=mem::storage_alignment::<u8>();}",
+        "mod __justrust_std {pub mod mem {pub fn storage_alignment<T>()->usize{__justrust_align_of!(T)}}} fn main(){let value=__justrust_std::mem::storage_alignment::<u8>();}",
         "fn main(){let value=__justrust_align_of!(u8);}",
         "mod mem { pub fn align_of<T>()->usize { __justrust_align_of!(T) } } fn main(){let value=mem::align_of::<u128>();}",
         "mod __justrust_std {pub mod mem {pub fn align_of<T>()->usize {__justrust_align_of!(T)}}} fn main(){let value=__justrust_std::mem::align_of::<u8>();}",
@@ -91,6 +93,18 @@ fn target_alignment_unknown_layouts_fail_explicitly_instead_of_using_private_sto
         (
             "enum",
             "enum E {A, B(u128)} fn main(){println!(\"{}\",std::mem::align_of::<E>());}",
+        ),
+        (
+            "byte-enum",
+            r#"enum E {A,B} fn main(){println!("{}",std::mem::align_of::<E>());}"#,
+        ),
+        (
+            "nested-enum",
+            r#"enum E {A,B} struct Wrapped{value:[E;2]} fn main(){println!("{}",std::mem::align_of::<Wrapped>());}"#,
+        ),
+        (
+            "fn-item",
+            r#"fn item(){} fn alignment<T>(value:T)->usize{std::mem::align_of::<T>()} fn main(){println!("{}",alignment(item));}"#,
         ),
         (
             "unsized-pointer",
@@ -136,6 +150,29 @@ fn target_alignment_unknown_layouts_fail_explicitly_instead_of_using_private_sto
     }
 }
 
+#[test]
+fn private_storage_alignment_preserves_vec_enum_transport() {
+    physical_matches_stock(
+        r#"
+        enum E { A, B(u16) }
+        fn main() {
+            let mut values:Vec<E>=Vec::new();
+            assert!(values.as_ptr() as usize!=0usize);
+            assert!(values.as_mut_ptr() as usize!=0usize);
+            assert_eq!(values.as_slice().len(),0usize);
+            values.push(E::A); values.push(E::B(513u16));
+            let pointer=values.as_ptr();
+            let first=unsafe{&*pointer};
+            match first {E::A=>{},E::B(_)=>panic!("first")}
+            match values.pop(){Some(E::B(value))=>assert_eq!(value,513u16),_=>panic!("payload")}
+            match values.pop(){Some(E::A)=>{},_=>panic!("tag")}
+            println!("private enum storage");
+        }
+    "#,
+        "private_storage_alignment_vec_enum",
+    );
+}
+
 fn physical_matches_stock(source: &str, tag: &str) {
     let (root, compiled) = stock(source, tag);
     assert!(
@@ -146,12 +183,14 @@ fn physical_matches_stock(source: &str, tag: &str) {
     let expected = Command::new(root.join("stock")).output().unwrap();
     assert!(expected.status.success(), "{tag}: {expected:?}");
     for workers in [1, 8] {
-        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        let checked = compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("{tag}: workers={workers} CHECK: {error}"));
         assert!(
             checked.executable.is_none(),
             "CHECK must not emit an executable"
         );
-        let built = compiler::compile(source.into(), workers, false).unwrap();
+        let built = compiler::compile(source.into(), workers, false)
+            .unwrap_or_else(|error| panic!("{tag}: workers={workers} BUILD: {error}"));
         let binary = root.join(format!("native-{workers}"));
         fs::write(&binary, built.executable.unwrap()).unwrap();
         fs::set_permissions(&binary, fs::Permissions::from_mode(0o700)).unwrap();
@@ -440,4 +479,235 @@ fn physical_u16_byte_reinterpretation_matches_stock() {
         r#"fn main(){let a=[257u16,513u16];let p=&a[0]as *const u16;let bytes=p as *const u8;unsafe{println!("{} {} {} {}",*bytes,*bytes.add(1usize),*bytes.add(2usize),*bytes.add(3usize));}}"#,
         "physical_u16_byte_reinterpretation_matches_stock",
     );
+}
+
+#[test]
+fn alignment_domain_recursive_wrappers_match_stock() {
+    physical_matches_stock(
+        r#"
+struct Pair<T>{left:T,right:[u16;3]}
+enum Ignored{A,B}
+fn left<T,U>(n:usize)->usize{if n==0usize{std::mem::align_of::<(T,[U;2])>()}else{right::<U,T>(n-1usize)}}
+fn right<T,U>(n:usize)->usize{left::<U,T>(n)}
+fn wrap<T>()->usize{std::mem::align_of::<Pair<T>>()}
+fn unused_parameter<T>(n:usize)->usize{n}
+fn raw_alignment<T:?Sized>()->usize{std::mem::align_of::<*const T>()}
+fn grow<T>(n:usize)->usize{if n==0usize{std::mem::align_of::<T>()}else{grow::<[T;2]>(n-1usize)}}
+fn main(){println!("{} {} {} {} {}",left::<u8,u32>(4usize),wrap::<u128>(),std::mem::align_of::<&Ignored>(),unused_parameter::<Ignored>(9usize),raw_alignment::<Ignored>());}
+"#,
+        "alignment-domain-recursive",
+    );
+}
+
+#[test]
+fn alignment_domain_closed_unsupported_wrappers_are_rejected_during_check() {
+    for (tag, source) in [
+        (
+            "generic-unsized-raw",
+            "fn raw<T:?Sized>()->usize{std::mem::align_of::<*const T>()} fn unused()->usize{raw::<str>()} fn main(){}",
+        ),
+        (
+            "nested-enum",
+            "enum E{A,B} struct Wrap<T>{value:[T;2]} fn inner<T>()->usize{std::mem::align_of::<Wrap<T>>()} fn outer<T>()->usize{inner::<(u8,T)>()} fn unused()->usize{outer::<E>()} fn main(){}",
+        ),
+        (
+            "recursive-enum",
+            "enum E{A,B} fn a<T,U>(n:usize)->usize{if n==0usize{std::mem::align_of::<(T,[U;2])>()}else{b::<U,T>(n-1usize)}} fn b<T,U>(n:usize)->usize{a::<U,T>(n)} fn unused()->usize{a::<u8,E>(0usize)} fn main(){}",
+        ),
+        (
+            "captured-closure",
+            "fn alignment<T>(_:T)->usize{std::mem::align_of::<T>()} fn unused()->usize{let n=3u8;alignment(||n)} fn main(){}",
+        ),
+        (
+            "trait-dispatch-enum",
+            "enum E{A,B}struct W<T>(T);trait Inspect{fn width(&self)->usize;}impl<T> Inspect for W<T>{fn width(&self)->usize{std::mem::align_of::<T>()}}fn invoke<T:Inspect>(x:T)->usize{x.width()}fn unused()->usize{invoke(W(E::A))}fn main(){}",
+        ),
+        (
+            "virtual-constructor-enum",
+            "enum E{A,B}struct W<T>(T);trait Inspect{fn width(&self)->usize;}impl<T> Inspect for W<T>{fn width(&self)->usize{std::mem::align_of::<T>()}}fn unused()->usize{let v=W(E::A);let p:&dyn Inspect=&v;p.width()}fn main(){}",
+        ),
+        (
+            "opaque-bound-enum",
+            "enum E{A,B}struct W<T>(T);trait Inspect{fn width(&self)->usize;}impl<T> Inspect for W<T>{fn width(&self)->usize{std::mem::align_of::<T>()}}fn make()->impl Inspect{W(E::A)}fn unused()->usize{make().width()}fn main(){}",
+        ),
+        (
+            "opaque-method-own-enum",
+            "enum E{A,B}struct V;trait Inspect{fn width<T>(&self)->usize;}impl Inspect for V{fn width<T>(&self)->usize{std::mem::align_of::<T>()}}fn make()->impl Inspect{V}fn unused()->usize{make().width::<E>()}fn main(){}",
+        ),
+        (
+            "implicit-drop-enum",
+            "enum E{A,B}struct D<T>(T);impl<T> Drop for D<T>{fn drop(&mut self){let _n=std::mem::align_of::<T>();}}fn consume<T>(_x:T){}fn unused(){consume(D(E::A));}fn main(){}",
+        ),
+    ] {
+        let (root, compiled) = stock(source, tag);
+        assert!(
+            compiled.status.success(),
+            "{tag}: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = match compiler::compile(source.into(), workers, check) {
+                    Ok(_) => panic!(
+                        "{tag}: workers={workers},check={check}: unsupported target alignment must fail admission"
+                    ),
+                    Err(error) => error.to_string(),
+                };
+                assert!(
+                    error.contains("unsupported") && error.contains("alignment"),
+                    "{tag}: workers={workers},check={check}: {error}"
+                );
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn alignment_domain_dispatch_projection_and_cleanup_match_stock() {
+    for (tag, source) in [
+        (
+            "trait-dispatch",
+            r#"trait Inspect{fn width(&self)->usize;}impl Inspect for u16{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn invoke<T:Inspect>(x:T)->usize{x.width()}fn main(){println!("{}",invoke(7u16));}"#,
+        ),
+        (
+            "virtual-constructor",
+            r#"struct V(u16);trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn invoke(x:&dyn Inspect)->usize{x.width()}fn main(){let v=V(7u16);println!("{}",invoke(&v));}"#,
+        ),
+        (
+            "opaque-bound",
+            r#"struct V(u16);trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn make()->impl Inspect{V(7u16)}fn main(){println!("{}",make().width());}"#,
+        ),
+        (
+            "opaque-method-own",
+            r#"struct V;trait Inspect{fn width<T>(&self)->usize;}impl Inspect for V{fn width<T>(&self)->usize{std::mem::align_of::<T>()}}fn make()->impl Inspect{V}fn main(){println!("{}",make().width::<u32>());}"#,
+        ),
+        (
+            "associated-query",
+            r#"trait Has{type Item;}impl Has for u16{type Item=u32;}fn width<T:Has>()->usize{std::mem::align_of::<T::Item>()}fn main(){println!("{}",width::<u16>());}"#,
+        ),
+        (
+            "implicit-drop",
+            r#"struct D<T>(T);impl<T> Drop for D<T>{fn drop(&mut self){println!("{}",std::mem::align_of::<T>());}}fn consume<T>(_x:T){}fn main(){consume(D(7u16));}"#,
+        ),
+    ] {
+        physical_matches_stock(source, tag);
+    }
+}
+
+#[test]
+fn alignment_domain_nested_opaque_keeps_explicit_declaration_boundary() {
+    let source = "struct V;trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn make()->impl Inspect{V}fn forward()->impl Inspect{make()}fn main(){let _n=forward().width();}";
+    let (root, compiled) = stock(source, "nested-opaque-domain-boundary");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    for workers in [1, 8] {
+        let error = compiler::compile(source.into(), workers, true)
+            .err()
+            .expect("nested opaque declaration support must not be approximated by layout domains")
+            .to_string();
+        assert!(
+            error.contains("nested opaque hidden types require a cycle-safe declaration protocol"),
+            "{error}"
+        );
+    }
+    fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn alignment_domain_check_keeps_closed_instance_and_codegen_nodes_undemanded() {
+    let source = "fn a<T>(n:usize)->usize{if n==0usize{std::mem::align_of::<T>()}else{b::<T>(n-1usize)}} fn b<U>(n:usize)->usize{a::<U>(n)} fn growing<T>(n:usize)->usize{if n==0usize{std::mem::align_of::<T>()}else{growing::<[T;2]>(n-1usize)}} fn main(){let _n=a::<u16>(2usize);}";
+    let opaque = "struct V;trait Inspect{fn width(&self)->usize;}impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn make()->impl Inspect{V}fn main(){let _n=make().width();}";
+    for (source, workers) in [source, opaque]
+        .into_iter()
+        .flat_map(|source| [1, 8].map(|workers| (source, workers)))
+    {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        for kind in [102, 103, 108, 137, 140, 142] {
+            assert!(
+                !checked.report.published_kind(kind),
+                "CHECK demanded backend/instance kind {kind}"
+            );
+        }
+        assert!(checked.report.published_kind(115));
+        assert!(checked.report.published_kind(128));
+    }
+}
+
+#[test]
+fn alignment_domain_graph_reads_compact_headers_not_transitive_bodies() {
+    use std::collections::HashMap;
+    let source = "fn leaf<T>()->usize{std::mem::align_of::<T>()}fn caller<T>()->usize{leaf::<T>()}fn apply<F:Fn()->usize>(f:F)->usize{f()}fn main(){let _n=caller::<u16>();let _m=apply(||std::mem::align_of::<u16>());}";
+    for workers in [1, 8] {
+        let compiled = compiler::compile_observed_with_options(
+            source.into(),
+            workers,
+            true,
+            compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let report = &compiled.report;
+        assert!(report.capture_complete);
+        let nodes: HashMap<_, _> = report
+            .node_evaluations
+            .iter()
+            .zip(&report.node_ids)
+            .map(|((key, _), id)| (*id, key))
+            .collect();
+        let mut tasks = HashMap::new();
+        for event in &report.events {
+            if let (Some(task), Some(node)) = (event.task, event.node) {
+                tasks.entry(task).or_insert(node);
+            }
+        }
+        let mut symbolic_summaries = 0;
+        let mut closed_summaries = 0;
+        for key in nodes.values() {
+            if key.kind == 115 && key.params.starts_with(&[u64::MAX - 1, 2]) {
+                symbolic_summaries += 1;
+            }
+            if key.kind == 128 && key.params.starts_with(&[u64::MAX - 2, 2]) {
+                closed_summaries += 1;
+            }
+        }
+        assert!(symbolic_summaries > 0 && closed_summaries > 0);
+        for &(task, producer, _) in &report.dependency_edges {
+            let consumer = nodes[&tasks[&task]];
+            let dependency = nodes[&producer];
+            let symbolic = consumer.kind == 115 && consumer.params.first() == Some(&(u64::MAX - 1));
+            let closed = consumer.kind == 128 && consumer.params.first() == Some(&(u64::MAX - 2));
+            if !(symbolic || closed) {
+                continue;
+            }
+            let flavor = consumer.params[1];
+            if flavor != 0 {
+                assert_ne!(
+                    dependency.kind, 110,
+                    "topology/SCC producer directly read a TemplateBody: {consumer:?} -> {dependency:?}"
+                );
+            }
+            if symbolic && flavor == 1 {
+                assert!(
+                    dependency.kind == 115 && dependency.params.starts_with(&[u64::MAX - 1, 0]),
+                    "symbolic topology consumed more than compact owner headers: {dependency:?}"
+                );
+            }
+            if symbolic && flavor == 2 {
+                assert!(
+                    dependency.kind == 115 && dependency.params.first() == Some(&(u64::MAX - 1)),
+                    "symbolic SCC consumed non-domain input: {dependency:?}"
+                );
+            }
+            if closed && flavor == 2 {
+                assert!(
+                    dependency.kind == 128 && dependency.params.first() == Some(&(u64::MAX - 2)),
+                    "closed SCC consumed non-domain input: {dependency:?}"
+                );
+            }
+        }
+    }
 }

@@ -1,4 +1,5 @@
 //! Source-to-native compiler built on the fact graph. See COMPILER.md.
+mod alignment_domain_graph;
 mod associated_constant_graph;
 pub mod backend;
 mod borrow;
@@ -8,6 +9,7 @@ pub mod cache;
 #[cfg(test)]
 mod canonical_instance_tests;
 pub mod cfg;
+mod closed_alignment_graph;
 mod const_check;
 mod const_diagnostics;
 pub mod const_eval;
@@ -311,8 +313,17 @@ enum Input {
 /// read by consumers through `Context::read_fact`, so every dependency is a
 /// recorded graph edge. Nothing here is a shared side slot.
 ///
-/// `TEMPLATE_BODY` output: the original checked body and, for Source bodies,
-/// its canonical publication.
+/// Compact alignment-domain admission. Universal admission also retains its
+/// closed dispatch receipt when the declaration has no type parameters.
+struct AlignmentDomainFact {
+    proof: Arc<memory_layout::domain::compact::Summary>,
+    closed: Option<Arc<memory_layout::domain::compact::closed::topology::Summary>>,
+}
+impl crate::engine::Fact for AlignmentDomainFact {}
+struct ClosedAlignmentProofFact {
+    proof: Option<Arc<memory_layout::domain::compact::closed::topology::Summary>>,
+}
+impl crate::engine::Fact for ClosedAlignmentProofFact {}
 struct TemplateBodyFact {
     checked: Arc<ir::CheckedFunction>,
     closure: Option<frontend::closures::check::CheckedClosure>,
@@ -1031,8 +1042,11 @@ impl Provider for CompilerProvider {
             | ASSOCIATED_CONST_HEADER
             | ASSOCIATED_CONST_SELECT
             | OPAQUE_CALL_DISPATCH => 2,
+            UNIVERSAL_EFFECTS_READY if key.params.first() == Some(&(u64::MAX - 1)) => 1,
+            UNIVERSAL_EFFECTS_READY => 2,
             TEMPLATE_BODY => 3,
-            SOURCE_ADMISSION => 4,
+            SOURCE_ADMISSION if key.params.first() == Some(&(u64::MAX - 2)) => 1,
+            SOURCE_ADMISSION => 6,
             ADMIT => 2,
             BUILD | OBJECT => 2,
             RESOLVE => 4,
@@ -1044,6 +1058,48 @@ impl Provider for CompilerProvider {
         let this = self.clone();
         if key.kind == nominal_realization::KIND {
             return Box::pin(async move { nominal_realization::run(&cx, key).await });
+        }
+        if key.kind == UNIVERSAL_EFFECTS_READY && key.params.first() == Some(&(u64::MAX - 1)) {
+            return Box::pin(async move {
+                let facts = Facts { cx: &cx };
+                this.0
+                    .budget
+                    .charge_work(key.params.len())
+                    .map_err(Error::new)?;
+                this.0
+                    .budget
+                    .retain_bytes(
+                        key.params
+                            .len()
+                            .saturating_mul(2 * std::mem::size_of::<u64>()),
+                    )
+                    .map_err(Error::new)?;
+                let request = keys::alignment_domain::AlignmentDomain::decode(&key)
+                    .map_err(Error::new)?
+                    .ok_or_else(|| Error::new("missing typed alignment flavor"))?;
+                alignment_domain_graph::produce(request, &facts, &cx, &this.0.budget).await
+            });
+        }
+        if key.kind == SOURCE_ADMISSION && key.params.first() == Some(&(u64::MAX - 2)) {
+            return Box::pin(async move {
+                let facts = Facts { cx: &cx };
+                this.0
+                    .budget
+                    .charge_work(key.params.len())
+                    .map_err(Error::new)?;
+                this.0
+                    .budget
+                    .retain_bytes(
+                        key.params
+                            .len()
+                            .saturating_mul(2 * std::mem::size_of::<u64>()),
+                    )
+                    .map_err(Error::new)?;
+                let request = keys::closed_domain::ClosedDomain::decode(&key)
+                    .map_err(Error::new)?
+                    .ok_or_else(|| Error::new("missing typed closed alignment flavor"))?;
+                closed_alignment_graph::produce(&this, request, &facts, &cx, &this.0.budget).await
+            });
         }
         // Keep declaration-local publication out of the legacy giant polling
         // frame used by unrelated source-checking producers.
@@ -2010,9 +2066,52 @@ impl Provider for CompilerProvider {
                     {
                         return Err(Error::new("non-universal callable has no admission fact"));
                     }
-                    let proof: Arc<UniversalProofFact> = facts
-                        .get(keys::words(UNIVERSAL_ANALYZE, key.params.clone())?)
-                        .await?;
+                    let analysis_handle = cx
+                        .request(keys::words(UNIVERSAL_ANALYZE, key.params.clone())?)
+                        .get(0);
+                    // A nongeneric declaration can still have a universal
+                    // source publication (for example an opaque receiver).
+                    // Its closed dispatch obligations are exact, not conditional.
+                    let closed_target = if template.closure.is_none()
+                        && !types
+                            .callable_env(declaration)
+                            .map_err(Error::new)?
+                            .is_generic()
+                    {
+                        Some(ir::CallTarget {
+                            declaration,
+                            type_args: Arc::from([]),
+                        })
+                    } else {
+                        None
+                    };
+                    if let Some(target) = &closed_target {
+                        let closed_key =
+                            keys::closed_domain::ClosedDomain::topology(target, &this.0.budget)
+                                .map_err(Error::new)?;
+                        closed_key.charge_key(&this.0.budget).map_err(Error::new)?;
+                        cx.request_item(&closed_key);
+                    }
+                    let domain =
+                        alignment_domain_graph::summary(&facts, declaration, &this.0.budget)
+                            .await?;
+                    domain.admit_symbolic(declaration).map_err(Error::new)?;
+                    let closed = if let Some(target) = &closed_target {
+                        let proof =
+                            closed_alignment_graph::summary(&facts, target, &this.0.budget).await?;
+                        proof.admit(target, &this.0.budget).map_err(Error::new)?;
+                        Some(proof)
+                    } else {
+                        None
+                    };
+                    cx.publish_fact(
+                        1,
+                        AlignmentDomainFact {
+                            proof: domain,
+                            closed,
+                        },
+                    )?;
+                    let proof: Arc<UniversalProofFact> = cx.read_fact(analysis_handle).await?;
                     let mut callee_indices = Vec::new();
                     for expression in &proof.verified.source().exprs {
                         this.0.budget.charge_work(1).map_err(Error::new)?;
@@ -2807,12 +2906,32 @@ impl Provider for CompilerProvider {
                         });
                     if abstract_source || Self::universal_body(&types, declaration)? {
                         cx.publish_fact(SOURCE_CLOSED_PROOF_OUTPUT, None::<ClosedSourceProof>)?;
-                        let effects = cx.request(function(UNIVERSAL_EFFECTS_READY, index)).get(0);
+                        let effect_outputs = cx.request(function(UNIVERSAL_EFFECTS_READY, index));
+                        let effects = effect_outputs.get(0);
+                        let domain = effect_outputs.get(1);
                         let proof = cx
                             .request(function(UNIVERSAL_ANALYZE, index))
                             .get(ANALYSIS_OUTPUT);
                         let lowered = cx.request(function(UNIVERSAL_LOWER, index)).get(0);
                         cx.read(effects).await?;
+                        let domain: Arc<AlignmentDomainFact> = cx.read_fact(domain).await?;
+                        domain
+                            .proof
+                            .admit_symbolic(declaration)
+                            .map_err(Error::new)?;
+                        cx.publish_fact(
+                            4,
+                            AlignmentDomainFact {
+                                proof: domain.proof.clone(),
+                                closed: domain.closed.clone(),
+                            },
+                        )?;
+                        cx.publish_fact(
+                            5,
+                            ClosedAlignmentProofFact {
+                                proof: domain.closed.clone(),
+                            },
+                        )?;
                         let analysis: Arc<Arc<ownership::Analysis>> = cx.read_fact(proof).await?;
                         let lowered: Arc<cfg::TemplateCfg> = cx.read_fact(lowered).await?;
                         cx.publish_fact(ANALYSIS_OUTPUT, analysis.as_ref().clone())?;
@@ -2821,6 +2940,43 @@ impl Provider for CompilerProvider {
                         let publication = template.publication.as_ref().ok_or_else(|| {
                             Error::new("closed source admission omitted its canonical publication")
                         })?;
+                        let target = publication.facts().target().ok_or_else(|| {
+                            Error::new("closed alignment omitted canonical target")
+                        })?;
+                        let symbolic_key =
+                            keys::alignment_domain::AlignmentDomain::Topology(declaration);
+                        let closed_key =
+                            keys::closed_domain::ClosedDomain::topology(target, &this.0.budget)
+                                .map_err(Error::new)?;
+                        symbolic_key
+                            .charge_key(&this.0.budget)
+                            .map_err(Error::new)?;
+                        closed_key.charge_key(&this.0.budget).map_err(Error::new)?;
+                        cx.request_item(&symbolic_key);
+                        cx.request_item(&closed_key);
+                        let domain =
+                            alignment_domain_graph::summary(&facts, declaration, &this.0.budget)
+                                .await?;
+                        domain.admit_symbolic(declaration).map_err(Error::new)?;
+                        cx.publish_fact(
+                            4,
+                            AlignmentDomainFact {
+                                proof: domain,
+                                closed: None,
+                            },
+                        )?;
+                        let closed_alignment =
+                            closed_alignment_graph::summary(&facts, target, &this.0.budget).await?;
+                        let admission = ClosedAlignmentProofFact {
+                            proof: Some(closed_alignment),
+                        };
+                        admission
+                            .proof
+                            .as_ref()
+                            .ok_or_else(|| Error::new("missing compact closed alignment proof"))?
+                            .admit(target, &this.0.budget)
+                            .map_err(Error::new)?;
+                        cx.publish_fact(5, admission)?;
                         // Declare this node's own input before lowering charges it.
                         scale_task_work_by_callable(&types, declaration);
                         let lowered = cfg::lower_source_closed(publication, &this.0.budget)

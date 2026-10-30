@@ -10,6 +10,7 @@ use super::ir::{
 use super::module_identity::{ModuleArena, ModuleError, ModuleId};
 use std::sync::Arc;
 
+pub(super) mod alignment_provider;
 mod associated_bounds;
 mod associated_constants;
 mod associated_types;

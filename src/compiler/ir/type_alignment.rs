@@ -5,6 +5,7 @@ use super::{DeclId, FactsCtx, ParamId, PlanBudget, Ty};
 pub enum TypeQueryKind {
     Alignment,
     PrivateStorageStride,
+    PrivateStorageAlignment,
     /// Exact original packed reserve helper only; never private u8 stride.
     PackedByteReserveUnit,
 }
@@ -81,6 +82,10 @@ impl TypeAlignmentQuery {
 
     pub fn is_packed_byte_reserve(&self) -> bool {
         self.kind == TypeQueryKind::PackedByteReserveUnit
+    }
+
+    pub fn is_private_storage_alignment(&self) -> bool {
+        self.kind == TypeQueryKind::PrivateStorageAlignment
     }
 
     pub fn is_private_storage_stride(&self) -> bool {
@@ -171,6 +176,113 @@ mod tests {
     use super::*;
     use crate::compiler::{frontend, ir};
     use std::sync::Arc;
+
+    #[test]
+    fn private_alignment_query_retains_canonical_source_kind_and_budget() {
+        use crate::compiler::source;
+        let options = source::SourceOptions::default();
+        let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let mut assembler = source::SourceAssembler::new(&options);
+        let mut step = assembler
+            .provide(Arc::new(source::prepare_text_unit(
+                "private-alignment-authority.rs",
+                "fn main(){}",
+                &options,
+            )))
+            .unwrap();
+        let prepared = loop {
+            match step {
+                source::AssemblyStep::Done(prepared) => break prepared,
+                source::AssemblyStep::Need(need) => {
+                    let unit = match need.parent.as_deref() {
+                        None => source::prepare_prelude_unit(&options, &expansion),
+                        Some(parent) => {
+                            source::prepare_child_unit(parent, need.index, &options, &expansion)
+                        }
+                    };
+                    step = assembler.provide(Arc::new(unit)).unwrap();
+                }
+            }
+        };
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        for name in ["storage_alignment", "align_of"] {
+            let index = program
+                .functions
+                .iter()
+                .position(|function| {
+                    function
+                        .name
+                        .segments()
+                        .last()
+                        .is_some_and(|id| program.names.spelling(*id).unwrap() == name)
+                })
+                .unwrap();
+            let owner = plan.function_decl(index).unwrap();
+            let frontend::PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(owner, &budget).unwrap()
+            else {
+                panic!("canonical alignment helper must retain source publication");
+            };
+            let source = publication.source();
+            publication
+                .validate_source(source, publication.facts(), &budget)
+                .unwrap();
+            let (index, query) = source
+                .exprs
+                .iter()
+                .enumerate()
+                .find_map(|(index, expr)| {
+                    if let ir::ExprKind::TypeAlignment(query) = &expr.kind {
+                        Some((index, query.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap();
+            assert_eq!(
+                query.is_private_storage_alignment(),
+                name == "storage_alignment"
+            );
+            assert_eq!(
+                crate::compiler::memory_layout::query_value(
+                    &query,
+                    FactsCtx::Validated(publication.facts()),
+                    &budget
+                )
+                .unwrap(),
+                None
+            );
+            let mut forged = source.as_ref().clone();
+            let mut changed = query.clone();
+            changed.kind = if name == "storage_alignment" {
+                TypeQueryKind::Alignment
+            } else {
+                TypeQueryKind::PrivateStorageAlignment
+            };
+            assert!(!query.same_query(&changed, &budget).unwrap());
+            forged.exprs[index].kind = ir::ExprKind::TypeAlignment(changed);
+            assert!(
+                publication
+                    .validate_source(&Arc::new(forged), publication.facts(), &budget)
+                    .is_err()
+            );
+            let limited = PlanBudget::new(super::super::PlanLimits {
+                work: 0,
+                ..Default::default()
+            });
+            assert!(
+                crate::compiler::memory_layout::query_value(
+                    &query,
+                    FactsCtx::Validated(publication.facts()),
+                    &limited
+                )
+                .is_err()
+            );
+        }
+    }
 
     #[test]
     fn private_stride_query_rejects_kind_owner_and_type_tampering() {

@@ -64,6 +64,7 @@ impl type_check::Checker<'_> {
         {
             "align_of" => ir::TypeQueryKind::Alignment,
             "storage_stride" => ir::TypeQueryKind::PrivateStorageStride,
+            "storage_alignment" => ir::TypeQueryKind::PrivateStorageAlignment,
             "packed_reserve" => ir::TypeQueryKind::PackedByteReserveUnit,
             _ => return Err("private type query outside its canonical source body".into()),
         };

@@ -113,7 +113,7 @@ impl<T> Vec<T> {
 
     pub fn as_ptr(&self) -> *const T {
         if self.ptr as usize == 0usize {
-            super::mem::align_of::<T>() as *const T
+            super::mem::storage_alignment::<T>() as *const T
         } else {
             self.ptr as *const T
         }
@@ -121,7 +121,7 @@ impl<T> Vec<T> {
 
     pub fn as_mut_ptr(&mut self) -> *mut T {
         if self.ptr as usize == 0usize {
-            super::mem::align_of::<T>() as *mut T
+            super::mem::storage_alignment::<T>() as *mut T
         } else {
             self.ptr
         }

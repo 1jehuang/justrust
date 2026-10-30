@@ -31,6 +31,11 @@ pub(super) fn packed_reserve(address: usize, old_count: usize, new_count: usize)
     raw_realloc(address, old_count * unit, new_count * unit)
 }
 
+// Alignment of the current private value representation, not public Rust layout.
+pub(super) fn storage_alignment<T>() -> usize {
+    __justrust_align_of!(T)
+}
+
 pub fn align_of<T>() -> usize {
     __justrust_align_of!(T)
 }

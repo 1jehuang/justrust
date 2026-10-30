@@ -7,6 +7,8 @@
 #[allow(unused_imports)]
 pub(crate) use crate::engine::{BuildRoot, CheckRoot, ResolveDebtRoot, SignaturesDebtRoot};
 use crate::engine::{ItemKey, Key};
+pub(in crate::compiler) mod alignment_domain;
+pub(in crate::compiler) mod closed_domain;
 
 /// One file's canonical position in the source forest. Roots distinguish the
 /// input crate, embedded prelude, and dependency crates. Descendants retain the
