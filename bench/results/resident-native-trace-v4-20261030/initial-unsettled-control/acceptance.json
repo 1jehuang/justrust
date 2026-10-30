@@ -1,0 +1,94 @@
+{
+  "scope": "frozen-v4-telemetry-acceptance-not-speedup",
+  "rows": [],
+  "tool_sha256": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+  "source_sha256_before": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+  "source_modified_by_gate": false,
+  "worker_identity_before": {
+    "daemon": [
+      [
+        "3641872",
+        "0.20261027.0-63ee7ef4-77b8418-18e3563e0db3e54d"
+      ]
+    ],
+    "workers": [
+      [
+        "3641875",
+        "/home/jeremy/.jcode/scratch/ba30/source/",
+        "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime/workers/1319e809662dd528/log"
+      ]
+    ]
+  },
+  "artifact_identity_before": {
+    "target/debug/deps/justrust-ba8710764aaf739d": {
+      "sha256": "fad770a50d2b5fb806f9b84e53ba2d815bcb0bdfab2e4211b7cf7295f09cf221",
+      "dev": 41,
+      "inode": 99377351
+    },
+    "target/rust-analyzer-rustc/debug/build/serde_derive/c516cdda3f0b5ca8/out/libserde_derive-c516cdda3f0b5ca8.so": {
+      "sha256": "d8bfebe11aef169fe8828b4a6aeae5a121a404bff34ea0de533f04e169b12048",
+      "dev": 41,
+      "inode": 99376034
+    },
+    "target/rust-analyzer-rustc/debug/build/serde_core/8153a721dda9ef4c/out/build_script_build": {
+      "sha256": "d475c57d84e08b3f26add4e8ae435d01ea697ddd1bcc1c8e81740ac4206c2245",
+      "dev": 41,
+      "inode": 99375806
+    },
+    "target/rust-analyzer-rustc/debug/build/zmij/e8c9a9478d06ce55/out/build_script_build": {
+      "sha256": "7ce07275538c095fa68053fc377f79e4fc456e240e83e6b3747de93d258b53ce",
+      "dev": 41,
+      "inode": 99375779
+    },
+    "target/rust-analyzer-rustc/debug/build/clap_derive/155ae4937f4dfc27/out/libclap_derive-155ae4937f4dfc27.so": {
+      "sha256": "3d21f2d27103e5d7bea3fd4a23cd3eb555ccb002e6c0060fb87e80559a731c06",
+      "dev": 41,
+      "inode": 99376002
+    },
+    "target/rust-analyzer-rustc/debug/build/serde_json/a69965d726c80a45/out/build_script_build": {
+      "sha256": "27fad6644c8e60ddbc4460b472bb4fe7175111155f9d02a742606a3771234890",
+      "dev": 41,
+      "inode": 99375697
+    },
+    "target/rust-analyzer-rustc/debug/build/libc/e6df33eb52bc48c3/out/build_script_build": {
+      "sha256": "00849e5c8019f3c9ff5277b7b13f1af189dcb21b4377c822286084056460cb40",
+      "dev": 41,
+      "inode": 99375870
+    },
+    "target/rust-analyzer-rustc/debug/build/num-traits/4350bc22361dcde3/out/build_script_build": {
+      "sha256": "c148fcffc3373d0150412ec87053031dd71a535ece6a30f1d6aa3707a0658f43",
+      "dev": 41,
+      "inode": 99375894
+    },
+    "target/rust-analyzer-rustc/debug/build/proc-macro2/71ea1a35731714b0/out/build_script_build": {
+      "sha256": "3b95f7bbb2c3aba7e242bcd972341f6ab15da3ef7535fc205871097eec26c498",
+      "dev": 41,
+      "inode": 99375790
+    },
+    "target/rust-analyzer-rustc/debug/build/anyhow/f7dfd08dcbace8cb/out/build_script_build": {
+      "sha256": "1008de3a0d5279fdabeedabe0aeedfe3b756262e223323486c45cccc2a57b825",
+      "dev": 41,
+      "inode": 99375749
+    },
+    "target/rust-analyzer-rustc/debug/build/serde/c9436a4f99448150/out/build_script_build": {
+      "sha256": "f01ff23ca3da5fea85aed789697f87f3ab23b706c06321a8bc9ffc0159aec603",
+      "dev": 41,
+      "inode": 99375802
+    },
+    "target/rust-analyzer-rustc/debug/build/quote/7a6deb504ef7f967/out/build_script_build": {
+      "sha256": "ec77487744f858282f8310869111c095974b5c8f8907bb3d5b952a7ea253a05e",
+      "dev": 41,
+      "inode": 99375729
+    },
+    "target/ra-jit/whole-test/justrust-lib-justrust-test/1319e809662dd528/justrust": {
+      "sha256": "fad770a50d2b5fb806f9b84e53ba2d815bcb0bdfab2e4211b7cf7295f09cf221",
+      "dev": 41,
+      "inode": 99377351
+    }
+  },
+  "status": "failed",
+  "error": "AssertionError(('off', {'daemon': [('3641872', '0.20261027.0-63ee7ef4-77b8418-18e3563e0db3e54d')], 'workers': [('3706903', '/home/jeremy/.jcode/scratch/ba30/source/', '/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime/workers/4461a2c65ddb85f8/log'), ('3641875', '/home/jeremy/.jcode/scratch/ba30/source/', '/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime/workers/1319e809662dd528/log')]}, {'daemon': [('3641872', '0.20261027.0-63ee7ef4-77b8418-18e3563e0db3e54d')], 'workers': [('3641875', '/home/jeremy/.jcode/scratch/ba30/source/', '/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime/workers/1319e809662dd528/log')]}))",
+  "source_sha256_after": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+  "source_unchanged": true,
+  "tool_sha256_after": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8"
+}

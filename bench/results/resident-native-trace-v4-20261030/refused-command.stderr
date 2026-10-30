@@ -1,0 +1,2 @@
+error: blaze does not build with `--message-format` yet
+blaze: trace written to /home/jeremy/justrust/bench/results/resident-native-trace-v4-20261030/refused-command.json

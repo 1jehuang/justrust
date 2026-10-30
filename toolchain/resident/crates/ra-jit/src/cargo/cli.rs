@@ -598,6 +598,14 @@ mod tests {
     }
 
     #[test]
+    fn telemetry_does_not_select_a_build_or_worker() {
+        for name in ["RA_JIT_STATS", "RA_JIT_TRACE", "BLAZE_STATS", "BLAZE_TRACE"] {
+            assert!(!worker_named(name), "{name} must not change a worker's identity");
+            assert!(!is_named(BUILD_ENV, name), "{name} must not change a build's identity");
+        }
+    }
+
+    #[test]
     fn flags_are_the_builds() {
         let exact = |name| is_named(WORKER_ENV_EXACT, name) || target_rustflags(name);
         assert!(exact("RUSTFLAGS") && exact("CARGO_ENCODED_RUSTDOCFLAGS"));

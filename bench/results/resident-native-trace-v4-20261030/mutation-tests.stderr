@@ -1,0 +1,17 @@
+test_reject_artifact_inode_changed (__main__.EvidenceMutation.test_reject_artifact_inode_changed) ... ok
+test_reject_hidden_compile_diagnostic (__main__.EvidenceMutation.test_reject_hidden_compile_diagnostic) ... ok
+test_reject_lost_negative_control (__main__.EvidenceMutation.test_reject_lost_negative_control) ... ok
+test_reject_status_changed (__main__.EvidenceMutation.test_reject_status_changed) ... ok
+test_reject_trace_changed (__main__.EvidenceMutation.test_reject_trace_changed) ... ok
+test_reject_worker_changed (__main__.EvidenceMutation.test_reject_worker_changed) ... ok
+test_retained_evidence_passes (__main__.EvidenceMutation.test_retained_evidence_passes) ... ok
+test_reject_double_counted_breakdown (__main__.TraceValidation.test_reject_double_counted_breakdown) ... ok
+test_reject_empty_trace (__main__.TraceValidation.test_reject_empty_trace) ... ok
+test_reject_missing_owner (__main__.TraceValidation.test_reject_missing_owner) ... ok
+test_reject_negative_duration (__main__.TraceValidation.test_reject_negative_duration) ... ok
+test_valid_trace (__main__.TraceValidation.test_valid_trace) ... ok
+
+----------------------------------------------------------------------
+Ran 12 tests in 0.046s
+
+OK

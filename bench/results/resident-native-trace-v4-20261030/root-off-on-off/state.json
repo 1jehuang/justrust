@@ -1,0 +1,680 @@
+{
+  "scope": "actual-native-telemetry-not-speedup",
+  "rows": [
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.1209329209959833,
+      "noise": {
+        "before": {
+          "busy_seconds": 378854.72,
+          "loadavg": [
+            7.45068359375,
+            6.1201171875,
+            6.07763671875
+          ]
+        },
+        "after": {
+          "busy_seconds": 378855.63,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "child_cpu_seconds": 0.034732,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.8752680000325963
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa01/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa01/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa01/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa01/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa01/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa01/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa01/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa01/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa01/engine/runtime"
+      },
+      "mode": "settle",
+      "artifacts": {
+        "target/debug/deps/justrust-ba8710764aaf739d": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_derive/c516cdda3f0b5ca8/out/libserde_derive-c516cdda3f0b5ca8.so": {
+          "sha256": "d8bfebe11aef169fe8828b4a6aeae5a121a404bff34ea0de533f04e169b12048",
+          "dev": 41,
+          "inode": 99376034
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_core/8153a721dda9ef4c/out/build_script_build": {
+          "sha256": "d475c57d84e08b3f26add4e8ae435d01ea697ddd1bcc1c8e81740ac4206c2245",
+          "dev": 41,
+          "inode": 99375806
+        },
+        "target/rust-analyzer-rustc/debug/build/zmij/e8c9a9478d06ce55/out/build_script_build": {
+          "sha256": "7ce07275538c095fa68053fc377f79e4fc456e240e83e6b3747de93d258b53ce",
+          "dev": 41,
+          "inode": 99375779
+        },
+        "target/rust-analyzer-rustc/debug/build/clap_derive/155ae4937f4dfc27/out/libclap_derive-155ae4937f4dfc27.so": {
+          "sha256": "3d21f2d27103e5d7bea3fd4a23cd3eb555ccb002e6c0060fb87e80559a731c06",
+          "dev": 41,
+          "inode": 99376002
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_json/a69965d726c80a45/out/build_script_build": {
+          "sha256": "27fad6644c8e60ddbc4460b472bb4fe7175111155f9d02a742606a3771234890",
+          "dev": 41,
+          "inode": 99375697
+        },
+        "target/rust-analyzer-rustc/debug/build/libc/e6df33eb52bc48c3/out/build_script_build": {
+          "sha256": "00849e5c8019f3c9ff5277b7b13f1af189dcb21b4377c822286084056460cb40",
+          "dev": 41,
+          "inode": 99375870
+        },
+        "target/rust-analyzer-rustc/debug/build/num-traits/4350bc22361dcde3/out/build_script_build": {
+          "sha256": "c148fcffc3373d0150412ec87053031dd71a535ece6a30f1d6aa3707a0658f43",
+          "dev": 41,
+          "inode": 99375894
+        },
+        "target/rust-analyzer-rustc/debug/build/proc-macro2/71ea1a35731714b0/out/build_script_build": {
+          "sha256": "3b95f7bbb2c3aba7e242bcd972341f6ab15da3ef7535fc205871097eec26c498",
+          "dev": 41,
+          "inode": 99375790
+        },
+        "target/rust-analyzer-rustc/debug/build/anyhow/f7dfd08dcbace8cb/out/build_script_build": {
+          "sha256": "1008de3a0d5279fdabeedabe0aeedfe3b756262e223323486c45cccc2a57b825",
+          "dev": 41,
+          "inode": 99375749
+        },
+        "target/rust-analyzer-rustc/debug/build/serde/c9436a4f99448150/out/build_script_build": {
+          "sha256": "f01ff23ca3da5fea85aed789697f87f3ab23b706c06321a8bc9ffc0159aec603",
+          "dev": 41,
+          "inode": 99375802
+        },
+        "target/rust-analyzer-rustc/debug/build/quote/7a6deb504ef7f967/out/build_script_build": {
+          "sha256": "ec77487744f858282f8310869111c095974b5c8f8907bb3d5b952a7ea253a05e",
+          "dev": 41,
+          "inode": 99375729
+        },
+        "target/ra-jit/whole-test/justrust-lib-justrust-test/1319e809662dd528/justrust": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        }
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.04105112700199243,
+      "noise": {
+        "before": {
+          "busy_seconds": 378856.08,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "after": {
+          "busy_seconds": 378856.5,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "child_cpu_seconds": 0.038500999999999994,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.38149899998370185
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa01/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa01/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa01/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa01/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa01/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa01/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa01/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa01/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa01/engine/runtime"
+      },
+      "mode": "off",
+      "artifacts": {
+        "target/debug/deps/justrust-ba8710764aaf739d": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_derive/c516cdda3f0b5ca8/out/libserde_derive-c516cdda3f0b5ca8.so": {
+          "sha256": "d8bfebe11aef169fe8828b4a6aeae5a121a404bff34ea0de533f04e169b12048",
+          "dev": 41,
+          "inode": 99376034
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_core/8153a721dda9ef4c/out/build_script_build": {
+          "sha256": "d475c57d84e08b3f26add4e8ae435d01ea697ddd1bcc1c8e81740ac4206c2245",
+          "dev": 41,
+          "inode": 99375806
+        },
+        "target/rust-analyzer-rustc/debug/build/zmij/e8c9a9478d06ce55/out/build_script_build": {
+          "sha256": "7ce07275538c095fa68053fc377f79e4fc456e240e83e6b3747de93d258b53ce",
+          "dev": 41,
+          "inode": 99375779
+        },
+        "target/rust-analyzer-rustc/debug/build/clap_derive/155ae4937f4dfc27/out/libclap_derive-155ae4937f4dfc27.so": {
+          "sha256": "3d21f2d27103e5d7bea3fd4a23cd3eb555ccb002e6c0060fb87e80559a731c06",
+          "dev": 41,
+          "inode": 99376002
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_json/a69965d726c80a45/out/build_script_build": {
+          "sha256": "27fad6644c8e60ddbc4460b472bb4fe7175111155f9d02a742606a3771234890",
+          "dev": 41,
+          "inode": 99375697
+        },
+        "target/rust-analyzer-rustc/debug/build/libc/e6df33eb52bc48c3/out/build_script_build": {
+          "sha256": "00849e5c8019f3c9ff5277b7b13f1af189dcb21b4377c822286084056460cb40",
+          "dev": 41,
+          "inode": 99375870
+        },
+        "target/rust-analyzer-rustc/debug/build/num-traits/4350bc22361dcde3/out/build_script_build": {
+          "sha256": "c148fcffc3373d0150412ec87053031dd71a535ece6a30f1d6aa3707a0658f43",
+          "dev": 41,
+          "inode": 99375894
+        },
+        "target/rust-analyzer-rustc/debug/build/proc-macro2/71ea1a35731714b0/out/build_script_build": {
+          "sha256": "3b95f7bbb2c3aba7e242bcd972341f6ab15da3ef7535fc205871097eec26c498",
+          "dev": 41,
+          "inode": 99375790
+        },
+        "target/rust-analyzer-rustc/debug/build/anyhow/f7dfd08dcbace8cb/out/build_script_build": {
+          "sha256": "1008de3a0d5279fdabeedabe0aeedfe3b756262e223323486c45cccc2a57b825",
+          "dev": 41,
+          "inode": 99375749
+        },
+        "target/rust-analyzer-rustc/debug/build/serde/c9436a4f99448150/out/build_script_build": {
+          "sha256": "f01ff23ca3da5fea85aed789697f87f3ab23b706c06321a8bc9ffc0159aec603",
+          "dev": 41,
+          "inode": 99375802
+        },
+        "target/rust-analyzer-rustc/debug/build/quote/7a6deb504ef7f967/out/build_script_build": {
+          "sha256": "ec77487744f858282f8310869111c095974b5c8f8907bb3d5b952a7ea253a05e",
+          "dev": 41,
+          "inode": 99375729
+        },
+        "target/ra-jit/whole-test/justrust-lib-justrust-test/1319e809662dd528/justrust": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        }
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.033141652995254844,
+      "noise": {
+        "before": {
+          "busy_seconds": 378857.34,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "after": {
+          "busy_seconds": 378857.6,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "child_cpu_seconds": 0.03655,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.22344999995110557
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa01/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa01/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa01/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa01/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa01/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa01/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa01/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa01/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa01/engine/runtime"
+      },
+      "mode": "trace",
+      "artifacts": {
+        "target/debug/deps/justrust-ba8710764aaf739d": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_derive/c516cdda3f0b5ca8/out/libserde_derive-c516cdda3f0b5ca8.so": {
+          "sha256": "d8bfebe11aef169fe8828b4a6aeae5a121a404bff34ea0de533f04e169b12048",
+          "dev": 41,
+          "inode": 99376034
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_core/8153a721dda9ef4c/out/build_script_build": {
+          "sha256": "d475c57d84e08b3f26add4e8ae435d01ea697ddd1bcc1c8e81740ac4206c2245",
+          "dev": 41,
+          "inode": 99375806
+        },
+        "target/rust-analyzer-rustc/debug/build/zmij/e8c9a9478d06ce55/out/build_script_build": {
+          "sha256": "7ce07275538c095fa68053fc377f79e4fc456e240e83e6b3747de93d258b53ce",
+          "dev": 41,
+          "inode": 99375779
+        },
+        "target/rust-analyzer-rustc/debug/build/clap_derive/155ae4937f4dfc27/out/libclap_derive-155ae4937f4dfc27.so": {
+          "sha256": "3d21f2d27103e5d7bea3fd4a23cd3eb555ccb002e6c0060fb87e80559a731c06",
+          "dev": 41,
+          "inode": 99376002
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_json/a69965d726c80a45/out/build_script_build": {
+          "sha256": "27fad6644c8e60ddbc4460b472bb4fe7175111155f9d02a742606a3771234890",
+          "dev": 41,
+          "inode": 99375697
+        },
+        "target/rust-analyzer-rustc/debug/build/libc/e6df33eb52bc48c3/out/build_script_build": {
+          "sha256": "00849e5c8019f3c9ff5277b7b13f1af189dcb21b4377c822286084056460cb40",
+          "dev": 41,
+          "inode": 99375870
+        },
+        "target/rust-analyzer-rustc/debug/build/num-traits/4350bc22361dcde3/out/build_script_build": {
+          "sha256": "c148fcffc3373d0150412ec87053031dd71a535ece6a30f1d6aa3707a0658f43",
+          "dev": 41,
+          "inode": 99375894
+        },
+        "target/rust-analyzer-rustc/debug/build/proc-macro2/71ea1a35731714b0/out/build_script_build": {
+          "sha256": "3b95f7bbb2c3aba7e242bcd972341f6ab15da3ef7535fc205871097eec26c498",
+          "dev": 41,
+          "inode": 99375790
+        },
+        "target/rust-analyzer-rustc/debug/build/anyhow/f7dfd08dcbace8cb/out/build_script_build": {
+          "sha256": "1008de3a0d5279fdabeedabe0aeedfe3b756262e223323486c45cccc2a57b825",
+          "dev": 41,
+          "inode": 99375749
+        },
+        "target/rust-analyzer-rustc/debug/build/serde/c9436a4f99448150/out/build_script_build": {
+          "sha256": "f01ff23ca3da5fea85aed789697f87f3ab23b706c06321a8bc9ffc0159aec603",
+          "dev": 41,
+          "inode": 99375802
+        },
+        "target/rust-analyzer-rustc/debug/build/quote/7a6deb504ef7f967/out/build_script_build": {
+          "sha256": "ec77487744f858282f8310869111c095974b5c8f8907bb3d5b952a7ea253a05e",
+          "dev": 41,
+          "inode": 99375729
+        },
+        "target/ra-jit/whole-test/justrust-lib-justrust-test/1319e809662dd528/justrust": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        }
+      },
+      "trace_sha256": "f5927d277d555e08f50ba6e393a32678e6a3bb878829a1010904dfda7839b6b5",
+      "phase_names": [
+        "client checkout",
+        "client command",
+        "client install artifacts",
+        "client metadata",
+        "client planning",
+        "client request",
+        "client test",
+        "client test execution",
+        "client whole build",
+        "client\u2194daemon",
+        "daemon",
+        "daemon read request",
+        "daemon\u2194worker",
+        "process_name",
+        "thread_name"
+      ]
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.03195433900691569,
+      "noise": {
+        "before": {
+          "busy_seconds": 378858.14,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "after": {
+          "busy_seconds": 378858.36,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "child_cpu_seconds": 0.03447900000000001,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.1855209999720603
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa01/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa01/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa01/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa01/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa01/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa01/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa01/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa01/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa01/engine/runtime"
+      },
+      "mode": "alias",
+      "artifacts": {
+        "target/debug/deps/justrust-ba8710764aaf739d": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_derive/c516cdda3f0b5ca8/out/libserde_derive-c516cdda3f0b5ca8.so": {
+          "sha256": "d8bfebe11aef169fe8828b4a6aeae5a121a404bff34ea0de533f04e169b12048",
+          "dev": 41,
+          "inode": 99376034
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_core/8153a721dda9ef4c/out/build_script_build": {
+          "sha256": "d475c57d84e08b3f26add4e8ae435d01ea697ddd1bcc1c8e81740ac4206c2245",
+          "dev": 41,
+          "inode": 99375806
+        },
+        "target/rust-analyzer-rustc/debug/build/zmij/e8c9a9478d06ce55/out/build_script_build": {
+          "sha256": "7ce07275538c095fa68053fc377f79e4fc456e240e83e6b3747de93d258b53ce",
+          "dev": 41,
+          "inode": 99375779
+        },
+        "target/rust-analyzer-rustc/debug/build/clap_derive/155ae4937f4dfc27/out/libclap_derive-155ae4937f4dfc27.so": {
+          "sha256": "3d21f2d27103e5d7bea3fd4a23cd3eb555ccb002e6c0060fb87e80559a731c06",
+          "dev": 41,
+          "inode": 99376002
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_json/a69965d726c80a45/out/build_script_build": {
+          "sha256": "27fad6644c8e60ddbc4460b472bb4fe7175111155f9d02a742606a3771234890",
+          "dev": 41,
+          "inode": 99375697
+        },
+        "target/rust-analyzer-rustc/debug/build/libc/e6df33eb52bc48c3/out/build_script_build": {
+          "sha256": "00849e5c8019f3c9ff5277b7b13f1af189dcb21b4377c822286084056460cb40",
+          "dev": 41,
+          "inode": 99375870
+        },
+        "target/rust-analyzer-rustc/debug/build/num-traits/4350bc22361dcde3/out/build_script_build": {
+          "sha256": "c148fcffc3373d0150412ec87053031dd71a535ece6a30f1d6aa3707a0658f43",
+          "dev": 41,
+          "inode": 99375894
+        },
+        "target/rust-analyzer-rustc/debug/build/proc-macro2/71ea1a35731714b0/out/build_script_build": {
+          "sha256": "3b95f7bbb2c3aba7e242bcd972341f6ab15da3ef7535fc205871097eec26c498",
+          "dev": 41,
+          "inode": 99375790
+        },
+        "target/rust-analyzer-rustc/debug/build/anyhow/f7dfd08dcbace8cb/out/build_script_build": {
+          "sha256": "1008de3a0d5279fdabeedabe0aeedfe3b756262e223323486c45cccc2a57b825",
+          "dev": 41,
+          "inode": 99375749
+        },
+        "target/rust-analyzer-rustc/debug/build/serde/c9436a4f99448150/out/build_script_build": {
+          "sha256": "f01ff23ca3da5fea85aed789697f87f3ab23b706c06321a8bc9ffc0159aec603",
+          "dev": 41,
+          "inode": 99375802
+        },
+        "target/rust-analyzer-rustc/debug/build/quote/7a6deb504ef7f967/out/build_script_build": {
+          "sha256": "ec77487744f858282f8310869111c095974b5c8f8907bb3d5b952a7ea253a05e",
+          "dev": 41,
+          "inode": 99375729
+        },
+        "target/ra-jit/whole-test/justrust-lib-justrust-test/1319e809662dd528/justrust": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        }
+      },
+      "trace_sha256": "0080525e46358a39b0040a474bc53400f50d87b7d5aa9e888f4cf423671cc353",
+      "phase_names": [
+        "client checkout",
+        "client command",
+        "client install artifacts",
+        "client metadata",
+        "client planning",
+        "client request",
+        "client test",
+        "client test execution",
+        "client whole build",
+        "client\u2194daemon",
+        "daemon",
+        "daemon read request",
+        "daemon\u2194worker",
+        "process_name",
+        "thread_name"
+      ]
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v4-bin/jr-engine",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.029831281994120218,
+      "noise": {
+        "before": {
+          "busy_seconds": 378858.71,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "after": {
+          "busy_seconds": 378858.81,
+          "loadavg": [
+            7.6552734375,
+            6.1845703125,
+            6.09912109375
+          ]
+        },
+        "child_cpu_seconds": 0.033167999999999975,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.06683199997671696
+      },
+      "environment": {
+        "BLAZE_BACKEND": "cranelift",
+        "BLAZE_CACHE": "/home/jeremy/rsa01/engine/blaze-cache",
+        "BLAZE_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "BLAZE_OPT": "0",
+        "CARGO_HOME": "/home/jeremy/rsa01/engine/cargo-home",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/rsa01/engine/target",
+        "HOME": "/home/jeremy",
+        "RA_JIT_CACHE": "/home/jeremy/rsa01/engine/ra-cache",
+        "RA_JIT_HOME": "/home/jeremy/rsa01/engine/engine-home/resident-v1/runtime",
+        "RUSTUP_HOME": "/home/jeremy/rsa01/engine/rustup-home",
+        "XDG_CACHE_HOME": "/home/jeremy/rsa01/engine/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/rsa01/engine/config",
+        "XDG_DATA_HOME": "/home/jeremy/rsa01/engine/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/rsa01/engine/runtime"
+      },
+      "mode": "off-again",
+      "artifacts": {
+        "target/debug/deps/justrust-ba8710764aaf739d": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_derive/c516cdda3f0b5ca8/out/libserde_derive-c516cdda3f0b5ca8.so": {
+          "sha256": "d8bfebe11aef169fe8828b4a6aeae5a121a404bff34ea0de533f04e169b12048",
+          "dev": 41,
+          "inode": 99376034
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_core/8153a721dda9ef4c/out/build_script_build": {
+          "sha256": "d475c57d84e08b3f26add4e8ae435d01ea697ddd1bcc1c8e81740ac4206c2245",
+          "dev": 41,
+          "inode": 99375806
+        },
+        "target/rust-analyzer-rustc/debug/build/zmij/e8c9a9478d06ce55/out/build_script_build": {
+          "sha256": "7ce07275538c095fa68053fc377f79e4fc456e240e83e6b3747de93d258b53ce",
+          "dev": 41,
+          "inode": 99375779
+        },
+        "target/rust-analyzer-rustc/debug/build/clap_derive/155ae4937f4dfc27/out/libclap_derive-155ae4937f4dfc27.so": {
+          "sha256": "3d21f2d27103e5d7bea3fd4a23cd3eb555ccb002e6c0060fb87e80559a731c06",
+          "dev": 41,
+          "inode": 99376002
+        },
+        "target/rust-analyzer-rustc/debug/build/serde_json/a69965d726c80a45/out/build_script_build": {
+          "sha256": "27fad6644c8e60ddbc4460b472bb4fe7175111155f9d02a742606a3771234890",
+          "dev": 41,
+          "inode": 99375697
+        },
+        "target/rust-analyzer-rustc/debug/build/libc/e6df33eb52bc48c3/out/build_script_build": {
+          "sha256": "00849e5c8019f3c9ff5277b7b13f1af189dcb21b4377c822286084056460cb40",
+          "dev": 41,
+          "inode": 99375870
+        },
+        "target/rust-analyzer-rustc/debug/build/num-traits/4350bc22361dcde3/out/build_script_build": {
+          "sha256": "c148fcffc3373d0150412ec87053031dd71a535ece6a30f1d6aa3707a0658f43",
+          "dev": 41,
+          "inode": 99375894
+        },
+        "target/rust-analyzer-rustc/debug/build/proc-macro2/71ea1a35731714b0/out/build_script_build": {
+          "sha256": "3b95f7bbb2c3aba7e242bcd972341f6ab15da3ef7535fc205871097eec26c498",
+          "dev": 41,
+          "inode": 99375790
+        },
+        "target/rust-analyzer-rustc/debug/build/anyhow/f7dfd08dcbace8cb/out/build_script_build": {
+          "sha256": "1008de3a0d5279fdabeedabe0aeedfe3b756262e223323486c45cccc2a57b825",
+          "dev": 41,
+          "inode": 99375749
+        },
+        "target/rust-analyzer-rustc/debug/build/serde/c9436a4f99448150/out/build_script_build": {
+          "sha256": "f01ff23ca3da5fea85aed789697f87f3ab23b706c06321a8bc9ffc0159aec603",
+          "dev": 41,
+          "inode": 99375802
+        },
+        "target/rust-analyzer-rustc/debug/build/quote/7a6deb504ef7f967/out/build_script_build": {
+          "sha256": "ec77487744f858282f8310869111c095974b5c8f8907bb3d5b952a7ea253a05e",
+          "dev": 41,
+          "inode": 99375729
+        },
+        "target/ra-jit/whole-test/justrust-lib-justrust-test/1319e809662dd528/justrust": {
+          "sha256": "2f2e0e1879356149b0d8368ce279e1a619923fdd721807fc61bf74773cbb5fbf",
+          "dev": 41,
+          "inode": 99377351
+        }
+      }
+    }
+  ],
+  "tool_before": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+  "status": "passed",
+  "tool_after": "deafad0c76f20059db6e1a07f4ed9665013ee61600db0089aec3667c38069df8",
+  "source_restored": true
+}

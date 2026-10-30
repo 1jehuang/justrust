@@ -1,0 +1,8 @@
+{
+  "scope": "instrumented-native-critical-path-not-speedup",
+  "rows": [],
+  "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+  "status": "failed",
+  "error": "FileNotFoundError(2, 'No such file or directory')",
+  "source_restored": true
+}

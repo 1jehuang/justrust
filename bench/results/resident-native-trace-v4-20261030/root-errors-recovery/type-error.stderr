@@ -1,0 +1,24 @@
+error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_RUNTIME_TYPE_ERROR";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib test) due to 1 previous error
+blaze time: 90.9 ms: daemon↔worker 67.0 (74%), client planning 18.2 (20%), client command 4.3 (5%), client metadata 0.4 (0%), client checkout 0.2 (0%), daemon 0.2 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.1%
+blaze    client command                     4.3 ms   4.7%
+blaze    client test                        0.1 ms   0.1%
+blaze    client metadata                    0.4 ms   0.5%
+blaze    client planning                   18.2 ms  20.0%
+blaze    client checkout                    0.2 ms   0.3%
+blaze    client whole build                 0.0 ms   0.0%
+blaze    client↔daemon                      0.2 ms   0.2%
+blaze    daemon read request                0.1 ms   0.1%
+blaze    daemon                             0.2 ms   0.2%
+blaze    daemon↔worker                     67.0 ms  73.7%
+blaze    client install artifacts           0.0 ms   0.0%
+blaze    total                             90.9 ms 100.0%
+blaze: trace written to /home/jeremy/.jcode/scratch/resident-trace-errors-v4-20261030/type-error.json

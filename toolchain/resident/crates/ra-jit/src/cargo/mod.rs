@@ -51,11 +51,21 @@ pub(crate) use units::Record;
 
 /// `ra-jit cargo ...`: runs the command and ends with the status cargo would end with.
 pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let result = command_code(args);
+    // `command_code` has returned, so all phase guards have recorded, including on
+    // errors. Finish before either propagating an error or exiting with the child's status.
+    crate::trace::finish();
+    std::process::exit(result?)
+}
+
+fn command_code(args: impl Iterator<Item = String>) -> anyhow::Result<i32> {
+    let _phase = Phase::new("client command");
     let args: Vec<String> = args.collect();
     if let [word, cargo, rest @ ..] = args.as_slice()
         && word == SETTLE
     {
-        return settle(cargo.parse().context("`settle` is told the cargo to wait for")?, rest);
+        return settle(cargo.parse().context("`settle` is told the cargo to wait for")?, rest)
+            .map(|()| 0);
     }
     let asked = Asked::parse(own::subcommand_first(args));
     if !matches!(asked, Asked::Build(_)) {
@@ -65,7 +75,7 @@ pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> 
         && let Err(why) = toolchain::settle(true)
     {
         say::error(&why);
-        std::process::exit(FAILED);
+        return Ok(FAILED);
     }
     let code = match asked {
         Asked::Build(asked) if matches!(asked.subcommand, Subcommand::Build | Subcommand::Run) => {
@@ -103,7 +113,38 @@ pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> 
             0
         }
     };
-    std::process::exit(code)
+    Ok(code)
+}
+
+/// Client-only opt-in. Never send these settings in a checkout or worker config:
+/// enabling measurement must not become an edit to the program being measured.
+fn telemetry_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("RA_JIT_STATS").is_some()
+            || std::env::var_os("RA_JIT_TRACE").is_some_and(|it| !it.is_empty())
+    })
+}
+
+/// Scope timing also records phases whose operation returns early with an error.
+/// Disabled commands only check the cached flag, without clock reads or allocations.
+struct Phase {
+    name: &'static str,
+    started: Option<Instant>,
+}
+
+impl Phase {
+    fn new(name: &'static str) -> Self {
+        Self { name, started: telemetry_enabled().then(Instant::now) }
+    }
+}
+
+impl Drop for Phase {
+    fn drop(&mut self) {
+        if let Some(started) = self.started {
+            crate::trace::note(self.name, crate::trace::CLIENT, started);
+        }
+    }
 }
 
 const HELP: &str = "\
@@ -413,13 +454,42 @@ fn asking(checkout: &Checkout) -> Checkout {
             || name == wrapper::EVERY_CRATE
             || name == switch::VARIABLE
             || name == switch::CHAINED
-            || name == "RA_JIT_STATS"
-            || name == "RA_JIT_TRACE"
+            || telemetry_variable(name)
     };
-    let mut env: BTreeMap<String, String> =
-        std::env::vars().filter(|(name, _)| !wraps(name)).collect();
-    env.extend(checkout.env.clone());
+    // Also filter explicit checkout entries and the public aliases that main
+    // normalizes to RA_JIT names. Neither spelling belongs in an env! input.
+    let env: BTreeMap<String, String> = std::env::vars()
+        .filter(|(name, _)| !wraps(name))
+        .chain(checkout.env.clone().into_iter().filter(|(name, _)| !telemetry_variable(name)))
+        .collect();
     Checkout { env, ..checkout.clone() }
+}
+
+fn telemetry_variable(name: &str) -> bool {
+    matches!(name, "RA_JIT_STATS" | "RA_JIT_TRACE" | "BLAZE_STATS" | "BLAZE_TRACE")
+}
+
+#[cfg(test)]
+mod telemetry_tests {
+    use super::*;
+
+    #[test]
+    fn both_telemetry_spellings_are_client_only() {
+        for name in ["RA_JIT_STATS", "RA_JIT_TRACE", "BLAZE_STATS", "BLAZE_TRACE"] {
+            assert!(telemetry_variable(name));
+        }
+        for name in ["RUSTFLAGS", "RA_JIT_REMOTE", "BLAZE_REMOTE", "MY_TRACE", "RA_JIT_TRACE_MORE"]
+        {
+            assert!(!telemetry_variable(name), "do not strip unrelated program inputs");
+        }
+    }
+
+    #[test]
+    fn disabled_phase_needs_no_clock_or_span() {
+        let phase = Phase { name: "disabled", started: None };
+        assert!(phase.started.is_none());
+        drop(phase);
+    }
 }
 
 /// Tells the daemon to load `checkout` as cargo just built it, starting one when there is

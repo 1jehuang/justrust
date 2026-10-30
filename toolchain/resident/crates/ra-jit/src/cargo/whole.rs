@@ -83,13 +83,17 @@ struct Program {
 /// A build of no program, of libraries alone, is the daemon's check of them: blaze writes no
 /// library for cargo, which builds nothing.
 pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
+    let _phase = super::Phase::new("client build");
     if let Some(why) = refused(asked) {
         say::error(&why);
         return Ok(FAILED);
     }
     let started = Instant::now();
     let cwd = std::env::current_dir()?;
-    let metadata = super::state::metadata(asked);
+    let metadata = {
+        let _phase = super::Phase::new("client metadata");
+        super::state::metadata(asked)
+    };
     let mut programs = match planned(asked, &cwd, &metadata, None) {
         Ok(programs) => programs,
         Err(why) => {
@@ -143,13 +147,17 @@ pub(super) fn build(asked: &Invocation) -> anyhow::Result<i32> {
 /// workspace with `cfg(test)`, the integration tests and the programs beside them by one
 /// that loads it without. The doc tests are still made through cargo, after.
 pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
+    let _phase = super::Phase::new("client test");
     if let Some(why) = refused(asked) {
         say::error(&why);
         return Ok(FAILED);
     }
     let started = Instant::now();
     let cwd = std::env::current_dir()?;
-    let metadata = super::state::metadata(asked);
+    let metadata = {
+        let _phase = super::Phase::new("client metadata");
+        super::state::metadata(asked)
+    };
     let named = asked.values_of("--test").first().copied();
     let tests = blaze_metadata::Tests { lib: asked.typed("--lib"), test: named };
     let programs = match planned(asked, &cwd, &metadata, Some(tests)) {
@@ -277,7 +285,10 @@ pub(super) fn test(asked: &Invocation) -> anyhow::Result<i32> {
     if asked.flags.no_run {
         return Ok(0);
     }
-    let code = run::tests(asked, &state, &cwd, None)?;
+    let code = {
+        let _phase = super::Phase::new("client test execution");
+        run::tests(asked, &state, &cwd, None)?
+    };
     let stopped = code != 0 && !asked.flags.no_fail_fast;
     // Cargo runs no doc tests when tests are picked by target or by name.
     let picked = asked.flags.selects_targets || !asked.positional.is_empty();
@@ -297,6 +308,7 @@ fn doc_tests(
     root: &Path,
     libraries: &[&Program],
 ) -> anyhow::Result<i32> {
+    let _phase = super::Phase::new("client doc tests");
     use std::ffi::OsString;
     let replay = crate::doctest::Replay {
         dir: std::env::temp_dir().join(format!("ra-jit-doctests-{}", std::process::id())),
@@ -440,19 +452,35 @@ fn turned_down(program: &Program, said: &crate::errors::Said) -> String {
 /// builds them again on what it has loaded when asked next. `Ok` names the programs, by
 /// index, the daemon built rather than found up to date; `Err` says why not.
 fn whole(cwd: &Path, checkout: &Checkout, programs: &[Program]) -> Result<Vec<usize>, Unbuilt> {
-    let reply = client::ask(Request::Build(super::asking(checkout)), Start::IfMissing)
-        .map_err(|it| format!("{it:#}"))?;
+    let _phase = super::Phase::new("client whole build");
+    let request = {
+        let _phase = super::Phase::new("client request");
+        Request::Build(super::asking(checkout))
+    };
+    let reply = {
+        let _phase = super::Phase::new("client↔daemon");
+        client::ask(request, Start::IfMissing).map_err(|it| format!("{it:#}"))?
+    };
     let built = match reply {
-        Some(Reply::Synced { programs, .. }) => programs,
+        Some(Reply::Synced { programs, spans }) => {
+            if super::telemetry_enabled() {
+                crate::trace::note_all(spans);
+                for line in programs.iter().flatten() {
+                    crate::trace::note_all(crate::trace::split(line).1);
+                }
+            }
+            programs
+        }
         Some(Reply::Cold { reason }) => return Err(not_loaded(cwd, checkout, &reason).into()),
         None => return Err(client::why_none().into()),
         Some(other) => return Err(format!("the daemon answered {other:?}").into()),
     };
+    let _phase = super::Phase::new("client install artifacts");
     let mut rebuilt = Vec::new();
     let pairs = std::iter::zip(programs, &checkout.programs).zip(built).enumerate();
     for (at, ((program, plan), built)) in pairs {
         match built {
-            Ok(said) if said == "ok unchanged" => {}
+            Ok(said) if crate::trace::without_spans(&said) == "ok unchanged" => {}
             Ok(_) => rebuilt.push(at),
             Err(NotBuilt::Error(said)) => return Err(Unbuilt::Said(turned_down(program, &said))),
             Err(why) => {
@@ -500,6 +528,7 @@ fn checkout(
     unit_tests: bool,
     env: BTreeMap<String, String>,
 ) -> Checkout {
+    let _phase = super::Phase::new("client checkout");
     let root = metadata.workspace_root.as_std_path();
     let asked_in = asked.flags.manifest_path.as_ref().map_or(cwd.to_owned(), |it| cwd.join(it));
     // From the root of the checkout, as `project` is: the same build in a worktree of the
@@ -676,6 +705,7 @@ pub(crate) fn without_hashes(name: &str) -> String {
 
 /// Runs the program `asked` names, as `cargo run` does.
 fn ran(asked: &Invocation, cwd: &Path, programs: &[Program]) -> anyhow::Result<i32> {
+    let _phase = super::Phase::new("client run execution");
     let named = asked.flags.bin.as_ref().or(asked.flags.example.as_ref());
     let mut chosen: Vec<&Program> =
         programs.iter().filter(|it| named.is_none_or(|name| it.name == *name)).collect();
@@ -745,6 +775,7 @@ fn planned(
     metadata: &Metadata,
     tests: Option<blaze_metadata::Tests<'_>>,
 ) -> anyhow::Result<Vec<Program>> {
+    let _phase = super::Phase::new("client planning");
     let manifest = asked.flags.manifest_path.as_ref().map(|it| cwd.join(it));
     let dir = manifest.as_deref().and_then(Path::parent).unwrap_or(cwd);
     let selection = asked.selection();

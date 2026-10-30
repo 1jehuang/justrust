@@ -1,0 +1,5 @@
+blaze: trace written to /home/jeremy/justrust/bench/results/resident-native-trace-v4-20261030/returned-error.json
+Error: `settle` is told the cargo to wait for
+
+Caused by:
+    invalid digit found in string

@@ -1,0 +1,1 @@
+{"status": "passed", "lightweight_modes": 8, "root_opt_in_rows": 5, "root_edit_error_rows": 5, "known_limitation": "metadata hard exit preserves status101 but skips trace"}
