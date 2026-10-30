@@ -1,0 +1,1223 @@
+{
+  "schema": 1,
+  "execution": "authenticated-justrust-hosted-direct-process",
+  "ssh_and_transfer_in_timed_samples": false,
+  "command": [
+    "python3",
+    "bench/suite.py",
+    "native-cache",
+    "--binary",
+    "bin/jr-rust-after-main",
+    "--scratch",
+    "/home/ubuntu/justrust-experiments/cache-speed-20261030-0419/scratch",
+    "--out-prefix",
+    "improvement-results/main-after",
+    "--stock",
+    "/usr/local/bin/rustc",
+    "-n",
+    "5",
+    "--warmup",
+    "1"
+  ],
+  "host": "ip-172-31-32-241",
+  "machine": "x86_64",
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "lscpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 9R45\nCPU family:                              26\nModel:                                   2\nThread(s) per core:                      1\nCore(s) per socket:                      32\nSocket(s):                               1\nStepping:                                1\nBogoMIPS:                                5199.99\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf tsc_known_freq pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch topoext perfctr_core ssbd perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx_vnni avx512_bf16 clzero xsaveerptr rdpru wbnoinvd arat avx512vbmi pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid movdiri movdir64b fsrm avx512_vp2intersect flush_l1d\nHypervisor vendor:                       KVM\nVirtualization type:                     full\nL1d cache:                               1.5 MiB (32 instances)\nL1i cache:                               1 MiB (32 instances)\nL2 cache:                                32 MiB (32 instances)\nL3 cache:                                128 MiB (4 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; IBPB on VMEXIT only\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP disabled; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected\n",
+  "stock_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+  "compiler_sha256": "c2a11f2134ee9102b35e384c4eae065e396521e7f652a95f85085bd8d580b5d2",
+  "observer_sha256": "4df900c29a3a600c15029c90826958966d614eebe03db5f248ca16b21db49d44",
+  "observations": [
+    {
+      "utc": "2026-10-30T10:54:38Z",
+      "loadavg": [
+        2.6884765625,
+        2.62060546875,
+        2.61572265625
+      ],
+      "cpu_stat": "cpu  508388 2246 53574 10791574 20916 0 63 161 0 0",
+      "compiler_process_counts": {}
+    },
+    {
+      "utc": "2026-10-30T10:54:43Z",
+      "loadavg": [
+        2.55322265625,
+        2.59326171875,
+        2.60693359375
+      ],
+      "cpu_stat": "cpu  508830 2246 53642 10807125 20916 0 63 161 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:54:48Z",
+      "loadavg": [
+        2.4287109375,
+        2.56640625,
+        2.59814453125
+      ],
+      "cpu_stat": "cpu  509278 2249 53723 10822649 20920 0 63 161 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:54:53Z",
+      "loadavg": [
+        2.31396484375,
+        2.5400390625,
+        2.58935546875
+      ],
+      "cpu_stat": "cpu  509727 2249 53784 10838201 20920 0 63 161 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:54:58Z",
+      "loadavg": [
+        2.20849609375,
+        2.51416015625,
+        2.58056640625
+      ],
+      "cpu_stat": "cpu  510165 2249 53853 10853754 20920 0 63 161 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:03Z",
+      "loadavg": [
+        2.111328125,
+        2.48876953125,
+        2.57177734375
+      ],
+      "cpu_stat": "cpu  510612 2249 53917 10869302 20920 0 63 162 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:08Z",
+      "loadavg": [
+        2.02197265625,
+        2.4638671875,
+        2.56298828125
+      ],
+      "cpu_stat": "cpu  511569 2250 54019 10884291 20924 0 64 162 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:13Z",
+      "loadavg": [
+        1.93994140625,
+        2.439453125,
+        2.55419921875
+      ],
+      "cpu_stat": "cpu  512438 2250 54095 10899407 20924 0 64 162 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:18Z",
+      "loadavg": [
+        1.8642578125,
+        2.41552734375,
+        2.54541015625
+      ],
+      "cpu_stat": "cpu  513293 2250 54174 10914527 20924 0 64 162 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:24Z",
+      "loadavg": [
+        2.03564453125,
+        2.44189453125,
+        2.5537109375
+      ],
+      "cpu_stat": "cpu  514253 2250 54246 10929550 20924 0 64 162 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:29Z",
+      "loadavg": [
+        1.95263671875,
+        2.41748046875,
+        2.544921875
+      ],
+      "cpu_stat": "cpu  514906 2250 54326 10944876 20925 0 64 162 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:34Z",
+      "loadavg": [
+        1.8759765625,
+        2.3935546875,
+        2.53662109375
+      ],
+      "cpu_stat": "cpu  515348 2250 54391 10960428 20925 0 64 163 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:39Z",
+      "loadavg": [
+        1.8056640625,
+        2.3701171875,
+        2.5283203125
+      ],
+      "cpu_stat": "cpu  515793 2250 54453 10975981 20925 0 64 164 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:44Z",
+      "loadavg": [
+        1.74072265625,
+        2.34716796875,
+        2.52001953125
+      ],
+      "cpu_stat": "cpu  516235 2250 54518 10991534 20925 0 64 164 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:49Z",
+      "loadavg": [
+        1.68115234375,
+        2.32470703125,
+        2.51171875
+      ],
+      "cpu_stat": "cpu  516682 2250 54578 11007088 20925 0 64 164 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:54Z",
+      "loadavg": [
+        1.62646484375,
+        2.30224609375,
+        2.50341796875
+      ],
+      "cpu_stat": "cpu  517339 2250 54653 11022415 20925 0 64 164 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:55:59Z",
+      "loadavg": [
+        1.576171875,
+        2.2802734375,
+        2.4951171875
+      ],
+      "cpu_stat": "cpu  518234 2250 54730 11037501 20925 0 64 164 0 0",
+      "compiler_process_counts": {}
+    },
+    {
+      "utc": "2026-10-30T10:56:04Z",
+      "loadavg": [
+        1.52978515625,
+        2.2587890625,
+        2.48681640625
+      ],
+      "cpu_stat": "cpu  519062 2250 54808 11052652 20925 0 64 164 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:09Z",
+      "loadavg": [
+        1.56787109375,
+        2.25439453125,
+        2.48388671875
+      ],
+      "cpu_stat": "cpu  519907 2250 54885 11067786 20930 0 64 165 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:14Z",
+      "loadavg": [
+        1.52197265625,
+        2.2333984375,
+        2.4755859375
+      ],
+      "cpu_stat": "cpu  520752 2250 54961 11082919 20930 0 64 165 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:19Z",
+      "loadavg": [
+        1.47998046875,
+        2.212890625,
+        2.46728515625
+      ],
+      "cpu_stat": "cpu  521249 2250 55029 11098416 20930 0 64 165 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:24Z",
+      "loadavg": [
+        1.44140625,
+        2.1923828125,
+        2.458984375
+      ],
+      "cpu_stat": "cpu  521756 2250 55148 11113837 20940 0 64 165 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:29Z",
+      "loadavg": [
+        1.40576171875,
+        2.17236328125,
+        2.45068359375
+      ],
+      "cpu_stat": "cpu  522204 2250 55215 11129385 20940 0 64 165 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:34Z",
+      "loadavg": [
+        1.373046875,
+        2.15283203125,
+        2.44287109375
+      ],
+      "cpu_stat": "cpu  522656 2250 55274 11144935 20940 0 64 166 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:39Z",
+      "loadavg": [
+        1.3427734375,
+        2.13330078125,
+        2.43505859375
+      ],
+      "cpu_stat": "cpu  523101 2250 55337 11160469 20940 0 64 166 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:44Z",
+      "loadavg": [
+        1.8759765625,
+        2.23095703125,
+        2.46533203125
+      ],
+      "cpu_stat": "cpu  523978 2250 55413 11175573 20940 0 64 167 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:49Z",
+      "loadavg": [
+        1.8056640625,
+        2.21044921875,
+        2.45703125
+      ],
+      "cpu_stat": "cpu  524874 2250 55495 11190656 20940 0 64 167 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:54Z",
+      "loadavg": [
+        1.74072265625,
+        2.18994140625,
+        2.44873046875
+      ],
+      "cpu_stat": "cpu  525741 2250 55580 11205762 20943 0 64 167 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:56:59Z",
+      "loadavg": [
+        1.68115234375,
+        2.169921875,
+        2.44091796875
+      ],
+      "cpu_stat": "cpu  526689 2250 55656 11220794 20943 0 64 167 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:04Z",
+      "loadavg": [
+        1.62646484375,
+        2.150390625,
+        2.43310546875
+      ],
+      "cpu_stat": "cpu  527401 2250 55724 11236077 20943 0 64 167 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:09Z",
+      "loadavg": [
+        1.576171875,
+        2.130859375,
+        2.42529296875
+      ],
+      "cpu_stat": "cpu  527889 2250 55746 11251628 20943 0 64 167 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:14Z",
+      "loadavg": [
+        1.6103515625,
+        2.12841796875,
+        2.4228515625
+      ],
+      "cpu_stat": "cpu  528503 2250 55782 11267026 20945 0 66 168 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:19Z",
+      "loadavg": [
+        1.56103515625,
+        2.109375,
+        2.4150390625
+      ],
+      "cpu_stat": "cpu  529114 2250 55818 11282428 20945 0 68 168 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:24Z",
+      "loadavg": [
+        1.515625,
+        2.0908203125,
+        2.4072265625
+      ],
+      "cpu_stat": "cpu  529707 2250 55852 11297854 20945 0 68 168 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:29Z",
+      "loadavg": [
+        1.47412109375,
+        2.072265625,
+        2.3994140625
+      ],
+      "cpu_stat": "cpu  530312 2250 55888 11313267 20945 0 69 168 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:34Z",
+      "loadavg": [
+        1.43603515625,
+        2.05419921875,
+        2.3916015625
+      ],
+      "cpu_stat": "cpu  530945 2250 55926 11328646 20945 0 70 169 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:39Z",
+      "loadavg": [
+        1.40087890625,
+        2.03662109375,
+        2.3837890625
+      ],
+      "cpu_stat": "cpu  531660 2250 55974 11343919 20945 0 72 169 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:44Z",
+      "loadavg": [
+        1.36865234375,
+        2.01904296875,
+        2.3759765625
+      ],
+      "cpu_stat": "cpu  532324 2250 56020 11359206 20996 0 73 169 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:49Z",
+      "loadavg": [
+        1.41943359375,
+        2.0185546875,
+        2.37353515625
+      ],
+      "cpu_stat": "cpu  532964 2250 56060 11374570 20996 0 74 169 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:54Z",
+      "loadavg": [
+        1.86669921875,
+        2.1015625,
+        2.3984375
+      ],
+      "cpu_stat": "cpu  533979 2250 56425 11389163 21004 0 75 170 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:57:59Z",
+      "loadavg": [
+        1.87744140625,
+        2.099609375,
+        2.39599609375
+      ],
+      "cpu_stat": "cpu  534793 2250 56613 11404198 21027 0 75 170 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:04Z",
+      "loadavg": [
+        1.8876953125,
+        2.09765625,
+        2.3935546875
+      ],
+      "cpu_stat": "cpu  535600 2250 56801 11419222 21062 0 77 170 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:09Z",
+      "loadavg": [
+        2.05712890625,
+        2.12939453125,
+        2.40234375
+      ],
+      "cpu_stat": "cpu  536403 2250 56967 11434075 21294 0 79 170 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:14Z",
+      "loadavg": [
+        2.05224609375,
+        2.126953125,
+        2.39990234375
+      ],
+      "cpu_stat": "cpu  537271 2250 57068 11449122 21331 0 79 170 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:19Z",
+      "loadavg": [
+        2.12841796875,
+        2.1416015625,
+        2.4033203125
+      ],
+      "cpu_stat": "cpu  538062 2250 57197 11464031 21549 0 86 170 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:24Z",
+      "loadavg": [
+        2.1982421875,
+        2.15625,
+        2.40673828125
+      ],
+      "cpu_stat": "cpu  538843 2250 57472 11478843 21678 0 110 171 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:29Z",
+      "loadavg": [
+        2.10205078125,
+        2.13671875,
+        2.39892578125
+      ],
+      "cpu_stat": "cpu  539580 2250 57598 11493939 21764 0 114 171 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:34Z",
+      "loadavg": [
+        2.09375,
+        2.13427734375,
+        2.396484375
+      ],
+      "cpu_stat": "cpu  540266 2250 57685 11509213 21767 0 116 172 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:39Z",
+      "loadavg": [
+        2.48681640625,
+        2.21533203125,
+        2.42138671875
+      ],
+      "cpu_stat": "cpu  541557 2250 57767 11523892 21769 0 117 172 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:44Z",
+      "loadavg": [
+        2.44775390625,
+        2.21142578125,
+        2.4189453125
+      ],
+      "cpu_stat": "cpu  543392 2250 57823 11538046 21776 0 119 172 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:49Z",
+      "loadavg": [
+        2.892578125,
+        2.3076171875,
+        2.44921875
+      ],
+      "cpu_stat": "cpu  545169 2250 57856 11552287 21781 0 119 172 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:54Z",
+      "loadavg": [
+        2.74072265625,
+        2.28564453125,
+        2.44140625
+      ],
+      "cpu_stat": "cpu  547188 2291 57989 11566089 21841 0 119 173 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:58:59Z",
+      "loadavg": [
+        2.68115234375,
+        2.28076171875,
+        2.43896484375
+      ],
+      "cpu_stat": "cpu  548965 2460 58113 11579842 22064 0 120 173 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:04Z",
+      "loadavg": [
+        2.54638671875,
+        2.25927734375,
+        2.43115234375
+      ],
+      "cpu_stat": "cpu  550840 2460 58156 11593790 22253 0 120 173 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:09Z",
+      "loadavg": [
+        2.42236328125,
+        2.23828125,
+        2.42333984375
+      ],
+      "cpu_stat": "cpu  552685 2460 58190 11607963 22263 0 120 173 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:14Z",
+      "loadavg": [
+        2.46875,
+        2.2509765625,
+        2.4267578125
+      ],
+      "cpu_stat": "cpu  554571 2460 58220 11622085 22284 0 120 173 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:19Z",
+      "loadavg": [
+        2.43115234375,
+        2.24658203125,
+        2.42431640625
+      ],
+      "cpu_stat": "cpu  556463 2460 58253 11636222 22284 0 121 173 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:24Z",
+      "loadavg": [
+        2.87744140625,
+        2.34228515625,
+        2.45458984375
+      ],
+      "cpu_stat": "cpu  558186 2460 58289 11650524 22284 0 121 173 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:29Z",
+      "loadavg": [
+        3.2880859375,
+        2.4365234375,
+        2.484375
+      ],
+      "cpu_stat": "cpu  559947 2460 58322 11664787 22285 0 121 174 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:35Z",
+      "loadavg": [
+        3.34521484375,
+        2.462890625,
+        2.49267578125
+      ],
+      "cpu_stat": "cpu  561827 2460 58355 11678932 22285 0 121 175 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:40Z",
+      "loadavg": [
+        3.1572265625,
+        2.4384765625,
+        2.484375
+      ],
+      "cpu_stat": "cpu  563610 2460 58388 11693176 22285 0 121 175 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:45Z",
+      "loadavg": [
+        2.984375,
+        2.41455078125,
+        2.47607421875
+      ],
+      "cpu_stat": "cpu  564823 2460 58415 11707997 22286 0 121 175 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T10:59:50Z",
+      "loadavg": [
+        2.8251953125,
+        2.390625,
+        2.4677734375
+      ],
+      "cpu_stat": "cpu  565300 2460 58444 11723553 22286 0 121 175 0 0",
+      "compiler_process_counts": {}
+    },
+    {
+      "utc": "2026-10-30T10:59:55Z",
+      "loadavg": [
+        2.6787109375,
+        2.3671875,
+        2.45947265625
+      ],
+      "cpu_stat": "cpu  565785 2460 58467 11739110 22286 0 121 175 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:00Z",
+      "loadavg": [
+        2.5439453125,
+        2.34423828125,
+        2.451171875
+      ],
+      "cpu_stat": "cpu  566269 2460 58490 11754662 22288 0 121 175 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:05Z",
+      "loadavg": [
+        2.419921875,
+        2.32177734375,
+        2.443359375
+      ],
+      "cpu_stat": "cpu  566866 2464 58617 11769959 22320 0 121 175 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:10Z",
+      "loadavg": [
+        2.38623046875,
+        2.31640625,
+        2.44091796875
+      ],
+      "cpu_stat": "cpu  567392 2945 58804 11784808 22325 0 121 176 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:15Z",
+      "loadavg": [
+        2.515625,
+        2.3447265625,
+        2.44970703125
+      ],
+      "cpu_stat": "cpu  568998 3521 58967 11798513 22334 0 122 176 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 2,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:20Z",
+      "loadavg": [
+        4.4765625,
+        2.75439453125,
+        2.58203125
+      ],
+      "cpu_stat": "cpu  570346 9086 59844 11806666 22419 0 124 176 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:25Z",
+      "loadavg": [
+        6.1201171875,
+        3.1240234375,
+        2.70263671875
+      ],
+      "cpu_stat": "cpu  570834 19706 60499 11810945 22435 0 124 176 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:30Z",
+      "loadavg": [
+        7.71240234375,
+        3.50390625,
+        2.828125
+      ],
+      "cpu_stat": "cpu  571324 31162 61110 11814396 22481 0 126 177 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 15,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:35Z",
+      "loadavg": [
+        9.09716796875,
+        3.86083984375,
+        2.947265625
+      ],
+      "cpu_stat": "cpu  571812 42739 61651 11817835 22493 0 126 177 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 18,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:40Z",
+      "loadavg": [
+        10.37109375,
+        4.2119140625,
+        3.06591796875
+      ],
+      "cpu_stat": "cpu  572300 54276 62216 11821296 22495 0 127 178 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 22,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:45Z",
+      "loadavg": [
+        11.54296875,
+        4.55712890625,
+        3.18408203125
+      ],
+      "cpu_stat": "cpu  572786 65760 62865 11824705 22523 0 128 178 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 28,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:50Z",
+      "loadavg": [
+        12.70068359375,
+        4.91357421875,
+        3.306640625
+      ],
+      "cpu_stat": "cpu  573498 75220 63485 11829946 22540 0 130 178 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 3,
+        "rustc": 28,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:00:55Z",
+      "loadavg": [
+        14.08642578125,
+        5.330078125,
+        3.4501953125
+      ],
+      "cpu_stat": "cpu  575256 82691 64124 11836118 22547 0 131 178 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 3,
+        "rustc": 32,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:00Z",
+      "loadavg": [
+        15.12060546875,
+        5.68994140625,
+        3.5771484375
+      ],
+      "cpu_stat": "cpu  576294 90932 65010 11841917 22623 0 132 178 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 30,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:05Z",
+      "loadavg": [
+        15.912109375,
+        6.0107421875,
+        3.6923828125
+      ],
+      "cpu_stat": "cpu  576783 102072 65849 11845472 22655 0 132 178 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 26,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:10Z",
+      "loadavg": [
+        16.64013671875,
+        6.326171875,
+        3.80712890625
+      ],
+      "cpu_stat": "cpu  577272 113255 66604 11849057 22700 0 133 179 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 26,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:15Z",
+      "loadavg": [
+        17.22998046875,
+        6.61962890625,
+        3.916015625
+      ],
+      "cpu_stat": "cpu  577761 124425 67377 11852657 22720 0 135 179 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 31,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:20Z",
+      "loadavg": [
+        17.8525390625,
+        6.9248046875,
+        4.029296875
+      ],
+      "cpu_stat": "cpu  579374 134387 68048 11856413 22755 0 136 179 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:25Z",
+      "loadavg": [
+        16.6630859375,
+        6.859375,
+        4.0234375
+      ],
+      "cpu_stat": "cpu  581775 134387 68095 11870003 22774 0 136 179 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:30Z",
+      "loadavg": [
+        15.48876953125,
+        6.7783203125,
+        4.01220703125
+      ],
+      "cpu_stat": "cpu  583927 134387 68156 11883796 22826 0 137 180 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:35Z",
+      "loadavg": [
+        14.888671875,
+        6.798828125,
+        4.03369140625
+      ],
+      "cpu_stat": "cpu  586344 134387 68198 11897380 22844 0 137 180 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:40Z",
+      "loadavg": [
+        13.7763671875,
+        6.7021484375,
+        4.01708984375
+      ],
+      "cpu_stat": "cpu  588790 134387 68249 11910913 22874 0 137 180 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:45Z",
+      "loadavg": [
+        13.3134765625,
+        6.72412109375,
+        4.03857421875
+      ],
+      "cpu_stat": "cpu  590977 134387 68302 11924726 22882 0 137 181 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:50Z",
+      "loadavg": [
+        12.8876953125,
+        6.74560546875,
+        4.06005859375
+      ],
+      "cpu_stat": "cpu  593479 134387 68348 11938211 22906 0 137 181 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:01:55Z",
+      "loadavg": [
+        12.49609375,
+        6.7666015625,
+        4.08154296875
+      ],
+      "cpu_stat": "cpu  595787 134387 68401 11951901 22926 0 137 181 0 0",
+      "compiler_process_counts": {
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:02:00Z",
+      "loadavg": [
+        12.2158203125,
+        6.8037109375,
+        4.1083984375
+      ],
+      "cpu_stat": "cpu  598259 137290 68768 11962284 22929 0 138 181 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:02:05Z",
+      "loadavg": [
+        13.64013671875,
+        7.18896484375,
+        4.24755859375
+      ],
+      "cpu_stat": "cpu  600638 148723 69321 11963978 22932 0 138 181 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 4,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:02:10Z",
+      "loadavg": [
+        15.11083984375,
+        7.60107421875,
+        4.39697265625
+      ],
+      "cpu_stat": "cpu  602657 160045 69920 11966090 22954 0 138 181 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 23,
+        "jr-rust-after-m": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T11:02:12Z",
+      "loadavg": [
+        15.11083984375,
+        7.60107421875,
+        4.39697265625
+      ],
+      "cpu_stat": "cpu  603553 164880 70148 11967000 22955 0 139 182 0 0",
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 26
+      }
+    }
+  ],
+  "exit_code": 0
+}
