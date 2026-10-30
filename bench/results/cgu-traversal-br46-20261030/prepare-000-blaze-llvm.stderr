@@ -1,0 +1,4 @@
+note: blaze builds with its own toolchain, blaze-2026-10-27, not rustc 1.99.1 (58cf8f9c3 2026-10-13), the toolchain cargo was started with. blaze is its own Rust toolchain whatever the project pins (docs/toolchain.md); the project's toolchain and its CI stay the final word
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source)
+    Finished `test` profile [blaze] target(s) in 17.39s
+     Running unittests src/lib.rs (/home/jeremy/.jcode/scratch/br46/llvm/blaze/target/debug/deps/justrust-6558d68915766071)

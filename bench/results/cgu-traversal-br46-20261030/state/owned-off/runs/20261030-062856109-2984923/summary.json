@@ -1,0 +1,164 @@
+{
+  "id": "20261030-062856109-2984923",
+  "args": [
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/.jcode/scratch/ba30/source",
+  "git": {
+    "root": null,
+    "head": null,
+    "dirty_files": null
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793366936.11812,
+  "wall": 1.0936720371246338,
+  "exit": 0,
+  "cpu_secs": 1.243758,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 7,
+    "processes": 6,
+    "sample_span_secs": 1.0933306217193604,
+    "max_sample_gap_secs": 0.2104787826538086
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.028372526168823242,
+    "lock_wait": 0.0,
+    "compile": 1.0564730167388916,
+    "build_gaps": 0.0012438297271728516,
+    "test_run": 0.0028209686279296875,
+    "tail": 0.004761695861816406
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 47,
+    "rustc_cpu_secs": 1.2,
+    "rustc_wall_sum": 1.0564732551574707,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "justrust (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.028372526168823242,
+      "wall": 1.0564732551574707,
+      "wall_share": 1.0564730167388916,
+      "cpu": 1.199861,
+      "max_rss_mb": 471.17578125,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "justrust-be688cf0e0173f41",
+        "start": 1.0888481140136719,
+        "wall": 0.0028209686279296875,
+        "passed": 4,
+        "failed": 0,
+        "filtered_out": 144
+      }
+    ],
+    "passed": 4,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 144,
+    "libtest_secs": 0.0,
+    "slowest": [
+      {
+        "name": "summary::tests::parses_libtest_results",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::splits_passes_without_double_counting",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "summary::tests::test_failures_are_not_compile_errors",
+        "binary": "justrust-be688cf0e0173f41",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.0,
+    "timed": 3
+  },
+  "resources": {
+    "avg_build_cores": 1.1372312336611954,
+    "peak_build_cores": 1.3794893267614643,
+    "peak_build_rss_mb": 470.6640625,
+    "peak_unit_rss_mb": 471.17578125,
+    "min_mem_available_mb": 43167,
+    "avg_other_cores": 3.0887484759725043,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.010006000000000001,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.000018
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 0,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "justrust",
+      "reason": "the file `src/summary.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-062856109-2984923.scope",
+    "final_weight": 982,
+    "setup_secs": 0.008193268,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

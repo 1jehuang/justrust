@@ -1,0 +1,10 @@
+
+justrust: ok: 4 tests passed in 1.2s
+  time    startup 0.03s | compile 1.14s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/summary.rs (justrust)
+          justrust (test)                    1.14s  cpu   1.3s    461 MB
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, 1 binary in 0.00s
+  cpu     1.3s total, avg 1.1/peak 1.1 of 16 cores; others used 2.8 cores
+  memory  peak 480 MB build, 461 MB largest rustc, 42.1 GB free; stalls cpu 0.01s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261030-062912622-2990974` full output, `justrust show 20261030-062912622-2990974` full profile
