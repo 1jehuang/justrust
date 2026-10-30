@@ -54,7 +54,7 @@ void _start(void){
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(output.stdout.len(), 4 * 144);
-        for bytes in output.stdout.chunks_exact(144) {
+        for bytes in output.stdout.as_chunks::<144>().0 {
             assert_eq!(&bytes[28..48], &[0; 20]);
             assert_eq!(&bytes[72..], &[0; 72]);
         }
