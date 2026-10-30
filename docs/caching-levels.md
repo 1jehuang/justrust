@@ -208,10 +208,23 @@ read-only Git discovery queries with synchronous spawn/panic fallback. Neither
 adds a persistent source-stamp cache. Both are installed in the shipping client
 (SHA-256 `15a4e8525174df5d63b277d47e052632a565802d5cf4ceb3d86aaed7aa48e2bc`).
 Bulk construction passed hosted gates. Final concurrent-discovery gates ran
-locally during an explicitly coordinated hosted maintenance pause. Its final
-real hosted cached/edit acceptance is pending that pause's release, not assumed
-from local tests. See `remote-sync-bulk-scan.md` and
-`remote-sync-concurrent-discovery.md` for bounded component evidence.
+locally during an explicitly coordinated hosted maintenance pause. After its
+release, final installed all-target Clippy passed three unchanged hosted runs:
+`20261029-214030501-3048523`, `20261029-214031568-3048590`, and
+`20261029-214033316-3048801`. Client wall times were 1.1/1.7/1.1 s, sync
+306/304/357 ms, with 62 fresh units and 0.03–0.05 s Cargo startup. This is
+not yet subsecond end to end. The fleet changed from 96 to 32 cores, so these
+are acceptance observations, not a matched before/after speedup claim.
+
+A reversible real body edit rebuilt the expected units and passed 837 tests
+(`20261029-214058307-3051393`). Restoring the backup passed 837 tests again
+(`20261029-214107578-3052277`), with one parallel DirectoryNotEmpty cleanup
+failure that passed the runner's isolated retry. Restored strict all-target
+Clippy passed (`20261029-214114111-3052815`). No temporary source edit remains.
+The comprehensive matched synthetic gate remains blocked by another benchmark's
+snapshot lock. Native experiments therefore remain default off. See
+`remote-sync-bulk-scan.md` and `remote-sync-concurrent-discovery.md` for bounded
+component evidence.
 
 ## Primary design references
 
