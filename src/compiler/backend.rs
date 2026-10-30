@@ -1,17 +1,21 @@
 //! Direct Linux x86-64 backend. No external compiler, assembler, or linker.
 //!
 //! Private ABI: arguments are evaluated left-to-right and pushed as eight-byte
-//! stack words. The callee reads them in reverse order above rbp. eax carries
+//! stack words. The callee reads them in reverse order from the saved incoming
+//! frame base. eax carries
 //! bool results (unit is zero), while rax carries normalized <=64-bit integers.
 //! The i128/u128 private carrier is an indirect 16-byte scalar snapshot, low
-//! limb at offset 0 and high limb at offset 8, with eight-byte alignment.
+//! limb at offset 0 and high limb at offset 8, with sixteen-byte frame alignment.
 //! Wide parameters use one snapshot pointer word and wide results use sret.
 //! Signed integers are sign-extended and unsigned integers zero-extended from
 //! their declared width. References remain a separate thin-pointer class,
 //! including borrowed receiver argument0 and references to aggregate referents.
-//! All registers are caller-saved. Frames use
-//! stable rbp-relative slots, independent of temporary pushes. At most 4096
-//! parameters/arguments are accepted. This is not a platform interoperability ABI.
+//! All registers are caller-saved. Frames use a sixteen-byte-aligned rbp base
+//! and stable local slots independent of temporary pushes. The original incoming
+//! frame base is retained for argument access and exact stack restoration. A
+//! disjoint mirrored header keeps the saved rbp and return PC at rbp and rbp+8.
+//! At most 4096 parameters/arguments are accepted. This is not a platform
+//! interoperability ABI.
 //! Aggregate layout is private: ordinary scalar/unit leaves occupy eight bytes,
 //! wide integer leaves occupy sixteen bytes,
 //! tuples and nominal structs concatenate their fields. Payload enums contain
@@ -22,7 +26,7 @@
 //! extents while owning snapshots reserve whole carrier words. Zero-sized
 //! arrays/elements have no memory bytes, but owning snapshots reserve a dummy word.
 //! Aggregate arguments carry snapshot pointers. Aggregate results use a
-//! caller-owned destination, passed last at rbp+16, even for a one-field aggregate.
+//! caller-owned destination, passed last at incoming-frame+16, even for a one-field aggregate.
 use super::cfg;
 use super::frontend::{BinaryOp, Program, UnaryOp};
 use super::ir::{self, LocalId};
@@ -47,6 +51,9 @@ const MAX_ARGS: usize = 4096;
 /// most two words (shared slice: data, len) plus one sret word.
 const MAX_ARG_WORDS: usize = 2 * MAX_ARGS + 1;
 const MAX_FRAME_BYTES: i32 = 1024 * 1024;
+// Reserved in every dynamically aligned frame. This is the stack address after
+// saving the caller's rbp, not the aligned local-storage base.
+const INCOMING_FRAME: i32 = -8;
 const BASE: u64 = 0x400000;
 const PAGE: usize = 4096;
 
@@ -145,7 +152,7 @@ fn call_cleanup_bytes(words: &[usize], sret: bool) -> Result<i32, String> {
         .ok_or_else(|| "call cleanup exceeds private stack limit".into())
 }
 
-/// Callee rbp offsets of each parameter's lowest pushed word:
+/// Offsets from the incoming frame of each parameter's lowest pushed word:
 /// `16 + sret*8 + 8 * sum(words of later params)`. For a two-word slice this
 /// addresses len, with data at offset+8.
 fn argument_slot_offsets(words: &[usize], sret: bool) -> Result<Vec<i32>, String> {
@@ -219,7 +226,8 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
 pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     ir::reject_associated_types(ty, Some(budget))?;
     if wide_integer(ty) {
-        // PRIVATE layout: low limb at 0, high limb at 8, eight-byte alignment.
+        // PRIVATE extent: low limb at 0, high limb at 8. Frame placement
+        // alignment is independent of the extent and nominal field offsets.
         return Ok(16);
     }
     if matches!(ty, ir::Ty::Param(_) | ir::Ty::AssociatedType(_)) {
@@ -400,11 +408,32 @@ fn array_offset(
     Ok((offset, element.as_ref().clone()))
 }
 
-fn allocate_value(frame: &mut i32, ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
-    *frame = frame
-        .checked_add(value_size(ty, budget)?)
+/// Only primitive/recursive-array frame alignment is claimed here. Nominal
+/// field offsets still follow the independent private aggregate layout.
+fn frame_value_alignment(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    let mut leaf = ty;
+    loop {
+        budget.charge_work(1)?;
+        match leaf {
+            ir::Ty::Array { element, .. } => leaf = element,
+            _ => return Ok(if wide_integer(leaf) { 16 } else { 8 }),
+        }
+    }
+}
+
+fn align_frame(bytes: i32, alignment: i32) -> Result<i32, String> {
+    bytes
+        .checked_add(alignment - 1)
+        .map(|bytes| bytes & !(alignment - 1))
         .filter(|size| *size <= MAX_FRAME_BYTES)
+        .ok_or_else(|| "function exceeds private frame limit".into())
+}
+
+fn allocate_value(frame: &mut i32, ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    let end = frame
+        .checked_add(value_size(ty, budget)?)
         .ok_or("function exceeds private frame limit")?;
+    *frame = align_frame(end, frame_value_alignment(ty, budget)?)?;
     Ok(-*frame)
 }
 
@@ -971,8 +1000,9 @@ impl<'a> Emitter<'a> {
         self.bytes(&[0xff, 0x70, layout.data_offset]);
         self.bytes(&[0xff, 0x70, layout.len_offset]);
     }
-    /// Callee prologue: copy a two-word argument at rbp+`argument` (len) and
-    /// rbp+`argument`+8 (data) into the local carrier at rbp+`local`.
+    /// Callee prologue: rdx is the original incoming frame base. Copy its
+    /// two-word argument (len at `argument`, data at `argument`+8) into the
+    /// aligned rbp-relative local carrier.
     fn store_slice_parameter(
         &mut self,
         layout: SliceLayout,
@@ -987,7 +1017,7 @@ impl<'a> Emitter<'a> {
             (pushed_data, layout.data_offset),
             (argument, layout.len_offset),
         ] {
-            self.bytes(&[0x48, 0x8b, 0x8d]);
+            self.bytes(&[0x48, 0x8b, 0x8a]); // mov rcx, [rdx+incoming offset]
             self.i32(from);
             self.bytes(&[0x48, 0x89, 0x8d]);
             self.i32(
@@ -1050,6 +1080,36 @@ impl<'a> Emitter<'a> {
         }
         Ok(())
     }
+    /// Establish an aligned local base below a disjoint mirrored frame header.
+    /// The incoming header remains untouched for exact argument access/return,
+    /// while ordinary rbp-chain walkers see the same saved rbp and return PC.
+    fn enter_frame(&mut self, frame_bytes: i32) {
+        self.bytes(&[
+            0x55, // push rbp
+            0x48, 0x89, 0xe0, // rax = original incoming frame P
+            0x48, 0x83, 0xec, 16, // room for the complete mirrored header
+            0x48, 0x83, 0xe4, 0xf0, // rsp = A = (P - 16) & -16
+            0x48, 0x89, 0xe5, // rbp = aligned local base A
+            0x48, 0x81, 0xec, // sub rsp, frame_bytes
+        ]);
+        self.i32(frame_bytes);
+        self.bytes(&[0x48, 0x89, 0x85]); // immutable incoming base below A
+        self.i32(INCOMING_FRAME);
+        self.bytes(&[
+            0x48, 0x8b, 0x08, // rcx = [P]: caller rbp
+            0x48, 0x89, 0x4d, 0, // [A] = caller rbp
+            0x48, 0x8b, 0x48, 8, // rcx = [P + 8]: original return PC
+            0x48, 0x89, 0x4d, 8, // [A + 8] = return PC
+        ]);
+    }
+    /// Restore the exact incoming stack, including any caller argument or
+    /// temporary pushes. `leave` would incorrectly return from the mirrored
+    /// header without restoring the caller argument stack.
+    fn return_from_frame(&mut self) {
+        self.bytes(&[0x48, 0x8b, 0xa5]); // mov rsp, [rbp+INCOMING_FRAME]
+        self.i32(INCOMING_FRAME);
+        self.bytes(&[0x5d, 0xc3]); // pop rbp; ret
+    }
     /// panic=unwind landing pad: drop every still-initialized owning local
     /// in reverse declaration order, then return with the panic flag set.
     /// Destructors run with the flag cleared so their own calls proceed.
@@ -1093,7 +1153,8 @@ impl<'a> Emitter<'a> {
             let here = self.position();
             self.patch(skip, here)?;
         }
-        self.bytes(&[0x41, 0xbf, 1, 0, 0, 0, 0xc9, 0xc3]); // mov r15d,1; leave; ret
+        self.bytes(&[0x41, 0xbf, 1, 0, 0, 0]); // mov r15d,1
+        self.return_from_frame();
         Ok(())
     }
     fn trap_block(&mut self) -> Result<(), String> {
@@ -3964,7 +4025,7 @@ fn emit_native_cfg(
                 .max(i32::try_from(count).map_err(|_| "wide argument scratch count overflow")?);
         }
     }
-    let mut frame_bytes = 0;
+    let mut frame_bytes = -INCOMING_FRAME;
     let locals = function
         .locals
         .iter()
@@ -4058,10 +4119,12 @@ fn emit_native_cfg(
             }
         }
     }
-    frame_bytes = frame_bytes
-        .checked_add(scratch_size)
-        .filter(|size| *size <= MAX_FRAME_BYTES)
-        .ok_or("function exceeds private frame limit")?;
+    frame_bytes = align_frame(
+        frame_bytes
+            .checked_add(scratch_size)
+            .ok_or("function exceeds private frame limit")?,
+        16,
+    )?;
     let aggregate_scratch = -frame_bytes;
     if needs_wide {
         let wide_bytes = max_wide_arguments
@@ -4079,6 +4142,7 @@ fn emit_native_cfg(
         .filter(|size| *size <= MAX_FRAME_BYTES)
         .ok_or("function exceeds private frame limit")?;
     let vtable_scratch = -frame_bytes;
+    frame_bytes = align_frame(frame_bytes, 16)?;
     let aggregate_result = result_indirect(&function.result, budget)?;
     let result_copy_bytes = copied_value_bytes(&function.result, budget)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
@@ -4109,13 +4173,14 @@ fn emit_native_cfg(
         traps: Vec::new(),
         edges: Vec::new(),
     };
-    emitter.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
-    emitter.i32(frame_bytes);
+    emitter.enter_frame(frame_bytes);
     for local in 0..function.locals.len() {
         emitter.set_drop_flag(LocalId(local), false);
     }
     for ((local, offset), words) in function.params.iter().zip(&param_offsets).zip(&param_words) {
         let local_ty = &function.locals[local.0].ty;
+        emitter.bytes(&[0x48, 0x8b, 0x95]); // rdx = original incoming frame
+        emitter.i32(INCOMING_FRAME);
         if *words == 2
             && (local_ty.descriptor_element().is_some() || trait_object_ref(local_ty).is_some())
         {
@@ -4130,7 +4195,7 @@ fn emit_native_cfg(
         if *words != 1 {
             return Err("invalid multi-word parameter transport".into());
         }
-        emitter.bytes(&[0x48, 0x8b, 0x85]);
+        emitter.bytes(&[0x48, 0x8b, 0x82]); // mov rax, [rdx+incoming offset]
         emitter.i32(*offset);
         emitter.store_value(emitter.local_offset(*local)?, &function.locals[local.0].ty)?;
         emitter.set_drop_flag(*local, true);
@@ -4156,12 +4221,13 @@ fn emit_native_cfg(
     }
     let epilogue = emitter.position();
     if aggregate_result {
-        emitter.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8b, 0xbd]);
-        emitter.i32(16);
+        emitter.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8b, 0x95]);
+        emitter.i32(INCOMING_FRAME);
+        emitter.bytes(&[0x48, 0x8b, 0x7a, 16]); // caller sret at incoming-frame+16
         emitter.copy_pointer_value(result_copy_bytes);
         emitter.bytes(&[0x48, 0x89, 0xf8]);
     }
-    emitter.bytes(&[0xc9, 0xc3]);
+    emitter.return_from_frame();
     for at in std::mem::take(&mut emitter.returns) {
         emitter.patch(at, epilogue)?;
     }
@@ -5460,6 +5526,130 @@ mod tests {
         assert_eq!(output.stdout, b"leading zeros once\n");
     }
 
+    /// Exercise the production prologue/epilogue bytes, not a layout model.
+    /// Private callers normally expose two word-aligned residues, but every
+    /// byte residue must preserve the original header and argument stack.
+    #[test]
+    fn aligned_frame_header_preserves_all_incoming_residues() {
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        let mut e = Emitter {
+            overflow_checks: true,
+            unwind: false,
+            unwinds: Vec::new(),
+            object: Object {
+                code: Vec::new(),
+                calls: Vec::new(),
+                strings: Vec::new(),
+                vtables: Vec::new(),
+                exports: Vec::new(),
+                receipt: None,
+            },
+            concrete: NativeConcrete::Ordinary(&concrete),
+            resolve: &resolve,
+            drop_flags: Vec::new(),
+            path_flags: Vec::new(),
+            locals: Vec::new(),
+            aggregate_scratch: 0,
+            wide_scratch: 0,
+            vtable_scratch: 0,
+            returns: Vec::new(),
+            runtime_location: None,
+            runtime_panic_kind: None,
+            runtime_traps: Vec::new(),
+            traps: Vec::new(),
+            edges: Vec::new(),
+        };
+        let budget = ir::PlanBudget::default();
+        let mut frame = -INCOMING_FRAME;
+        let wide = allocate_value(&mut frame, &ir::Ty::Int(ir::IntTy::U128), &budget).unwrap();
+        let flag = allocate_value(&mut frame, &ir::Ty::Bool, &budget).unwrap();
+        assert!(wide <= -16 && flag <= -16);
+        let frame = align_frame(frame, 16).unwrap();
+        let mut failures = Vec::new();
+        let mut calls = Vec::new();
+        e.bytes(&[0x48, 0x83, 0xe4, 0xf0, 0x48, 0x81, 0xec]); // aligned caller scratch
+        e.i32(256);
+        e.bytes(&[0x49, 0x89, 0xe4, 0xbd]); // r12 = baseline rsp; ebp = saved sentinel
+        e.i32(0x12345678);
+        for residue in 0..16_u8 {
+            e.bytes(&[
+                0x4c, 0x89, 0xe4, // rsp = r12
+                0x48, 0x83, 0xec, residue, // vary incoming rsp by every byte
+                0x6a, 42, // argument remains on the caller stack after return
+                0x49, 0x89, 0xe5, // r13 = exact expected post-return rsp
+                0x41, 0xbe, // r14d = failing residue + 1
+            ]);
+            e.i32(i32::from(residue) + 1);
+            calls.push(e.jump(&[0xe8]));
+            e.bytes(&[0x4c, 0x39, 0xec]); // cmp rsp, r13
+            failures.push(e.jump(&[0x0f, 0x85]));
+            e.bytes(&[0x48, 0x81, 0xfd]); // cmp rbp, saved sentinel
+            e.i32(0x12345678);
+            failures.push(e.jump(&[0x0f, 0x85]));
+            e.bytes(&[0x48, 0x83, 0x3c, 0x24, 42]); // original argument untouched
+            failures.push(e.jump(&[0x0f, 0x85]));
+            e.bytes(&[0x48, 0x83, 0xf8, 123]); // scalar result survives epilogue
+            failures.push(e.jump(&[0x0f, 0x85]));
+        }
+        e.bytes(&[0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b]);
+        let callee = e.position();
+        e.enter_frame(frame);
+        e.bytes(&[0x48, 0x89, 0xe8, 0x83, 0xe0, 15, 0x85, 0xc0]); // rbp % 16
+        failures.push(e.jump(&[0x0f, 0x85]));
+        e.bytes(&[0x48, 0x8b, 0x95]); // rdx = original incoming frame P
+        e.i32(INCOMING_FRAME);
+        e.bytes(&[0x4c, 0x89, 0xe9, 0x48, 0x83, 0xe9, 16, 0x48, 0x39, 0xca]);
+        failures.push(e.jump(&[0x0f, 0x85])); // P == caller rsp before call - 16
+        e.bytes(&[0x48, 0x8d, 0x4d, 16, 0x48, 0x39, 0xd1]); // A + 16 <= P
+        failures.push(e.jump(&[0x0f, 0x87]));
+        e.bytes(&[0x48, 0x8b, 0x45, 0, 0x48, 0x8b, 0x0a, 0x48, 0x39, 0xc8]);
+        failures.push(e.jump(&[0x0f, 0x85])); // mirrored previous rbp == original
+        e.bytes(&[0x48, 0x8b, 0x45, 8, 0x48, 0x8b, 0x4a, 8, 0x48, 0x39, 0xc8]);
+        failures.push(e.jump(&[0x0f, 0x85])); // mirrored return PC == original
+        e.bytes(&[0x48, 0x83, 0x7a, 16, 42]);
+        failures.push(e.jump(&[0x0f, 0x85])); // canonical incoming argument slot
+        for (offset, limb) in [(wide, 7), (wide + 8, 9)] {
+            e.bytes(&[0x48, 0xc7, 0x85]);
+            e.i32(offset);
+            e.i32(limb);
+        }
+        e.flag_store(flag, true);
+        e.address(wide);
+        e.bytes(&[0x83, 0xe0, 15, 0x85, 0xc0]); // actual wide local is aligned
+        failures.push(e.jump(&[0x0f, 0x85]));
+        e.bytes(&[0x48, 0x8b, 0x95]);
+        e.i32(INCOMING_FRAME);
+        e.bytes(&[0x4c, 0x89, 0xe9, 0x48, 0x83, 0xe9, 16, 0x48, 0x39, 0xca]);
+        failures.push(e.jump(&[0x0f, 0x85])); // local/drop-flag writes did not touch P
+        for field in [0, 8] {
+            e.bytes(&[
+                0x48, 0x8b, 0x45, field, 0x48, 0x8b, 0x4a, field, 0x48, 0x39, 0xc8,
+            ]);
+            failures.push(e.jump(&[0x0f, 0x85])); // mirrored header remains immutable
+        }
+        e.immediate(123);
+        e.return_from_frame();
+        let failed = e.position();
+        e.bytes(&[0x4c, 0x89, 0xf7, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b]);
+        for at in failures {
+            e.patch(at, failed).unwrap();
+        }
+        for at in calls {
+            e.patch(at, callee).unwrap();
+        }
+        let elf = link(&[("main".into(), e.object)]).unwrap();
+        let path = executable_bytes(&elf);
+        let output = execute(&mut Command::new(&path));
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert_eq!(output.status.code(), Some(0), "{output:?}");
+        assert!(
+            output.stdout.is_empty() && output.stderr.is_empty(),
+            "{output:?}"
+        );
+    }
+
     #[test]
     fn wide_integer_private_layout_uses_indirect_scalar_storage() {
         for integer in [ir::IntTy::I128, ir::IntTy::U128] {
@@ -5490,7 +5680,7 @@ mod tests {
                 24
             );
             let array = ir::Ty::Array {
-                element: std::sync::Arc::new(ty),
+                element: std::sync::Arc::new(ty.clone()),
                 len: 3,
             };
             assert_eq!(value_size(&array, &ir::PlanBudget::default()), Ok(48));
@@ -5503,8 +5693,25 @@ mod tests {
             let mut frame = 8;
             assert_eq!(
                 allocate_value(&mut frame, &array, &ir::PlanBudget::default()),
-                Ok(-56)
+                Ok(-64)
             );
+            let empty = ir::Ty::Array {
+                element: std::sync::Arc::new(array.clone()),
+                len: 0,
+            };
+            let nested = ir::Ty::Array {
+                element: std::sync::Arc::new(empty.clone()),
+                len: 2,
+            };
+            for aligned in [&ty, &array, &empty, &nested] {
+                for initial in 0..16 {
+                    let budget = ir::PlanBudget::default();
+                    let mut frame = initial;
+                    let offset = allocate_value(&mut frame, aligned, &budget).unwrap();
+                    assert_eq!(offset % 16, 0);
+                    assert!(-offset >= initial + value_size(aligned, &budget).unwrap());
+                }
+            }
         }
     }
 
@@ -5761,6 +5968,7 @@ mod tests {
         // Two-word argument transport: after `sub rsp,128` two pushes land
         // len at rbp-144 and data at rbp-136, the callee's slot convention.
         e.push_slice_argument(layout);
+        e.bytes(&[0x48, 0x89, 0xea]); // rdx = helper's incoming base
         e.store_slice_parameter(layout, -144, -48).unwrap(); // -> C
         e.bytes(&[0x48, 0x83, 0xc4, 0x10]);
         e.bytes(&[0x48, 0x8d, 0xbd]);
@@ -9430,20 +9638,25 @@ mod tests {
         assert_eq!(original.code, renamed.code);
         assert_eq!(original.calls, renamed.calls);
         assert_eq!(original.strings, renamed.strings);
-        // Both the parameter and shadow binding own a distinct monotonic slot.
-        let frame = i32::from_le_bytes(original.code[7..11].try_into().unwrap());
-        assert!(frame >= 16 && frame % 8 == 0);
-        assert!(
-            original
-                .code
-                .windows(7)
-                .any(|bytes| bytes == [0x48, 0x8d, 0x85, 0xf8, 0xff, 0xff, 0xff])
-        );
+        // The incoming-base slot is reserved before both distinct bindings.
+        let prologue = [
+            0x55, 0x48, 0x89, 0xe0, 0x48, 0x83, 0xec, 16, 0x48, 0x83, 0xe4, 0xf0, 0x48, 0x89, 0xe5,
+            0x48, 0x81, 0xec,
+        ];
+        assert!(original.code.starts_with(&prologue));
+        let frame = i32::from_le_bytes(original.code[18..22].try_into().unwrap());
+        assert!(frame >= 32 && frame % 16 == 0);
         assert!(
             original
                 .code
                 .windows(7)
                 .any(|bytes| bytes == [0x48, 0x8d, 0x85, 0xf0, 0xff, 0xff, 0xff])
+        );
+        assert!(
+            original
+                .code
+                .windows(7)
+                .any(|bytes| bytes == [0x48, 0x8d, 0x85, 0xe8, 0xff, 0xff, 0xff])
         );
     }
 
@@ -9648,10 +9861,10 @@ mod tests {
         let checked = frontend::type_function_with_signatures(&p, index, &signatures).unwrap();
         let object = emit_checked_fixture(&checked, &signatures, index).unwrap();
         assert!(
-            object
-                .code
-                .windows(5)
-                .any(|bytes| bytes == [0x48, 0x89, 0xf8, 0xc9, 0xc3]),
+            object.code.windows(12).any(|bytes| bytes
+                == [
+                    0x48, 0x89, 0xf8, 0x48, 0x8b, 0xa5, 0xf8, 0xff, 0xff, 0xff, 0x5d, 0xc3
+                ]),
             "aggregate epilogue must return the caller destination pointer"
         );
     }
@@ -10027,10 +10240,10 @@ mod tests {
         );
         let object = emit_checked_fixture(&checked, &env, index).unwrap();
         assert!(
-            object
-                .code
-                .windows(5)
-                .any(|bytes| bytes == [0x48, 0x89, 0xf8, 0xc9, 0xc3]),
+            object.code.windows(12).any(|bytes| bytes
+                == [
+                    0x48, 0x89, 0xf8, 0x48, 0x8b, 0xa5, 0xf8, 0xff, 0xff, 0xff, 0x5d, 0xc3
+                ]),
             "one-field nominal return must still use the aggregate destination ABI"
         );
     }

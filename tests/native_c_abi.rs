@@ -231,6 +231,102 @@ fn main(){
 }
 
 #[test]
+fn wide_private_frame_addresses_survive_c_import_export_and_callbacks() {
+    let scratch = Scratch::new();
+    let source = scratch.file("wide-frame.rs");
+    let c_source = scratch.file("wide-frame.c");
+    let object = scratch.file("wide-frame.o");
+    fs::write(
+        &c_source,
+        r#"
+#include <stdint.h>
+extern unsigned __int128 rust_frame_wide(uint64_t, unsigned __int128);
+extern uint64_t rust_frame_even(uint64_t, uint64_t);
+uint64_t c_frame_address(uintptr_t address) {
+    const unsigned __int128 *p = (const unsigned __int128 *)address;
+    return (address & 15u) + (uint64_t)(*p & 65535u);
+}
+unsigned __int128 c_frame_reenter(uint64_t tag, unsigned __int128 value) {
+    return rust_frame_wide(tag, value) + 5u;
+}
+uint64_t c_frame_even(uint64_t a, uint64_t b) {
+    return rust_frame_even(a, b);
+}
+"#,
+    )
+    .unwrap();
+    fs::write(
+        &source,
+        r#"
+unsafe extern "C" {
+    fn c_frame_address(address:usize)->u64;
+    fn c_frame_reenter(tag:u64,value:u128)->u128;
+    fn c_frame_even(a:u64,b:u64)->u64;
+}
+fn aligned(value:&u128){assert_eq!(value as *const u128 as usize%16usize,0usize);}
+fn private_wide(tag:u64,value:u128)->u128{
+    aligned(&value);let local=value+tag as u128;aligned(&local);local
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_frame_wide(tag:u64,value:u128)->u128{
+    aligned(&value);assert_eq!(tag,7u64);
+    let array=[value,value+1u128];aligned(&array[0]);aligned(&array[1]);
+    assert_eq!(unsafe{c_frame_address(&array[1] as *const u128 as usize)},10u64);
+    let got=private_wide(tag,value);aligned(&got);got
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_frame_even(a:u64,b:u64)->u64{
+    assert_eq!(a,11u64);assert_eq!(b,13u64);let local=17u128;aligned(&local);
+    unsafe{c_frame_address(&local as *const u128 as usize)}
+}
+fn main(){
+    let before=19u64;let value=18446744073709551625u128;aligned(&value);
+    assert_eq!(unsafe{c_frame_address(&value as *const u128 as usize)},9u64);
+    let got=unsafe{c_frame_reenter(7u64,value)};aligned(&got);assert_eq!(got,value+12u128);
+    assert_eq!(unsafe{c_frame_even(11u64,13u64)},17u64);assert_eq!(before,19u64);
+    println!("wide C frame boundaries");
+}
+"#,
+    )
+    .unwrap();
+    run(Command::new("cc")
+        .args(["-std=c11", "-O2", "-fno-pie", "-c"])
+        .arg(&c_source)
+        .arg("-o")
+        .arg(&object));
+    let stock = scratch.file("stock");
+    run(Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "-Cpanic=abort", "-Clink-arg=-no-pie"])
+        .arg(&source)
+        .arg(format!("-Clink-arg={}", object.display()))
+        .arg("-o")
+        .arg(&stock));
+    let expected = run(&mut Command::new(stock));
+    assert_eq!(expected.stdout, b"wide C frame boundaries\n");
+    for workers in [1, 8] {
+        run(Command::new(cli())
+            .arg(&source)
+            .args([
+                "--check",
+                "--workers",
+                &workers.to_string(),
+                "--native-object",
+            ])
+            .arg(&object));
+        let native = scratch.file(&format!("wide-frame-{workers}"));
+        run(Command::new(cli())
+            .arg(&source)
+            .args(["--workers", &workers.to_string(), "--native-object"])
+            .arg(&object)
+            .arg("-o")
+            .arg(&native));
+        let actual = run(&mut Command::new(native));
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.stderr, expected.stderr);
+    }
+}
+
+#[test]
 fn real_c_imports_exports_callbacks_and_native_library_match_stock_at_workers_1_8() {
     let scratch = Scratch::new();
     let c = scratch.file("oracle.o");

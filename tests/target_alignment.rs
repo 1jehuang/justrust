@@ -240,6 +240,87 @@ fn main(){
 }
 
 #[test]
+fn physical_wide_frame_addresses_ignore_argument_and_caller_frame_parity() {
+    // Keep these sources independent: adding unrelated temporaries can mask
+    // the old frame-base parity error. They inspect real addresses, not align_of.
+    for (tag, source) in [
+        (
+            "wide-local-frame",
+            r#"fn probe(){let x=1u128;println!("{}",&x as *const u128 as usize%16usize);}fn main(){probe();}"#,
+        ),
+        (
+            "wide-array-frame",
+            r#"fn probe(){let x=[1u128;1];println!("{}",&x as *const [u128;1] as usize%16usize);}fn main(){probe();}"#,
+        ),
+        (
+            "wide-caller-parity",
+            r#"fn probe()->usize{let x=1u128;&x as *const u128 as usize%16usize}fn caller0()->usize{probe()}fn caller1()->usize{let p=1u64;let r=probe();assert_eq!(p,1u64);r}fn main(){println!("{} {}",caller0(),caller1());}"#,
+        ),
+        (
+            "wide-recursive-parity",
+            r#"fn recurse(n:u64){let x=1u128;let a=[2u128;1];println!("{} {}",&x as *const u128 as usize%16usize,&a as *const [u128;1] as usize%16usize);if n>0u64{recurse(n-1u64);}}fn main(){recurse(3u64);}"#,
+        ),
+        (
+            "wide-scalar-args-parity",
+            r#"fn odd(a:u64){let x=1u128;println!("{} {}",&x as *const u128 as usize%16usize,a);}fn even(a:u64,b:u64){let x=[1u128;1];println!("{} {} {}",&x as *const [u128;1] as usize%16usize,a,b);}fn main(){odd(7u64);even(7u64,9u64);}"#,
+        ),
+        (
+            "wide-fat-args-parity",
+            r#"fn f(s:&[u64]){let x=1u128;println!("{} {}",&x as *const u128 as usize%16usize,s.len());}fn g(a:u64,s:&[u64]){let x=[1u128;1];println!("{} {} {}",&x as *const [u128;1] as usize%16usize,a,s.len());}fn main(){let pad=3u64;let s=[7u64];f(&s);g(9u64,&s);assert_eq!(pad,3u64);}"#,
+        ),
+    ] {
+        physical_matches_stock(source, tag);
+    }
+}
+
+#[test]
+fn physical_wide_frames_arrays_nested_calls_recursion_traits_and_drop_match_stock() {
+    physical_matches_stock(
+        r#"
+fn aligned(value:&u128){assert_eq!(value as *const u128 as usize%16usize,0usize);}
+fn array_aligned(value:&[[u128;2];2]){
+    assert_eq!(value as *const [[u128;2];2] as usize%16usize,0usize);
+    assert_eq!(&value[0] as *const [u128;2] as usize%16usize,0usize);
+    assert_eq!(&value[1] as *const [u128;2] as usize%16usize,0usize);
+    aligned(&value[0][0]);aligned(&value[0][1]);aligned(&value[1][0]);aligned(&value[1][1]);
+}
+fn wide(a:u64,b:u64,value:u128)->u128{aligned(&value);assert_eq!(a,7u64);assert_eq!(b,9u64);value+1u128}
+fn arrays(value:[[u128;2];2],salt:u64)->[[u128;2];2]{array_aligned(&value);assert_eq!(salt,11u64);value}
+fn fat_odd(a:u64,values:&[u64])->usize{let x=19u128;aligned(&x);assert_eq!(a,13u64);assert_eq!(values[1],29u64);values.len()}
+fn fat_even(values:&[u64],tail:&[u64])->usize{let x=23u128;aligned(&x);assert_eq!(values[0],17u64);assert_eq!(tail[0],29u64);values.len()+tail.len()}
+struct Guard{id:u64}
+impl Drop for Guard{fn drop(&mut self){let local=31u128;aligned(&local);println!("drop {}",self.id);}}
+fn recursive(depth:u64,value:u128)->u128{
+    let guard=Guard{id:depth};let sentinel=depth as u128+101u128;aligned(&value);aligned(&sentinel);
+    if depth==0u64{return value;}
+    let result=recursive(depth-1u64,value+1u128);aligned(&result);aligned(&sentinel);result
+}
+trait Probe{fn probe(&self,value:u64)->u128;}
+struct Marker{tag:u64}
+impl Probe for Marker{fn probe(&self,value:u64)->u128{let local=value as u128+41u128;aligned(&local);assert_eq!(self.tag,43u64);wide(7u64,9u64,local)}}
+fn dispatch(object:&dyn Probe,value:u64)->u128{let local=47u128;aligned(&local);object.probe(value)}
+fn note(order:&mut u64,digit:u64)->u64{*order=*order*10u64+digit;digit}
+fn ordered(a:u64,b:usize,c:u64)->usize{let local=53u128;aligned(&local);assert_eq!(a,1u64);assert_eq!(c,2u64);b}
+fn main(){
+    let narrow=3u64;let wide_local=18446744073709551617u128;aligned(&wide_local);assert_eq!(narrow,3u64);
+    let signed=-18446744073709551617i128;assert_eq!(&signed as *const i128 as usize%16usize,0usize);
+    let array=arrays([[wide_local,2u128],[3u128,4u128]],11u64);array_aligned(&array);assert_eq!(array[0][0],wide_local);
+    let zero:[u128;0]=[];assert_eq!(&zero as *const [u128;0] as usize%16usize,0usize);
+    let row_zero:[[u128;0];2]=[[],[]];assert_eq!(&row_zero as *const [[u128;0];2] as usize%16usize,0usize);
+    let result=wide(7u64,9u64,wide(7u64,9u64,wide_local));aligned(&result);assert_eq!(result,wide_local+2u128);
+    aligned(&wide(7u64,9u64,wide_local));
+    let values=[17u64,29u64];let tail=[29u64];assert_eq!(fat_odd(13u64,&values),2usize);assert_eq!(fat_even(&values,&tail),3usize);
+    let mut order=0u64;assert_eq!(ordered(note(&mut order,1u64),fat_odd(13u64,&values),note(&mut order,2u64)),2usize);assert_eq!(order,12u64);
+    let returned=recursive(3u64,wide_local);aligned(&returned);assert_eq!(returned,wide_local+3u128);
+    let marker=Marker{tag:43u64};let object:&dyn Probe=&marker;let got=dispatch(object,59u64);aligned(&got);assert_eq!(got,101u128);
+    println!("wide frame boundaries");
+}
+"#,
+        "physical_wide_frames_arrays_nested_calls_recursion_traits_and_drop_match_stock",
+    );
+}
+
+#[test]
 fn physical_u16_byte_reinterpretation_matches_stock() {
     physical_matches_stock(
         r#"fn main(){let a=[257u16,513u16];let p=&a[0]as *const u16;let bytes=p as *const u8;unsafe{println!("{} {} {} {}",*bytes,*bytes.add(1usize),*bytes.add(2usize),*bytes.add(3usize));}}"#,

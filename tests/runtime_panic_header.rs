@@ -131,11 +131,12 @@ fn unwind_runs_pending_drops_and_exits_101_like_stock() {
     let dir = std::env::temp_dir().join(format!("jr-panic-unwind-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let template = r#"struct D(u8);
-impl Drop for D{fn drop(&mut self){println!("drop {}",self.0);}}
+fn aligned(value:&u128){assert_eq!(value as *const u128 as usize%16usize,0usize);}
+impl Drop for D{fn drop(&mut self){let local=17u128;aligned(&local);println!("drop {}",self.0);}}
 trait T{fn go(&self,n:usize)->usize;}
 struct S;
-impl T for S{fn go(&self,n:usize)->usize{let _g=D(7);let v=[1usize,2,3];v[n]}}
-fn deep(k:u32,t:&dyn T)->usize{let _x=D(k as u8+10);if k==0{t.go(9)}else{deep(k-1,t)+1}}
+impl T for S{fn go(&self,n:usize)->usize{let _g=D(7);let wide=[19u128,23u128];aligned(&wide[0]);aligned(&wide[1]);let v=[1usize,2,3];v[n]}}
+fn deep(k:u32,t:&dyn T)->usize{let _x=D(k as u8+10);let local=k as u128;aligned(&local);if k==0{t.go(9)}else{deep(k-1,t)+1}}
 fn lit(n:u32)->u32{let _d=D(30);if n>2{panic!("boom {}",n)}n}
 struct Pair{a:D,b:D}
 fn main(){
