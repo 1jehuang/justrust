@@ -1,0 +1,892 @@
+{
+  "schema": 1,
+  "execution": "authenticated-justrust-hosted-direct-process",
+  "ssh_and_transfer_in_timed_samples": false,
+  "command": [
+    "python3",
+    "bench/suite.py",
+    "native-cache",
+    "--binary",
+    "/home/ubuntu/justrust-experiments/cache-speed-20261030-0419/bin/jr-rust",
+    "--scratch",
+    "/home/ubuntu/justrust-experiments/cache-speed-20261030-0419/scratch",
+    "--out-prefix",
+    "bench/results/20261030-hosted-native-cache",
+    "--stock",
+    "/usr/local/bin/rustc",
+    "-n",
+    "5",
+    "--warmup",
+    "1"
+  ],
+  "host": "ip-172-31-32-241",
+  "machine": "x86_64",
+  "affinity": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95
+  ],
+  "lscpu": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  96\nOn-line CPU(s) list:                     0-95\nVendor ID:                               AuthenticAMD\nModel name:                              AMD EPYC 9R45\nCPU family:                              26\nModel:                                   2\nThread(s) per core:                      1\nCore(s) per socket:                      96\nSocket(s):                               1\nStepping:                                1\nBogoMIPS:                                5200.00\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf tsc_known_freq pni pclmulqdq monitor ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm cmp_legacy cr8_legacy abm sse4a misalignsse 3dnowprefetch topoext perfctr_core ssbd perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves avx_vnni avx512_bf16 clzero xsaveerptr rdpru wbnoinvd arat avx512vbmi pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid movdiri movdir64b fsrm avx512_vp2intersect flush_l1d\nHypervisor vendor:                       KVM\nVirtualization type:                     full\nL1d cache:                               4.5 MiB (96 instances)\nL1i cache:                               3 MiB (96 instances)\nL2 cache:                                96 MiB (96 instances)\nL3 cache:                                384 MiB (12 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-95\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; IBPB on VMEXIT only\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Enhanced / Automatic IBRS; IBPB conditional; STIBP disabled; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Not affected\n",
+  "stock_version": "rustc 1.99.0 (b940084d7 2026-09-28)\nbinary: rustc\ncommit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4\ncommit-date: 2026-09-28\nhost: x86_64-unknown-linux-gnu\nrelease: 1.99.0\nLLVM version: 23.1.1\n",
+  "compiler_sha256": "4b56919a8aa7c1b3bb5437c08f97611ad4f6dd97690f636aefa2d03455a54a81",
+  "observer_sha256": "86de1b56d7f33e8363bdb7f40da48a6849e4e95af4192d7151bdf82c1a1d67cb",
+  "observations": [
+    {
+      "utc": "2026-10-30T04:21:16Z",
+      "loadavg": [
+        1.39794921875,
+        1.5888671875,
+        1.81201171875
+      ],
+      "cpu_stat": "cpu  967564 3408 170055 53719334 45574 0 220 252 0 0",
+      "meminfo": {
+        "MemAvailable": "377015552 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "rustc": 2
+      }
+    },
+    {
+      "utc": "2026-10-30T04:21:26Z",
+      "loadavg": [
+        2.044921875,
+        1.71875,
+        1.85205078125
+      ],
+      "cpu_stat": "cpu  971886 3434 171775 53809591 45625 0 221 252 0 0",
+      "meminfo": {
+        "MemAvailable": "377662388 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "rustc": 2,
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:21:36Z",
+      "loadavg": [
+        2.1787109375,
+        1.76025390625,
+        1.8642578125
+      ],
+      "cpu_stat": "cpu  974380 3446 172718 53902474 45674 0 221 253 0 0",
+      "meminfo": {
+        "MemAvailable": "379055476 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:21:47Z",
+      "loadavg": [
+        1.9970703125,
+        1.73486328125,
+        1.8544921875
+      ],
+      "cpu_stat": "cpu  975817 3446 172862 53997277 45691 0 221 253 0 0",
+      "meminfo": {
+        "MemAvailable": "379115748 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:21:57Z",
+      "loadavg": [
+        2.564453125,
+        1.8603515625,
+        1.8935546875
+      ],
+      "cpu_stat": "cpu  977626 3446 173028 54091560 45837 0 221 253 0 0",
+      "meminfo": {
+        "MemAvailable": "379480056 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:22:07Z",
+      "loadavg": [
+        2.32373046875,
+        1.83154296875,
+        1.8837890625
+      ],
+      "cpu_stat": "cpu  979142 3446 173182 54186270 45874 0 221 254 0 0",
+      "meminfo": {
+        "MemAvailable": "379834780 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:22:17Z",
+      "loadavg": [
+        2.11962890625,
+        1.8037109375,
+        1.8740234375
+      ],
+      "cpu_stat": "cpu  980553 3446 173362 54281083 45876 0 221 255 0 0",
+      "meminfo": {
+        "MemAvailable": "378773168 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "rustc": 2,
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:22:27Z",
+      "loadavg": [
+        2.1748046875,
+        1.82666015625,
+        1.88134765625
+      ],
+      "cpu_stat": "cpu  982462 3486 173593 54375291 45891 0 222 255 0 0",
+      "meminfo": {
+        "MemAvailable": "380084992 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:22:37Z",
+      "loadavg": [
+        1.99365234375,
+        1.798828125,
+        1.87158203125
+      ],
+      "cpu_stat": "cpu  984180 3486 173760 54469806 45898 0 222 256 0 0",
+      "meminfo": {
+        "MemAvailable": "380095240 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:22:47Z",
+      "loadavg": [
+        2.1923828125,
+        1.8564453125,
+        1.89013671875
+      ],
+      "cpu_stat": "cpu  985924 3486 173914 54564296 45918 0 222 256 0 0",
+      "meminfo": {
+        "MemAvailable": "380018452 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:22:57Z",
+      "loadavg": [
+        2.16259765625,
+        1.861328125,
+        1.89208984375
+      ],
+      "cpu_stat": "cpu  987252 3486 174102 54659181 45936 0 222 257 0 0",
+      "meminfo": {
+        "MemAvailable": "379127080 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "rustc": 2,
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:23:07Z",
+      "loadavg": [
+        2.05712890625,
+        1.84912109375,
+        1.88818359375
+      ],
+      "cpu_stat": "cpu  990483 3503 175212 54751178 45960 0 222 258 0 0",
+      "meminfo": {
+        "MemAvailable": "379644572 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:23:17Z",
+      "loadavg": [
+        1.9677734375,
+        1.837890625,
+        1.88427734375
+      ],
+      "cpu_stat": "cpu  991527 3503 175341 54846421 45960 0 222 258 0 0",
+      "meminfo": {
+        "MemAvailable": "379034448 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:23:27Z",
+      "loadavg": [
+        1.8994140625,
+        1.82666015625,
+        1.88037109375
+      ],
+      "cpu_stat": "cpu  993361 3503 175501 54940814 45984 0 222 258 0 0",
+      "meminfo": {
+        "MemAvailable": "379392184 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:23:37Z",
+      "loadavg": [
+        1.7607421875,
+        1.798828125,
+        1.87060546875
+      ],
+      "cpu_stat": "cpu  995200 3503 175654 55035235 45985 0 222 259 0 0",
+      "meminfo": {
+        "MemAvailable": "379276420 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:23:47Z",
+      "loadavg": [
+        1.6435546875,
+        1.77197265625,
+        1.86083984375
+      ],
+      "cpu_stat": "cpu  996228 3503 175718 55130564 46015 0 222 259 0 0",
+      "meminfo": {
+        "MemAvailable": "379243536 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:23:57Z",
+      "loadavg": [
+        1.5439453125,
+        1.74609375,
+        1.85107421875
+      ],
+      "cpu_stat": "cpu  997746 3510 175874 55225322 46022 0 222 260 0 0",
+      "meminfo": {
+        "MemAvailable": "379963508 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:24:07Z",
+      "loadavg": [
+        1.4599609375,
+        1.72119140625,
+        1.84130859375
+      ],
+      "cpu_stat": "cpu  998717 3510 175923 55320719 46022 0 222 260 0 0",
+      "meminfo": {
+        "MemAvailable": "380171264 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:24:17Z",
+      "loadavg": [
+        1.388671875,
+        1.69677734375,
+        1.83154296875
+      ],
+      "cpu_stat": "cpu  999689 3510 175965 55416086 46024 0 222 261 0 0",
+      "meminfo": {
+        "MemAvailable": "380300096 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:24:27Z",
+      "loadavg": [
+        1.4892578125,
+        1.70703125,
+        1.8330078125
+      ],
+      "cpu_stat": "cpu  1000848 3510 176082 55511205 46044 0 223 262 0 0",
+      "meminfo": {
+        "MemAvailable": "381115708 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:24:37Z",
+      "loadavg": [
+        1.56103515625,
+        1.71630859375,
+        1.83447265625
+      ],
+      "cpu_stat": "cpu  1003095 3524 176752 55604676 46074 0 223 262 0 0",
+      "meminfo": {
+        "MemAvailable": "381301736 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:24:47Z",
+      "loadavg": [
+        1.47412109375,
+        1.6923828125,
+        1.82470703125
+      ],
+      "cpu_stat": "cpu  1004066 3524 176804 55700074 46074 0 223 262 0 0",
+      "meminfo": {
+        "MemAvailable": "381391032 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:24:57Z",
+      "loadavg": [
+        2.0361328125,
+        1.802734375,
+        1.85888671875
+      ],
+      "cpu_stat": "cpu  1006831 3537 177067 55793417 46102 0 223 263 0 0",
+      "meminfo": {
+        "MemAvailable": "380056184 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 2
+      }
+    },
+    {
+      "utc": "2026-10-30T04:25:07Z",
+      "loadavg": [
+        2.17822265625,
+        1.84228515625,
+        1.87158203125
+      ],
+      "cpu_stat": "cpu  1010750 3552 177342 55885602 46127 0 223 264 0 0",
+      "meminfo": {
+        "MemAvailable": "379398072 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 2,
+        "rustc": 2,
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:25:17Z",
+      "loadavg": [
+        2.39111328125,
+        1.89794921875,
+        1.8896484375
+      ],
+      "cpu_stat": "cpu  1016009 3594 177617 55976417 46150 0 223 264 0 0",
+      "meminfo": {
+        "MemAvailable": "380325812 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1,
+        "jr-cargo": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:25:27Z",
+      "loadavg": [
+        2.1767578125,
+        1.86767578125,
+        1.8798828125
+      ],
+      "cpu_stat": "cpu  1020438 3602 177976 56067970 46199 0 224 265 0 0",
+      "meminfo": {
+        "MemAvailable": "380391392 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:25:38Z",
+      "loadavg": [
+        2.591796875,
+        1.970703125,
+        1.91357421875
+      ],
+      "cpu_stat": "cpu  1024476 3602 178041 56160243 46246 0 224 265 0 0",
+      "meminfo": {
+        "MemAvailable": "380477984 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:25:48Z",
+      "loadavg": [
+        2.5869140625,
+        1.98828125,
+        1.919921875
+      ],
+      "cpu_stat": "cpu  1028172 3602 178104 56252881 46280 0 224 265 0 0",
+      "meminfo": {
+        "MemAvailable": "380617344 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:25:58Z",
+      "loadavg": [
+        6.35693359375,
+        2.7998046875,
+        2.18408203125
+      ],
+      "cpu_stat": "cpu  1033915 3614 178929 56342671 46320 0 224 266 0 0",
+      "meminfo": {
+        "MemAvailable": "380897732 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:26:08Z",
+      "loadavg": [
+        13.9287109375,
+        4.4833984375,
+        2.7353515625
+      ],
+      "cpu_stat": "cpu  1039619 3631 180180 56432045 46385 0 225 267 0 0",
+      "meminfo": {
+        "MemAvailable": "380777352 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:26:18Z",
+      "loadavg": [
+        12.4560546875,
+        4.48291015625,
+        2.75390625
+      ],
+      "cpu_stat": "cpu  1043560 3631 180252 56524441 46390 0 225 267 0 0",
+      "meminfo": {
+        "MemAvailable": "380703944 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:26:28Z",
+      "loadavg": [
+        11.6298828125,
+        4.56689453125,
+        2.7998046875
+      ],
+      "cpu_stat": "cpu  1047209 3631 180402 56617046 46411 0 225 268 0 0",
+      "meminfo": {
+        "MemAvailable": "378966896 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "rustc": 2,
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:26:38Z",
+      "loadavg": [
+        10.22900390625,
+        4.49853515625,
+        2.796875
+      ],
+      "cpu_stat": "cpu  1051780 3631 181734 56707453 46470 0 225 268 0 0",
+      "meminfo": {
+        "MemAvailable": "378886536 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-cargo": 1,
+        "rustc": 2,
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:26:48Z",
+      "loadavg": [
+        8.8095703125,
+        4.38330078125,
+        2.77734375
+      ],
+      "cpu_stat": "cpu  1052753 3651 181819 56802789 46505 0 225 269 0 0",
+      "meminfo": {
+        "MemAvailable": "380248812 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:26:58Z",
+      "loadavg": [
+        7.6083984375,
+        4.27099609375,
+        2.7578125
+      ],
+      "cpu_stat": "cpu  1053724 3651 181869 56898192 46509 0 225 269 0 0",
+      "meminfo": {
+        "MemAvailable": "380080792 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:27:08Z",
+      "loadavg": [
+        6.59228515625,
+        4.16259765625,
+        2.73828125
+      ],
+      "cpu_stat": "cpu  1054694 3651 181922 56993599 46529 0 225 270 0 0",
+      "meminfo": {
+        "MemAvailable": "380214172 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:27:18Z",
+      "loadavg": [
+        5.73193359375,
+        4.05810546875,
+        2.71875
+      ],
+      "cpu_stat": "cpu  1055656 3651 181979 57088953 46569 0 225 271 0 0",
+      "meminfo": {
+        "MemAvailable": "380535584 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:27:28Z",
+      "loadavg": [
+        5.00390625,
+        3.95703125,
+        2.7001953125
+      ],
+      "cpu_stat": "cpu  1056623 3651 182027 57184378 46569 0 225 271 0 0",
+      "meminfo": {
+        "MemAvailable": "380350156 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:27:38Z",
+      "loadavg": [
+        4.3876953125,
+        3.859375,
+        2.681640625
+      ],
+      "cpu_stat": "cpu  1057593 3651 182077 57279780 46569 0 225 272 0 0",
+      "meminfo": {
+        "MemAvailable": "379894196 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:27:48Z",
+      "loadavg": [
+        3.8662109375,
+        3.7646484375,
+        2.6630859375
+      ],
+      "cpu_stat": "cpu  1058561 3651 182126 57375218 46570 0 225 272 0 0",
+      "meminfo": {
+        "MemAvailable": "379946640 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:27:58Z",
+      "loadavg": [
+        3.98583984375,
+        3.7900390625,
+        2.6826171875
+      ],
+      "cpu_stat": "cpu  1061260 3651 182187 57468878 46570 0 225 272 0 0",
+      "meminfo": {
+        "MemAvailable": "380059444 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:28:08Z",
+      "loadavg": [
+        4.12255859375,
+        3.8291015625,
+        2.70751953125
+      ],
+      "cpu_stat": "cpu  1066257 3651 182265 57560215 46570 0 225 273 0 0",
+      "meminfo": {
+        "MemAvailable": "380182192 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:28:18Z",
+      "loadavg": [
+        4.15771484375,
+        3.85009765625,
+        2.7265625
+      ],
+      "cpu_stat": "cpu  1071098 3651 182353 57651698 46570 0 225 274 0 0",
+      "meminfo": {
+        "MemAvailable": "380358484 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:28:28Z",
+      "loadavg": [
+        4.18798828125,
+        3.87060546875,
+        2.74560546875
+      ],
+      "cpu_stat": "cpu  1076423 3651 182425 57742722 46570 0 225 274 0 0",
+      "meminfo": {
+        "MemAvailable": "380478812 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {}
+    },
+    {
+      "utc": "2026-10-30T04:28:38Z",
+      "loadavg": [
+        4.77490234375,
+        4.00732421875,
+        2.80224609375
+      ],
+      "cpu_stat": "cpu  1081367 3651 182507 57834109 46571 0 225 275 0 0",
+      "meminfo": {
+        "MemAvailable": "380354896 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:28:48Z",
+      "loadavg": [
+        5.27099609375,
+        4.13916015625,
+        2.8583984375
+      ],
+      "cpu_stat": "cpu  1086491 3651 182583 57925324 46571 0 225 275 0 0",
+      "meminfo": {
+        "MemAvailable": "380330592 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {
+        "jr-rust": 1
+      }
+    },
+    {
+      "utc": "2026-10-30T04:28:55Z",
+      "loadavg": [
+        4.9287109375,
+        4.0869140625,
+        2.84814453125
+      ],
+      "cpu_stat": "cpu  1089776 3651 182644 57987412 46571 0 225 275 0 0",
+      "meminfo": {
+        "MemAvailable": "380580380 kB",
+        "SwapFree": "0 kB"
+      },
+      "compiler_process_counts": {}
+    }
+  ],
+  "exit_code": 0
+}
