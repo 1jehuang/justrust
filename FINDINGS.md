@@ -8921,3 +8921,30 @@ and the corrected single-test acceptance passed. Final installed hosted run
 `20261027-191513371-2753567` additionally verified warning persistence in
 `output.jsonl` before the test process exited. These fixes do not require a
 cloud infrastructure deployment or a change to tenant resource limits.
+
+## 2026-10-30: Query-retention frontier and uncontrolled Desktop pair
+
+The scalar retention experiment now passes 66 shared-cache no/yes/no transitions
+across 22 cases against fresh native references (264 compiler invocations with
+incremental fingerprint verification and exact diagnostics/runtime). The empty
+lint-owner setup candidate separately passes 22 cases, 88 native invocations.
+These are finite correctness gates, not full-IR retention or speedup evidence.
+
+The comprehensive scalar baseline stopped at 22/40 points with seven failures,
+including pinned tool-description assertions, context-sensitive and UI failures.
+A named full-test baseline also failed because DEPCACHE=0 correctly disables
+the wrapper that its pinned test unconditionally unwraps. Neither was accepted.
+The named harness now rejects unexpected failed tests and historical comparisons
+containing them, instead of printing a note and accepting a timing result.
+
+A prospective check-only Desktop pair completed three measured body edits per
+mode with one frozen compiler/client and only the scalar flag changed. Off run
+`20261029-220342124-3169100682` is among the baseline samples; on run
+`20261029-220833457-3235606297` is among the candidate samples.
+`bench/suite.py compare` observes 2.79s off versus 3.17s
+on (+14%), explicitly **uncontrolled** because all six samples were noisy.
+The first baseline sample had four foreign rustc processes and 7.67 other cores.
+This does not establish a causal slowdown or improvement. No default promotion.
+Exact reports and limitations are in `docs/query-retention-benchmark-20261030.md`;
+62 private experiment runs were exported to the separate
+`data/runs/xps14-query-retention-20261030/` directory.

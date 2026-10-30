@@ -1,0 +1,59 @@
+{
+  "scope": "desktop-check-desktop-body-check-only",
+  "status": "completed",
+  "started": 1793336250.8920083,
+  "identities": {
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/home/toolchains/staged/jr-50f30aea8dbb/bin/rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/home/toolchains/staged/jr-50f30aea8dbb/lib/librustc_driver-e2bd696299265a4a.so": "502401b14a878674fddf862e4fe7c7dca0948da8a7b8e8aefd3543ffd57a0eb7"
+  },
+  "runs": {
+    "no": {
+      "command": [
+        "python3",
+        "-u",
+        "bench/suite.py",
+        "run",
+        "desktop-body-check",
+        "-n",
+        "3",
+        "--warmup",
+        "1",
+        "--quiet-wait",
+        "30",
+        "--toolchain",
+        "jr-50f30aea8dbb",
+        "-o",
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-no.json"
+      ],
+      "rustflags": "-Zjr-cache-small-query-values=no",
+      "output": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-no.json",
+      "status": 0
+    },
+    "yes": {
+      "command": [
+        "python3",
+        "-u",
+        "bench/suite.py",
+        "run",
+        "desktop-body-check",
+        "-n",
+        "3",
+        "--warmup",
+        "1",
+        "--quiet-wait",
+        "30",
+        "--toolchain",
+        "jr-50f30aea8dbb",
+        "-o",
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-yes.json"
+      ],
+      "rustflags": "-Zjr-cache-small-query-values=yes",
+      "output": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-yes.json",
+      "status": 0
+    }
+  },
+  "mode": "yes",
+  "compare_status": 0,
+  "finished": 1793336950.684315
+}

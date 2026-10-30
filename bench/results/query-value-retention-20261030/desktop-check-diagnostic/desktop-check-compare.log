@@ -1,0 +1,5 @@
+A /home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-no.json (justrust dcea30c03d07)
+B /home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-yes.json (justrust af00a39c837e)
+scenario                       A med   B med   delta      %  verdict
+desktop-body-check              2.79    3.17   +0.39   +14%  uncontrolled (noisy or unknown samples)
+exit overhead (med/max)      0.030/0.039s -> 0.027/0.039s

@@ -136,3 +136,34 @@ launcher state are retained in
 These are failure evidence only, not an accepted speed measurement. A future
 diagnostic must use a workload compatible with its cache controls or explicitly
 declare a different matched configuration before running both modes.
+
+## Completed check-only diagnostic, not promotion evidence
+
+A prospective matched pair used `desktop-body-check -n 3 --warmup 1`, the
+original frozen scalar compiler/client, the same disabled artifact/result
+caches and execution roots, and only the scalar flag changed. Every measured
+check succeeded and compiled one local unit. Both source edits were restored
+by the suite's normal `finally` path. The discarded preparation checks compiled
+887 units each; their 276.91/161.26-second walls are not edit-loop samples.
+
+`bench/suite.py compare` reports:
+
+```text
+scenario                       A med   B med   delta      %  verdict
+desktop-body-check              2.79    3.17   +0.39   +14%  uncontrolled (noisy or unknown samples)
+```
+
+All six measured samples were noisy. For example, the first baseline sample
+recorded four foreign compiler processes before execution and 7.67 other cores
+of concurrent work. The observed difference is **not** evidence that retention
+causes a slowdown or improvement. This diagnostic supplies no reason to promote
+the flag. The broad session-weighted baseline remains blocked as described above.
+
+The exact pair, compare output, launcher state/commands and input hashes are
+retained under
+`bench/results/query-value-retention-20261030/desktop-check-diagnostic/`.
+Its frozen executable and driver hashes were unchanged before/after the pair.
+Benchmark repository HEAD changed during unrelated work and is recorded on each
+side; it is not the frozen client revision. Private experiment run summaries
+were exported from the repository root to
+`data/runs/xps14-query-retention-20261030/`, separately from other agents' exports.

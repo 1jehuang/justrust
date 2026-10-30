@@ -1,0 +1,9 @@
+bench: desktop-body-check (1/1)
+  desktop-body-check 1/4: 161.26s compile 160.73s units 887 id 20261029-220448714-3235606217 noisy (warmup)
+  desktop-body-check 2/4: 3.04s compile 2.64s units 1 id 20261029-220800162-3235606979 noisy
+  desktop-body-check 3/4: 3.17s compile 2.60s units 1 id 20261029-220833457-3235606297 noisy
+  desktop-body-check 4/4: 3.37s compile 2.72s units 1 id 20261029-220906895-3235606394 noisy
+scenario                      median     min     max   n   quiet 1st err  start compile  tests  front codegen   incr   link units
+desktop-body-check              3.17    3.04    3.37   3       -       -   0.51    2.64   0.00   1.88    0.00   0.16   0.00     1
+
+saved /home/jeremy/.jcode/scratch/query-retention-bench-20261030/desktop-check-yes.json

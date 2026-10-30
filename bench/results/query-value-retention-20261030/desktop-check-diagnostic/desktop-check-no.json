@@ -1,0 +1,220 @@
+{
+ "started": "2026-10-29T21:57:31-0700",
+ "env": {
+  "host": "xps14",
+  "cpu": "Intel(R) Core(TM) Ultra X9 388H",
+  "ncpu": 16,
+  "mem_gb": 62.3,
+  "kernel": "7.2.11-arch1-1",
+  "foreign_rustc_policy": "proc-stat-live-excluding-Z-X-x-conservative-exit-v2",
+  "justrust": "justrust 0.1.0-alpha.19",
+  "justrust_rev": "dcea30c03d07",
+  "benchmark_repo_rev": "dcea30c03d07",
+  "justrust_binary_revision": null,
+  "justrust_revision_source": "repository HEAD, not binary revision",
+  "justrust_binary_sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+  "justrust_dirty": true,
+  "rustc": "rustc 1.101.0-nightly (50f30aea8 2026-10-14)",
+  "toolchain": "jr-50f30aea8dbb",
+  "optimization_env": {
+   "JUSTRUST_LOCALCACHE": "0"
+  },
+  "runtime_context": {
+   "policy": "inherited"
+  },
+  "rustc_threads": null,
+  "workspace_threads": null,
+  "pass_times": false,
+  "miniz_opt_level": null,
+  "cargo": "cargo 1.99.1 (5f94df478 2026-08-27) (Arch Linux rust 1:1.99.1-1)",
+  "governor": "powersave",
+  "on_ac": "1",
+  "snapshots": {
+   "desktop": {
+    "jcode-desktop": "7d38fb7",
+    "jcode": "abff94eeb"
+   },
+   "justrust": {
+    "justrust": "f97fcc2"
+   }
+  },
+  "execution": "local",
+  "hosted_early": false
+ },
+ "runs_per_scenario": 3,
+ "scenarios": {
+  "desktop-body-check": {
+   "what": "same body edit, `check` only (the inner type-check loop)",
+   "cmd": [
+    "check",
+    "-p",
+    "jcode-desktop-ui"
+   ],
+   "expect_test_fail": false,
+   "samples": [
+    {
+     "id": "20261029-220308981-3169100242",
+     "wall": 2.919,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 2.895,
+     "cpu": 3.17,
+     "startup": 0.347,
+     "compile": 2.513,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 1.88,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.12,
+      "other": 0.498
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 7.67,
+     "foreign_rustc_before": 4,
+     "load_before": 21.29,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui",
+     "workspace_frontend_threads": 8
+    },
+    {
+     "id": "20261029-220342124-3169100682",
+     "wall": 2.738,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 2.708,
+     "cpu": 3.0,
+     "startup": 0.259,
+     "compile": 2.42,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 1.751,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.13,
+      "other": 0.525
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 5.64,
+     "foreign_rustc_before": 0,
+     "load_before": 14.91,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui",
+     "workspace_frontend_threads": 8
+    },
+    {
+     "id": "20261029-220415147-3169100741",
+     "wall": 2.786,
+     "first_error": null,
+     "first_fail": null,
+     "early": null,
+     "recorded_wall": 2.747,
+     "cpu": 3.0,
+     "startup": 0.347,
+     "compile": 2.369,
+     "test_run": 0.0,
+     "units": 1,
+     "local_units": 1,
+     "dep_units": 0,
+     "reuse": {
+      "compiled": 1,
+      "fresh": 743,
+      "depcache_hits": 0,
+      "depcache_misses": 0,
+      "depcache_saved_secs": 0.0,
+      "script_hits": 0,
+      "script_saved_secs": 0.0,
+      "slot_refreshed_units": 0,
+      "local_hits": 0,
+      "local_saved_secs": -0.0
+     },
+     "split": {
+      "frontend": 1.76,
+      "codegen": 0.0,
+      "link": 0.0,
+      "incremental": 0.146,
+      "other": 0.444
+     },
+     "link_secs": 0.0,
+     "hotpatch": null,
+     "tests_passed": 0,
+     "tests_failed": 0,
+     "other_cores": 6.99,
+     "foreign_rustc_before": 0,
+     "load_before": 14.46,
+     "noisy": true,
+     "top_unit": "jcode_desktop_ui",
+     "workspace_frontend_threads": 8
+    }
+   ],
+   "stats": {
+    "first_fail": null,
+    "first_fail_min": null,
+    "first_fail_max": null,
+    "n": 3,
+    "first_error": null,
+    "first_error_min": null,
+    "first_error_max": null,
+    "median": 2.786,
+    "min": 2.738,
+    "max": 2.919,
+    "quiet_n": 0,
+    "quiet_median": 0.0,
+    "phases": {
+     "startup": 0.347,
+     "compile": 2.42,
+     "test_run": 0.0,
+     "cpu": 3.0,
+     "link_secs": 0.0
+    },
+    "split": {
+     "frontend": 1.76,
+     "codegen": 0.0,
+     "link": 0.0,
+     "incremental": 0.13,
+     "other": 0.498
+    },
+    "units": 1
+   }
+  }
+ },
+ "finished": "2026-10-29T22:04:17-0700"
+}
