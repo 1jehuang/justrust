@@ -708,7 +708,14 @@ impl Module {
         acc: &mut Vec<AnyDiagnostic<'db>>,
         style_lints: bool,
     ) {
-        crate::diagnostics::DiagnosticsCollector::collect(db, self.id, acc, style_lints, None);
+        crate::diagnostics::DiagnosticsCollector::collect(
+            db,
+            self.id,
+            acc,
+            style_lints,
+            None,
+            None,
+        );
     }
 
     /// Fills `acc` with the module's diagnostics, of the bodies only those `bodies` asks for:
@@ -721,7 +728,35 @@ impl Module {
         bodies: &dyn Fn(DefWithBody) -> bool,
     ) {
         let bodies = Some(bodies);
-        crate::diagnostics::DiagnosticsCollector::collect(db, self.id, acc, style_lints, bodies);
+        crate::diagnostics::DiagnosticsCollector::collect(
+            db,
+            self.id,
+            acc,
+            style_lints,
+            bodies,
+            None,
+        );
+    }
+
+    /// The same diagnostic walk with optional caller-owned, bounded category totals.
+    /// `None` reads no collector clock. Counts and cumulative nanoseconds are inclusive,
+    /// not timeline events or a critical-path sum. Existing rows are accumulated by label.
+    pub fn diagnostics_with_collector_timings<'db>(
+        self,
+        db: &'db dyn HirDatabase,
+        acc: &mut Vec<AnyDiagnostic<'db>>,
+        style_lints: bool,
+        bodies: Option<&dyn Fn(DefWithBody) -> bool>,
+        timings: Option<&mut Vec<diagnostics::CollectorTiming>>,
+    ) {
+        crate::diagnostics::DiagnosticsCollector::collect(
+            db,
+            self.id,
+            acc,
+            style_lints,
+            bodies,
+            timings,
+        );
     }
 
     pub fn declarations(self, db: &dyn HirDatabase) -> Vec<ModuleDef> {

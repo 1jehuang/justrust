@@ -753,7 +753,122 @@ pub struct ReturnOutsideFunction {
     pub kind: ReturnKind,
 }
 
-pub(crate) struct DiagnosticsCollector<'a, 'db> {
+/// Actual elapsed collector work, aggregated without manufacturing timeline intervals.
+/// Categories are inclusive and can nest, including recursively within the same category.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CollectorTiming {
+    pub label: &'static str,
+    pub calls: u64,
+    pub cumulative_ns: u128,
+}
+
+const COLLECTOR_LABELS: [&str; 16] = [
+    "hir.collect.module_inclusive",
+    "hir.collect.item_case",
+    "hir.collect.signature_generic_inclusive",
+    "hir.collect.signature_fields_inclusive",
+    "hir.collect.wellformed",
+    "hir.collect.impl_inclusive",
+    "hir.collect.selected_body_inclusive",
+    "hir.collect.body_expr_inclusive",
+    "hir.collect.body_inference_inclusive",
+    "hir.collect.missing_unsafe",
+    "hir.collect.body_validation",
+    "hir.collect.body_borrowck",
+    "hir.collect.signature_anon_inference_inclusive",
+    "hir.collect.signature_setup_inclusive",
+    "hir.collect.impl_checks_inclusive",
+    "hir.collect.signature_anon_borrowck",
+];
+
+struct CollectorInventory {
+    totals: [std::cell::Cell<(u64, u128)>; COLLECTOR_LABELS.len()],
+}
+
+impl CollectorInventory {
+    fn new() -> Self {
+        Self { totals: std::array::from_fn(|_| std::cell::Cell::new((0, 0))) }
+    }
+
+    fn append(&self, output: &mut Vec<CollectorTiming>) {
+        for (label, total) in COLLECTOR_LABELS.into_iter().zip(&self.totals) {
+            let (calls, cumulative_ns) = total.get();
+            if calls == 0 {
+                continue;
+            }
+            if let Some(row) = output.iter_mut().find(|row| row.label == label) {
+                row.calls = row.calls.saturating_add(calls);
+                row.cumulative_ns = row.cumulative_ns.saturating_add(cumulative_ns);
+            } else {
+                output.push(CollectorTiming { label, calls, cumulative_ns });
+            }
+        }
+    }
+}
+
+/// Not Send: start, finish and accumulation stay on the actual collector thread.
+struct CollectorInterval<'a> {
+    target: Option<(&'a std::cell::Cell<(u64, u128)>, std::time::Instant)>,
+}
+
+impl<'a> CollectorInterval<'a> {
+    fn enter(inventory: Option<&'a CollectorInventory>, category: usize) -> Self {
+        Self::with_clock(inventory, category, std::time::Instant::now)
+    }
+
+    fn with_clock(
+        inventory: Option<&'a CollectorInventory>,
+        category: usize,
+        clock: impl FnOnce() -> std::time::Instant,
+    ) -> Self {
+        Self { target: inventory.map(|inventory| (&inventory.totals[category], clock())) }
+    }
+}
+
+impl Drop for CollectorInterval<'_> {
+    fn drop(&mut self) {
+        if let Some((total, started)) = self.target {
+            let elapsed = started.elapsed().as_nanos();
+            let (calls, ns) = total.get();
+            total.set((calls.saturating_add(1), ns.saturating_add(elapsed)));
+        }
+    }
+}
+
+#[cfg(test)]
+mod resident_collector_subphases_tests {
+    use super::*;
+
+    #[test]
+    fn resident_collector_subphases_disabled_no_clock_helper() {
+        let interval = CollectorInterval::with_clock(None, 0, || {
+            panic!("disabled collector must not read the clock")
+        });
+        assert!(interval.target.is_none());
+        drop(interval);
+    }
+
+    #[test]
+    fn resident_collector_subphases_actual_scopes_bounded_inventory() {
+        let inventory = CollectorInventory::new();
+        for _ in 0..4096 {
+            let _outer = CollectorInterval::enter(Some(&inventory), 0);
+            let _inner = CollectorInterval::enter(Some(&inventory), 1);
+        }
+        let mut rows = Vec::new();
+        inventory.append(&mut rows);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].label, "hir.collect.module_inclusive");
+        assert_eq!(rows[1].label, "hir.collect.item_case");
+        assert!(rows.iter().all(|row| row.calls == 4096 && row.cumulative_ns > 0));
+        assert!(rows[0].cumulative_ns >= rows[1].cumulative_ns);
+        inventory.append(&mut rows);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.calls == 8192));
+    }
+}
+
+pub(crate) struct DiagnosticsCollector<'a, 'db, 'timing> {
     db: &'db dyn HirDatabase,
     krate: base_db::Crate,
     edition: Edition,
@@ -761,6 +876,7 @@ pub(crate) struct DiagnosticsCollector<'a, 'db> {
     acc: &'a mut Vec<AnyDiagnostic<'db>>,
     /// The bodies whose diagnostics are asked for, when not all of them are.
     bodies: Option<&'a dyn Fn(crate::DefWithBody) -> bool>,
+    timings: Option<&'timing CollectorInventory>,
 }
 
 fn precise_macro_call_location(
@@ -793,18 +909,31 @@ fn precise_macro_call_location(
     }
 }
 
-impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
+impl<'a, 'db> DiagnosticsCollector<'a, 'db, '_> {
     pub(crate) fn collect(
         db: &'db dyn HirDatabase,
         module: ModuleId,
         acc: &'a mut Vec<AnyDiagnostic<'db>>,
         style_lints: bool,
         bodies: Option<&'a dyn Fn(crate::DefWithBody) -> bool>,
+        timings: Option<&mut Vec<CollectorTiming>>,
     ) {
+        let inventory = timings.as_ref().map(|_| CollectorInventory::new());
         let krate = module.krate(db);
         let edition = krate.data(db).edition;
-        DiagnosticsCollector { db, krate, edition, style_lints, acc, bodies }
-            .collect_module(module);
+        DiagnosticsCollector {
+            db,
+            krate,
+            edition,
+            style_lints,
+            acc,
+            bodies,
+            timings: inventory.as_ref(),
+        }
+        .collect_module(module);
+        if let (Some(inventory), Some(output)) = (inventory, timings) {
+            inventory.append(output);
+        }
     }
 
     fn emit_def_diagnostic(&mut self, diag: &DefDiagnosticKind) {
@@ -912,6 +1041,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn emit_case_diagnostics(&mut self, def: ModuleDefId) {
+        let _timing = CollectorInterval::enter(self.timings, 1);
         self.acc
             .extend(hir_ide::diagnostics::incorrect_case(self.db, def).into_iter().map(Into::into));
     }
@@ -953,10 +1083,12 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn collect_trait(&mut self, def: TraitId, def_map: &DefMap) {
+        let signature_timing = CollectorInterval::enter(self.timings, 13);
         let (signature, source_map) = TraitSignature::with_source_map(self.db, def);
         let items = TraitItems::query_with_diagnostics(self.db, def);
 
         self.collect_generic_def(&signature.store, source_map, def.into());
+        drop(signature_timing);
         self.collect_wfcheck(def.into());
         self.emit_def_diagnostics(&items.1);
         items.0.macro_calls().for_each(|(_, call)| self.collect_macro_call(call));
@@ -970,6 +1102,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         def_map: &'db DefMap,
         impl_assoc_items_scratch: &mut Vec<(Name, AssocItemId)>,
     ) {
+        let _timing = CollectorInterval::enter(self.timings, 5);
         let (impl_signature, source_map) = ImplSignature::with_source_map(self.db, def);
         let impl_items = ImplItems::of(self.db, def);
 
@@ -978,6 +1111,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         impl_items.0.macro_calls().for_each(|(_, call)| self.collect_macro_call(call));
         self.collect_assoc_items(&impl_items.0.items, def_map);
 
+        let _checks_timing = CollectorInterval::enter(self.timings, 14);
         let loc = def.lookup(self.db);
 
         let file_id = loc.id.file_id;
@@ -1167,6 +1301,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn collect_module(&mut self, def: ModuleId) {
+        let _timing = CollectorInterval::enter(self.timings, 0);
         let _p = tracing::info_span!("diagnostics", name = ?def.name(self.db)).entered();
 
         let def_map = def.def_map(self.db);
@@ -1218,11 +1353,14 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn collect_anon_const(&mut self, source_map: &ExpressionStoreSourceMap, def: AnonConstId<'db>) {
-        self.emit_inference_errors(
-            def.into(),
-            source_map,
-            TypeOwnerId::from_anon_const(def, self.db),
-        );
+        {
+            let _timing = CollectorInterval::enter(self.timings, 12);
+            self.emit_inference_errors(
+                def.into(),
+                source_map,
+                TypeOwnerId::from_anon_const(def, self.db),
+            );
+        }
         self.collect_anon_const_borrowck(source_map, def);
     }
 
@@ -1231,6 +1369,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         source_map: &ExpressionStoreSourceMap,
         def: AnonConstId<'db>,
     ) {
+        let _timing = CollectorInterval::enter(self.timings, 15);
         use hir_ide::mir::MirSpan;
         let result = hir_ty_borrowck::borrowck_anon_const(self.db, def);
         for diagnostic in &result.diagnostics {
@@ -1305,6 +1444,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         source_map: &ExpressionStoreSourceMap,
         def: GenericDefId,
     ) {
+        let _timing = CollectorInterval::enter(self.timings, 2);
         self.collect_expr_store(store, source_map);
         for (anon_consts, diagnostics) in signature_anon_consts_and_diagnostics(self.db, def) {
             self.collect_anon_consts_and_ty_diagnostics(source_map, anon_consts, diagnostics);
@@ -1315,12 +1455,20 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         if self.bodies.is_some_and(|asked| !asked(def.into())) {
             return;
         }
+        let _timing = CollectorInterval::enter(self.timings, 6);
         let (body, source_map) = Body::with_source_map(self.db, def);
 
-        self.collect_expr_store(body, source_map);
-        self.emit_inference_errors(def.into(), source_map, type_owner);
+        {
+            let _timing = CollectorInterval::enter(self.timings, 7);
+            self.collect_expr_store(body, source_map);
+        }
+        {
+            let _timing = CollectorInterval::enter(self.timings, 8);
+            self.emit_inference_errors(def.into(), source_map, type_owner);
+        }
 
         // FIXME: Missing unsafe and body validation should be defined for any `InferBodyId`.
+        let unsafe_timing = CollectorInterval::enter(self.timings, 9);
         let missing_unsafe = hir_ide::diagnostics::missing_unsafe(self.db, def);
         for (node, reason) in missing_unsafe.unsafe_exprs {
             match source_map.expr_or_pat_syntax(node) {
@@ -1356,10 +1504,13 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
             }
         }
 
+        drop(unsafe_timing);
+        let validation_timing = CollectorInterval::enter(self.timings, 10);
         for diagnostic in BodyValidationDiagnostic::collect(self.db, def, self.style_lints) {
             self.acc
                 .extend(AnyDiagnostic::body_validation_diagnostic(self.db, diagnostic, source_map));
         }
+        drop(validation_timing);
         self.collect_borrowck(def, body, source_map);
     }
 
@@ -1369,6 +1520,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         body: &Body,
         source_map: &hir_def::expr_store::BodySourceMap,
     ) {
+        let _timing = CollectorInterval::enter(self.timings, 11);
         use hir_ide::mir::MirSpan;
         let result = hir_ty_borrowck::borrowck(self.db, def);
         // An `async fn`'s body is the future it makes, which rustc points at as its block.
@@ -1506,6 +1658,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn collect_variant(&mut self, def: VariantId) {
+        let _timing = CollectorInterval::enter(self.timings, 3);
         let (fields, source_map) = def.fields_with_source_map(self.db);
         self.collect_expr_store(&fields.store, source_map);
 
@@ -1521,10 +1674,12 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
         &mut self,
         def: impl Into<GenericDefId> + Into<DefWithBodyId> + Copy,
     ) {
+        let signature_timing = CollectorInterval::enter(self.timings, 13);
         let generic_def: GenericDefId = def.into();
         let (signature_store, signature_source_map) =
             ExpressionStore::with_source_map(self.db, generic_def.into());
         self.collect_generic_def(signature_store, signature_source_map, generic_def);
+        drop(signature_timing);
 
         let def_with_body: DefWithBodyId = def.into();
         self.collect_def_with_body(def_with_body, generic_def.into());
@@ -1534,15 +1689,18 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn collect_generic_variant(&mut self, def: impl Into<GenericDefId> + Into<VariantId> + Copy) {
+        let signature_timing = CollectorInterval::enter(self.timings, 13);
         let generic_def: GenericDefId = def.into();
         let (store, source_map) = ExpressionStore::with_source_map(self.db, generic_def.into());
         self.collect_generic_def(store, source_map, generic_def);
+        drop(signature_timing);
         self.collect_variant(def.into());
         self.collect_wfcheck(generic_def);
     }
 
     /// rustc's well-formedness errors of an ADT or an impl, reported as the borrow checker's.
     fn collect_wfcheck(&mut self, def: GenericDefId) {
+        let _timing = CollectorInterval::enter(self.timings, 4);
         use hir_ty_wfcheck::Site;
         let db = self.db;
         for diagnostic in &hir_ty_wfcheck::wfcheck(db, def).diagnostics {
@@ -1662,6 +1820,7 @@ impl<'a, 'db> DiagnosticsCollector<'a, 'db> {
     }
 
     fn collect_only_generic_def(&mut self, def: impl Into<GenericDefId>) {
+        let _timing = CollectorInterval::enter(self.timings, 13);
         let generic_def: GenericDefId = def.into();
         let (store, source_map) = ExpressionStore::with_source_map(self.db, generic_def.into());
         self.collect_generic_def(store, source_map, generic_def);

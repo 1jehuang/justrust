@@ -7005,6 +7005,7 @@ fn errors_of(
     let semantic_phase = DiagnosticsPhase::new("diagnostics.semantic_inclusive_asked");
     let diagnostics = if diagnostics_telemetry_enabled() {
         let mut intervals = Vec::with_capacity(5);
+        let mut collector_timings = Vec::new();
         let diagnostics = ide_diagnostics::semantic_diagnostics_of_bodies_with_timings(
             db,
             config,
@@ -7013,7 +7014,16 @@ fn errors_of(
             within,
             &asked,
             Some(&mut intervals),
+            Some(&mut collector_timings),
         );
+        // Actual elapsed category totals, not timeline spans. Categories nest and
+        // must not be summed as a critical path. No per-body trace transport cost.
+        for row in collector_timings {
+            eprintln!(
+                "diagnostics collector: label={} calls={} cumulative_ns={} inclusive=true",
+                row.label, row.calls, row.cumulative_ns,
+            );
+        }
         // Convert on the same caller thread as the actual measured intervals.
         let mut details = DIAGNOSTICS_DETAILS.lock().unwrap_or_else(|it| it.into_inner());
         for (name, start, end) in intervals {

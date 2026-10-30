@@ -19,6 +19,10 @@ use crate::{DiagnosticsConfig, Severity};
 /// Compare every Debug-visible diagnostic field, including fixes and main-node pointers.
 /// Diagnostic deliberately has no PartialEq implementation.
 fn resident_semantic_subphases_compare(selection: usize, disabled: bool) {
+    resident_collector_subphases_compare(selection, disabled, false);
+}
+
+fn resident_collector_subphases_compare(selection: usize, disabled: bool, collector: bool) {
     use std::{cell::RefCell, time::Instant};
 
     let (db, file_id) = RootDatabase::with_single_file(
@@ -54,6 +58,7 @@ fn second() { let _: bool = 42; }
         let callback_intervals = RefCell::new(Vec::new());
         let before = Instant::now();
         let mut intervals = vec![("sentinel", before, before)];
+        let mut inventory = Vec::new();
         let new = super::semantic_diagnostics_of_bodies_with_timings(
             &db,
             &config,
@@ -73,11 +78,43 @@ fn second() { let _: bool = 42; }
                 selected
             },
             Some(&mut intervals),
+            collector.then_some(&mut inventory),
         );
         let after = Instant::now();
         assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
         assert_eq!(*old_calls.borrow(), *new_calls.borrow());
         assert!(!new_calls.borrow().is_empty());
+        if collector {
+            assert!(inventory.len() <= 16);
+            for row in &inventory {
+                assert!(row.calls > 0, "{row:?}");
+                assert!(row.cumulative_ns > 0, "{row:?}");
+            }
+            let calls =
+                |label| inventory.iter().find(|row| row.label == label).map_or(0, |row| row.calls);
+            assert!(calls("hir.collect.module_inclusive") > 0);
+            assert!(calls("hir.collect.item_case") > 0);
+            assert!(calls("hir.collect.signature_generic_inclusive") > 0);
+            assert!(calls("hir.collect.signature_setup_inclusive") > 0);
+            let visited = new_calls.borrow().len() as u64;
+            let selected = match selection {
+                0 => 0,
+                1 => visited,
+                _ => visited.div_ceil(2),
+            };
+            for label in [
+                "hir.collect.selected_body_inclusive",
+                "hir.collect.body_expr_inclusive",
+                "hir.collect.body_inference_inclusive",
+                "hir.collect.missing_unsafe",
+                "hir.collect.body_validation",
+                "hir.collect.body_borrowck",
+            ] {
+                assert_eq!(calls(label), selected, "{label}");
+            }
+        } else {
+            assert!(inventory.is_empty());
+        }
         if selection == 1 && !disabled {
             assert!(new.iter().any(|diag| diag.code.as_str() == "E0308"));
         }
@@ -107,6 +144,116 @@ fn second() { let _: bool = 42; }
         for &(start, end) in callback_intervals.borrow().iter() {
             assert!(collect_start <= start && end <= collect_end);
         }
+    });
+}
+
+#[test]
+fn resident_collector_subphases_all_bodies_exact() {
+    resident_collector_subphases_compare(1, false, true);
+}
+
+#[test]
+fn resident_collector_subphases_no_bodies_exact() {
+    resident_collector_subphases_compare(0, false, true);
+}
+
+#[test]
+fn resident_collector_subphases_selective_bodies_exact() {
+    resident_collector_subphases_compare(2, false, true);
+}
+
+#[test]
+fn resident_collector_subphases_disabled_diagnostic_exact() {
+    resident_collector_subphases_compare(1, true, true);
+}
+
+#[test]
+fn resident_collector_subphases_disabled_clockfree_api_exact() {
+    resident_semantic_subphases_disabled_clockfree_api_exact();
+}
+
+#[test]
+fn resident_collector_subphases_hir_api_complete_debug_and_visitation() {
+    use std::cell::RefCell;
+
+    let (db, file_id) = RootDatabase::with_single_file(
+        r#"
+struct Bad_name { field: [u8; 1 + 1] }
+trait Tr { fn method(&self); }
+impl Tr for Bad_name { fn method(&self) { let _: u8 = "bad"; } }
+fn first() { let _: bool = 42; }
+mod nested { pub fn other() { let _: u32 = "nested"; } }
+"#,
+    );
+    let file_id = file_id.file_id(&db);
+    hir::attach_db(&db, || {
+        let sema = hir::Semantics::new(&db);
+        let module = sema.file_to_module_def(file_id).expect("fixture module");
+        for selection in 0..3 {
+            for enabled in [false, true] {
+                let old_calls = RefCell::new(Vec::new());
+                let new_calls = RefCell::new(Vec::new());
+                let select = |calls: &RefCell<Vec<hir::DefWithBody>>, body| {
+                    let mut calls = calls.borrow_mut();
+                    calls.push(body);
+                    match selection {
+                        0 => false,
+                        1 => true,
+                        _ => calls.len() % 2 == 1,
+                    }
+                };
+                let mut old = Vec::new();
+                module.diagnostics_of_bodies(&db, &mut old, true, &|body| select(&old_calls, body));
+                let mut new = Vec::new();
+                let mut inventory = Vec::new();
+                module.diagnostics_with_collector_timings(
+                    &db,
+                    &mut new,
+                    true,
+                    Some(&|body| select(&new_calls, body)),
+                    enabled.then_some(&mut inventory),
+                );
+                assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
+                assert_eq!(*old_calls.borrow(), *new_calls.borrow());
+                assert!(!old_calls.borrow().is_empty());
+                if enabled {
+                    assert!(inventory.len() <= 16);
+                    for label in [
+                        "hir.collect.item_case",
+                        "hir.collect.signature_generic_inclusive",
+                        "hir.collect.signature_fields_inclusive",
+                        "hir.collect.signature_anon_inference_inclusive",
+                        "hir.collect.signature_anon_borrowck",
+                        "hir.collect.wellformed",
+                        "hir.collect.impl_inclusive",
+                        "hir.collect.impl_checks_inclusive",
+                    ] {
+                        assert!(
+                            inventory.iter().any(|row| {
+                                row.label == label && row.calls > 0 && row.cumulative_ns > 0
+                            }),
+                            "missing actual work for {label}: {inventory:?}"
+                        );
+                    }
+                    if selection == 0 {
+                        assert!(
+                            !inventory
+                                .iter()
+                                .any(|row| row.label == "hir.collect.selected_body_inclusive")
+                        );
+                    }
+                } else {
+                    assert!(inventory.is_empty());
+                }
+            }
+        }
+        let mut old = Vec::new();
+        module.diagnostics(&db, &mut old, true);
+        let mut new = Vec::new();
+        let mut inventory = Vec::new();
+        module.diagnostics_with_collector_timings(&db, &mut new, true, None, Some(&mut inventory));
+        assert_eq!(format!("{old:#?}"), format!("{new:#?}"));
+        assert!(!inventory.is_empty());
     });
 }
 
@@ -151,6 +298,7 @@ fn resident_semantic_subphases_disabled_clockfree_api_exact() {
             file_id,
             None,
             &|_| true,
+            None,
             None,
         );
         assert_eq!(format!("{old:#?}"), format!("{new:#?}"));

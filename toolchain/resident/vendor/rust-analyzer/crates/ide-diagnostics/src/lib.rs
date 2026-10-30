@@ -393,7 +393,7 @@ pub fn semantic_diagnostics_within(
     file_id: FileId,
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
 ) -> Vec<Diagnostic> {
-    semantic_diagnostics_asked(db, config, resolve, file_id, within, None, None)
+    semantic_diagnostics_asked(db, config, resolve, file_id, within, None, None, None)
 }
 
 /// [`semantic_diagnostics_within`], of the bodies only those `bodies` asks for, for a caller
@@ -407,12 +407,14 @@ pub fn semantic_diagnostics_of_bodies(
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
     bodies: &dyn Fn(hir::DefWithBody) -> bool,
 ) -> Vec<Diagnostic> {
-    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), None)
+    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), None, None)
 }
 
 /// [`semantic_diagnostics_of_bodies`] with optional actual caller-thread phase intervals.
-/// Passing `None` reads no clock. Intervals include body-selection callbacks and append
-/// to rather than replace the output. An early return records only phases reached.
+/// Passing `None` for both outputs reads no instrumentation clock. Intervals include
+/// body-selection callbacks and append to rather than replace the output. An early
+/// return records only phases reached.
+/// Optional HIR totals are inclusive category inventories, never synthetic intervals.
 pub fn semantic_diagnostics_of_bodies_with_timings(
     db: &RootDatabase,
     config: &DiagnosticsConfig,
@@ -421,8 +423,18 @@ pub fn semantic_diagnostics_of_bodies_with_timings(
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
     bodies: &dyn Fn(hir::DefWithBody) -> bool,
     timings: Option<&mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
+    collector_timings: Option<&mut Vec<hir::diagnostics::CollectorTiming>>,
 ) -> Vec<Diagnostic> {
-    semantic_diagnostics_asked(db, config, resolve, file_id, within, Some(bodies), timings)
+    semantic_diagnostics_asked(
+        db,
+        config,
+        resolve,
+        file_id,
+        within,
+        Some(bodies),
+        timings,
+        collector_timings,
+    )
 }
 
 /// Caller-local recorder, including the active phase on an early return.
@@ -467,6 +479,7 @@ fn semantic_diagnostics_asked(
     within: Option<std::sync::Arc<ide_db::FxHashSet<ide_db::base_db::Crate>>>,
     bodies: Option<&dyn Fn(hir::DefWithBody) -> bool>,
     timings: Option<&mut Vec<(&'static str, std::time::Instant, std::time::Instant)>>,
+    collector_timings: Option<&mut Vec<hir::diagnostics::CollectorTiming>>,
 ) -> Vec<Diagnostic> {
     let _p = tracing::info_span!("semantic_diagnostics").entered();
     let mut phases = SemanticDiagnosticPhases::new(timings);
@@ -526,12 +539,13 @@ fn semantic_diagnostics_asked(
         // file, so we skip semantic diagnostics so we can show these faster.
         Some(m) => {
             if editioned_file_id.parse_errors(db).is_none_or(|es| es.len() < 16) {
-                match bodies {
-                    Some(bodies) => {
-                        m.diagnostics_of_bodies(db, &mut diags, config.style_lints, bodies)
-                    }
-                    None => m.diagnostics(db, &mut diags, config.style_lints),
-                }
+                m.diagnostics_with_collector_timings(
+                    db,
+                    &mut diags,
+                    config.style_lints,
+                    bodies,
+                    collector_timings,
+                );
             }
         }
         None => handlers::unlinked_file::unlinked_file(&ctx, &mut res, editioned_file_id),
