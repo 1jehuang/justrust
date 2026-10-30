@@ -126,7 +126,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -135,7 +135,11 @@ class HarnessTests(unittest.TestCase):
             edit_file='src/summary.rs', edit_test=NAME, edit_anchor='fn shares_overlapping_time() {',
             blaze_llvm=True, command='test', test_filter='summary::tests::', timeout=1,
             binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
-            owned_experiments=experiments, blaze_seed_cache=root / 'seed' if seeded else None)
+            owned_experiments=experiments, blaze_seed_cache=root / 'seed' if seeded else None,
+            wild=root / 'fake-wild' if experiments else None)
+        if args.wild:
+            args.wild.write_bytes(b'fake executable, never invoked')
+            args.wild.chmod(0o700)
         if seeded:
             args.blaze_seed_cache.mkdir()
             (args.blaze_seed_cache / 'test.pack').write_bytes(b'private seeded pack')
@@ -158,12 +162,20 @@ class HarnessTests(unittest.TestCase):
                 marker = re.search(rb'JR_RUNTIME_EXECUTED_\d+', contents).group().decode()
                 text = output(marker=marker)
             if command[0] == '/fake/justrust':
+                if args.wild:
+                    private_wild = Path(env['JUSTRUST_HOME']) / 'toolchains/linkers/wild-0.10.0/wild'
+                    self.assertEqual(private_wild.read_bytes(), args.wild.read_bytes())
+                    self.assertNotEqual(private_wild.stat().st_ino, args.wild.stat().st_ino)
                 recording = Path(env['JUSTRUST_HOME']) / 'runs' / f'run-{len(observed)}'
                 if raw_mode != 'missing':
                     recording.mkdir(parents=True)
                     raw = ''.join(json.dumps({'t': i, 's': 'o', 'l': line}) + '\n'
                                   for i, line in enumerate(text.splitlines()))
                     (recording / 'output.jsonl').write_text(raw if raw_mode == 'valid' else '{bad json')
+                    if prefix.name.endswith('-all4hotpatch') and journal:
+                        (recording / 'hotpatch.jsonl').write_text(json.dumps({
+                            'outcome': 'patched' if prefix.name.startswith('edit-') else 'full-link',
+                            'detail': 'synthetic test evidence', 'ms': .1}) + '\n')
                 text = 'justrust: condensed UI, no test names or diagnostics'
             prefix.with_suffix('.stdout').write_text(text)
             prefix.with_suffix('.stderr').write_text('')
@@ -177,7 +189,7 @@ class HarnessTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     h.execute(args)
             else:
-                self.assertEqual(h.execute(args), 1 if stale or raw_mode != 'valid' else 0)
+                self.assertEqual(h.execute(args), 1 if stale or raw_mode != 'valid' or (experiments and not journal) else 0)
         self.assertEqual(pinned.read_bytes(), ORIGINAL)
         self.assertEqual((args.output / 'source.original').read_bytes(), ORIGINAL)
         return observed
@@ -217,11 +229,36 @@ class HarnessTests(unittest.TestCase):
                     self.assertIn(f'{phase}-000-{stack}', phases)
                 self.assertEqual(sum(name.startswith('edit-') for name in phases), 2)
             metadata = json.loads((root / 'out/metadata.json').read_text())
+            self.assertEqual(set(metadata['wild_copies']), {'owned-off', 'all3on', 'all4on', 'all4hotpatch'})
+            self.assertEqual(metadata['identities_before']['wild'], metadata['identities_after']['wild'])
+            records = json.loads((root / 'out/records.json').read_text())
+            hotpatch = next(r['raw_output']['hotpatch'] for r in records
+                            if r['stack'] == 'all4hotpatch' and r['phase'] == 'edit')
+            self.assertEqual(hotpatch['outcomes'], ['patched'])
+            self.assertTrue((root / 'out' / hotpatch['artifact']).is_file())
             self.assertEqual(metadata['store_scope'], 'warm-store seeded')
             self.assertEqual(set(metadata['blaze_seed_manifests']), {'blaze', 'blaze-llvm'})
             for manifest in metadata['blaze_seed_manifests'].values():
                 self.assertEqual(manifest['files'], {'test.pack': h.base.digest(root / 'seed/test.pack')})
             self.assertEqual((root / 'seed/test.pack').read_bytes(), b'private seeded pack')
+
+    def test_hotpatch_without_journal_not_ranked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self.exercise(root, experiments=True, journal=False)
+            summary = json.loads((root / 'out/summary.json').read_text())
+            self.assertNotIn('all4hotpatch', summary['medians_seconds'])
+            self.assertIn('all4on', summary['medians_seconds'])
+
+    def test_hotpatch_journal_invalid_and_full_link_evidence(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / 'hotpatch.jsonl').write_text('{invalid')
+            with self.assertRaises(ValueError):
+                h.retained_hotpatch(root, root / 'bad')
+            self.assertTrue((root / 'bad.hotpatch.jsonl').is_file())
+            (root / 'hotpatch.jsonl').write_text(json.dumps({'outcome': 'full-link'}) + '\n')
+            self.assertEqual(h.retained_hotpatch(root, root / 'fallback')['outcomes'], ['full-link'])
 
     def test_seed_copy_preserves_source_and_rejects_unsafe_paths(self):
         with tempfile.TemporaryDirectory() as temp:

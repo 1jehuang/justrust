@@ -20,6 +20,8 @@ import time
 
 import blaze_edit_compare as base
 
+WILD_VERSION = '0.10.0'  # Shipping client's pinned src/linker.rs layout.
+
 PROFILES = {f'CARGO_PROFILE_{p}_{k}': v for p in ('DEV', 'TEST')
             for k, v in (('OPT_LEVEL', '0'), ('DEBUG', '0'), ('INCREMENTAL', 'true'))}
 ALLOW = base.ENV_LOG_ALLOWLIST | frozenset(PROFILES) | {'BLAZE_BACKEND', 'BLAZE_OPT', 'JUSTRUST_HOTPATCH'}
@@ -90,6 +92,44 @@ def run_process(command, cwd, env, prefix, timeout):
                 environment=logged_environment(env))
 
 
+def identities(args):
+    result = dict(base.identities(args))
+    if args.wild:
+        result['wild'] = {'path': str(args.wild), 'sha256': base.digest(args.wild)}
+    return result
+
+
+def install_wild(source, env):
+    source = Path(source)
+    if not source.is_file() or not os.access(source, os.X_OK):
+        raise ValueError('--wild must name an executable file')
+    destination = Path(env['JUSTRUST_HOME']) / 'toolchains/linkers' / f'wild-{WILD_VERSION}' / 'wild'
+    destination.parent.mkdir(mode=0o700, parents=True, exist_ok=False)
+    shutil.copy2(source, destination)
+    expected = base.digest(source)
+    if base.digest(destination) != expected:
+        raise ValueError('wild source changed while copying')
+    return {'source': str(source), 'path': str(destination), 'sha256': expected,
+            'version_layout': WILD_VERSION}
+
+
+def retained_hotpatch(root, prefix):
+    journal = root / 'hotpatch.jsonl'
+    if not journal.exists():
+        return {'present': False, 'outcomes': []}
+    raw = journal.read_bytes()
+    artifact = prefix.with_suffix('.hotpatch.jsonl')
+    with artifact.open('xb') as stream:
+        stream.write(raw)
+    entries = [json.loads(line) for line in raw.decode('utf-8').splitlines()]
+    if not entries or any(not isinstance(e, dict) or not isinstance(e.get('outcome'), str)
+                          for e in entries):
+        raise ValueError('invalid hotpatch journal')
+    return {'present': True, 'artifact': artifact.name,
+            'sha256': hashlib.sha256(raw).hexdigest(),
+            'outcomes': [e['outcome'] for e in entries]}
+
+
 def recorded_runs(env):
     """Snapshot only this stack's private recording home, never global last."""
     root = Path(env['JUSTRUST_HOME']) / 'runs'
@@ -121,7 +161,8 @@ def recorded_output(env, before, prefix):
     if not lines:
         raise ValueError('empty recorded output')
     return '\n'.join(lines) + '\n', {'run_id': run_id,
-        'artifact': artifact.name, 'sha256': hashlib.sha256(raw).hexdigest()}
+        'artifact': artifact.name, 'sha256': hashlib.sha256(raw).hexdigest(),
+        'hotpatch': retained_hotpatch(root, prefix)}
 
 
 def test_results(output):
@@ -233,10 +274,10 @@ def execute(args):
     records, medians = [], {}
     metadata = {'scope': 'scoped filtered tests, not full suite or general speed claim',
                 'source_before': source_hashes(args.source, args.output),
-                'identities_before': base.identities(args), 'profiles': PROFILES,
+                'identities_before': identities(args), 'profiles': PROFILES,
                 'samples': args.samples, 'stacks': stacks,
                 'store_scope': 'warm-store seeded' if args.blaze_seed_cache else 'unseeded private stores',
-                'blaze_seed_manifests': {},
+                'blaze_seed_manifests': {}, 'wild_copies': {},
                 'seed_source_before': seed_manifest(args.blaze_seed_cache) if args.blaze_seed_cache else None}
     expected = None
     def save():
@@ -257,6 +298,9 @@ def execute(args):
             try:
                 output, provenance = recorded_output(env, before_runs, prefix)
                 row['raw_output'] = provenance
+                if (stack == 'all4hotpatch' and phase in ('prepare', 'edit')
+                        and base.succeeded(row) and not provenance['hotpatch']['present']):
+                    row['error'] = 'hotpatch experiment produced no linker journal'
             except (OSError, ValueError, UnicodeError) as exc:
                 output = ''
                 row['raw_output_error'] = repr(exc)
@@ -292,6 +336,11 @@ def execute(args):
             else:
                 env = environment(args, stack)
             environments[stack] = env
+            if not stack.startswith('blaze') and args.wild:
+                metadata['wild_copies'][stack] = install_wild(args.wild, env)
+                if metadata['wild_copies'][stack]['sha256'] != metadata['identities_before']['wild']['sha256']:
+                    raise ValueError('wild identity changed between stacks')
+                save()
             if stack.startswith('blaze') and args.blaze_seed_cache:
                 metadata['blaze_seed_manifests'][stack] = seed_cache(
                     args.blaze_seed_cache, Path(env['BLAZE_CACHE']))
@@ -345,9 +394,13 @@ def execute(args):
         metadata['source_after'] = source_hashes(args.source, args.output)
         metadata['source_restored'] = pinned.read_bytes() == original
         try:
-            metadata['identities_after'] = base.identities(args)
+            metadata['identities_after'] = identities(args)
+            metadata['wild_copy_hashes_after'] = {stack: base.digest(item['path'])
+                for stack, item in metadata['wild_copies'].items()}
+            copies_valid = all(metadata['wild_copy_hashes_after'][stack] == item['sha256']
+                               for stack, item in metadata['wild_copies'].items())
             metadata['seed_source_after'] = seed_manifest(args.blaze_seed_cache) if args.blaze_seed_cache else None
-            valid = (metadata['source_before'] == metadata['source_after'] and
+            valid = (copies_valid and metadata['source_before'] == metadata['source_after'] and
                      metadata['identities_before'] == metadata['identities_after'] and
                      metadata['seed_source_before'] == metadata['seed_source_after'])
         except Exception as exc:
@@ -360,6 +413,10 @@ def execute(args):
         (args.output / 'summary.json').write_text(json.dumps({
             'medians_seconds': medians, 'excluded': [s for s in stacks if s not in medians],
             'store_scope': metadata['store_scope'],
+            'edit_hotpatch_outcomes': {stack: [outcome for row in records
+                if row['stack'] == stack and row['phase'] == 'edit'
+                for outcome in row.get('raw_output', {}).get('hotpatch', {}).get('outcomes', [])]
+                for stack in stacks if stack == 'all4hotpatch'},
             'policy': 'Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only.'}, indent=2) + '\n')
     return 0 if len(medians) == len(stacks) else 1
 
@@ -368,6 +425,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for key in ('source', 'output', 'blaze', 'justrust', 'rustc', 'cargo'):
         parser.add_argument('--' + key, required=True, type=lambda s: Path(s).expanduser().resolve())
+    parser.add_argument('--wild', type=lambda s: Path(s).expanduser().resolve(),
+                        help='copy this linker into every private owned toolchain home')
     parser.add_argument('--samples', type=int, default=5)
     parser.add_argument('--command', choices=('test', 'build'), default='test')
     parser.add_argument('--binary', default='justrust')
@@ -382,6 +441,8 @@ def main():
                         help='copy a private successful store into each fresh Blaze cache; warm-store scope only')
     parser.add_argument('--timeout', type=float, default=360)
     args = parser.parse_args()
+    if args.owned_experiments and not args.wild:
+        parser.error('--owned-experiments requires --wild so hotpatch is not inert')
     if args.samples < 1 or args.timeout <= 0:
         parser.error('samples and timeout must be positive')
     if Path(args.edit_file).is_absolute() or '..' in Path(args.edit_file).parts:
