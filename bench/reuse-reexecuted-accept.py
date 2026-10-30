@@ -16,7 +16,7 @@ _spec.loader.exec_module(_helpers)
 run, digest, compare = _helpers.run, _helpers.digest, _helpers.compare
 
 MARKER_FILTER = 'generic-activity,function-args'
-MARKERS = tuple('jr_incremental_' + family + '_' + outcome
+MARKERS = tuple('jr_incremental_provider_' + family + '_' + outcome
                 for family in ('reexecuted', 'eval_always')
                 for outcome in ('same_value', 'different_value', 'no_hash'))
 BASE = '''#![allow(dead_code)]
@@ -67,14 +67,15 @@ def validate_counts(observations):
     # This fixture must exercise real retrospective ordinary equality and change.
     # Other families may be absent; absence never becomes zero-work evidence.
     for suffix in ('same_value', 'different_value'):
-        if not totals['jr_incremental_reexecuted_' + suffix]:
+        if not totals['jr_incremental_provider_reexecuted_' + suffix]:
             raise AssertionError('Missing native ordinary ' + suffix + ' evidence')
     return dict(totals)
 
 
 def capture(rustc, root):
     root.mkdir(mode=0o700, parents=False, exist_ok=False)
-    report = dict(schema=1, scope='retrospective-reexecuted-value-classification-only',
+    report = dict(schema=2, scope='provider-only-retrospective-reexecuted-value-classification',
+                  allocation_origin='query-provider-only-feed-and-nonquery-tasks-excluded',
                   verify_ich=True, self_profile_events=MARKER_FILTER, verdict='incomplete', observations=[],
                   provider_elapsed_ns=None, time_saved_ns=None, inputs_changed=None,
                   provider_avoidable=None, capture_complete=None)

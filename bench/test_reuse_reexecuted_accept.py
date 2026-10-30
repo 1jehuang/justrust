@@ -65,6 +65,30 @@ class ReexecutedAcceptanceTests(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, 'Fresh incremental'):
             accept.validate_counts([self.observation('initial', [same, different])])
 
+    def test_legacy_mixed_markers_do_not_establish_provider_coverage(self):
+        legacy = [marker.replace('jr_incremental_provider_', 'jr_incremental_')
+                  for marker in accept.MARKERS]
+        records = [dict(self.record(label), event_id=i) for i, label in enumerate(legacy)]
+        markers = accept.inventory(records, lambda i: legacy[i] + '\x1edef_kind')
+        self.assertTrue(all(value['interval_records'] is None for value in markers.values()))
+        observation = dict(name='body-edit', modes=dict(on=dict(profile=dict(markers=markers))))
+        with self.assertRaisesRegex(AssertionError, 'same_value'):
+            accept.validate_counts([observation])
+
+    def test_native_callers_explicitly_exclude_feed_and_nonquery_tasks(self):
+        # Structural regression check, supplemented by the direct native gate.
+        compiler = Path(__file__).resolve().parents[1] / 'toolchain/rustc/compiler'
+        graph = (compiler / 'rustc_middle/src/dep_graph/graph.rs').read_text()
+        execution = (compiler / 'rustc_query_impl/src/execution.rs').read_text()
+        self.assertIn('data.with_task_impl(dep_node, tcx, op, hash_result, false)', graph)
+        self.assertEqual(graph.count('self.with_task_impl(dep_node, tcx, op, hash_result, true)'), 1)
+        self.assertIn('data.hash_result_and_alloc_node(tcx, node, &reads, result, hash_result, false)', graph)
+        self.assertIn('if tcx.prof.enabled()\n            && provider_execution\n            && let Some(previous_index)', graph)
+        self.assertIn('|| (query.invoke_provider_fn)(tcx, key)', execution)
+        for marker in accept.MARKERS:
+            self.assertIn('"' + marker + '"', graph)
+            self.assertNotIn('"' + marker.replace('jr_incremental_provider_', 'jr_incremental_') + '"', graph)
+
     def test_matrix_has_real_edits_error_and_recovery(self):
         cases = accept.cases()
         self.assertEqual([c[0] for c in cases], ['initial', 'unchanged', 'body-edit', 'type-error', 'recovery'])

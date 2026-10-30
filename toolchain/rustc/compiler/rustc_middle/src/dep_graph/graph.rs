@@ -349,7 +349,7 @@ impl DepGraph {
         OP: FnOnce() -> R,
     {
         match self.data() {
-            Some(data) => data.with_task(dep_node, tcx, op, hash_result),
+            Some(data) => data.with_task_impl(dep_node, tcx, op, hash_result, false),
             None => (op(), self.next_virtual_depnode_index()),
         }
     }
@@ -375,6 +375,8 @@ impl DepGraph {
 }
 
 impl DepGraphData {
+    /// Run a query provider. The non-query `DepGraph::with_task` entry point
+    /// uses the same implementation without provider classification.
     #[inline(always)]
     pub fn with_task<'tcx, OP, R>(
         &self,
@@ -382,6 +384,21 @@ impl DepGraphData {
         tcx: TyCtxt<'tcx>,
         op: OP,
         hash_result: Option<fn(&mut StableHashState<'_>, &R) -> Fingerprint>,
+    ) -> (R, DepNodeIndex)
+    where
+        OP: FnOnce() -> R,
+    {
+        self.with_task_impl(dep_node, tcx, op, hash_result, true)
+    }
+
+    #[inline(always)]
+    fn with_task_impl<'tcx, OP, R>(
+        &self,
+        dep_node: DepNode,
+        tcx: TyCtxt<'tcx>,
+        op: OP,
+        hash_result: Option<fn(&mut StableHashState<'_>, &R) -> Fingerprint>,
+        provider_execution: bool,
     ) -> (R, DepNodeIndex)
     where
         OP: FnOnce() -> R,
@@ -406,8 +423,14 @@ impl DepGraphData {
         };
 
         let edges: &[DepNodeIndex] = task_deps.as_ref().map_or(&[], |deps| deps.edges());
-        let dep_node_index =
-            self.hash_result_and_alloc_node(tcx, dep_node, edges, &result, hash_result);
+        let dep_node_index = self.hash_result_and_alloc_node(
+            tcx,
+            dep_node,
+            edges,
+            &result,
+            hash_result,
+            provider_execution,
+        );
         if let Some(TaskDeps { reads: TaskReads::Recorded(recorder), .. }) = task_deps {
             recorder.release(&self.read_recorder_pool);
         }
@@ -502,27 +525,32 @@ impl DepGraphData {
         edges: &[DepNodeIndex],
         result: &R,
         hash_result: Option<fn(&mut StableHashState<'_>, &R) -> Fingerprint>,
+        provider_execution: bool,
     ) -> DepNodeIndex {
         let hashing_timer = tcx.prof.incr_result_hashing();
         let current_fingerprint = hash_result.map(|hash_result| {
             tcx.with_stable_hashing_context(|mut hcx| hash_result(&mut hcx, result))
         });
+        // Only the query-provider caller enables this classification. Feed and
+        // non-query task callers also hash/allocate here, but do not execute a
+        // query provider. Never label their supplied values as provider results.
         // Retrospective classification only: the provider has already executed.
         // Equality does not establish changed inputs or avoidable provider work.
         // Profiling off adds no previous-graph lookup or result hashing.
         if tcx.prof.enabled()
+            && provider_execution
             && let Some(previous_index) = self.previous.node_to_index_opt(&node)
         {
             let same_value = current_fingerprint.map(|fingerprint| {
                 fingerprint == self.previous.value_fingerprint_for_index(previous_index)
             });
             let label = match (tcx.is_eval_always(node.kind), same_value) {
-                (false, Some(true)) => "jr_incremental_reexecuted_same_value",
-                (false, Some(false)) => "jr_incremental_reexecuted_different_value",
-                (false, None) => "jr_incremental_reexecuted_no_hash",
-                (true, Some(true)) => "jr_incremental_eval_always_same_value",
-                (true, Some(false)) => "jr_incremental_eval_always_different_value",
-                (true, None) => "jr_incremental_eval_always_no_hash",
+                (false, Some(true)) => "jr_incremental_provider_reexecuted_same_value",
+                (false, Some(false)) => "jr_incremental_provider_reexecuted_different_value",
+                (false, None) => "jr_incremental_provider_reexecuted_no_hash",
+                (true, Some(true)) => "jr_incremental_provider_eval_always_same_value",
+                (true, Some(false)) => "jr_incremental_provider_eval_always_different_value",
+                (true, None) => "jr_incremental_provider_eval_always_no_hash",
             };
             // This interval covers marker recording, not provider execution.
             drop(tcx.prof.generic_activity_with_arg(label, node.kind.name()));
@@ -722,7 +750,7 @@ impl DepGraph {
                 }
             });
 
-            data.hash_result_and_alloc_node(tcx, node, &reads, result, hash_result)
+            data.hash_result_and_alloc_node(tcx, node, &reads, result, hash_result, false)
         } else {
             // Incremental compilation is turned off. We just execute the task
             // without tracking. We still provide a dep-node index that uniquely
