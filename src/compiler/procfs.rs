@@ -6,6 +6,9 @@ use std::fs::{File, Metadata};
 use std::io::{self, Read};
 use std::sync::Arc;
 
+#[cfg(target_os = "linux")]
+mod floating;
+
 const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -188,13 +191,14 @@ fn read_mappings() -> io::Result<Vec<ExecutableMapping>> {
 
 #[cfg(target_os = "linux")]
 fn capture_runtime() -> io::Result<CompilerImage> {
+    let floating = floating::current()?;
     let process = current_process_identity()?;
     let mappings = read_mappings()?;
     let mut pinned = RuntimeFiles::default();
     let executable = pinned.capture(File::open("/proc/self/exe")?)?;
     let mut bytes = executable.bytes;
     let mut hash = blake3::Hasher::new();
-    hash.update(b"justrust-running-compiler-runtime-v6");
+    hash.update(b"justrust-running-compiler-runtime-v7");
     hash.update(&executable.digest);
     let memory = File::open("/proc/self/mem")?;
     let mut remaining_code = 128 * 1024 * 1024u64;
@@ -253,11 +257,14 @@ fn capture_runtime() -> io::Result<CompilerImage> {
     if read_mappings()? != mappings
         || pinned.capture(File::open("/proc/self/exe")?)? != executable
         || current_process_identity()? != process
+        || floating::current()? != floating
     {
         return Err(invalid("runtime mappings changed during capture"));
     }
     let implementation_digest = *hash.finalize().as_bytes();
     hash.update(&process);
+    hash.update(b"native-floating-controls-v1");
+    hash.update(&floating);
     Ok(CompilerImage {
         bytes,
         digest: *hash.finalize().as_bytes(),

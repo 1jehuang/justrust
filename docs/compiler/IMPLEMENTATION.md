@@ -2057,6 +2057,7 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       | Native projects, path dependencies, canonical checksum-locked cached crates.io packages, standalone source/extern roots | Bounded repeated acquisition into immutable owned bytes, closed discovery/source/archive reads; CHECK/BUILD/run tested at workers 1/8. |
       | Missing candidates and paths outside authorized roots | Immutable absence / rejection, never ambient host fallback. Symlinks, special files and exhausted limits reject. |
       | Network/unlocked/alternate registry acquisition, noncanonical cache aliases, Cargo configuration, reviewed probes, external tools/linkers | Legacy compatibility remains explicitly unproven or frozen mode rejects. Archive links and unsupported header extensions reject. |
+      | Compiler runtime evidence on Linux/x86-64 | Executable/mapped code and bounded process configuration. Canonical MXCSR/x87 control state is required and rechecked across capture; sticky exception status is excluded. Unsupported floating environments cannot mint evidence. Arbitrary mutable process state is not sealed. |
       | Build scripts, proc macros, arbitrary process/in-memory state, atomic host snapshots | Not closed by this namespace capture. Complete-input-capture remains incomplete. |
       | Artifact reuse and global sharing | Disabled. No persistent or global private cache is enabled by this foundation. |
 
