@@ -1,0 +1,66 @@
+{
+  "verdict": "passed",
+  "semantic_modes": 288,
+  "dependency_compiles": 198,
+  "native_profiles_reparsed": 10,
+  "compiler_sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "driver_sha256": "ed21691a9db267ffb71cc3b8975a8cd89768397a7a7f82c9c839083485424efd",
+  "mechanism_proof": {
+    "proof": "positive skipped promotion versus positive normal-promotion controls",
+    "green_recompute_after_demand_return": 1376,
+    "limitation": "Green recompute markers are observational, not proof that a particular missing value caused fallback. No speedup claim."
+  },
+  "mechanism_marker_counts": {
+    "cold/no": {
+      "incr_comp_query_cache_promotion": 1,
+      "jr_demand_query_cache_promotion_skipped": 0,
+      "jr_incremental_green_recompute": 0
+    },
+    "cold/yes": {
+      "incr_comp_query_cache_promotion": 0,
+      "jr_demand_query_cache_promotion_skipped": 1,
+      "jr_incremental_green_recompute": 0
+    },
+    "unchanged/no": {
+      "incr_comp_query_cache_promotion": 1,
+      "jr_demand_query_cache_promotion_skipped": 0,
+      "jr_incremental_green_recompute": 546
+    },
+    "unchanged/yes": {
+      "incr_comp_query_cache_promotion": 0,
+      "jr_demand_query_cache_promotion_skipped": 1,
+      "jr_incremental_green_recompute": 546
+    },
+    "demand-narrow/no": {
+      "incr_comp_query_cache_promotion": 1,
+      "jr_demand_query_cache_promotion_skipped": 0,
+      "jr_incremental_green_recompute": 1221
+    },
+    "demand-narrow/yes": {
+      "incr_comp_query_cache_promotion": 0,
+      "jr_demand_query_cache_promotion_skipped": 1,
+      "jr_incremental_green_recompute": 1357
+    },
+    "demand-narrow-unchanged/no": {
+      "incr_comp_query_cache_promotion": 1,
+      "jr_demand_query_cache_promotion_skipped": 0,
+      "jr_incremental_green_recompute": 544
+    },
+    "demand-narrow-unchanged/yes": {
+      "incr_comp_query_cache_promotion": 0,
+      "jr_demand_query_cache_promotion_skipped": 1,
+      "jr_incremental_green_recompute": 544
+    },
+    "demand-wide-return/no": {
+      "incr_comp_query_cache_promotion": 1,
+      "jr_demand_query_cache_promotion_skipped": 0,
+      "jr_incremental_green_recompute": 1242
+    },
+    "demand-wide-return/yes": {
+      "incr_comp_query_cache_promotion": 0,
+      "jr_demand_query_cache_promotion_skipped": 1,
+      "jr_incremental_green_recompute": 1376
+    }
+  },
+  "archive_sha256": "b20d0c839832fbe10ad3e3267451ee26678fb7ea9b822c76fc88abfbbe80ea8f"
+}

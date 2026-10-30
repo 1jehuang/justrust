@@ -6,7 +6,9 @@ skips end-of-session query-cache promotion, while demanded values remain
 serialized normally. This harness is not a speed benchmark or default-promotion
 gate. Root owns compiler builds, frozen compiler release, native execution,
 and representative performance measurements. No native compiler or fixture
-has been executed during harness implementation.
+was executed during harness implementation. Root subsequently released the
+frozen compiler and completed native acceptance on October 30, 2026, as
+documented in the retained evidence section below.
 
 ## Execution boundary
 
@@ -135,3 +137,46 @@ evidence. A failed optional mechanism gate preserves a passed semantic verdict.
 Mock tests establish only this harness contract, not compiler correctness or
 performance. Do not lower expected counts or discard failures to promote the
 candidate.
+
+## Retained native evidence, October 30, 2026
+
+Root's released native run passed all **32 revisions x nine modes = 288 main
+compile observations**, **198 dependency compiles**, and the separate ten-process
+mechanism gate. Both `semantic_verdict` and `mechanism_verdict` passed. The
+full unmodified report and all ten raw profiles are retained in
+`bench/results/demand-query-cache-20261030/native-evidence.tar.gz`, along with
+the compiler build/status, version, before/after identity logs, acceptance
+log/status, and root's successful 630-test Python suite log. The archive
+preserves original physical absolute paths and byte-exact diagnostics, not
+normalized substitutes. It excludes native executables and incremental caches.
+
+The five off controls each recorded one normal promotion and zero skipped
+promotions. The five on runs each recorded one skipped promotion and zero normal
+promotions, including cold sessions. Wide-demand return observed **1,376** green
+recomputations on and **1,242** off. These counts do not establish which missing
+value caused any fallback, a cache hit, or a speedup.
+
+Frozen executable SHA-256:
+`570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144`.
+Frozen driver SHA-256:
+`ed21691a9db267ffb71cc3b8975a8cd89768397a7a7f82c9c839083485424efd`.
+Both before/after identities match.
+
+Offline validation requires no original scratch directories, compiler, or
+fixture binary execution:
+
+```sh
+python3 bench/results/demand-query-cache-20261030/audit.py
+python3 bench/results/demand-query-cache-20261030/test_audit.py -v
+```
+
+The portable audit repeats every exact semantic comparison and independent
+runtime/error expectation, checks identities/version, explicit mode flags,
+verify-ICH, sources/output paths, edition, and persistent cache continuity
+across revisions. It reparses all ten raw profiles, verifying hashes, byte
+counts, metadata, native marker counts, and unresolved records before validating
+the mechanism proof. `audit.json` records the successful replay and archive
+hash. Eight mutation tests check that diagnostic changes, missing replays,
+cache resets, identity drift, absent markers, conflated mechanism caches, and
+corrupted raw profiles are rejected. This evidence does not substitute for
+the separate representative performance or default-promotion gates.
