@@ -1,0 +1,232 @@
+{
+  "verdict": "passed",
+  "scope": "mechanism-not-total-speedup",
+  "rows": [
+    {
+      "stack": "owned-off",
+      "phase": "prepare",
+      "run_id": "20261030-053559695-2585576",
+      "records": 968083,
+      "unresolved_records": 0,
+      "intervals": [
+        {
+          "label": "encode_query_values",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 90956592
+        },
+        {
+          "label": "incr_comp_persist_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 97817693
+        },
+        {
+          "label": "incr_comp_query_cache_promotion",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 627
+        },
+        {
+          "label": "incr_comp_serialize_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 97762892
+        }
+      ]
+    },
+    {
+      "stack": "owned-off",
+      "phase": "edit",
+      "run_id": "20261030-053627090-2589045",
+      "records": 862909,
+      "unresolved_records": 0,
+      "intervals": [
+        {
+          "label": "encode_query_values",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 72890075
+        },
+        {
+          "label": "incr_comp_persist_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 128603017
+        },
+        {
+          "label": "incr_comp_query_cache_promotion",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 50067182
+        },
+        {
+          "label": "incr_comp_serialize_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 77987104
+        },
+        {
+          "label": "jr_incremental_green_recompute",
+          "thread": 3,
+          "records": 47683,
+          "union_elapsed_ns": 73879416
+        }
+      ]
+    },
+    {
+      "stack": "owned-off",
+      "phase": "restore",
+      "run_id": "20261030-053630624-2589679",
+      "records": 862582,
+      "unresolved_records": 0,
+      "intervals": [
+        {
+          "label": "encode_query_values",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 54098196
+        },
+        {
+          "label": "incr_comp_persist_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 108670406
+        },
+        {
+          "label": "incr_comp_query_cache_promotion",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 49874975
+        },
+        {
+          "label": "incr_comp_serialize_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 58328228
+        },
+        {
+          "label": "jr_incremental_green_recompute",
+          "thread": 3,
+          "records": 47594,
+          "union_elapsed_ns": 83980719
+        }
+      ]
+    },
+    {
+      "stack": "owned-demand",
+      "phase": "prepare",
+      "run_id": "20261030-053634680-2590302",
+      "records": 968083,
+      "unresolved_records": 0,
+      "intervals": [
+        {
+          "label": "encode_query_values",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 88982228
+        },
+        {
+          "label": "incr_comp_persist_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 96410106
+        },
+        {
+          "label": "incr_comp_serialize_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 96349903
+        },
+        {
+          "label": "jr_demand_query_cache_promotion_skipped",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 36
+        }
+      ]
+    },
+    {
+      "stack": "owned-demand",
+      "phase": "edit",
+      "run_id": "20261030-053702229-2593817",
+      "records": 862909,
+      "unresolved_records": 0,
+      "intervals": [
+        {
+          "label": "encode_query_values",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 50472941
+        },
+        {
+          "label": "incr_comp_persist_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 55100320
+        },
+        {
+          "label": "incr_comp_serialize_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 54704088
+        },
+        {
+          "label": "jr_demand_query_cache_promotion_skipped",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 29
+        },
+        {
+          "label": "jr_incremental_green_recompute",
+          "thread": 3,
+          "records": 47683,
+          "union_elapsed_ns": 85265536
+        }
+      ]
+    },
+    {
+      "stack": "owned-demand",
+      "phase": "restore",
+      "run_id": "20261030-053705966-2594407",
+      "records": 862582,
+      "unresolved_records": 0,
+      "intervals": [
+        {
+          "label": "encode_query_values",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 36254341
+        },
+        {
+          "label": "incr_comp_persist_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 40295275
+        },
+        {
+          "label": "incr_comp_serialize_result_cache",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 40027462
+        },
+        {
+          "label": "jr_demand_query_cache_promotion_skipped",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 36
+        },
+        {
+          "label": "jr_incremental_green_recompute",
+          "thread": 3,
+          "records": 47594,
+          "union_elapsed_ns": 84153675
+        }
+      ]
+    }
+  ],
+  "negative_total_medians_seconds": {
+    "owned-off": 1.4214650110079674,
+    "owned-demand": 1.4307719740027096
+  }
+}
