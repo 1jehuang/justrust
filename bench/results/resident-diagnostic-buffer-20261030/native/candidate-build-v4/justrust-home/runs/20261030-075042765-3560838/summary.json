@@ -1,0 +1,138 @@
+{
+  "id": "20261030-075042765-3560838",
+  "args": [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "subcommand": "build",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "a6ccd1e7ab60",
+    "dirty_files": 6
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793371842.7803388,
+  "wall": 58.28107810020447,
+  "exit": 0,
+  "cpu_secs": 232.46615,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 279,
+    "processes": 7,
+    "sample_span_secs": 58.273688077926636,
+    "max_sample_gap_secs": 0.2174854278564453
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 1.1460084915161133,
+    "lock_wait": 0.0,
+    "compile": 57.087263107299805,
+    "build_gaps": 0.014319419860839844,
+    "test_run": 0.0,
+    "tail": 0.03348708152770996
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 426,
+    "rustc_cpu_secs": 231.05,
+    "rustc_wall_sum": 57.087263107299805,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "jr_engine",
+      "kind": "bin",
+      "local": true,
+      "start": 1.1460084915161133,
+      "wall": 57.087263107299805,
+      "wall_share": 57.087263107299805,
+      "cpu": 231.053625,
+      "max_rss_mb": 2756.7734375,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 78687
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 3.988707099760813,
+    "peak_build_cores": 6.183686240531839,
+    "peak_build_rss_mb": 2859.8359375,
+    "peak_unit_rss_mb": 2756.7734375,
+    "min_mem_available_mb": 35341,
+    "avg_other_cores": 3.208343471169165,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.5217920000000003,
+    "psi_mem_secs": 0.001031,
+    "psi_io_secs": 0.026679
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 254,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "ra-jit",
+      "reason": "the file `crates` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-075042765-3560838.scope",
+    "final_weight": 204,
+    "setup_secs": 0.014589335,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

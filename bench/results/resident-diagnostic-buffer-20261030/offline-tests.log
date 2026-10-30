@@ -1,0 +1,24 @@
+test_candidate_source_corruption (__main__.ReplayTests.test_candidate_source_corruption) ... ok
+test_edit_bytes (__main__.ReplayTests.test_edit_bytes) ... ok
+test_failure_required (__main__.ReplayTests.test_failure_required) ... ok
+test_fixed_medians_not_trusted (__main__.ReplayTests.test_fixed_medians_not_trusted) ... ok
+test_hash_corruption (__main__.ReplayTests.test_hash_corruption) ... ok
+test_marker_even_with_rehashed_stream (__main__.ReplayTests.test_marker_even_with_rehashed_stream) ... ok
+test_medians_not_trusted (__main__.ReplayTests.test_medians_not_trusted) ... ok
+test_moved_directory_offline (__main__.ReplayTests.test_moved_directory_offline) ... ok
+test_native_raw_name_substitution (__main__.ReplayTests.test_native_raw_name_substitution) ... ok
+test_paired_order (__main__.ReplayTests.test_paired_order) ... ok
+test_positive_complete_replay (__main__.ReplayTests.test_positive_complete_replay) ... ok
+test_profile (__main__.ReplayTests.test_profile) ... ok
+test_recovery_required (__main__.ReplayTests.test_recovery_required) ... ok
+test_runtime_status (__main__.ReplayTests.test_runtime_status) ... ok
+test_source63_not_trusted (__main__.ReplayTests.test_source63_not_trusted) ... ok
+test_source_restoration (__main__.ReplayTests.test_source_restoration) ... ok
+test_testcount_349_is_rejected (__main__.ReplayTests.test_testcount_349_is_rejected) ... ok
+test_tool_identity (__main__.ReplayTests.test_tool_identity) ... ok
+test_toolchain_identity (__main__.ReplayTests.test_toolchain_identity) ... ok
+
+----------------------------------------------------------------------
+Ran 19 tests in 1.313s
+
+OK

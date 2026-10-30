@@ -1,0 +1,120 @@
+[
+  {
+    "id": "20261030-113131259-2094449",
+    "args": [
+      "check",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "--tests",
+      "-j",
+      "6"
+    ],
+    "summary": "native/candidate-build-v20/justrust-home/runs/20261030-113131259-2094449/summary.json"
+  },
+  {
+    "id": "20261030-113159600-2096531",
+    "args": [
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6"
+    ],
+    "summary": "native/candidate-build-v20/justrust-home/runs/20261030-113159600-2096531/summary.json"
+  },
+  {
+    "id": "20261030-113438035-2107407",
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6",
+      "--",
+      "resident_diagnostic_buffer",
+      "--nocapture"
+    ],
+    "summary": "native/candidate-unit-v20/justrust-home/runs/20261030-113438035-2107407/summary.json"
+  },
+  {
+    "id": "20261030-113705404-2117352",
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6",
+      "--",
+      "resident_graph_reuse",
+      "--nocapture"
+    ],
+    "summary": "native/candidate-unit-v20/justrust-home/runs/20261030-113705404-2117352/summary.json"
+  },
+  {
+    "id": "20261030-113705722-2117423",
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6",
+      "--",
+      "the_roots_of_a_listed_crate",
+      "--nocapture"
+    ],
+    "summary": "native/candidate-unit-v20/justrust-home/runs/20261030-113705722-2117423/summary.json"
+  },
+  {
+    "id": "20261030-113705994-2117471",
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6",
+      "--",
+      "telemetry",
+      "--nocapture"
+    ],
+    "summary": "native/candidate-unit-v20/justrust-home/runs/20261030-113705994-2117471/summary.json"
+  },
+  {
+    "id": "20261030-113913476-2300871",
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6"
+    ],
+    "summary": "native/candidate-unit-v20/justrust-home/runs/20261030-113913476-2300871/summary.json"
+  }
+]

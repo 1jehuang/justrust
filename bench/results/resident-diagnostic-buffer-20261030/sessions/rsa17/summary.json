@@ -1,0 +1,12 @@
+{
+  "medians_seconds": {
+    "reference": 0.11261893100163434,
+    "engine": 0.1133263889933005
+  },
+  "excluded": [],
+  "source_built_parity": true,
+  "proc_macro_policy": "compatibility control: rustc-built proc macros, both server variables explicitly 0",
+  "toolchain": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu",
+  "store_scope": "unseeded private cold stores, no automatic seeding",
+  "policy": "Descriptive only. No general speed claim or independent optimization proof. Cold failures retained, never silently seeded."
+}

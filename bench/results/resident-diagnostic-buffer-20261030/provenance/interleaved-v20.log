@@ -1,0 +1,10 @@
+{
+  "status": "passed",
+  "rows": 141,
+  "medians_seconds": {
+    "old": 0.10399137149943272,
+    "new": 0.10771834100160049,
+    "blaze": 0.10450627249520039
+  },
+  "scope": "extended interleaved warm-store diagnostic, not cold support, comprehensive gate, significance or default promotion"
+}

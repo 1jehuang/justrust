@@ -1,0 +1,108 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index be57fd8ab..d58758c8f 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -6763,6 +6763,14 @@ type CleanKey = (vfs::FileId, Option<(usize, u64)>, (bool, bool));
+ static CLEAN: std::sync::LazyLock<std::sync::Mutex<FxHashMap<CleanKey, Clean>>> =
+     std::sync::LazyLock::new(Default::default);
+ 
++/// Hash the complete syntax text exactly as an owned string, reusing only its storage.
++fn diagnostic_text_hash(text: syntax::SyntaxText, scratch: &mut String) -> u64 {
++    use std::hash::BuildHasher as _;
++    scratch.clear();
++    text.for_each_chunk(|chunk| scratch.push_str(chunk));
++    rustc_hash::FxBuildHasher.hash_one(scratch.as_str())
++}
++
+ /// The errors the check of `file` as a module of the crates `within` finds, by the rules
+ /// (lints denied, borrowck refused) of [`broken_in`]. After a check that found none, the next
+ /// asks rust-analyzer only for the bodies an edit can have changed ([`Clean`]); every body is
+@@ -6784,10 +6792,12 @@ fn errors_of(
+     let was = skeleton.and_then(|now| lock(&CLEAN).remove(&key).filter(|it| it.skeleton == now));
+     let functions = std::cell::RefCell::new(FxHashMap::default());
+     let asked_of = std::cell::Cell::new((0usize, 0usize));
++    let text_scratch = std::cell::RefCell::new(String::new());
+     let asked = |body: hir::DefWithBody| {
+         let hir::DefWithBody::Function(func) = body else { return was.is_none() };
+-        let written = hir::HasSource::source(func, db)
+-            .map(|it| rustc_hash::FxBuildHasher.hash_one(it.value.syntax().text().to_string()));
++        let written = hir::HasSource::source(func, db).map(|it| {
++            diagnostic_text_hash(it.value.syntax().text(), &mut text_scratch.borrow_mut())
++        });
+         let Some(written) = written else { return true };
+         functions.borrow_mut().insert(func, written);
+         let asked = was.as_ref().is_none_or(|was| was.functions.get(&func) != Some(&written));
+@@ -11559,6 +11569,56 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn resident_diagnostic_buffer_matches_owned_syntax_text() {
++        use std::hash::BuildHasher as _;
++        let mut scratch = String::new();
++        for source in [
++            "",
++            "// café 🦀\nfn α() { /* nested /* comment */ */ let s = \"你好\"; }\n",
++            "fn outer() { fn inner() {} { /* trivia */ let x = (1, (2, 3)); } }\nfn next() {}",
++            " \n/* comments only */\t",
++        ] {
++            let root = syntax::SourceFile::parse(source, syntax::Edition::CURRENT).syntax_node();
++            // Every subtree exercises different token/chunk boundaries, including nested functions.
++            for node in root.descendants() {
++                let original = node.text().to_string();
++                assert_eq!(
++                    diagnostic_text_hash(node.text(), &mut scratch),
++                    rustc_hash::FxBuildHasher.hash_one(&original)
++                );
++                assert_eq!(scratch, original);
++            }
++        }
++    }
++
++    #[test]
++    fn resident_diagnostic_buffer_large_to_small_reuses_storage() {
++        use std::hash::BuildHasher as _;
++        let large = format!("fn large() {{ /* {} */ }}", "é🦀 ".repeat(4096));
++        let mut scratch = String::new();
++        let mut capacity = 0;
++        let mut allocation = std::ptr::null();
++        for (index, source) in
++            [large.as_str(), "fn small() {}", "", "fn last() { /* 終 */ }"].into_iter().enumerate()
++        {
++            let root = syntax::SourceFile::parse(source, syntax::Edition::CURRENT).syntax_node();
++            let original = root.text().to_string();
++            assert_eq!(
++                diagnostic_text_hash(root.text(), &mut scratch),
++                rustc_hash::FxBuildHasher.hash_one(original.as_str())
++            );
++            assert_eq!(scratch, original);
++            if index == 0 {
++                capacity = scratch.capacity();
++                allocation = scratch.as_ptr();
++            } else {
++                assert_eq!(scratch.capacity(), capacity);
++                assert_eq!(scratch.as_ptr(), allocation);
++            }
++        }
++    }
++
+     #[test]
+     fn a_fetched_crate_is_named_the_same_wherever_cargo_keeps_it() {
+         let fetched = "registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.7.4/src/lib.rs";
+diff --git a/docs/resident-diagnostic-buffer.md b/docs/resident-diagnostic-buffer.md
+new file mode 100644
+index 000000000..2eeacb822
+--- /dev/null
++++ b/docs/resident-diagnostic-buffer.md
+@@ -0,0 +1,11 @@
++# Resident diagnostic text buffer experiment (v20)
++
++This is a source-ready hypothesis in the licensed Blaze-derived experimental resident engine, not the clean-room engine. It is not a measured speedup or an approved default promotion.
++
++`errors_of` now owns one initially empty `RefCell<String>` per call. Its `asked` closure temporarily borrows that storage for each function source, clears the length, and appends every `SyntaxText::for_each_chunk` chunk without normalization or filtering. The helper hashes the resulting complete UTF-8 string with `FxBuildHasher.hash_one(scratch.as_str())`. The original owned `String` hashes through the same Rust string hash semantics, including the string terminator. Comments, whitespace, Unicode, and all other trivia remain in the input. Hash collision properties are unchanged. Hashing chunks separately would not be equivalent and is deliberately avoided.
++
++Only allocation storage is reused. There is no persisted or shared scratch, query wrapper, new cache, altered cache key, diagnostic selection/filter change, or root graph/function-cache policy change. The borrow ends before the existing function hash insertion and selection logic. Storage is dropped on return from `errors_of`, retaining at most the largest examined function's capacity during that invocation.
++
++Two focused native tests in the existing test module have names prefixed `resident_diagnostic_buffer`. They compare complete strings and Fx hashes against the original `text().to_string()` path across empty syntax, Unicode, comments and trivia, nested syntax, token/chunk boundaries, and multiple functions. A large-to-small-to-empty sequence additionally checks capacity and allocation-pointer reuse.
++
++Source-only handoff checks: standalone rustfmt with child-module formatting disabled, diff whitespace validation, local SyntaxText API inspection, and helper/caller inspection. No builds, tests, native workloads, source commits, or performance measurements were run for this handoff. Root owns correctness/error/recovery gates and matched warm runtime measurements. Reject this small allocation hypothesis if it does not improve real agent wait.

@@ -1,0 +1,99 @@
+{
+  "verdict": "REJECT",
+  "source_restored_to_HEAD": true,
+  "source_change_shipped": false,
+  "artifacts": 491,
+  "native": {
+    "resident_diagnostic_buffer": {
+      "run": "20261030-113438035-2107407",
+      "passed": 2
+    },
+    "resident_graph_reuse": {
+      "run": "20261030-113705404-2117352",
+      "passed": 1
+    },
+    "the_roots_of_a_listed_crate": {
+      "run": "20261030-113705722-2117423",
+      "passed": 1
+    },
+    "telemetry": {
+      "run": "20261030-113705994-2117471",
+      "passed": 3
+    },
+    "full-native": {
+      "run": "20261030-113913476-2300871",
+      "passed": 348
+    }
+  },
+  "fixed_five": {
+    "baseline": {
+      "reference": {
+        "samples_seconds": [
+          0.14234013599343598,
+          0.11314124800264835,
+          0.11212664400227368,
+          0.10675612000341062,
+          0.10530102001212072
+        ],
+        "median_seconds": 0.11212664400227368
+      },
+      "engine": {
+        "samples_seconds": [
+          0.13239334100217093,
+          0.10605298400332686,
+          0.11409415000525769,
+          0.10351983699365519,
+          0.11999374299193732
+        ],
+        "median_seconds": 0.11409415000525769
+      }
+    },
+    "candidate": {
+      "reference": {
+        "samples_seconds": [
+          0.14381578098982573,
+          0.10790887400798965,
+          0.11925404000794515,
+          0.11261893100163434,
+          0.0983088480134029
+        ],
+        "median_seconds": 0.11261893100163434
+      },
+      "engine": {
+        "samples_seconds": [
+          0.13615522500185762,
+          0.1133263889933005,
+          0.10580288698838558,
+          0.11659380600031,
+          0.11080353199213278
+        ],
+        "median_seconds": 0.1133263889933005
+      }
+    },
+    "engine_percent": -0.6729188235521377,
+    "reference_normalized_percent": -1.1071036476550944
+  },
+  "interleaved": {
+    "rows": 141,
+    "timed_triples": 42,
+    "permutation_repetitions": 7,
+    "medians_seconds": {
+      "old": 0.10399137149943272,
+      "new": 0.10771834100160049,
+      "blaze": 0.10450627249520039
+    },
+    "exact_medians": {
+      "old": "0.10399137149943272",
+      "new": "0.107718341001600495",
+      "blaze": "0.10450627249520039"
+    },
+    "exact_new_vs_old_percent": "3.5839218662368597301967389264381997890872115479000",
+    "noise": "unknown",
+    "promotion": false,
+    "scope": "extended interleaved warm-store diagnostic, not cold support, comprehensive gate, significance or default promotion"
+  },
+  "noise": "unknown",
+  "allocation_count_measured": false,
+  "general_speed_claim": false,
+  "default_promotion": false
+}

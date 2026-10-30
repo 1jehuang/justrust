@@ -1,0 +1,11 @@
+{
+  "verified_at": "2026-10-30T18:46:23Z",
+  "head": "6197235ec4daeeb2173f00044645a6089f2402d5",
+  "path": "toolchain/resident/crates/ra-jit/src/main.rs",
+  "head_sha256": "471f0b5c10187ecbea879acfe3e5eae52925161e32bce6feeebe49b67af0368f",
+  "working_sha256": "471f0b5c10187ecbea879acfe3e5eae52925161e32bce6feeebe49b67af0368f",
+  "git_diff_HEAD_exit": 0,
+  "production_source_changes": false,
+  "restoration_performed_by": "root coordinator before evidence handoff",
+  "observation": "Worker verified actual checkout matches archived HEAD main bytes, did not edit main."
+}

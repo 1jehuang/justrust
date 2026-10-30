@@ -1,0 +1,7 @@
+6767:fn diagnostic_text_hash(text: syntax::SyntaxText, scratch: &mut String) -> u64 {
+6795:    let text_scratch = std::cell::RefCell::new(String::new());
+6799:            diagnostic_text_hash(it.value.syntax().text(), &mut text_scratch.borrow_mut())
+11573:    fn resident_diagnostic_buffer_matches_owned_syntax_text() {
+11587:                    diagnostic_text_hash(node.text(), &mut scratch),
+11596:    fn resident_diagnostic_buffer_large_to_small_reuses_storage() {
+11608:                diagnostic_text_hash(root.text(), &mut scratch),
