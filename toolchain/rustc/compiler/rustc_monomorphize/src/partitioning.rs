@@ -215,6 +215,14 @@ where
 
     let cgu_name_builder = &mut CodegenUnitNameBuilder::new(cx.tcx);
     let cgu_name_cache = &mut UnordMap::default();
+    let mut shared_inline_visited = cx
+        .tcx
+        .sess
+        .opts
+        .unstable_opts
+        .jr_cgu_shared_inline_traversal
+        .then(UnordMap::<Symbol, FxIndexSet<MonoItem<'tcx>>>::default);
+    let mut shared_revisit_recorded = false;
 
     for mono_item in mono_items {
         // Handle only root (GloballyShared) items directly here. Inlined (LocalCopy) items
@@ -263,6 +271,38 @@ where
         // going via another root item. This includes drop-glue, functions from
         // external crates, and local functions the definition of which is
         // marked with `#[inline]`.
+        if let Some(shared_inline_visited) = &mut shared_inline_visited {
+            // Only LocalCopy destinations enter this set. In particular, roots must
+            // always be expanded, even when their CGU already contains inline items.
+            let visited = shared_inline_visited.entry(cgu_name).or_default();
+            let first_new = visited.len();
+            let revisited = {
+                let _timer = cx.tcx.prof.generic_activity("jr_cgu_inline_shared_traversal");
+                visit_inline_successors(mono_item, visited, &|item, visit| {
+                    cx.usage_map.for_each_inlined_used_item(cx.tcx, item, visit);
+                })
+            };
+            if revisited && !shared_revisit_recorded {
+                // One fixed-name marker per invocation, not one event per edge.
+                // Only reuse from an earlier root counts, not a same-root diamond.
+                let _timer = cx.tcx.prof.generic_activity("jr_cgu_inline_shared_revisit");
+                shared_revisit_recorded = true;
+            }
+
+            // Retain the old DFS first-discovery insertion order without rescanning
+            // the visited prefix, or retaining a transitive closure for each root.
+            for index in first_new..visited.len() {
+                let inlined_item = *visited.get_index(index).unwrap();
+                cgu.items_mut().entry(inlined_item).or_insert_with(|| MonoItemData {
+                    inlined: true,
+                    linkage: Linkage::Internal,
+                    visibility: Visibility::Default,
+                    size_estimate: inlined_item.size_estimate(cx.tcx),
+                });
+            }
+            continue;
+        }
+
         let mut reachable_inlined_items = FxIndexSet::default();
         get_reachable_inlined_items(cx.tcx, mono_item, cx.usage_map, &mut reachable_inlined_items);
 
@@ -309,6 +349,132 @@ where
                 get_reachable_inlined_items(tcx, inlined_item, usage_map, visited);
             }
         });
+    }
+}
+
+/// Expand a root unconditionally, but expand each inline successor only on its
+/// first discovery in this CGU. `successors` must report only inline destinations,
+/// not other roots. Mark before recursing so cycles terminate without treating a
+/// partially computed per-root closure as complete.
+/// Returns whether an expansion was suppressed by a visit from an earlier root.
+fn visit_inline_successors<T: Copy + Eq + std::hash::Hash>(
+    root: T,
+    visited: &mut FxIndexSet<T>,
+    successors: &impl Fn(T, &mut dyn FnMut(T)),
+) -> bool {
+    let first_new = visited.len();
+    return expand(root, visited, successors, first_new);
+
+    fn expand<T: Copy + Eq + std::hash::Hash>(
+        root: T,
+        visited: &mut FxIndexSet<T>,
+        successors: &impl Fn(T, &mut dyn FnMut(T)),
+        first_new: usize,
+    ) -> bool {
+        let mut revisited = false;
+        successors(root, &mut |item| {
+            let (index, is_new) = visited.insert_full(item);
+            if is_new {
+                revisited |= expand(item, visited, successors, first_new);
+            } else {
+                revisited |= index < first_new;
+            }
+        });
+        revisited
+    }
+}
+
+#[cfg(test)]
+mod shared_inline_traversal_tests {
+    use std::cell::RefCell;
+
+    use rustc_data_structures::fx::FxIndexSet;
+
+    use super::visit_inline_successors;
+
+    // Model UsageMap's destination-mode filter, including edges to global roots
+    // that must not be followed even when reached from a LocalCopy item.
+    fn walk(
+        graph: &[&[usize]],
+        inline: &[bool],
+        roots: &[usize],
+        visited: &mut FxIndexSet<usize>,
+    ) -> Vec<usize> {
+        let expanded = RefCell::new(Vec::new());
+        for &root in roots {
+            visit_inline_successors(root, visited, &|item, visit| {
+                expanded.borrow_mut().push(item);
+                for &next in graph[item] {
+                    if inline[next] {
+                        visit(next);
+                    }
+                }
+            });
+        }
+        expanded.into_inner()
+    }
+
+    #[test]
+    fn diamond_preserves_depth_first_order() {
+        let mut visited = FxIndexSet::default();
+        let expanded =
+            walk(&[&[1, 2], &[3], &[3], &[]], &[false, true, true, true], &[0], &mut visited);
+        assert_eq!(expanded, [0, 1, 3, 2]);
+        assert_eq!(visited.into_iter().collect::<Vec<_>>(), [1, 3, 2]);
+    }
+
+    #[test]
+    fn cycles_are_marked_before_recursing() {
+        let mut visited = FxIndexSet::default();
+        let expanded = walk(&[&[1], &[1, 2], &[1]], &[false, true, true], &[0], &mut visited);
+        assert_eq!(expanded, [0, 1, 2]);
+        assert_eq!(visited.into_iter().collect::<Vec<_>>(), [1, 2]);
+    }
+
+    #[test]
+    fn multiple_roots_share_only_inline_expansions() {
+        let graph: &[&[usize]] = &[&[2], &[2, 4], &[3, 1], &[], &[3]];
+        let inline = &[false, false, true, true, true];
+        let mut shared = FxIndexSet::default();
+        assert_eq!(walk(graph, inline, &[0, 1], &mut shared), [0, 2, 3, 1, 4]);
+
+        // The ordered union of the old per-root traversals is unchanged.
+        let mut old_union = FxIndexSet::default();
+        for root in [0, 1] {
+            let mut per_root = FxIndexSet::default();
+            walk(graph, inline, &[root], &mut per_root);
+            old_union.extend(per_root);
+        }
+        assert_eq!(
+            shared.into_iter().collect::<Vec<_>>(),
+            old_union.into_iter().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn cgu_isolation_and_repeated_roots() {
+        let graph: &[&[usize]] = &[&[1], &[2], &[]];
+        let inline = &[false, true, true];
+        let mut first_cgu = FxIndexSet::default();
+        assert_eq!(walk(graph, inline, &[0, 0], &mut first_cgu), [0, 1, 2, 0]);
+        let mut second_cgu = FxIndexSet::default();
+        assert_eq!(walk(graph, inline, &[0], &mut second_cgu), [0, 1, 2]);
+        assert_eq!(first_cgu, second_cgu);
+    }
+
+    #[test]
+    fn reuse_marker_requires_an_earlier_root() {
+        let mut visited = FxIndexSet::default();
+        let successors = |item, visit: &mut dyn FnMut(usize)| match item {
+            0 => {
+                visit(1);
+                visit(1);
+            }
+            1 => visit(1),
+            _ => unreachable!(),
+        };
+        assert!(!visit_inline_successors(0, &mut visited, &successors));
+        assert!(visit_inline_successors(0, &mut visited, &successors));
     }
 }
 

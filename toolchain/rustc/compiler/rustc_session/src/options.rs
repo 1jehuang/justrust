@@ -2610,6 +2610,8 @@ options! {
         "justrust: experimentally persist associated-item lookup values (default: no)"),
     jr_cache_small_query_values: bool = (false, parse_bool, [TRACKED],
         "justrust: experimentally persist small proven-green query values (default: no)"),
+    jr_cgu_shared_inline_traversal: bool = (false, parse_bool, [TRACKED],
+        "justrust: experimentally share inline reachability traversal within each CGU (default: no)"),
     jr_demand_query_cache: bool = (false, parse_bool, [TRACKED],
         "justrust: experimentally skip end-session query cache promotions (default: no)"),
     jr_empty_lint_level_fast_path: bool = (false, parse_bool, [TRACKED],
