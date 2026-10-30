@@ -40,3 +40,15 @@ These observations establish a local recursive-validation bottleneck, not a
 prebuild-wait bottleneck. They are not a matched before/after speedup comparison.
 The diagnostic uses `JUSTRUST_REMOTE=off` to isolate local execution, without
 changing the hosted default. All file traversal and Cargo validation remain.
+
+## Focused pinned baseline attempt
+
+A daemon-enabled local `bench/suite.py run desktop-noop-test -n 3 --warmup 1`
+attempt used the existing installed binary and a 60-second diagnostic deadline.
+It timed out during the initial Desktop test compilation, before producing a
+result JSON. The daemon detected client exit and cancelled its owned child.
+No before/after comparison or end-to-end speedup is claimed from this attempt.
+The pinned Desktop snapshot's measured source validation was only 25.6 ms,
+so it would not represent the 171,114-file local checkout's scan bottleneck.
+The comprehensive synthetic gate remains incomplete as described in
+`caching-levels.md`.
