@@ -1,0 +1,15 @@
+{
+  "epoch": "prepare",
+  "status": 0,
+  "identities": {
+    "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+    "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+    "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so": "8cfb723e9ffb482bdd9518251f281c5169aae7211804e9d12ff5bbb29f321569"
+  },
+  "rustflags": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zself-profile=/home/jeremy/.jcode/scratch/provider-cost-real-20261030/profiles -Zself-profile-events=default,function-args -Zincremental-verify-ich",
+  "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+  "profile": "/home/jeremy/.jcode/scratch/provider-cost-real-20261030/profiles/justrust-3711373.mm_profdata",
+  "profile_sha256": "8d57ec2e755dbdcabc36595caf69a4fb8c08e61ccf3310c1beb9f9c758c0a1d9",
+  "decoder_status": 2
+}
