@@ -1,0 +1,47 @@
+{
+  "schema": 1,
+  "date_utc": "2026-10-30",
+  "scope": "Focused in-process manifest-diff diagnostic, debug profile. Not an end-to-end or comprehensive workload claim.",
+  "command": "justrust test --local remote_sync::tests::diff_real_manifest_diagnostic -- --ignored --nocapture",
+  "local_reason": "Measures the actual local checkout's vendored 68k-file source manifest, not the hosted mirror or a synthetic manifest.",
+  "samples_per_algorithm_per_case": 7,
+  "statistic": "median elapsed nanoseconds; manifest scan and construction excluded; result construction and drop included",
+  "baseline": {
+    "run": "20261029-210657761-2623911",
+    "implementation": "original two tree-lookup loops",
+    "entries": 68218,
+    "cases": [
+      {"case": "unchanged", "lookup_oracle_ns": 312080906, "production_diff_ns": 328471328},
+      {"case": "sparse-mode", "lookup_oracle_ns": 325915788, "production_diff_ns": 278334930},
+      {"case": "add-delete", "new_entries": 68152, "lookup_oracle_ns": 278192987, "production_diff_ns": 284812739}
+    ]
+  },
+  "after": {
+    "run": "20261029-210906571-2650741",
+    "implementation": "linear ordered merge",
+    "entries": 68219,
+    "cases": [
+      {"case": "unchanged", "lookup_oracle_ns": 319278646, "production_diff_ns": 11049812},
+      {"case": "sparse-mode", "lookup_oracle_ns": 284123056, "production_diff_ns": 11412648},
+      {"case": "add-delete", "new_entries": 68153, "lookup_oracle_ns": 319359284, "production_diff_ns": 10371754}
+    ]
+  },
+  "comparison_limit": "One source file was added between the separate baseline and after scans. The controlled comparison is the preserved original-algorithm oracle versus the new diff on identical manifests within the after run, not the cross-session timings.",
+  "correctness": {
+    "exhaustive_manifest_count": 343,
+    "exhaustive_ordered_pairs": 117649,
+    "exact_output_vector_order": true,
+    "states": ["absent", "unchanged", "mtime changed", "size changed", "mode changed", "UNKNOWN", "extreme signed time and unsigned size/mode"],
+    "paths": ["a", "a/child", "z"],
+    "unknown_to_unknown_remains_unchanged": true
+  },
+  "hosted_gates": {
+    "check": "20261029-210857962-2649165",
+    "sync_tests": "20261029-210904378-2650348",
+    "sync_tests_passed": 14,
+    "sync_tests_ignored": 3,
+    "all_target_clippy_deny_warnings": "20261029-210912932-2648872",
+    "all_succeeded_on_hosted": true
+  },
+  "comprehensive_session_weighted_gate": "not run; no broad speed claim or workload promotion"
+}

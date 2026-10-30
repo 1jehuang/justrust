@@ -311,16 +311,43 @@ impl Diff {
 
 pub fn diff(old: &Manifest, new: &Manifest) -> Diff {
     let mut d = Diff::default();
-    for (p, s) in new {
-        if old.get(p) != Some(s) {
-            d.changed.push(p.clone());
+    let mut old_iter = old.iter();
+    let mut new_iter = new.iter();
+    let mut old_entry = old_iter.next();
+    let mut new_entry = new_iter.next();
+    // Both manifests are ordered. Visit each entry once instead of performing
+    // a tree lookup for every path in both maps. Each output stays path-sorted.
+    while let (Some((old_path, old_stamp)), Some((new_path, new_stamp))) = (old_entry, new_entry) {
+        match old_path.cmp(new_path) {
+            std::cmp::Ordering::Less => {
+                d.deleted.push(old_path.clone());
+                old_entry = old_iter.next();
+            }
+            std::cmp::Ordering::Equal => {
+                if old_stamp != new_stamp {
+                    d.changed.push(new_path.clone());
+                }
+                old_entry = old_iter.next();
+                new_entry = new_iter.next();
+            }
+            std::cmp::Ordering::Greater => {
+                d.changed.push(new_path.clone());
+                new_entry = new_iter.next();
+            }
         }
     }
-    for p in old.keys() {
-        if !new.contains_key(p) {
-            d.deleted.push(p.clone());
-        }
-    }
+    d.deleted.extend(
+        old_entry
+            .into_iter()
+            .chain(old_iter)
+            .map(|(path, _)| path.clone()),
+    );
+    d.changed.extend(
+        new_entry
+            .into_iter()
+            .chain(new_iter)
+            .map(|(path, _)| path.clone()),
+    );
     d
 }
 
@@ -1048,6 +1075,120 @@ mod tests {
         assert_eq!(d.changed, vec![PathBuf::from("a"), PathBuf::from("c")]);
         assert_eq!(d.deleted, vec![PathBuf::from("b")]);
         assert!(diff(&new, &new).is_empty());
+    }
+
+    // Preserve the original lookup algorithm as an independent exact oracle.
+    fn lookup_diff(old: &Manifest, new: &Manifest) -> Diff {
+        Diff {
+            changed: new
+                .iter()
+                .filter(|(path, stamp)| old.get(*path) != Some(*stamp))
+                .map(|(path, _)| path.clone())
+                .collect(),
+            deleted: old
+                .keys()
+                .filter(|path| !new.contains_key(*path))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn diff_exhaustive_ordered_manifest_oracle() {
+        let original = st(1);
+        let stamps = [
+            None,
+            Some(original),
+            Some(Stamp {
+                mtime_ns: 2,
+                ..original
+            }),
+            Some(Stamp {
+                size: original.size + 1,
+                ..original
+            }),
+            Some(Stamp {
+                mode: original.mode ^ 0o111,
+                ..original
+            }),
+            Some(UNKNOWN),
+            Some(Stamp {
+                mtime_ns: i128::MIN,
+                size: u64::MAX,
+                mode: u32::MAX,
+            }),
+        ];
+        let paths = ["a", "a/child", "z"];
+        let manifests: Vec<Manifest> = (0..stamps.len().pow(paths.len() as u32))
+            .map(|mut state| {
+                paths
+                    .iter()
+                    .filter_map(|path| {
+                        let stamp = stamps[state % stamps.len()];
+                        state /= stamps.len();
+                        stamp.map(|stamp| (PathBuf::from(path), stamp))
+                    })
+                    .collect()
+            })
+            .collect();
+        for old in &manifests {
+            for new in &manifests {
+                assert_eq!(
+                    diff(old, new),
+                    lookup_diff(old, new),
+                    "old={old:?}, new={new:?}"
+                );
+            }
+        }
+    }
+
+    /// Focused local diagnostic, not the session-weighted performance gate.
+    #[test]
+    #[ignore = "measures a real local source manifest; run with --ignored --nocapture"]
+    fn diff_real_manifest_diagnostic() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let root = std::env::var_os("JUSTRUST_DIFF_BENCH_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let old = scan(&root).unwrap().files;
+        assert!(!old.is_empty());
+        let mut sparse = old.clone();
+        for (index, stamp) in sparse.values_mut().enumerate() {
+            if index % 257 == 0 {
+                stamp.mode ^= 0o111;
+            }
+        }
+        let mut churn = sparse.clone();
+        for path in old.keys().step_by(1021) {
+            churn.remove(path);
+        }
+        churn.insert(PathBuf::from("justrust-diagnostic-added.rs"), UNKNOWN);
+        for (case, new) in [
+            ("unchanged", &old),
+            ("sparse-mode", &sparse),
+            ("add-delete", &churn),
+        ] {
+            assert_eq!(diff(&old, new), lookup_diff(&old, new));
+            let measure = |implementation: fn(&Manifest, &Manifest) -> Diff| {
+                let mut samples = Vec::new();
+                for _ in 0..7 {
+                    let start = Instant::now();
+                    black_box(implementation(black_box(&old), black_box(new)));
+                    samples.push(start.elapsed().as_nanos());
+                }
+                samples.sort_unstable();
+                samples[samples.len() / 2]
+            };
+            println!(
+                "manifest_diff case={case} old={} new={} lookup_median_ns={} diff_median_ns={}",
+                old.len(),
+                new.len(),
+                measure(lookup_diff),
+                measure(diff),
+            );
+        }
     }
 
     // Runs `sh` scripts.
