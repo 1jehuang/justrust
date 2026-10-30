@@ -1,0 +1,15 @@
+{
+  "medians_seconds": {
+    "owned-off": 1.4724841699935496,
+    "all3on": 1.5273661450046347,
+    "blaze": 0.11391410299984273,
+    "blaze-llvm": 0.1304301799973473,
+    "owned-declarative": 1.5806717010127613
+  },
+  "excluded": [],
+  "store_scope": "warm-store seeded",
+  "known_unsafe_external_input_stacks": [],
+  "macro_cache_safety": "derive/attribute cache has confirmed stale env/file outputs including tracked APIs; explicit experiment timings are not correctness-certified optimizations",
+  "edit_hotpatch_outcomes": {},
+  "policy": "Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only."
+}
