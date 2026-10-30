@@ -507,6 +507,26 @@ impl DepGraphData {
         let current_fingerprint = hash_result.map(|hash_result| {
             tcx.with_stable_hashing_context(|mut hcx| hash_result(&mut hcx, result))
         });
+        // Retrospective classification only: the provider has already executed.
+        // Equality does not establish changed inputs or avoidable provider work.
+        // Profiling off adds no previous-graph lookup or result hashing.
+        if tcx.prof.enabled()
+            && let Some(previous_index) = self.previous.node_to_index_opt(&node)
+        {
+            let same_value = current_fingerprint.map(|fingerprint| {
+                fingerprint == self.previous.value_fingerprint_for_index(previous_index)
+            });
+            let label = match (tcx.is_eval_always(node.kind), same_value) {
+                (false, Some(true)) => "jr_incremental_reexecuted_same_value",
+                (false, Some(false)) => "jr_incremental_reexecuted_different_value",
+                (false, None) => "jr_incremental_reexecuted_no_hash",
+                (true, Some(true)) => "jr_incremental_eval_always_same_value",
+                (true, Some(false)) => "jr_incremental_eval_always_different_value",
+                (true, None) => "jr_incremental_eval_always_no_hash",
+            };
+            // This interval covers marker recording, not provider execution.
+            drop(tcx.prof.generic_activity_with_arg(label, node.kind.name()));
+        }
         let dep_node_index = self.alloc_and_color_node(node, edges, current_fingerprint);
         hashing_timer.finish_with_query_invocation_id(dep_node_index.into());
         dep_node_index

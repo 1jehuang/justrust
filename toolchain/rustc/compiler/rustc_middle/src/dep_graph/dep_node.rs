@@ -287,6 +287,16 @@ macro_rules! define_dep_nodes {
             $( $(#[$q_attr])* $q_name, )*
         }
 
+        impl DepKind {
+            /// Static profiler argument, without formatting a dep node or its key.
+            pub(crate) const fn name(self) -> &'static str {
+                match self {
+                    $( Self::$nq_name => stringify!($nq_name), )*
+                    $( Self::$q_name => stringify!($q_name), )*
+                }
+            }
+        }
+
         /// Converts a string to a `DepKind`. Used for handling attributes like `rustc_clean` that
         /// name dep kinds.
         fn dep_kind_from_label_string(label: &str) -> Result<DepKind, ()> {
