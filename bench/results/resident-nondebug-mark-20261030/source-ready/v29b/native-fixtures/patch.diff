@@ -1,0 +1,292 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/patch.rs b/toolchain/resident/crates/hir-ty-codegen/patch.rs
+index df96a3854..18cd2d6d9 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/patch.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/patch.rs
+@@ -235,11 +235,7 @@ impl Mark {
+ 
+     /// The mark of a root, `None` when it does not compile.
+     fn of_root(db: &dyn HirDatabase, root: FunctionId, debug: bool) -> Option<Mark> {
+-        if debug {
+-            return root_mark(db, root);
+-        }
+-        let compiled = compiled_root(db, root).as_ref().ok()?;
+-        Some(Mark::of_function(db, root_serial(db, root), compiled, false))
++        root_mark(db, root, debug)
+     }
+ 
+     /// The mark of an instance, `None` when it does not compile.
+@@ -249,12 +245,7 @@ impl Mark {
+         env: &StoredParamEnvAndCrate,
+         debug: bool,
+     ) -> Option<Mark> {
+-        if debug {
+-            return instance_mark(db, instance.clone(), env.clone());
+-        }
+-        let compiled = compiled_instance(db, instance.clone(), env.clone()).as_ref().ok()?;
+-        let serial = instance_serial(db, instance.clone(), env.clone());
+-        Some(Mark::of_function(db, serial, compiled, false))
++        instance_mark(db, instance.clone(), env.clone(), debug)
+     }
+ 
+     /// Whether the code is the same, wherever in the file it is: a copy of rustc's that no
+@@ -264,13 +255,16 @@ impl Mark {
+     }
+ }
+ 
+-/// The mark of a root with the lines of its code. Every edit asks it of every root the edit
+-/// can reach, and found again it would ask where each row of the code is; kept, asking again
+-/// verifies the places it read, which instances of one function share.
++/// The exact mark of a root, with code lines only for the debug key. Even without debug,
++/// the mark reads the source locations requested by its code. Keep those reads inside the
++/// tracked query as well as compilation and the serial, so Salsa verifies every dependency.
++/// Retain the original tracked queries' default cache policy for both debug keys.
+ #[salsa::tracked(returns(copy))]
+-fn root_mark(db: &dyn HirDatabase, root: FunctionId) -> Option<Mark> {
++fn root_mark(db: &dyn HirDatabase, root: FunctionId, debug: bool) -> Option<Mark> {
++    #[cfg(test)]
++    tests::mark_provider_executed(true);
+     let compiled = compiled_root(db, root).as_ref().ok()?;
+-    Some(Mark::of_function(db, root_serial(db, root), compiled, true))
++    Some(Mark::of_function(db, root_serial(db, root), compiled, debug))
+ }
+ 
+ /// [`root_mark`], of an instance.
+@@ -279,10 +273,13 @@ fn instance_mark(
+     db: &dyn HirDatabase,
+     instance: Instance,
+     env: StoredParamEnvAndCrate,
++    debug: bool,
+ ) -> Option<Mark> {
++    #[cfg(test)]
++    tests::mark_provider_executed(false);
+     let compiled = compiled_instance(db, instance.clone(), env.clone()).as_ref().ok()?;
+     let serial = instance_serial(db, instance, env);
+-    Some(Mark::of_function(db, serial, compiled, true))
++    Some(Mark::of_function(db, serial, compiled, debug))
+ }
+ 
+ /// Something in the base that an edit can change or take away.
+@@ -2945,7 +2942,222 @@ impl Base {
+ 
+ #[cfg(test)]
+ mod tests {
+-    use super::probe;
++    use std::cell::Cell;
++
++    use base_db::SourceDatabase;
++    use ide_db::RootDatabase;
++    use syntax::{AstNode, ast, ast::HasName};
++    use test_fixture::WithFixture;
++
++    use super::*;
++
++    thread_local! {
++        static MARK_PROVIDERS: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
++    }
++
++    // Count entries into the actual tracked providers, not requests, equal answers or
++    // compiled-query hits. These fixtures call them synchronously on the test thread.
++    pub(super) fn mark_provider_executed(root: bool) {
++        MARK_PROVIDERS.with(|counts| {
++            let (roots, instances) = counts.get();
++            counts.set((roots + usize::from(root), instances + usize::from(!root)));
++        });
++    }
++
++    fn take_provider_counts() -> (usize, usize) {
++        MARK_PROVIDERS.with(|counts| counts.replace((0, 0)))
++    }
++
++    fn fixture_function(db: &RootDatabase, file: EditionedFileId, name: &str) -> FunctionId {
++        let sema = hir::Semantics::new(db);
++        let parsed = sema.parse(file);
++        let syntax = parsed
++            .syntax()
++            .descendants()
++            .filter_map(ast::Fn::cast)
++            .find(|it| it.name().is_some_and(|it| it.text() == name))
++            .expect("fixture function syntax");
++        FunctionId::try_from(sema.to_def(&syntax).expect("fixture function definition"))
++            .expect("ordinary fixture function")
++    }
++
++    // Independent original direct computations: never call either tracked mark query,
++    // Mark::of_root/of_instance, Mark::of_function or Mark::new. Keep the original
++    // compilation failure ordering, serial reads, location reads and hashes here.
++    fn original_function_mark(
++        db: &dyn HirDatabase,
++        serial: u128,
++        compiled: &CompiledFunction,
++        debug: bool,
++    ) -> Mark {
++        let mut lines = rustc_hash::FxHasher::default();
++        if debug && let Some((owner, spans)) = &compiled.source {
++            for row in &compiled.code.lines {
++                let span = spans.get(row.span as usize);
++                span.map(|span| row_location(db, *owner, compiled.closure, *span)).hash(&mut lines);
++            }
++        }
++        let mut locations = rustc_hash::FxHasher::default();
++        for request in &compiled.requests.datas {
++            match request {
++                DataRequest::Location(Some((owner, span))) => {
++                    source_location(db, *owner, *span).hash(&mut locations)
++                }
++                DataRequest::Declaration(func) => {
++                    declaration_location(db, *func).hash(&mut locations)
++                }
++                _ => {}
++            }
++        }
++        Mark { serial, locations: locations.finish(), lines: lines.finish() }
++    }
++
++    fn original_root_mark(db: &dyn HirDatabase, root: FunctionId, debug: bool) -> Option<Mark> {
++        let compiled = compiled_root(db, root).as_ref().ok()?;
++        Some(original_function_mark(db, root_serial(db, root), compiled, debug))
++    }
++
++    fn original_instance_mark(
++        db: &dyn HirDatabase,
++        instance: &Instance,
++        env: &StoredParamEnvAndCrate,
++        debug: bool,
++    ) -> Option<Mark> {
++        let compiled = compiled_instance(db, instance.clone(), env.clone()).as_ref().ok()?;
++        let serial = instance_serial(db, instance.clone(), env.clone());
++        Some(original_function_mark(db, serial, compiled, debug))
++    }
++
++    fn exact_fixture_marks(db: &RootDatabase, root: FunctionId, debug: bool) -> (Mark, Mark) {
++        let instance = crate::root_instance(db, root);
++        let env = closure_env(db, root);
++        let original_root = original_root_mark(db, root, debug).expect("root must compile");
++        let original_instance =
++            original_instance_mark(db, &instance, &env, debug).expect("instance must compile");
++        let root_mark = Mark::of_root(db, root, debug).expect("tracked root must compile");
++        let instance_mark =
++            Mark::of_instance(db, &instance, &env, debug).expect("tracked instance must compile");
++        assert_eq!(root_mark, original_root, "root parity, debug={debug}");
++        assert_eq!(instance_mark, original_instance, "instance parity, debug={debug}");
++        (root_mark, instance_mark)
++    }
++
++    #[test]
++    fn nondebug_marks_execute_cold_and_reuse_both_debug_keys_in_one_revision() {
++        let (db, file) = RootDatabase::with_single_file("fn sample() -> u32 { 1 }");
++        let root = fixture_function(&db, file, "sample");
++        take_provider_counts();
++        let plain = exact_fixture_marks(&db, root, false);
++        assert_eq!(take_provider_counts(), (1, 1), "cold nondebug provider execution");
++        let debug = exact_fixture_marks(&db, root, true);
++        assert_eq!(take_provider_counts(), (1, 1), "debug key must execute separately");
++        for _ in 0..3 {
++            assert_eq!(exact_fixture_marks(&db, root, false), plain);
++            assert_eq!(exact_fixture_marks(&db, root, true), debug);
++        }
++        assert_eq!(take_provider_counts(), (0, 0), "same-revision provider reuse");
++    }
++
++    #[test]
++    fn nondebug_marks_match_original_after_body_signature_and_restoration_edits() {
++        let initial = "fn sample() -> u32 { 1 }";
++        let (mut db, file) = RootDatabase::with_single_file(initial);
++        let root = fixture_function(&db, file, "sample");
++        take_provider_counts();
++        let original = exact_fixture_marks(&db, root, false);
++        assert_eq!(take_provider_counts(), (1, 1));
++        let mut previous = original;
++        for source in ["fn sample() -> u32 { 2 }", "fn sample() -> u64 { 2 }", initial] {
++            db.set_file_text(file.file_id(&db), source);
++            assert_eq!(fixture_function(&db, file, "sample"), root, "same query key");
++            let marks = exact_fixture_marks(&db, root, false);
++            assert_ne!(marks.0.serial, previous.0.serial, "root serial must change");
++            assert_ne!(marks.1.serial, previous.1.serial, "instance serial must change");
++            assert_eq!(take_provider_counts(), (1, 1), "changed providers must execute");
++            assert_eq!(exact_fixture_marks(&db, root, false), marks);
++            assert_eq!(take_provider_counts(), (0, 0), "reuse after invalidation");
++            previous = marks;
++        }
++        assert_eq!(previous, original, "restoration must recover original exact marks");
++    }
++
++    #[test]
++    fn nondebug_marks_invalidate_on_real_caller_location_movement() {
++        let source = "#[track_caller]\nfn callee() -> u32 { 7 }\nfn sample() -> u32 { callee() }";
++        let (mut db, file) = RootDatabase::with_single_file(source);
++        let root = fixture_function(&db, file, "sample");
++        let compiled = compiled_root(&db, root).as_ref().expect("caller fixture compiles");
++        assert!(
++            compiled.requests.datas.iter().any(|request| {
++                matches!(request, DataRequest::Location(Some((owner, span)))
++                if source_location(&db, *owner, *span).is_some())
++            }),
++            "fixture must contain a resolved runtime source-location request"
++        );
++        take_provider_counts();
++        let plain = exact_fixture_marks(&db, root, false);
++        let debug = exact_fixture_marks(&db, root, true);
++        assert_eq!(take_provider_counts(), (2, 2));
++        db.set_file_text(file.file_id(&db), &format!("\n\n{source}"));
++        assert_eq!(fixture_function(&db, file, "sample"), root, "same query key");
++        for (mode, was) in [(false, plain), (true, debug)] {
++            let now = exact_fixture_marks(&db, root, mode);
++            assert_eq!(now.0.serial, was.0.serial, "root code must remain identical");
++            assert_eq!(now.1.serial, was.1.serial, "instance code must remain identical");
++            assert_ne!(now.0.locations, was.0.locations, "nondebug locations are dependencies");
++            assert_ne!(now.1.locations, was.1.locations, "instance locations are dependencies");
++            assert_eq!(take_provider_counts(), (1, 1), "location edit executes each provider");
++            assert_eq!(exact_fixture_marks(&db, root, mode), now);
++            assert_eq!(take_provider_counts(), (0, 0));
++        }
++    }
++
++    #[test]
++    fn nondebug_instance_marks_invalidate_on_real_declaration_location_movement() {
++        let source =
++            "#[track_caller]\nfn callee() -> u32 { 7 }\nfn sample() -> fn() -> u32 { callee }";
++        let (mut db, file) = RootDatabase::with_single_file(source);
++        let root = fixture_function(&db, file, "sample");
++        let compiled = compiled_root(&db, root).as_ref().expect("fn pointer fixture compiles");
++        let (instance, env) = compiled
++            .requests
++            .funcs
++            .iter()
++            .find_map(|request| match &request.target {
++                FuncTarget::Instance(instance, env)
++                    if matches!(instance.def, InstanceDef::ReifyShim { .. }) =>
++                {
++                    Some((instance.clone(), env.clone()))
++                }
++                _ => None,
++            })
++            .expect("track_caller fn pointer must request a reify shim");
++        let shim = compiled_instance(&db, instance.clone(), env.clone())
++            .as_ref()
++            .expect("reify shim compiles");
++        assert!(
++            shim.requests.datas.iter().any(|request| {
++                matches!(request, DataRequest::Declaration(func)
++                if declaration_location(&db, *func).is_some())
++            }),
++            "shim must contain a resolved declaration-location request"
++        );
++        take_provider_counts();
++        let was = Mark::of_instance(&db, &instance, &env, false).expect("tracked shim compiles");
++        assert_eq!(Some(was), original_instance_mark(&db, &instance, &env, false));
++        assert_eq!(take_provider_counts(), (0, 1), "cold shim provider execution");
++        assert_eq!(Mark::of_instance(&db, &instance, &env, false), Some(was));
++        assert_eq!(take_provider_counts(), (0, 0));
++        db.set_file_text(file.file_id(&db), &format!("\n\n{source}"));
++        assert_eq!(fixture_function(&db, file, "sample"), root, "same root key");
++        let now = Mark::of_instance(&db, &instance, &env, false).expect("moved shim compiles");
++        assert_eq!(Some(now), original_instance_mark(&db, &instance, &env, false));
++        assert_eq!(now.serial, was.serial, "shim code must remain identical");
++        assert_ne!(now.locations, was.locations, "declaration location must invalidate");
++        assert_eq!(take_provider_counts(), (0, 1), "declaration edit executes provider");
++        assert_eq!(Mark::of_instance(&db, &instance, &env, false), Some(now));
++        assert_eq!(take_provider_counts(), (0, 0));
++    }
+ 
+     #[test]
+     fn a_program_started_again_keeps_what_rustcs_copies_are_of() {

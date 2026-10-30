@@ -1,0 +1,10 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-mark-native-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 0.12s
+     Running unittests src/lib.rs (/home/jeremy/rsa26/reference/target/debug/deps/justrust-98cb9f3c2f3e75b8)
+
+thread 'summary::tests::shares_overlapping_time' (1722489) panicked at src/summary.rs:1100:1:
+assertion `left == right` failed: JR_RUNTIME_FAILURE
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p justrust --lib`

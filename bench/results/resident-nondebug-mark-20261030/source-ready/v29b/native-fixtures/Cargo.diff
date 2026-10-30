@@ -1,0 +1,15 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/Cargo.toml b/toolchain/resident/crates/hir-ty-codegen/Cargo.toml
+index ac8596f94..9f5dc5e6a 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/Cargo.toml
++++ b/toolchain/resident/crates/hir-ty-codegen/Cargo.toml
+@@ -60,7 +60,10 @@ sha2 = "0.10"
+ inkwell = { version = "0.11.0", default-features = false, features = ["llvm23-1-prefer-static", "target-x86", "target-aarch64", "no-libffi-linking"], optional = true }
+ 
+ [dev-dependencies]
++hir.workspace = true
++ide-db.workspace = true
+ ra-jit-fuzz.workspace = true
++test-fixture.workspace = true
+ 
+ [features]
+ llvm = ["dep:inkwell"]

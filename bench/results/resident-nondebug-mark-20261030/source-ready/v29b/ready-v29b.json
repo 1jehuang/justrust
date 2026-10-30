@@ -1,0 +1,32 @@
+{
+  "status": "READY_SOURCE_ONLY",
+  "candidate": "nondebug-mark-v29b",
+  "date_utc": "2026-10-30",
+  "source_ownership_released": true,
+  "owned_files": ["toolchain/resident/crates/hir-ty-codegen/patch.rs", "docs/resident-nondebug-mark-cache.md"],
+  "original_patch_sha256": "f5bbdae3988e42aaef61a0d5f1edda759c29775491b800ad4cfde13cc116f9a2",
+  "candidate_patch_sha256": "2850a2f5db8d7ec65bd06eb751ecec3b172f71df9a5f823e98f15bc95e40dd4d",
+  "candidate_doc_sha256": "8a3759520ad9ab91320e701d3c3f4f6584792dd06a9aa3ac20e4850632a88956",
+  "diff_sha256": "3781e359c32129a074937d3d318a2a2060c69d295d65d22dec281b4910311743",
+  "supersedes_without_overwriting": "../nondebug-mark-v29",
+  "old_v29_manifest_verified_unchanged": true,
+  "old_v29_ready_sha256": "632a45034f09765e49c4f428220cfda5461269a8d1564a85d993389ffa8e7f5d",
+  "source_checks": {"rustfmt_edition_2024_check": "passed", "git_diff_check_owned_files": "passed"},
+  "implementation": {
+    "debug_is_query_key": true,
+    "both_query_attributes": "#[salsa::tracked(returns(copy))]",
+    "explicit_lru_added": false,
+    "explicit_retention_override_added": false,
+    "original_default_cache_policy_preserved": true,
+    "original_provider_computation_and_dependencies_preserved_by_source_inspection": true,
+    "total_memory_bound_claimed": false
+  },
+  "native_builds_tests_workloads_run": false,
+  "native_differential_fixture_added": false,
+  "native_correctness_proven": false,
+  "provider_avoidance_proven": false,
+  "speedup_claimed": false,
+  "committed": false,
+  "installed": false,
+  "remaining_authority": "Root will compile and add actual native host tests for independent original-direct differential correctness and positive provider execution/reuse evidence. Root owns frozen v28 binary comparison, native correctness/performance gates and any eventual commits."
+}

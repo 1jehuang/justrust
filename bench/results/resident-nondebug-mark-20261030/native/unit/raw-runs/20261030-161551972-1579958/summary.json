@@ -1,0 +1,235 @@
+{
+  "id": "20261030-161551972-1579958",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "5ec494e604fe",
+    "dirty_files": 5
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793402151.986059,
+  "wall": 0.24410057067871094,
+  "exit": 0,
+  "cpu_secs": 0.529938,
+  "measurement_coverage": {
+    "samples": 3,
+    "processes": 2,
+    "sample_span_secs": 0.239349365234375,
+    "max_sample_gap_secs": 0.21051716804504395
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.21365618705749512,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 0.022810697555541992,
+    "tail": 0.007633686065673828
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 199,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "hir_ty_codegen-ea0312fd8f75379d",
+        "start": 0.21365618705749512,
+        "wall": 0.022810697555541992,
+        "passed": 50,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 50,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.02,
+    "slowest": [
+      {
+        "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.019,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.018,
+        "passed": true
+      },
+      {
+        "name": "patch::tests::nondebug_instance_marks_invalidate_on_real_declaration_location_movement",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.007,
+        "passed": true
+      },
+      {
+        "name": "patch::tests::nondebug_marks_execute_cold_and_reuse_both_debug_keys_in_one_revision",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.007,
+        "passed": true
+      },
+      {
+        "name": "patch::tests::nondebug_marks_invalidate_on_real_caller_location_movement",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.007,
+        "passed": true
+      },
+      {
+        "name": "patch::tests::nondebug_marks_match_original_after_body_signature_and_restoration_edits",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.007,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.004,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.003,
+        "passed": true
+      },
+      {
+        "name": "sve::tests::stubs_are_what_llvm_selects",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.003,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::an_entry_that_names_what_it_lacks_is_no_entry",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "fncache::tests::code_moved_to_other_lines_has_the_same_hash_and_other_code_another",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::a_type_in_a_set_twice_is_one",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "float_pair::tests::a_pair_of_floats_is_returned_and_read_as_two_integers_of_the_same_widths",
+        "binary": "hir_ty_codegen-ea0312fd8f75379d",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.076,
+    "timed": 50
+  },
+  "resources": {
+    "avg_build_cores": 2.170982224771252,
+    "peak_build_cores": 1.0925474731390428,
+    "peak_build_rss_mb": 145.0078125,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 45874,
+    "avg_other_cores": 3.2374037462230056,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.002778,
+    "psi_mem_secs": 1e-6,
+    "psi_io_secs": 8.999999999999999e-6
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 251,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-161551972-1579958.scope",
+    "final_weight": 1000,
+    "setup_secs": 0.013455794,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

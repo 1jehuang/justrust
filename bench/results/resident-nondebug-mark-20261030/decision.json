@@ -1,0 +1,19 @@
+{
+  "decision": "REJECTED",
+  "promotion": false,
+  "speedup_claimed": false,
+  "date": "2026-10-30",
+  "experiment": "licensed Blaze-derived resident nondebug mark query memoization, not clean-room",
+  "unbuilt_initial_proposal": "v29 explicit LRU4096/32768, superseded before native builds",
+  "built_candidate": "v29b original default Salsa cache policy, debug bool key, independent direct-oracle native fixtures",
+  "baseline": "frozen native v28 binary, not rebuilt from restored sources for this comparison",
+  "matched_sessions": ["rsb20", "rsa26"],
+  "native_gates": {"new_fixtures": 4, "full_codegen": 50, "full_resident": 359},
+  "observed_engine_medians_seconds": [0.08611292598652653, 0.09181484799773898],
+  "observed_reference_medians_seconds": [0.12275236198911443, 0.10960590999457054],
+  "reason": "Strict correctness/provider fixtures passed, but matched scoped timing showed no benefit and was descriptively worse, raw +6.62% and reference-normalized +19.41%. Reject prospective optimization without promoting it.",
+  "limits": ["noise unknown", "not statistical significance", "not a causal slowdown claim", "not comprehensive session-weighted workload", "no default promotion", "positive mechanism is not total-time benefit"],
+  "separate_issue": "Inherited cold-matrix precise diagnostic ordering gap is not evidence against this query's correctness. Root's later cold-diagnostic experiment is independent and not archived or claimed here.",
+  "live_source_restored": true,
+  "root_owns_commits": true
+}

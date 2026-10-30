@@ -1,0 +1,100 @@
+# Experimental resident nondebug mark memoization
+
+This is a source-only candidate for the licensed Blaze-derived resident under
+`toolchain/resident`, not the clean-room compiler. It is not a shipping-client
+change or evidence of a speedup. The coordinator owns native builds, correctness
+checks, performance gates, and any eventual commit.
+
+## Exact computation, tracked for both modes
+
+`Mark::of_root` and `Mark::of_instance` now always call the existing tracked
+`root_mark` and `instance_mark` queries. Their keys include `debug`, so a nondebug
+answer cannot substitute for a debug answer or vice versa. The instance key still
+includes the complete `Instance` and `StoredParamEnvAndCrate`.
+
+The providers perform the original computations in the original order:
+
+1. Read `compiled_root` or `compiled_instance`, returning `None` on compilation
+   failure before reading a serial.
+2. Read `root_serial` or `instance_serial` with the same root or instance/env.
+3. Call the unchanged `Mark::of_function` with the requested debug mode.
+
+In particular, nondebug does **not** mean locations can be omitted.
+`Mark::of_function` still calls `Mark::new`, which hashes every
+`DataRequest::Location(Some((owner, span)))` via `source_location` and every
+`DataRequest::Declaration` via `declaration_location`. Those reads now occur
+inside the tracked mark provider and remain dependencies of that provider.
+Debug code-row locations still go through `row_location` with the original
+owner, closure, and span. The hashing algorithms, empty-hasher result for
+nondebug lines, failure behavior, and `same_code` comparison are unchanged.
+
+No touched-file filter, home determination, authority for cached artifacts,
+serial definition, compiled-code definition, or call-site decision was changed.
+All existing callers of `Mark::of_root` and `Mark::of_instance`, including
+parallel base marks, closure marks, patch probes, and full-rebuild probes, keep
+their original inputs and control flow.
+
+## Retention and Salsa inspection
+
+The mark queries use finite Salsa LRU capacities of 4,096 root values and 32,768
+instance values, shared between the two debug keys within each query. These
+candidate capacities leave room for both modes of the coordinator's reported
+576-root / 10,431-instance workload. They are not measured optimums.
+
+The checked-in Salsa implementation was inspected directly:
+
+- `vendor/salsa-macros/src/tracked_fn.rs` supports multi-argument interned keys
+  and the `lru` option with `returns(copy)`.
+- `vendor/salsa/src/salsa_value.rs` accepts `bool`; existing root/instance/env
+  inputs and the `Copy + Eq` `Option<Mark>` output remain unchanged types.
+- `vendor/salsa/src/function/eviction/lru.rs` evicts least-recently-used values
+  at the next revision boundary, not at every insertion.
+- `vendor/salsa/src/function/memo.rs` only evicts reconstructible derived,
+  nonprovisional values. Eviction is not a hard bound on all Salsa memory or on
+  peak memory within a revision. Dependency and interner bookkeeping are not
+  covered by these value capacities, and protected values may survive eviction.
+
+The default argument-interner retention policy is left unchanged. In particular,
+this change does not add an unbounded `revisions = usize::MAX` policy. Adding a
+bool makes the root query use an interned tuple key rather than its original
+single-Salsa-struct key. Root must validate the cost of that change as well as the
+LRU's locking and bookkeeping costs.
+
+## Validation status and required native gates
+
+Source-only checks: `rustfmt --edition 2024 --check` on `patch.rs` and
+`git diff --check` on the owned changes. No native build, test, workload,
+installation, or commit is performed by this source worker.
+
+No native differential test was added. This crate has no reusable `HirDatabase`
+fixture, the nearby `hir-def` test database is private, and `ide-db`'s
+`RootDatabase` is not a dependency. Introducing a new analysis database and crate
+fixture without a native compile would add an unvalidated subsystem to this
+small candidate. A synthetic Salsa-only fixture would not establish preservation
+of real compilation, serial, and source-location dependencies. The preserved
+original full source is the independent direct-computation oracle for root's
+native gates, not a cached computation compared with itself.
+
+Before promotion, root should:
+
+- Compare both debug modes against the original direct providers on unchanged
+  input, body edits, signature edits, restoration, compilation failures, and
+  source movement. Include changes that move `Location` and `Declaration`
+  requests without changing executable code, and generic/closure instances with
+  distinct environments. Nondebug marks can legitimately change on location
+  movement.
+- Observe actual executions of the **mark providers** on first access, repeated
+  access, unrelated revisions, and relevant revisions using native Salsa
+  execution events or equivalent provider instrumentation. A request, equal
+  returned value, verified memo, compiled-query hit, or lower elapsed time alone
+  does not prove provider avoidance. Relevant inputs must still invalidate.
+- Exercise eviction across revisions and re-request evicted marks against the
+  independent direct oracle. Check both query kinds and debug-key separation.
+- Keep the frozen v28 baseline binary and run the same correctness and measured
+  workloads against v28 and v29. Inspect per-command regressions and memory, not
+  only an aggregate time or the longest validation. Do not infer any speedup
+  from this source change.
+
+The coordinator's artifact directory `ROOT/nondebug-mark-v29` holds the original
+full bytes, exact candidate bytes, diff, SHA-256 manifest, and readiness record.
+That record identifies the source candidate only, not native acceptance.

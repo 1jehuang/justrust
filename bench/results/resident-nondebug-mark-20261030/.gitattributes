@@ -1,0 +1,7 @@
+# Preserve original raw output/unified context bytes, not authored audit text.
+source-ready/** -whitespace
+native/** -whitespace
+sessions/** -whitespace
+provenance/** -whitespace
+licenses/** -whitespace
+harness-captured/** -whitespace

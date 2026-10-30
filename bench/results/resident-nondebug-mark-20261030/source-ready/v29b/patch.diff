@@ -1,0 +1,64 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/patch.rs b/toolchain/resident/crates/hir-ty-codegen/patch.rs
+index df96a3854..3d03a9323 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/patch.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/patch.rs
+@@ -235,11 +235,7 @@ impl Mark {
+ 
+     /// The mark of a root, `None` when it does not compile.
+     fn of_root(db: &dyn HirDatabase, root: FunctionId, debug: bool) -> Option<Mark> {
+-        if debug {
+-            return root_mark(db, root);
+-        }
+-        let compiled = compiled_root(db, root).as_ref().ok()?;
+-        Some(Mark::of_function(db, root_serial(db, root), compiled, false))
++        root_mark(db, root, debug)
+     }
+ 
+     /// The mark of an instance, `None` when it does not compile.
+@@ -249,12 +245,7 @@ impl Mark {
+         env: &StoredParamEnvAndCrate,
+         debug: bool,
+     ) -> Option<Mark> {
+-        if debug {
+-            return instance_mark(db, instance.clone(), env.clone());
+-        }
+-        let compiled = compiled_instance(db, instance.clone(), env.clone()).as_ref().ok()?;
+-        let serial = instance_serial(db, instance.clone(), env.clone());
+-        Some(Mark::of_function(db, serial, compiled, false))
++        instance_mark(db, instance.clone(), env.clone(), debug)
+     }
+ 
+     /// Whether the code is the same, wherever in the file it is: a copy of rustc's that no
+@@ -264,13 +255,14 @@ impl Mark {
+     }
+ }
+ 
+-/// The mark of a root with the lines of its code. Every edit asks it of every root the edit
+-/// can reach, and found again it would ask where each row of the code is; kept, asking again
+-/// verifies the places it read, which instances of one function share.
++/// The exact mark of a root, with code lines only for the debug key. Even without debug,
++/// the mark reads the source locations requested by its code. Keep those reads inside the
++/// tracked query as well as compilation and the serial, so Salsa verifies every dependency.
++/// Retain the original tracked queries' default cache policy for both debug keys.
+ #[salsa::tracked(returns(copy))]
+-fn root_mark(db: &dyn HirDatabase, root: FunctionId) -> Option<Mark> {
++fn root_mark(db: &dyn HirDatabase, root: FunctionId, debug: bool) -> Option<Mark> {
+     let compiled = compiled_root(db, root).as_ref().ok()?;
+-    Some(Mark::of_function(db, root_serial(db, root), compiled, true))
++    Some(Mark::of_function(db, root_serial(db, root), compiled, debug))
+ }
+ 
+ /// [`root_mark`], of an instance.
+@@ -279,10 +271,11 @@ fn instance_mark(
+     db: &dyn HirDatabase,
+     instance: Instance,
+     env: StoredParamEnvAndCrate,
++    debug: bool,
+ ) -> Option<Mark> {
+     let compiled = compiled_instance(db, instance.clone(), env.clone()).as_ref().ok()?;
+     let serial = instance_serial(db, instance, env);
+-    Some(Mark::of_function(db, serial, compiled, true))
++    Some(Mark::of_function(db, serial, compiled, debug))
+ }
+ 
+ /// Something in the base that an edit can change or take away.

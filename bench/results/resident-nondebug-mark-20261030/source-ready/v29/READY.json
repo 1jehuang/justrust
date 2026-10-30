@@ -1,0 +1,35 @@
+{
+  "status": "READY_SOURCE_ONLY",
+  "candidate": "nondebug-mark-v29",
+  "date_utc": "2026-10-30",
+  "source_ownership_released": true,
+  "owned_files": [
+    "toolchain/resident/crates/hir-ty-codegen/patch.rs",
+    "docs/resident-nondebug-mark-cache.md"
+  ],
+  "original_patch_sha256": "f5bbdae3988e42aaef61a0d5f1edda759c29775491b800ad4cfde13cc116f9a2",
+  "candidate_patch_sha256": "0bf66d7539d51f03a04551aaeac9122a216030f1597a7d6d4e3ca1a253bb79d4",
+  "candidate_doc_sha256": "b9654cc9510c2fe23d05ba0f6c79b232be5b01784da18e5d3b99e049fc260967",
+  "diff_sha256": "7eb738f607130cafcf78d1ab9fe9ec5a9891f1aa94feea7f297d28f368ac2765",
+  "source_checks": {
+    "rustfmt_edition_2024_check": "passed",
+    "git_diff_check_owned_files": "passed",
+    "full_original_preserved_before_edit": true,
+    "callers_and_salsa_sources_inspected": true
+  },
+  "implementation": {
+    "debug_is_query_key": true,
+    "root_lru_values": 4096,
+    "instance_lru_values": 32768,
+    "original_provider_computation_and_dependencies_preserved": true,
+    "lru_is_revision_boundary_value_retention_not_total_memory_bound": true
+  },
+  "native_builds_tests_workloads_run": false,
+  "native_differential_fixture_added": false,
+  "fixture_limitation": "No reusable HirDatabase fixture in this crate; hir-def TestDB private; ide-db RootDatabase unavailable without dependency edits. No synthetic proof substituted.",
+  "provider_avoidance_proven": false,
+  "speedup_claimed": false,
+  "committed": false,
+  "installed": false,
+  "remaining_authority": "Root owns actual native builds, independent direct-computation correctness oracles, provider execution/reuse evidence, memory/eviction validation, frozen v28 binary comparisons, performance gates, and any eventual commits."
+}

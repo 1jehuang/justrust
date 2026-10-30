@@ -1,0 +1,48 @@
+{
+  "status": "READY_SOURCE_ONLY",
+  "candidate": "nondebug-mark-v29b-native-fixtures",
+  "date_utc": "2026-10-30",
+  "source_ownership_released": true,
+  "owned_files": [
+    "toolchain/resident/crates/hir-ty-codegen/patch.rs",
+    "toolchain/resident/crates/hir-ty-codegen/Cargo.toml",
+    "docs/resident-nondebug-mark-cache.md"
+  ],
+  "original_patch_sha256": "f5bbdae3988e42aaef61a0d5f1edda759c29775491b800ad4cfde13cc116f9a2",
+  "candidate_patch_sha256": "959dacd0e3a6ece56514b98175f828e5ec3e0e41af826ee42ceb600ba141771e",
+  "original_cargo_sha256": "f46dec5b2cf06f30456f2379967d4bb1747c9e690ae35a1861d3775c95eab381",
+  "candidate_cargo_sha256": "443ba74bc8d7cbdc902c3fba1d1efc2cecc8a1772db9dfb2fd83393de6601774",
+  "candidate_doc_sha256": "3164e5e2fb0043afc2925faa2392ab52cc62f904277b9e47abbe9b490c95fe1f",
+  "preserved_prior_candidates": ["../../nondebug-mark-v29", ".."],
+  "source_checks": {
+    "rustfmt_edition_2024_check": "passed",
+    "git_diff_check_owned_files": "passed",
+    "real_fixture_api_sources_inspected": true
+  },
+  "implementation": {
+    "debug_is_query_key": true,
+    "both_query_attributes": "#[salsa::tracked(returns(copy))]",
+    "explicit_lru_added": false,
+    "explicit_retention_override_added": false,
+    "original_default_cache_policy_preserved": true,
+    "production_test_shim_added": false,
+    "provider_counters": "cfg(test) synchronous thread-local actual provider-entry counts",
+    "oracle": "cfg(test) independent original direct compilation, serial and complete line/location hashing; never calls tracked mark queries or Mark constructors",
+    "fixture_database": "ide_db::RootDatabase with test_fixture::WithFixture, hir::Semantics, actual compiled functions and reify shim",
+    "devdeps_added": ["hir", "ide-db", "test-fixture"]
+  },
+  "native_fixture_sources_added": [
+    "nondebug_marks_execute_cold_and_reuse_both_debug_keys_in_one_revision",
+    "nondebug_marks_match_original_after_body_signature_and_restoration_edits",
+    "nondebug_marks_invalidate_on_real_caller_location_movement",
+    "nondebug_instance_marks_invalidate_on_real_declaration_location_movement"
+  ],
+  "native_builds_tests_workloads_run": false,
+  "lockfile_resolution_or_edit_run": false,
+  "native_correctness_proven": false,
+  "provider_avoidance_proven": false,
+  "speedup_claimed": false,
+  "committed": false,
+  "installed": false,
+  "remaining_authority": "Root will compile and run real native host tests. Exact cold-positive/repeat-zero/edit-positive counter assertions and real resolved request/unchanged-serial/changed-location/parity assertions must pass, not be softened. Root owns lockfile updates if needed, further coverage, frozen v28 comparison, performance/correctness gates and eventual commits."
+}

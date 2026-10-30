@@ -1,0 +1,32 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: 50 tests passed in 0.2s
+  time    startup 0.21s | compile 0.00s | tests 0.02s
+  units   0 compiled (0 local, 0 deps, 0 build scripts), 199 fresh
+  tests   50 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 0.02s
+  cpu     0.5s total, avg 2.2/peak 1.1 of 16 cores; others used 3.2 cores
+  memory  peak 145 MB build, 0 MB largest rustc, 44.8 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+  output  3 warnings shown, 248 hidden; 203 progress and 50 passing-test lines hidden
+  waste   none detected
+  more    `justrust log 20261030-161551972-1579958` full output, `justrust show 20261030-161551972-1579958` full profile

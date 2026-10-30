@@ -1,0 +1,27 @@
+{
+  "decision": "REJECTED",
+  "promotion": false,
+  "speedup_claimed": false,
+  "immutable_files": 197,
+  "native_test_counts": [
+    4,
+    50,
+    359
+  ],
+  "sessions": {
+    "rsb20": {
+      "reference": 0.12275236198911443,
+      "engine": 0.08611292598652653
+    },
+    "rsa26": {
+      "reference": 0.10960590999457054,
+      "engine": 0.09181484799773898
+    }
+  },
+  "raw_percent": 6.621447298288974,
+  "reference_normalized_percent": 19.409934146901264,
+  "noise": "unknown",
+  "scope": "scoped native diagnostic only, not comprehensive default-promotion evidence",
+  "mechanism": "four native direct-oracle/provider-counter fixtures passed as written",
+  "restoration": "two owned source paths exact HEAD; root separately restored lock"
+}

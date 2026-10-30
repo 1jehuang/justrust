@@ -1,0 +1,24 @@
+diff --git a/toolchain/resident/Cargo.lock b/toolchain/resident/Cargo.lock
+index 761b0dac4..ad187f2fa 100644
+--- a/toolchain/resident/Cargo.lock
++++ b/toolchain/resident/Cargo.lock
+@@ -2221,9 +2221,11 @@ dependencies = [
+  "cranelift-module",
+  "cranelift-object",
+  "either",
++ "hir",
+  "hir-def",
+  "hir-expand",
+  "hir-ty",
++ "ide-db",
+  "indexmap",
+  "inkwell",
+  "intern",
+@@ -2247,6 +2249,7 @@ dependencies = [
+  "stdx",
+  "syntax",
+  "target-lexicon",
++ "test-fixture",
+  "tracing",
+  "triomphe",
+  "wasm-encoder 0.244.0",

@@ -1,0 +1,18 @@
+{
+  "restored_at_utc": "2026-10-30T23:30:56Z",
+  "head_at_restoration": "5ec494e604fed32d21f425d884f2a4ec7b548a78",
+  "source_ownership_released": true,
+  "scoped_git_diff_head_clean": true,
+  "candidate_bytes_compared_before_restore": true,
+  "original_backup_bytes_compared_after_restore": true,
+  "restoration_method": "Copy exact preserved original full bytes after confirming both current candidates matched frozen snapshots; run cmp then git diff --exit-code HEAD scoped to exactly the two owned paths.",
+  "restored_patch_path": "toolchain/resident/crates/hir-ty-codegen/patch.rs",
+  "restored_patch_sha256": "f5bbdae3988e42aaef61a0d5f1edda759c29775491b800ad4cfde13cc116f9a2",
+  "restored_cargo_path": "toolchain/resident/crates/hir-ty-codegen/Cargo.toml",
+  "restored_cargo_sha256": "f46dec5b2cf06f30456f2379967d4bb1747c9e690ae35a1861d3775c95eab381",
+  "candidate_patch_sha256": "959dacd0e3a6ece56514b98175f828e5ec3e0e41af826ee42ceb600ba141771e",
+  "candidate_cargo_sha256": "443ba74bc8d7cbdc902c3fba1d1efc2cecc8a1772db9dfb2fd83393de6601774",
+  "lock_restore_authority": "Root restored Cargo.lock separately; worker did not edit lock.",
+  "later_live_changes": "Root may independently edit resident main.rs and commit later experiments. Portable replay never reads live sources or assumes checkout HEAD remains at restoration revision.",
+  "native_workloads_run_by_evidence_worker": false
+}

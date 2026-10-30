@@ -1,0 +1,4 @@
+f5bbdae3988e42aaef61a0d5f1edda759c29775491b800ad4cfde13cc116f9a2  patch.rs.original
+2850a2f5db8d7ec65bd06eb751ecec3b172f71df9a5f823e98f15bc95e40dd4d  patch.rs.candidate
+8a3759520ad9ab91320e701d3c3f4f6584792dd06a9aa3ac20e4850632a88956  resident-nondebug-mark-cache.md.candidate
+3781e359c32129a074937d3d318a2a2060c69d295d65d22dec281b4910311743  patch.diff

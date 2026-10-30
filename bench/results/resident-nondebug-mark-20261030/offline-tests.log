@@ -1,0 +1,28 @@
+test_detached_relocation_empty_path (__main__.RejectionControls.test_detached_relocation_empty_path) ... ok
+test_plain_checksum_corruption (__main__.RejectionControls.test_plain_checksum_corruption) ... ok
+test_positive_offline_replay (__main__.RejectionControls.test_positive_offline_replay) ... ok
+test_resigned_assertion_marker_loss (__main__.RejectionControls.test_resigned_assertion_marker_loss) ... ok
+test_resigned_binary_identity_all_copies (__main__.RejectionControls.test_resigned_binary_identity_all_copies) ... ok
+test_resigned_candidate_source_change_is_rejected (__main__.RejectionControls.test_resigned_candidate_source_change_is_rejected) ... ok
+test_resigned_changed_median (__main__.RejectionControls.test_resigned_changed_median) ... ok
+test_resigned_empty_native_filter (__main__.RejectionControls.test_resigned_empty_native_filter) ... ok
+test_resigned_missing_frozen_source_check (__main__.RejectionControls.test_resigned_missing_frozen_source_check) ... ok
+test_resigned_missing_recovery_phase (__main__.RejectionControls.test_resigned_missing_recovery_phase) ... ok
+test_resigned_native_raw_status (__main__.RejectionControls.test_resigned_native_raw_status) ... ok
+test_resigned_native_test_rename_keeps_count_but_fails_names (__main__.RejectionControls.test_resigned_native_test_rename_keeps_count_but_fails_names) ... ok
+test_resigned_original_lock_identity (__main__.RejectionControls.test_resigned_original_lock_identity) ... ok
+test_resigned_patch_reconstruction_change (__main__.RejectionControls.test_resigned_patch_reconstruction_change) ... ok
+test_resigned_profile_change (__main__.RejectionControls.test_resigned_profile_change) ... ok
+test_resigned_promotion_is_rejected (__main__.RejectionControls.test_resigned_promotion_is_rejected) ... ok
+test_resigned_restoration_claim_change (__main__.RejectionControls.test_resigned_restoration_claim_change) ... ok
+test_resigned_runtime_marker_loss (__main__.RejectionControls.test_resigned_runtime_marker_loss) ... ok
+test_resigned_sample_exclusion (__main__.RejectionControls.test_resigned_sample_exclusion) ... ok
+test_resigned_source_identity_all_copies (__main__.RejectionControls.test_resigned_source_identity_all_copies) ... ok
+test_resigned_source_readiness_cannot_claim_native_proof (__main__.RejectionControls.test_resigned_source_readiness_cannot_claim_native_proof) ... ok
+test_resigned_toolchain_identity_all_copies (__main__.RejectionControls.test_resigned_toolchain_identity_all_copies) ... ok
+test_resigned_type_diagnostic_loss (__main__.RejectionControls.test_resigned_type_diagnostic_loss) ... ok
+
+----------------------------------------------------------------------
+Ran 23 tests in 1.780s
+
+OK

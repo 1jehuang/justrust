@@ -1,0 +1,136 @@
+# Experimental resident nondebug mark memoization
+
+This is a source-only candidate for the licensed Blaze-derived resident under
+`toolchain/resident`, not the clean-room compiler. It is not a shipping-client
+change or evidence of a speedup. The coordinator owns native builds, correctness
+checks, performance gates, and any eventual commit.
+
+## Exact computation, tracked for both modes
+
+`Mark::of_root` and `Mark::of_instance` now always call the existing tracked
+`root_mark` and `instance_mark` queries. Their keys include `debug`, so a nondebug
+answer cannot substitute for a debug answer or vice versa. The instance key still
+includes the complete `Instance` and `StoredParamEnvAndCrate`.
+
+The providers perform the original computations in the original order:
+
+1. Read `compiled_root` or `compiled_instance`, returning `None` on compilation
+   failure before reading a serial.
+2. Read `root_serial` or `instance_serial` with the same root or instance/env.
+3. Call the unchanged `Mark::of_function` with the requested debug mode.
+
+In particular, nondebug does **not** mean locations can be omitted.
+`Mark::of_function` still calls `Mark::new`, which hashes every
+`DataRequest::Location(Some((owner, span)))` via `source_location` and every
+`DataRequest::Declaration` via `declaration_location`. Those reads now occur
+inside the tracked mark provider and remain dependencies of that provider.
+Debug code-row locations still go through `row_location` with the original
+owner, closure, and span. The hashing algorithms, empty-hasher result for
+nondebug lines, failure behavior, and `same_code` comparison are unchanged.
+
+No touched-file filter, home determination, authority for cached artifacts,
+serial definition, compiled-code definition, or call-site decision was changed.
+All existing callers of `Mark::of_root` and `Mark::of_instance`, including
+parallel base marks, closure marks, patch probes, and full-rebuild probes, keep
+their original inputs and control flow.
+
+## Retention and Salsa inspection
+
+The v29b mark queries retain the original `#[salsa::tracked(returns(copy))]`
+attributes and their default cache policy. No explicit LRU capacity, retention
+override, or new eviction policy is added. The earlier source-only v29 proposal
+with explicit LRU capacities was not built by root and remains preserved
+separately. It is superseded by v29b, not silently overwritten.
+
+The checked-in Salsa implementation was inspected directly:
+
+- `vendor/salsa-macros/src/tracked_fn.rs` supports multi-argument interned keys
+  with `returns(copy)`. With no `lru` option it selects `NoopEviction`, as the
+  original mark queries did.
+- `vendor/salsa/src/salsa_value.rs` accepts `bool`; existing root/instance/env
+  inputs and the `Copy + Eq` `Option<Mark>` output remain unchanged types.
+- `vendor/salsa/src/function/eviction/noop.rs` is the original default value
+  policy. No finite global memo-memory bound is claimed by this candidate.
+
+The default argument-interner retention policy is left unchanged. In particular,
+this change does not add an unbounded `revisions = usize::MAX` policy. Adding a
+bool makes the root query use an interned tuple key rather than its original
+single-Salsa-struct key. Root must validate the cost and memory behavior of that
+change. Only the bool-keyed query routing is under evaluation, not a cache-policy
+retuning.
+
+## Validation status and required native gates
+
+Source-only checks: `rustfmt --edition 2024 --check` on `patch.rs` and
+`git diff --check` on the owned changes. No native build, test, workload,
+installation, or commit is performed by this source worker.
+
+Root expanded source ownership to the codegen crate's `Cargo.toml` to permit
+test-only workspace dependencies on `hir`, `ide-db`, and `test-fixture`. Four
+native tests are now present in `patch.rs`, using the real
+`RootDatabase::with_single_file` fixture and `hir::Semantics` to resolve stable
+function IDs. They have **not** been compiled or executed by this source worker.
+They are proposed gates, not successful correctness or provider-reuse evidence.
+
+The cfg-test-only direct oracle copies the original compiled-query and serial
+reads and independently repeats the original line/location hashing. It never
+calls either tracked mark query or `Mark::of_root`, `Mark::of_instance`,
+`Mark::of_function`, or `Mark::new`. The actual tracked providers increment
+thread-local counters on entry in test builds only. Synchronous fixtures assert
+exact positive cold counts, zero repeat counts, and exact positive invalidation
+counts. Counters measure provider entries, not request counts or equal answers.
+No public production test shim or environment-variable behavior was added.
+
+The fixtures cover:
+
+- Both debug keys: one root and one instance execution per cold key, followed by
+  zero executions for repeated calls in the same revision.
+- Body, signature, and restoration edits: the same function ID, changed root
+  and instance serials, exact direct-oracle parity, one execution of each mark
+  provider per edited revision, then zero repeat executions.
+- Source movement around a real `#[track_caller]` call: assert a resolved
+  `DataRequest::Location` exists, unchanged code serials, changed location
+  hashes for both query kinds and both debug keys, exact oracle parity, and
+  exact invalidation/reuse counts.
+- Declaration movement for a real track-caller function-pointer reify shim:
+  assert a resolved `DataRequest::Declaration` exists, unchanged shim serial,
+  changed nondebug location hash, exact instance oracle parity, and exact
+  invalidation/reuse counts.
+
+These tests fail rather than skip if a fixture does not compile or does not
+actually contain its required location request. No positive count assertion is
+softened to allow zero. Root must compile and run them, repair any concrete
+failure without weakening the intended proof, and add coverage for remaining
+native cases as needed. The preserved original full source remains available
+for independent comparisons against the frozen v28 binary.
+
+Before promotion, root should:
+
+- Compare both debug modes against the original direct providers on unchanged
+  input, body edits, signature edits, restoration, compilation failures, and
+  source movement. Include changes that move `Location` and `Declaration`
+  requests without changing executable code, and generic/closure instances with
+  distinct environments. Nondebug marks can legitimately change on location
+  movement.
+- Observe actual executions of the **mark providers** on first access, repeated
+  access, unrelated revisions, and relevant revisions using native Salsa
+  execution events or equivalent provider instrumentation. A request, equal
+  returned value, verified memo, compiled-query hit, or lower elapsed time alone
+  does not prove provider avoidance. Relevant inputs must still invalidate.
+- Exercise repeated revisions and restoration against the independent direct
+  oracle. Check both query kinds and debug-key separation, including the
+  default argument-interner retention behavior.
+- Keep the frozen v28 baseline binary and run the same correctness and measured
+  workloads against v28 and v29b. Inspect per-command regressions and memory, not
+  only an aggregate time or the longest validation. Do not infer any speedup
+  from this source change.
+
+The coordinator's artifact directory `ROOT/nondebug-mark-v29` preserves the old
+v29 proposal unchanged. The initial no-fixture v29b snapshot is also retained
+unchanged in `ROOT/nondebug-mark-v29b`. The final fixture-bearing source candidate
+is in `ROOT/nondebug-mark-v29b/native-fixtures`, including original source and
+manifest bytes, exact candidate source and manifest bytes, documentation
+snapshot, diffs, SHA-256 manifest, and a distinct `ready-v29b.json`. That record
+identifies the source candidate only, not native acceptance. Root must pass
+native host correctness and provider-execution tests before treating either as
+proven.
