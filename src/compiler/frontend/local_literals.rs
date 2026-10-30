@@ -1573,10 +1573,38 @@ impl<'s> Solver<'_, '_, 's> {
                         progress = true;
                         continue;
                     }
-                    // No declaration of this name exists anywhere, so no
-                    // autoderef step of this final receiver can select it.
+                    // Exact receiver and argument types permit the canonical
+                    // selector to prove absence even if an unrelated type has
+                    // a same-spelled method. Retain this diagnostic until true
+                    // quiescence below, never across missing graph inputs.
+                    // Open arguments keep the older name-inventory proof.
+                    let exact_arguments =
+                        if !final_receiver_has_inference(&ty) && method.actuals.is_empty() {
+                            self.checker.infer_storage(method.args.len())?;
+                            method
+                                .args
+                                .iter()
+                                .map(|argument| self.resolve(*argument, 0))
+                                .collect::<Result<Option<Vec<_>>, _>>()?
+                        } else {
+                            None
+                        };
+                    let exact_absence = if let Some(arguments) = exact_arguments
+                        && arguments.iter().all(|ty| !final_receiver_has_inference(ty))
+                    {
+                        let written = self
+                            .resolve(method.receiver, 0)?
+                            .unwrap_or_else(|| ty.clone());
+                        matches!(
+                            plan.select_method(&written, &method.name, &arguments, self.checker.facts(), &self.checker.module, &plan.budget),
+                            Err(error) if error.starts_with("no applicable method ")
+                        )
+                    } else {
+                        false
+                    };
                     if !final_receiver_has_inference(&ty)
-                        && method_name_has_no_declaration(plan, &method.name, &plan.budget)?
+                        && (exact_absence
+                            || method_name_has_no_declaration(plan, &method.name, &plan.budget)?)
                     {
                         let name = self
                             .checker
