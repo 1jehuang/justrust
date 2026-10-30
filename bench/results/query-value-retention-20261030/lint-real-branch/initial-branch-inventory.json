@@ -1,0 +1,20 @@
+{
+  "no": {
+    "evidence": "unknown-marker-absent",
+    "interval_records": null,
+    "per_thread": [],
+    "time_saved_ns": null
+  },
+  "yes": {
+    "evidence": "observed",
+    "interval_records": 1182,
+    "per_thread": [
+      {
+        "thread": 3,
+        "union_elapsed_ns": 27034,
+        "interval_records": 1182
+      }
+    ],
+    "time_saved_ns": null
+  }
+}

@@ -159,6 +159,7 @@ fn shallow_lint_levels_on(tcx: TyCtxt<'_>, owner: hir::OwnerId) -> ShallowLintLe
         && owner != hir::CRATE_OWNER_ID
         && attrs.map.is_empty()
     {
+        let _fast_path_timer = tcx.prof.generic_activity("jr_empty_lint_level_fast_path");
         // This is a shallow map, not the effective inherited lint levels. Parent
         // and command-line levels are still resolved by probe_for_lint_level_spec.
         // Read hir_attr_map first so incremental invalidation observes attributes

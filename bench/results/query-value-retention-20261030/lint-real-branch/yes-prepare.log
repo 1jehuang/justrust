@@ -1,0 +1,14 @@
+
+justrust: ok: check succeeded, tests not run in 28.0s
+  time    startup 0.07s | compile 27.87s | gaps 0.01s
+  units   57 compiled (1 local, 47 deps, 9 build scripts), 0 fresh
+          justrust                           6.43s  cpu   6.4s    485 MB
+          syn                                3.66s  cpu   7.5s    380 MB
+          serde_derive                       2.91s  cpu   4.6s    349 MB
+          serde_core                         2.18s  cpu   5.0s    317 MB
+  cpu     66.3s total, avg 2.4/peak 6.1 of 16 cores; others used 10.8 cores (1 other rustc), priority weight 1000 -> 471
+  memory  peak 2289 MB build, 485 MB largest rustc, 20.1 GB free; stalls cpu 11.35s mem 0.00s io 0.02s
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 16.3s  rebuilt 47 registry dependencies and 9 build scripts (16.3s)
+          ~  9.5s  machine was busy: other processes used 11 of 16 cores on average (up to 1 rustc from other builds) and tasks stalled 11.4s waiting for CPU
+  more    `justrust log 20261029-222237800-3399990` full output, `justrust show 20261029-222237800-3399990` full profile

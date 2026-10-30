@@ -148,5 +148,43 @@ remove those provider calls. For that query's recompute scopes, thread 3 elapsed
 unions are 19,077,911 ns off and 16,242,189 ns on. These are two instrumented
 invocations under contention, **not time saved, CPU work, causal speedup, or a
 promotion result**. The initial capture has no explicit shortcut-branch marker,
-so it does not directly count how many owners take that return. A native optional
-branch marker and separate inventory are being added to close that evidence gap.
+so it does not directly count how many owners take that return. The subsequent
+optional marker capture below closes that narrower evidence gap.
+
+## Direct shortcut coverage and existing incremental regressions
+
+The optional native generic activity `jr_empty_lint_level_fast_path` is emitted
+only inside the enabled, non-crate, entirely empty owner-attribute-map return.
+It observes that shortcut, not all lint work or unique semantic owners. Its
+interval covers the return path, not the setup avoided relative to the off
+provider. It must not be interpreted as time saved.
+
+After adding the marker, compiler and matching std bootstrap passed in 64 seconds.
+A new frozen sysroot passed the 22-case/88-invocation native gate again. Its
+driver SHA-256 is
+`77c3da92b7795833b871b5c7e965700ee707949dceac910d75cbdfb10db17c1d`.
+The new real-source capture follows the same pinned-source and independent-mode
+protocol above. The off capture has no shortcut marker, reported as unknown
+coverage rather than zero. The on capture directly observes **1,182 shortcut
+interval records**, thread 3 union 27,034 ns. That is instrumented branch-body
+elapsed time, not an estimate of saved setup time or an end-to-end result.
+
+`bench/reuse-lint-incremental.sh` additionally runs three unchanged existing
+native compiler fixtures through the actual compiletest binary in both modes:
+
+* `cache-lint-expectation.rs`
+* `hashes/delayed_lints.rs`
+* `lint-unused-features.rs`
+
+All three pass per mode, with fingerprint verification and scalar/associated
+retention disabled. The unused-features fixture intentionally emits its expected
+errors and is a passing negative test. Fixtures and their internal revisions
+were not modified or blessed. This is six selected test executions, not the full
+180-test incremental suite. Compiler, driver and compiletest hashes remain
+unchanged across the pair. Native formatting and root `cargo fmt --check` pass.
+
+Exact correctness, real-capture and compiletest receipts are retained in
+`bench/results/query-value-retention-20261030/lint-real-branch/`; the corresponding
+redacted run exports are in `data/runs/xps14-lint-branch-20261030/`. None of this
+promotes the experimental flag or substitutes for the blocked comprehensive
+session-weighted performance comparison.

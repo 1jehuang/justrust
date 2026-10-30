@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "scope": "real-pinned-justrust-unchanged-lint-mechanism-only",
+  "source_commit": "f97fcc2",
+  "status": "completed",
+  "identities": {
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+    "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/sysroot/bin/rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so": "77c3da92b7795833b871b5c7e965700ee707949dceac910d75cbdfb10db17c1d",
+    "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+  },
+  "runs": {
+    "no-prepare": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "check",
+        "--lib"
+      ],
+      "rustflags": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zself-profile=/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/profiles-no -Zself-profile-events=default,function-args -Zincremental-verify-ich",
+      "log": "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/no-prepare.log",
+      "status": 0
+    },
+    "no-forced-unchanged": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "check",
+        "--lib"
+      ],
+      "rustflags": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zself-profile=/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/profiles-no -Zself-profile-events=default,function-args -Zincremental-verify-ich",
+      "log": "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/no-forced-unchanged.log",
+      "status": 0,
+      "profile": "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/profiles-no/justrust-3399648.mm_profdata",
+      "profile_sha256": "a78132a34a4e91535a9dcdda990431a8781446009a64f075cfd694a125805ede"
+    },
+    "yes-prepare": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "check",
+        "--lib"
+      ],
+      "rustflags": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zself-profile=/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/profiles-yes -Zself-profile-events=default,function-args -Zincremental-verify-ich",
+      "log": "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/yes-prepare.log",
+      "status": 0
+    },
+    "yes-forced-unchanged": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "check",
+        "--lib"
+      ],
+      "rustflags": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no -Zself-profile=/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/profiles-yes -Zself-profile-events=default,function-args -Zincremental-verify-ich",
+      "log": "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/yes-forced-unchanged.log",
+      "status": 0,
+      "profile": "/home/jeremy/.jcode/scratch/lint-branch-profile-20261030/profiles-yes/justrust-3404283.mm_profdata",
+      "profile_sha256": "d08e0152ff995ea71783562a6e9e7e9c57b578f46dee9be584eb04a997d616c6"
+    }
+  },
+  "mode": "yes",
+  "epoch": "forced-unchanged"
+}
