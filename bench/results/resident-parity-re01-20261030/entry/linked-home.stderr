@@ -1,0 +1,4 @@
+Error: unsafe JR_ENGINE_HOME
+
+Caused by:
+    /home/jeremy/.jcode/scratch/re-entry-20261030/linked must be canonical, owned by this user and inaccessible to group/other

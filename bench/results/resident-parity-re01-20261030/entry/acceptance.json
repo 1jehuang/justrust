@@ -1,0 +1,80 @@
+{
+  "scope": "native-entry-and-namespace-only-not-language-or-performance",
+  "status": "passed",
+  "sha256_before": "726edc785271a1907e5d40619fde5239da031f535fff035b62c6650a8b1aafef",
+  "rows": [
+    {
+      "case": "version-without-home",
+      "arguments": [
+        "--version"
+      ],
+      "status": 0,
+      "stdout": "jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-bc9689b69a6f40e47b93a11f679daa197eb5c1fbc10b9898a310e9cac3efdfc4)\n",
+      "stderr": ""
+    },
+    {
+      "case": "no-home",
+      "arguments": [
+        "status"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "Error: jr-engine requires explicit JR_ENGINE_HOME, no upstream or user-home fallback is allowed\n"
+    },
+    {
+      "case": "relative-home",
+      "arguments": [
+        "status"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "Error: JR_ENGINE_HOME must be an absolute canonical private directory, not a root\n"
+    },
+    {
+      "case": "shared-home",
+      "arguments": [
+        "status"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "Error: unsafe JR_ENGINE_HOME\n\nCaused by:\n    /home/jeremy/.jcode/scratch/re-entry-20261030/shared must be canonical, owned by this user and inaccessible to group/other\n"
+    },
+    {
+      "case": "linked-home",
+      "arguments": [
+        "status"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "Error: unsafe JR_ENGINE_HOME\n\nCaused by:\n    /home/jeremy/.jcode/scratch/re-entry-20261030/linked must be canonical, owned by this user and inaccessible to group/other\n"
+    },
+    {
+      "case": "private-status-hostile-aliases",
+      "arguments": [
+        "status"
+      ],
+      "status": 0,
+      "stdout": "plain cargo: not through blaze (`blaze enable` turns it on)\ndaemon: not running\nstore: 0 MB, at most 32768 MB (`blaze cache gc` collects it), /home/jeremy/.jcode/scratch/re-entry-20261030/private/resident-v1/store/resident-v1-bc9689b69a6f40e47b93a11f679daa197eb5c1fbc10b9898a310e9cac3efdfc4\n",
+      "stderr": ""
+    },
+    {
+      "case": "reject-management",
+      "arguments": [
+        "enable"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "Error: jr-engine does not support upstream install, shared cache, or closure management commands\n"
+    },
+    {
+      "case": "linked-namespace",
+      "arguments": [
+        "status"
+      ],
+      "status": 1,
+      "stdout": "",
+      "stderr": "Error: /home/jeremy/.jcode/scratch/re-entry-20261030/trap-home/resident-v1 must be canonical, owned by this user and inaccessible to group/other\n"
+    }
+  ],
+  "sha256_after": "726edc785271a1907e5d40619fde5239da031f535fff035b62c6650a8b1aafef"
+}

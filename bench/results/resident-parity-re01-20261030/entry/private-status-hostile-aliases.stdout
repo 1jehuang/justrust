@@ -1,0 +1,3 @@
+plain cargo: not through blaze (`blaze enable` turns it on)
+daemon: not running
+store: 0 MB, at most 32768 MB (`blaze cache gc` collects it), /home/jeremy/.jcode/scratch/re-entry-20261030/private/resident-v1/store/resident-v1-bc9689b69a6f40e47b93a11f679daa197eb5c1fbc10b9898a310e9cac3efdfc4
