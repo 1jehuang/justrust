@@ -208,5 +208,50 @@ The original failed report remains at
 The focused repair report and its four raw profiles remain under
 `/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/mechanism-repair-v2/`.
 The focused report is `focused-evidence.json`. These scratch paths are an audit
-trail, not a portable retained-results bundle. The repaired full matrix remains
-root-owned and must pass before source promotion. No speedup is inferred.
+trail. Root subsequently passed the repaired full matrix and independent
+mechanism gate, with portable evidence retained below. No speedup is inferred.
+
+## Portable native evidence and detached source replay
+
+`bench/results/cgu-inline-native-20261030/` preserves the complete original
+failed report, focused repair report, repaired full passed report, and all
+**twelve raw profiles**, plus build/status/version/identity logs, the original
+source-ready marker, and root's Python test log. Original physical paths and
+diagnostic bytes are not rewritten. The original positive-proof gap remains
+explicit: 672 semantic observations passed, but the required revisit proof
+failed. It is not retroactively labeled a passing native gate.
+
+The repaired full root run passed **672 semantic observations plus four
+independent mechanism processes**. Enabled cold and warm profiles each recorded
+23 scopes and one cross-root revisit. Both off profiles recorded zero markers.
+Native source was accepted as `66e0f9273` after this gate. The driver and native
+marker implementation remained unchanged between the failed fixture, focused
+repair, and successful full rerun.
+
+The bundle includes original/repaired harness snapshots at `719c916df` and
+`20e3f2a5e`, their complete Python helper/parser sources, and native source
+snapshots from `66e0f9273`. Both compiler source hashes are checked against the
+original source-ready marker. The later native documentation snapshot has an
+updated document hash after acceptance, explicitly distinct from the marker's
+historical document hash. Neither historical record is rewritten.
+
+Copy the results directory alone anywhere with Python, then run:
+
+```sh
+python3 audit.py
+python3 test_audit.py -v
+```
+
+The audit needs no git checkout, original scratch directory, compiler binary,
+network, or third-party package. It imports only archived source snapshots and
+checks both complete 672-observation matrices against the correct fixture
+revision, exact status/diagnostic/runtime bytes and independent expectations,
+all mode flags and tracked transitions, persistent cache continuity,
+nonincremental cache omission, compiler identities, and frozen compiler-source
+hashes. All twelve profiles are reparsed to check their SHA-256, size, metadata,
+resolved static marker counts, and unresolved record counts. The precise
+original failure and both subsequent positive proofs are validated separately.
+`audit.json` records the successful replay and four archive hashes. Ten tests
+cover mutations and genuinely detached isolated-Python replay from copied
+archives. No native calls were made for evidence retention or audit. These
+results do not justify default promotion or a performance improvement claim.

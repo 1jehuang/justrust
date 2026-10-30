@@ -1,0 +1,30 @@
+{
+  "verdict": "passed",
+  "original_semantic_modes": 672,
+  "repaired_semantic_modes": 672,
+  "raw_profiles_reparsed": 12,
+  "original_mechanism_verdict": "failed-as-required",
+  "repaired_mechanism_proof": {
+    "marker_totals": {
+      "jr_cgu_inline_shared_traversal": 46,
+      "jr_cgu_inline_shared_revisit": 2
+    },
+    "proof": "positive shared traversal and suppressed duplicate LocalCopy DFS",
+    "limitation": "Warm partition queries may be reused without markers. Counts prove native branch execution and duplicate avoidance, not a speedup."
+  },
+  "compiler_sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "driver_sha256": "29ea709935d751ce13e77995173659006c1e15683e0f0645616d12cd5a3a1665",
+  "native_source_hashes": {
+    "toolchain/rustc/compiler/rustc_monomorphize/src/partitioning.rs": "fd269dc9cb3dc92599839ca127f799921f613088fc50a9fbd05ebbba5a56134f",
+    "toolchain/rustc/compiler/rustc_session/src/options.rs": "6301a8c55991317045183d0e1ae2673dbab48b13bf08f9b68686f3922e62ff6b"
+  },
+  "source_commit": "66e0f9273",
+  "original_harness_commit": "719c916df",
+  "repaired_harness_commit": "20e3f2a5e",
+  "archive_sha256": {
+    "harness-original.tar.gz": "9297a0b94393ab8b74b40e16f13e8269250ed4f2f85aacbec1df1f84d8d3d266",
+    "harness-repaired.tar.gz": "ad10f0b9314829b7191df19636006fd69f9b29d731534a88b138b48c4d0678ba",
+    "native-evidence.tar.gz": "a8d284175f31925268702a0089334b22fa898a5610dfb337a7ee691d09988737",
+    "native-source.tar.gz": "370f20696a7c566abc5358eb2fabbbfc825ded3605ba006f9486733fb296f5f9"
+  }
+}
