@@ -12,6 +12,7 @@ use ssa::{meter::Meter, store::Owned};
 pub enum ObjectStage {
     Native,
     Ssa,
+    ExactInputs,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ObjectUse {
@@ -45,6 +46,7 @@ impl Counts {
 pub struct Report {
     pub native_objects: Counts,
     pub ssa_objects: Counts,
+    pub exact_input_objects: Counts,
     pub ssa_lowering: Counts,
     pub local_optimization: Counts,
     pub post_inline_optimization: Counts,
@@ -227,6 +229,63 @@ fn store_object(
     )
 }
 
+/// The whole immutable namespace is conservative invalidation, not a proof.
+/// OBJECT must still read its current concrete proof before using this key.
+pub(super) fn exact_object_key(
+    namespace: &[u8; 32],
+    symbol: &str,
+    meter: &Meter<'_>,
+) -> Result<[u8; 32], String> {
+    meter.work(symbol.len())?;
+    let mut key = KeyBuilder::new(b"justrust/exact-input-object/x86_64-linux/v1", namespace);
+    key.field(symbol.as_bytes());
+    Ok(key.finish())
+}
+
+fn object_bound(function: &super::cfg::Function) -> usize {
+    let shape = function
+        .blocks
+        .iter()
+        .fold(function.locals.len(), |n, block| {
+            n.saturating_add(block.statements.len()).saturating_add(1)
+        });
+    shape
+        .saturating_mul(16384)
+        .saturating_add(65536)
+        .min(MAX_ENTRY_BYTES)
+}
+
+pub(super) fn exact_object_load(
+    options: &SourceOptions,
+    key: &[u8; 32],
+    function: &super::cfg::Function,
+    meter: &Meter<'_>,
+) -> Result<Option<backend::Object>, String> {
+    let Some(cache) = &options.local_cache else {
+        return Ok(None);
+    };
+    let Some(object) = restore_object(cache, key, object_bound(function), meter)? else {
+        return Ok(None);
+    };
+    // Storage evidence belongs to this node, never to the previous process.
+    let (mut object, receipt) = object.seal(meter)?;
+    object.receipt = Some(std::sync::Arc::new(receipt));
+    Ok(Some(object))
+}
+
+pub(super) fn exact_object_store(
+    options: &SourceOptions,
+    key: &[u8; 32],
+    function: &super::cfg::Function,
+    object: &backend::Object,
+    meter: &Meter<'_>,
+) -> Result<Outcome, String> {
+    let Some(cache) = &options.local_cache else {
+        return Ok(Outcome::Disabled);
+    };
+    store_object(cache, key, object_bound(function), object, meter)
+}
+
 pub(super) fn ssa_object(
     lowered: &ssa::lower::Lowered,
     types: &[Option<ssa::SsaTy>],
@@ -279,17 +338,7 @@ pub(super) fn native_object(
     };
     // The bound scales with this function's own shape. It is an eligibility
     // cap, not a shared compiler budget or a promise of a fixed code size.
-    let function = concrete.function();
-    let shape = function
-        .blocks
-        .iter()
-        .fold(function.locals.len(), |n, block| {
-            n.saturating_add(block.statements.len()).saturating_add(1)
-        });
-    let bound = shape
-        .saturating_mul(16384)
-        .saturating_add(65536)
-        .min(MAX_ENTRY_BYTES);
+    let bound = object_bound(concrete.function());
     if let Some((cache, key)) = &cached
         && let Some(object) = restore_object(cache, key, bound, meter)?
     {
