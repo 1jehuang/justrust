@@ -578,6 +578,7 @@ impl StrPattern for &str {
 
 pub trait StrMethods {
     fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err>;
+    fn as_bytes<'a>(&'a self) -> &'a [u8];
     fn is_empty(&self) -> bool;
     fn to_uppercase(&self) -> String;
     fn contains<P: StrPattern>(&self, pattern: P) -> bool;
@@ -595,6 +596,13 @@ pub trait StrMethods {
 impl StrMethods for str {
     fn parse<F: super::primitive::FromStr>(&self) -> Result<F, F::Err> {
         F::from_str(self)
+    }
+
+    fn as_bytes<'a>(&'a self) -> &'a [u8] {
+        let (ptr, len) = str_parts(self);
+        // A str already owns a valid, non-null shared byte range, even when
+        // empty. The result borrows that same range for the receiver's lifetime.
+        unsafe { super::slice::from_raw_parts::<u8>(ptr as *const u8, len) }
     }
 
     fn is_empty(&self) -> bool {

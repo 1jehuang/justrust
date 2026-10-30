@@ -159,6 +159,124 @@ fn string_implementation_helpers_remain_private() {
 mod closure_oracle;
 
 #[test]
+fn str_as_bytes_matches_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "str-as-bytes",
+        &[
+            Case {
+                name: "empty_nul_and_multibyte_utf8_views",
+                source: r#"fn view<'a>(text: &'a str) -> &'a [u8] { text.as_bytes() }
+                fn main() {
+                    for text in ["", "a\0b", "é日🦀"] {
+                        let bytes = view(text);
+                        println!("len {}", bytes.len());
+                        let mut i = 0usize;
+                        while i < bytes.len() { println!("{}", bytes[i]); i += 1usize; }
+                    }
+                }"#,
+                expect: Expect::Run(
+                    "len 0\nlen 3\n97\n0\n98\nlen 9\n195\n169\n230\n151\n165\n240\n159\n166\n128\n",
+                ),
+            },
+            Case {
+                name: "owned_string_view_aliases_storage_and_borrow_ends",
+                source: r#"fn main() {
+                    let mut owner = String::from("é\0");
+                    let bytes = owner.as_bytes();
+                    println!("{} {} {}", bytes.len(), bytes[0], bytes[2]);
+                    println!("{}", (&bytes[0] as *const u8 as usize) == (owner.as_ptr() as usize));
+                    owner.push_str("日");
+                    let bytes = owner.as_str().as_bytes();
+                    println!("{} {} {} {}", bytes.len(), bytes[3], bytes[4], bytes[5]);
+                    let empty = String::new();
+                    println!("{}", empty.as_bytes().len());
+                }"#,
+                expect: Expect::Run("3 195 0\ntrue\n6 230 151 165\n0\n"),
+            },
+            Case {
+                name: "unused_local_owner_view_cannot_escape",
+                source: "fn invalid<'a>() -> &'a [u8] { let owner = String::from(\"abc\"); owner.as_bytes() } fn main() {}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_borrowed_view_cannot_gain_static_lifetime",
+                source: "fn invalid(text: &str) -> &'static [u8] { text.as_bytes() } fn main() {}",
+                expect: Expect::Invalid("lifetime may not live long enough"),
+            },
+            Case {
+                name: "shared_bytes_cannot_mutate_utf8",
+                source: "fn main() { let bytes = \"é\".as_bytes(); bytes[0] = 0u8; }",
+                expect: Expect::Invalid("E0594"),
+            },
+            Case {
+                name: "owner_cannot_mutate_while_bytes_live",
+                source: "fn main() { let mut owner = String::from(\"abc\"); let bytes = owner.as_bytes(); owner.push_str(\"d\"); println!(\"{}\", bytes[0]); }",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "owner_cannot_move_while_bytes_live",
+                source: "fn main() { let owner = String::from(\"abc\"); let bytes = owner.as_bytes(); let moved = owner; println!(\"{}\", bytes[0]); }",
+                expect: Expect::Invalid("E0505"),
+            },
+            Case {
+                name: "unused_shared_view_cannot_be_strengthened_to_mutable",
+                source: "fn invalid(text: &str) -> &mut [u8] { text.as_bytes() } fn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn str_as_bytes_retains_typed_raw_slice_graph_without_check_codegen() {
+    use justrust_engine::compiler::cfg;
+    let source = "fn view<'a>(text: &'a str) -> &'a [u8] { text.as_bytes() } fn main() { let owner = String::from(\"é\"); let bytes = view(owner.as_str()); println!(\"{} {}\", bytes.len(), bytes[0]); }";
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert!(checked.analyses.iter().all(|analysis| analysis.passed()));
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| { !matches!(key.kind, 103 | 105 | 130 | 131 | 133) })
+        );
+        // CHECK exposes user SOURCE_ADMISSION CFGs, not prelude helper CFGs.
+        // The user's view must retain its borrowed slice result and typed call.
+        assert!(checked.control_flow.iter().any(|function| {
+            function.result.slice_ref_element().is_some()
+                && function.blocks.iter().any(|block| {
+                    matches!(&block.terminator.value, cfg::Terminator::Call { signature, .. }
+                        if signature.result.slice_ref_element().is_some())
+                })
+        }));
+        // BUILD reports demanded LOWER instances, including the ordinary
+        // from_raw_parts helper that owns the real RawSlice operation.
+        let built = compiler::compile(source.into(), workers, false).unwrap();
+        assert!(built.executable.is_some());
+        assert!(built.report.capture_complete);
+        assert!(built.analyses.iter().all(|analysis| analysis.passed()));
+        assert!(built.control_flow.iter().any(|function| {
+            function.result.slice_ref_element().is_some()
+                && function.blocks.iter().any(|block| {
+                    block.statements.iter().any(|statement| {
+                        matches!(
+                            statement.value,
+                            cfg::Statement::Assign {
+                                value: cfg::Rvalue::RawSlice { .. },
+                                ..
+                            }
+                        )
+                    })
+                })
+        }));
+    }
+}
+
+#[test]
 fn str_ordering_and_tuple_comparator_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

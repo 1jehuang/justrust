@@ -1106,6 +1106,100 @@ fn locked_registry_unchanged_probe_boundaries() {
 }
 
 #[test]
+fn locked_registry_nix_base32_matches_stock_end_to_end() {
+    let scratch = target_dir("registry-nix-base32-acceptance");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let cargo_home = seed_registry_cache("nix-base32-0.2.0");
+    let checksum = "d2628953ed836273ee4262e3708a8ef63ca38bd8a922070626eef7f9e5d8d536";
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='probe'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nnix-base32='=0.2.0'\n",
+    ).unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        format!("version=4\n[[package]]\nname='probe'\nversion='0.1.0'\ndependencies=['nix-base32']\n[[package]]\nname='nix-base32'\nversion='0.2.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{checksum}'\n"),
+    ).unwrap();
+    let source = r#"fn main(){
+        let bytes=[1u8,2u8];
+        let encoded=nix_base32::to_nix_base32(&bytes);
+        println!("{}",encoded);
+        let decoded=nix_base32::from_nix_base32(&encoded).unwrap();
+        assert_eq!(decoded.len(),2usize);
+        assert_eq!(decoded[0],1u8);
+        assert_eq!(decoded[1],2u8);
+        assert!(nix_base32::from_nix_base32("!").is_none());
+        println!("true");
+    }"#;
+    let client = project.join("src/main.rs");
+    std::fs::write(&client, source).unwrap();
+    let library = scratch.join("libnix_base32.rlib");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .args([
+            "--edition=2018",
+            "--crate-type=rlib",
+            "--crate-name=nix_base32",
+        ])
+        .arg(
+            cargo_home
+                .join("registry/src")
+                .join(CRATES_IO_CACHE_ID)
+                .join("nix-base32-0.2.0/src/lib.rs"),
+        )
+        .arg("-o")
+        .arg(&library)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let stock_image = scratch.join("stock-client");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .args(["--edition=2024", "--crate-name=probe"])
+        .arg(&client)
+        .arg("--extern")
+        .arg(format!("nix_base32={}", library.display()))
+        .arg("-o")
+        .arg(&stock_image)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let expected = Command::new(&stock_image).output().unwrap();
+    assert!(expected.status.success(), "{expected:?}");
+    assert_eq!(expected.stdout, b"00h1\ntrue\n");
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let output = native_command()
+                .args([command, "-j", workers])
+                .current_dir(&project)
+                .env("CARGO_HOME", &cargo_home)
+                .env(
+                    "CARGO_TARGET_DIR",
+                    scratch.join(format!("native-{workers}")),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "workers={workers} {command}: {output:?}"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("Input capture: immutable native project namespace"),
+                "{stderr}"
+            );
+            assert!(
+                !stderr.contains("native input capture is unproven"),
+                "{stderr}"
+            );
+            if command == "run" {
+                assert_eq!(output.stdout, expected.stdout);
+            } else {
+                assert!(output.stdout.is_empty(), "{output:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn invalid_projects_are_rejected_explicitly() {
     let scratch = target_dir("invalid");
     std::fs::create_dir_all(scratch.join("src")).unwrap();

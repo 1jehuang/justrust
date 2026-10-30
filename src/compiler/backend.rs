@@ -18,7 +18,8 @@
 //! an eight-byte tag followed by the largest variant's concatenated fields.
 //! Any non-unit variant shape makes the entire enum use aggregate transport,
 //! including unit variants of that enum and zero-field tuple/struct variants.
-//! Arrays are always indirect and concatenate element storage. Empty arrays
+//! Arrays are always indirect and concatenate element storage, with packed u8
+//! elements and eight-byte-aligned owning snapshots. Empty arrays
 //! own one initialized eight-byte dummy word, including when nested as elements.
 //! Aggregate arguments carry snapshot pointers. Aggregate results use a
 //! caller-owned destination, passed last at rbp+16, even for a one-field aggregate.
@@ -68,7 +69,7 @@ pub const SHARED_BYTE_SLICE_LAYOUT: SliceLayout = SliceLayout {
     data_offset: 0,
     len_offset: 8,
     word_bytes: 8,
-    element_stride: 8,
+    element_stride: 1,
 };
 
 /// `&dyn P` / `&mut dyn P`: a two-word carrier (data pointer at 0, vtable
@@ -95,7 +96,7 @@ const FAT_LAYOUT: SliceLayout = SHARED_BYTE_SLICE_LAYOUT;
 
 fn shared_slice_layout(element: &ir::Ty, budget: &ir::PlanBudget) -> Result<SliceLayout, String> {
     Ok(SliceLayout {
-        element_stride: u32::try_from(value_size(element, budget)?)
+        element_stride: u32::try_from(array_element_stride(element, budget)?)
             .map_err(|_| "slice element exceeds private layout limit")?,
         ..SHARED_BYTE_SLICE_LAYOUT
     })
@@ -258,10 +259,12 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
         }
         // Empty arrays still own an initialized dummy word. This rule also
         // determines the stride of arrays whose elements are empty arrays.
-        let stride = value_size(element, budget)?;
+        let stride = array_element_stride(element, budget)?;
         let len = i32::try_from(*len).map_err(|_| "array length exceeds private frame limit")?;
         return stride
             .checked_mul(len)
+            .and_then(|size| size.checked_add(7))
+            .map(|size| (size / 8) * 8)
             .filter(|size| *size <= MAX_FRAME_BYTES)
             .map(|size| size.max(8))
             .ok_or_else(|| "unsupported: array exceeds the native 1 MiB frame limit".into());
@@ -305,6 +308,31 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
     }
 }
 
+/// Array and slice elements are memory, not scalar register/local carriers.
+/// Bytes are physically adjacent, including raw slices over UTF-8 storage.
+fn array_element_stride(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    if matches!(ty, ir::Ty::Int(ir::IntTy::U8)) {
+        Ok(1)
+    } else {
+        value_size(ty, budget)
+    }
+}
+
+/// A borrowed byte array may have no readable padding beyond its last byte.
+/// Owning snapshots reserve rounded storage, but transport only real elements.
+fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    match ty {
+        ir::Ty::Array { len: 0, .. } => Ok(0),
+        ir::Ty::Array { element, len }
+            if matches!(element.as_ref(), ir::Ty::Int(ir::IntTy::U8)) =>
+        {
+            value_size(ty, budget)?;
+            i32::try_from(*len).map_err(|_| "byte array exceeds private frame limit".into())
+        }
+        _ => value_size(ty, budget),
+    }
+}
+
 fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     match ty {
         ir::Ty::Int(integer) => integer.bits() / 8,
@@ -344,7 +372,7 @@ fn array_offset(
     if index >= *len {
         return Err("constant array index out of bounds".into());
     }
-    let offset = value_size(element, budget)?
+    let offset = array_element_stride(element, budget)?
         .checked_mul(i32::try_from(index).map_err(|_| "array index exceeds private frame limit")?)
         .filter(|offset| *offset < MAX_FRAME_BYTES)
         .ok_or("array index offset exceeds private frame limit")?;
@@ -722,7 +750,10 @@ impl<'a> Emitter<'a> {
                     }
                     self.trap_if(0x83); // jae, before scaling/address formation
                     self.bytes(&[0x48, 0x69, 0xc0]);
-                    self.i32(value_size(element, self.concrete.facts().budget())?);
+                    self.i32(array_element_stride(
+                        element,
+                        self.concrete.facts().budget(),
+                    )?);
                     self.bytes(&[0x4c, 0x01, 0xd8]); // rax += r11
                     // The reference stores this address, not a recipe that
                     // reads the cursor again when the reference is used.
@@ -780,16 +811,22 @@ impl<'a> Emitter<'a> {
             // Large array transport must not expand generated code per element.
             // Preserve both pointers, especially rdi used by return epilogues.
             self.bytes(&[0x49, 0x89, 0xfb, 0x49, 0x89, 0xf2, 0xb9]);
-            self.i32(size / 8);
-            self.bytes(&[0xfc, 0xf3, 0x48, 0xa5]);
+            self.i32(size);
+            self.bytes(&[0xfc, 0xf3, 0xa4]); // rep movsb, including a partial final word
             self.bytes(&[0x4c, 0x89, 0xdf, 0x4c, 0x89, 0xd6]);
             return;
         }
-        // All private scalar/unit leaves are initialized eight-byte words.
-        for offset in (0..size).step_by(8) {
+        let whole_words = (size / 8) * 8;
+        for offset in (0..whole_words).step_by(8) {
             self.bytes(&[0x48, 0x8b, 0x8e]);
             self.i32(offset);
             self.bytes(&[0x48, 0x89, 0x8f]);
+            self.i32(offset);
+        }
+        for offset in whole_words..size {
+            self.bytes(&[0x8a, 0x8e]); // cl = source byte, never read past the extent
+            self.i32(offset);
+            self.bytes(&[0x88, 0x8f]);
             self.i32(offset);
         }
     }
@@ -797,7 +834,7 @@ impl<'a> Emitter<'a> {
         if indirect(ty, self.concrete.facts().budget())? {
             self.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8d, 0xbd]);
             self.i32(offset);
-            self.copy_pointer_value(value_size(ty, self.concrete.facts().budget())?);
+            self.copy_pointer_value(copied_value_bytes(ty, self.concrete.facts().budget())?);
             self.address(offset);
         } else {
             if let ir::Ty::Int(integer) = ty {
@@ -812,7 +849,7 @@ impl<'a> Emitter<'a> {
     fn store_address_value(&mut self, ty: &ir::Ty) -> Result<(), String> {
         if indirect(ty, self.concrete.facts().budget())? {
             self.bytes(&[0x48, 0x89, 0xc6]);
-            self.copy_pointer_value(value_size(ty, self.concrete.facts().budget())?);
+            self.copy_pointer_value(copied_value_bytes(ty, self.concrete.facts().budget())?);
             self.bytes(&[0x48, 0x89, 0xf8]);
         } else {
             if let ir::Ty::Int(integer) = ty {
@@ -821,6 +858,23 @@ impl<'a> Emitter<'a> {
             self.bytes(&[0x48, 0x89, 0x07]);
         }
         Ok(())
+    }
+    // Indexed byte storage is packed, unlike an owning scalar local carrier.
+    fn store_element_value(&mut self, ty: &ir::Ty) -> Result<(), String> {
+        if matches!(ty, ir::Ty::Int(ir::IntTy::U8)) {
+            self.bytes(&[0x88, 0x07]);
+            Ok(())
+        } else {
+            self.store_address_value(ty)
+        }
+    }
+
+    fn load_element_scalar(&mut self, ty: &ir::Ty) {
+        if matches!(ty, ir::Ty::Int(ir::IntTy::U8)) {
+            self.bytes(&[0x0f, 0xb6, 0x00]);
+        } else {
+            self.bytes(&[0x48, 0x8b, 0x00]);
+        }
     }
     // Shared slice carrier helpers. Convention: a slice operand leaves
     // the ADDRESS of a two-word carrier snapshot in rax (like aggregates), but
@@ -936,7 +990,7 @@ impl<'a> Emitter<'a> {
     ) -> Result<(), String> {
         let stride = i32::try_from(layout.element_stride)
             .map_err(|_| "slice stride exceeds private layout limit")?;
-        if stride != value_size(element, self.concrete.facts().budget())? {
+        if stride != array_element_stride(element, self.concrete.facts().budget())? {
             return Err("slice stride disagrees with exact array element layout".into());
         }
         self.bytes(&[0x48, 0x39, 0xd0]); // cmp rax, rdx
@@ -958,7 +1012,7 @@ impl<'a> Emitter<'a> {
             // independent full wide/aggregate snapshot before assignment.
             self.store_value(self.aggregate_scratch, element)?;
         } else {
-            self.bytes(&[0x48, 0x8b, 0x00]);
+            self.load_element_scalar(element);
             if let ir::Ty::Int(integer) = element {
                 self.normalize_integer(*integer);
             }
@@ -1466,7 +1520,8 @@ impl<'a> Emitter<'a> {
         let ty = self.place_address(place)?;
         let ty = &ty;
         self.bytes(&[0x48, 0x89, 0xc7, 0x4c, 0x89, 0xc8]);
-        if place.projection.contains(&ir::Projection::Deref)
+        if (place.projection.contains(&ir::Projection::Deref)
+            || (matches!(ty, ir::Ty::Int(ir::IntTy::U8)) && !place.projection.is_empty()))
             && !indirect(ty, self.concrete.facts().budget())?
         {
             // Heap storage is byte-addressed, unlike private eight-byte local
@@ -1540,7 +1595,8 @@ impl<'a> Emitter<'a> {
         let ty = self.place_address(place)?;
         let ty = &ty;
         if !indirect(ty, self.concrete.facts().budget())? {
-            let dereferenced = place.projection.contains(&ir::Projection::Deref);
+            let dereferenced = place.projection.contains(&ir::Projection::Deref)
+                || (matches!(ty, ir::Ty::Int(ir::IntTy::U8)) && !place.projection.is_empty());
             match if dereferenced {
                 scalar_memory_bytes(ty)
             } else {
@@ -1577,7 +1633,10 @@ impl<'a> Emitter<'a> {
         self.bounds_trap();
         if len != 0 {
             self.bytes(&[0x48, 0x69, 0xc0]); // rax *= physical element stride
-            self.i32(value_size(&element, self.concrete.facts().budget())?);
+            self.i32(array_element_stride(
+                &element,
+                self.concrete.facts().budget(),
+            )?);
             self.bytes(&[0x49, 0x89, 0xc0]); // r8 = checked byte offset
             self.place_address(array)?;
             self.bytes(&[0x4c, 0x01, 0xc0]);
@@ -1601,7 +1660,7 @@ impl<'a> Emitter<'a> {
         if self.function().operand_ty(index)? != ir::Ty::Int(ir::IntTy::Usize) {
             return Err("runtime index requires genuine usize operand".into());
         }
-        let stride = value_size(&element, self.concrete.facts().budget())?;
+        let stride = array_element_stride(&element, self.concrete.facts().budget())?;
         self.operand(index)?;
         self.bytes(&[0x49, 0x89, 0xc0]); // r8 = index
         // rax = address of the two-word carrier (data at +0, len at +8).
@@ -1694,7 +1753,11 @@ impl<'a> Emitter<'a> {
             } else {
                 self.bytes(&[0xb9]); // ecx = len; rax is the scalar snapshot
                 self.i32(i32::try_from(*len).map_err(|_| "repeat length exceeds limit")?);
-                self.bytes(&[0xfc, 0xf3, 0x48, 0xab]); // cld; rep stosq
+                if matches!(element.as_ref(), ir::Ty::Int(ir::IntTy::U8)) {
+                    self.bytes(&[0xfc, 0xf3, 0xaa]); // cld; rep stosb
+                } else {
+                    self.bytes(&[0xfc, 0xf3, 0x48, 0xab]); // cld; rep stosq
+                }
             }
         }
         self.address(self.aggregate_scratch);
@@ -2108,7 +2171,7 @@ impl<'a> Emitter<'a> {
     /// Exact thin `&'static [u8; N]` pointer into immutable program data.
     fn byte_string_literal(&mut self, data: &[u8]) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
-        let stride = usize::try_from(value_size(
+        let stride = usize::try_from(array_element_stride(
             &ir::Ty::Int(ir::IntTy::U8),
             self.concrete.facts().budget(),
         )?)
@@ -2177,7 +2240,7 @@ impl<'a> Emitter<'a> {
     /// layout as byte string literals. Only the backend materializes storage.
     fn byte_repeat_literal(&mut self, byte: u8, len: usize) -> Result<(), String> {
         let budget = self.concrete.facts().budget().clone();
-        let stride = usize::try_from(value_size(
+        let stride = usize::try_from(array_element_stride(
             &ir::Ty::Int(ir::IntTy::U8),
             self.concrete.facts().budget(),
         )?)
@@ -3034,7 +3097,7 @@ impl Emitter<'_> {
                 let element = self.index_address(array, index)?;
                 let element = &element;
                 if !indirect(element, self.concrete.facts().budget())? {
-                    self.bytes(&[0x48, 0x8b, 0x00]);
+                    self.load_element_scalar(element);
                     if let ir::Ty::Int(integer) = element {
                         self.normalize_integer(*integer);
                     }
@@ -3146,7 +3209,14 @@ impl Emitter<'_> {
                         .aggregate_scratch
                         .checked_add(field)
                         .ok_or("aggregate offset too large")?;
-                    self.store_value(offset, &field_ty)?;
+                    if matches!(ty, ir::Ty::Array { .. })
+                        && matches!(field_ty, ir::Ty::Int(ir::IntTy::U8))
+                    {
+                        self.bytes(&[0x88, 0x85]); // mov byte [rbp+offset], al
+                        self.i32(offset);
+                    } else {
+                        self.store_value(offset, &field_ty)?;
+                    }
                 }
                 self.address(self.aggregate_scratch);
             }
@@ -3286,7 +3356,7 @@ impl Emitter<'_> {
                 self.trap_if(0x82); // jb: end < start
                 let stride = i32::try_from(layout.element_stride)
                     .map_err(|_| "slice stride exceeds private layout limit")?;
-                if stride != value_size(element, self.concrete.facts().budget())? {
+                if stride != array_element_stride(element, self.concrete.facts().budget())? {
                     return Err("slice stride disagrees with exact array element layout".into());
                 }
                 self.bytes(&[0x4c, 0x29, 0xc1]); // sub rcx, r8 -> new len
@@ -3355,7 +3425,7 @@ impl Emitter<'_> {
                 self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
                 self.operand(value)?;
                 self.bytes(&[0x4c, 0x89, 0xcf]);
-                self.store_address_value(element)?;
+                self.store_element_value(element)?;
             }
             cfg::Statement::IndexAssignOp {
                 array,
@@ -3373,7 +3443,7 @@ impl Emitter<'_> {
                     // clobber every caller-saved register. Never recompute it.
                     self.bytes(&[0x50]);
                     if integer.bits() <= 64 {
-                        self.bytes(&[0x48, 0x8b, 0x00]);
+                        self.load_element_scalar(element);
                         self.normalize_integer(*integer);
                     }
                     self.snapshot_number(ir::NumTy::Int(*integer), 0);
@@ -3381,7 +3451,7 @@ impl Emitter<'_> {
                     self.snapshot_number(ir::NumTy::Int(rhs), 16);
                     self.wide_binary(*op, *integer, rhs)?;
                     self.bytes(&[0x5f]); // pop rdi: exact selected destination
-                    self.store_address_value(element)?;
+                    self.store_element_value(element)?;
                     return Ok(());
                 }
                 // RHS/index effects are already owning CFG snapshots. Keep the
@@ -3389,7 +3459,12 @@ impl Emitter<'_> {
                 // including multiplication/division's RDX and shifts' RCX.
                 self.bytes(&[0x49, 0x89, 0xc1]); // r9 = checked destination
                 self.operand(value)?;
-                self.bytes(&[0x48, 0x89, 0xc1, 0x49, 0x8b, 0x01]); // rhs RCX, old [r9] RAX
+                self.bytes(&[0x48, 0x89, 0xc1]); // rhs RCX
+                if matches!(element, ir::Ty::Int(ir::IntTy::U8)) {
+                    self.bytes(&[0x41, 0x0f, 0xb6, 0x01]); // old byte [r9] RAX
+                } else {
+                    self.bytes(&[0x49, 0x8b, 0x01]); // old carrier [r9] RAX
+                }
                 match element {
                     ir::Ty::Int(integer) => {
                         self.normalize_integer(*integer);
@@ -3400,7 +3475,7 @@ impl Emitter<'_> {
                     _ => return Err("indexed compound update requires scalar operands".into()),
                 }
                 self.bytes(&[0x4c, 0x89, 0xcf]); // same checked destination
-                self.store_address_value(element)?;
+                self.store_element_value(element)?;
             }
             cfg::Statement::Assign { destination, value } => {
                 self.rvalue(value)?;
@@ -3978,7 +4053,7 @@ fn emit_native_cfg(
         .ok_or("function exceeds private frame limit")?;
     let vtable_scratch = -frame_bytes;
     let aggregate_result = result_indirect(&function.result, budget)?;
-    let result_size = value_size(&function.result, budget)?;
+    let result_copy_bytes = copied_value_bytes(&function.result, budget)?;
     let param_offsets = argument_slot_offsets(&param_words, aggregate_result)?;
     let mut emitter = Emitter {
         overflow_checks,
@@ -4056,7 +4131,7 @@ fn emit_native_cfg(
     if aggregate_result {
         emitter.bytes(&[0x48, 0x89, 0xc6, 0x48, 0x8b, 0xbd]);
         emitter.i32(16);
-        emitter.copy_pointer_value(result_size);
+        emitter.copy_pointer_value(result_copy_bytes);
         emitter.bytes(&[0x48, 0x89, 0xf8]);
     }
     emitter.bytes(&[0xc9, 0xc3]);
@@ -5551,7 +5626,7 @@ mod tests {
                 data_offset: 0,
                 len_offset: 8,
                 word_bytes: 8,
-                element_stride: 8
+                element_stride: 1
             }
         );
         let u8_array = ir::Ty::Array {
@@ -5648,13 +5723,11 @@ mod tests {
         let layout = SHARED_BYTE_SLICE_LAYOUT;
         e.bytes(&[0x55, 0x48, 0x89, 0xe5, 0x48, 0x81, 0xec]);
         e.i32(128);
-        // Private u8 array leaves at rbp-128, -120, -112. 300 checks that the
-        // loaded element is normalized to u8.
-        for (offset, value) in [(-128, 7_u64), (-120, 300), (-112, 9)] {
-            e.word(value);
-            e.bytes(&[0x48, 0x89, 0x85]);
-            e.i32(offset);
-        }
+        // Exact packed bytes at rbp-128, -127, -126. Scalar carriers elsewhere
+        // still hold normalized words, but byte array backing has no word gaps.
+        e.word(7_u64 | (44 << 8) | (9 << 16));
+        e.bytes(&[0x48, 0x89, 0x85]);
+        e.i32(-128);
         e.address(-128);
         e.array_to_slice(layout, -32, len).unwrap(); // carrier A
         e.copy_slice_to_frame(layout, -16).unwrap(); // A -> B
@@ -5696,6 +5769,136 @@ mod tests {
         for (index, len) in [(3, 3), (2, 2), (0, 0), (u64::MAX, 3), (1 << 63, 3)] {
             assert_eq!(run_slice_helpers(index, len), Some(101), "{index} {len}");
         }
+    }
+
+    #[test]
+    fn packed_byte_array_layout_keeps_word_carriers_and_exact_memory_extents() {
+        let budget = ir::PlanBudget::default();
+        let byte = ir::Ty::Int(ir::IntTy::U8);
+        assert_eq!(value_size(&byte, &budget), Ok(8));
+        assert_eq!(array_element_stride(&byte, &budget), Ok(1));
+        assert_eq!(
+            shared_slice_layout(&byte, &budget).unwrap().element_stride,
+            1
+        );
+        for len in [0, 1, 3, 7, 8, 9, 63, 64, 65, 73] {
+            let array = ir::Ty::Array {
+                element: std::sync::Arc::new(byte.clone()),
+                len,
+            };
+            let rounded = (len.div_ceil(8) * 8).max(8) as i32;
+            assert_eq!(value_size(&array, &budget), Ok(rounded));
+            assert_eq!(copied_value_bytes(&array, &budget), Ok(len as i32));
+            if len != 0 {
+                assert_eq!(
+                    array_offset(&array, len - 1, &budget).unwrap().0,
+                    (len - 1) as i32
+                );
+            }
+        }
+        let word = ir::Ty::Int(ir::IntTy::U64);
+        assert_eq!(array_element_stride(&word, &budget), Ok(8));
+    }
+
+    #[test]
+    fn packed_byte_arrays_slices_promotions_and_vec_views_alias_exact_elements() {
+        let source = r#"
+            fn relay(value:[u8;9])->[u8;9] { value }
+            fn update(bytes:&mut[u8]) {
+                bytes[1usize]=31u8;
+                let index=2usize;
+                bytes[index]+=2u8;
+                let selected=&mut bytes[3usize]; *selected=41u8;
+                let tail=&mut bytes[4usize..7usize]; tail[1usize]=51u8;
+            }
+            fn main() {
+                let literal=b"abcdefghi";
+                let mut bytes=relay(*literal);
+                bytes[0]=21u8;
+                update(&mut bytes);
+                if bytes[0]!=21u8 || bytes[1]!=31u8 || bytes[2]!=101u8
+                    || bytes[3]!=41u8 || bytes[4]!=101u8 || bytes[5]!=51u8
+                    || bytes[6]!=103u8 || bytes[7]!=104u8 || bytes[8]!=105u8 { panic!("neighbors"); }
+                let original=bytes; bytes[8]=1u8;
+                if original[8]!=105u8 { panic!("copy alias"); }
+                let repeated=[17u8;65];
+                if repeated[0]!=17u8 || repeated[64]!=17u8 { panic!("repeat"); }
+                let nested=[[1u8,2u8,3u8],[4u8,5u8,6u8]];
+                if nested[0][2]!=3u8 || nested[1][0]!=4u8 { panic!("nested"); }
+                let literal=b"a\0z";
+                let first=&literal[0] as *const u8 as usize;
+                let last=&literal[2] as *const u8 as usize;
+                if last-first!=2usize || literal[1]!=0u8 { panic!("literal packing"); }
+                let promoted=&[23u8;100000];
+                if promoted[99999usize]!=23u8 { panic!("promotion"); }
+                let pointer=&mut bytes[0] as *mut u8;
+                let raw=unsafe{std::slice::from_raw_parts_mut(pointer,9usize)};
+                raw[8usize]=61u8;
+                if bytes[7]!=104u8 || bytes[8]!=61u8 { panic!("raw alias"); }
+                let mut values=Vec::new(); values.push(7u8); values.push(8u8); values.push(9u8);
+                let view=values.as_slice();
+                if view[0usize]!=7u8 || view[1usize]!=8u8 || view[2usize]!=9u8 { panic!("vec stride"); }
+                let view=values.as_mut_slice(); view[1usize]=11u8;
+                if values[0usize]!=7u8 || values[1usize]!=11u8 || values[2usize]!=9u8 { panic!("vec alias"); }
+                println!("packed-elements");
+            }
+        "#;
+        let compilation = super::super::compile(source.into(), 1, false).unwrap();
+        let path = executable_bytes(&compilation.executable.unwrap());
+        let output = execute(
+            Command::new(&path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"packed-elements\n");
+    }
+
+    #[test]
+    fn packed_byte_raw_arrays_and_slices_do_not_cross_guard_page() {
+        let source = r#"
+            fn small(value:[u8;3])->[u8;3] { value }
+            fn large(value:[u8;65])->[u8;65] { value }
+            fn main() {
+                let base=unsafe{__justrust_linux_syscall6!(9usize,0usize,8192usize,3usize,34usize,18446744073709551615usize,0usize)};
+                if base>=18446744073709547521usize { panic!("mmap"); }
+                let guard=base+4096usize;
+                let status=unsafe{__justrust_linux_syscall6!(10usize,guard,4096usize,0usize,0usize,0usize,0usize)};
+                if status!=0usize { panic!("mprotect"); }
+                let narrow=(guard-3usize) as *mut[u8;3];
+                unsafe{*narrow=[11u8,22u8,33u8];}
+                let saved=small(unsafe{*narrow});
+                if saved[0]!=11u8 || saved[2]!=33u8 { panic!("small copy"); }
+                let broad=(guard-65usize) as *mut[u8;65];
+                unsafe{*broad=[7u8;65];}
+                let saved=large(unsafe{*broad});
+                if saved[0]!=7u8 || saved[64]!=7u8 { panic!("large copy"); }
+                let last=(guard-1usize) as *mut u8;
+                let bytes=unsafe{std::slice::from_raw_parts_mut(last,1usize)};
+                bytes[0usize]=91u8;
+                bytes[0usize]+=1u8;
+                if bytes[0usize]!=92u8 { panic!("last byte"); }
+                let byte=&bytes[0usize]; if *byte!=92u8 { panic!("byte reference"); }
+                let empty=guard as *const[u8;0]; let copied=unsafe{*empty};
+                let _moved=copied;
+                let status=unsafe{__justrust_linux_syscall6!(11usize,base,8192usize,0usize,0usize,0usize,0usize)};
+                if status!=0usize { panic!("munmap"); }
+                println!("packed-page");
+            }
+        "#;
+        let compilation = super::super::compile(source.into(), 1, false).unwrap();
+        let path = executable_bytes(&compilation.executable.unwrap());
+        let output = execute(
+            Command::new(&path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        );
+        std::fs::remove_file(&path).unwrap();
+        std::fs::remove_dir(path.parent().unwrap()).unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, b"packed-page\n");
     }
 
     #[test]
