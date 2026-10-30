@@ -85,6 +85,7 @@ impl Checker<'_> {
                 None
             };
         let mut deferred = false;
+        let mut unproved_expected = false;
         let selection = plan.select_method_with_arguments_scratch(
             receiver,
             name,
@@ -119,13 +120,15 @@ impl Checker<'_> {
                 let ir::FactsCtx::Validated(facts) = self.facts() else {
                     return Err("method inference requires canonical caller facts".into());
                 };
-                let candidates = plan.method_trait_candidates(
+                let (candidates, unproved) = plan.method_trait_candidates_expected(
                     owner,
                     name,
                     self.facts(),
                     &self.module,
                     &plan.budget,
+                    expected.map(|result| (result, mode)),
                 )?;
+                unproved_expected |= unproved;
                 let mut selected = None;
                 let mut same: Vec<(&ir::TraitRef, ir::DeclId)> = Vec::new();
                 for (application, item) in candidates.as_slice() {
@@ -207,6 +210,16 @@ impl Checker<'_> {
                         }
                     }
                     let Some(app) = fitting else {
+                        if let Some((application, item)) = same.first() {
+                            plan.reject_unproved_expected_trait_result(
+                                application,
+                                *item,
+                                expected,
+                                facts,
+                                &plan.budget,
+                                &mut self.trait_scratch.borrow_mut(),
+                            )?;
+                        }
                         return Err(super::super::trait_selection::trait_application_ambiguity());
                     };
                     selected = Some(app);
@@ -214,7 +227,10 @@ impl Checker<'_> {
                 let Some(application) = selected else {
                     return Ok(MethodArguments::Missing);
                 };
-                let pinned = !same.is_empty();
+                // Expected-result discovery can prove one exact application
+                // without enumerating an open blanket-implementation frontier.
+                // Preserve that application through final method selection too.
+                let pinned = !same.is_empty() || expected.is_some();
                 Ok(
                     match self.inferred_trait_method_actuals(
                         application,
@@ -250,6 +266,11 @@ impl Checker<'_> {
                 }
             },
         )?;
+        if selection.is_none() && !deferred && unproved_expected {
+            return Err(
+                "E0277: expected method result requires an unsatisfied trait application".into(),
+            );
+        }
         Ok((selection, deferred))
     }
 }

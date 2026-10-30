@@ -74,6 +74,7 @@ impl PlanCtx {
             }
         }
         let mut root = receiver;
+        let mut through_shared = false;
         for depth in 0..=2 {
             budget.charge_work(1)?;
             for adjustment in [
@@ -81,6 +82,11 @@ impl PlanCtx {
                 ReceiverAdjustment::SharedAutoref,
                 ReceiverAdjustment::MutAutoref,
             ] {
+                // Autodereferencing a shared reference cannot grant mutable
+                // access to its pointee, even if a later method probe fits.
+                if through_shared && matches!(adjustment, ReceiverAdjustment::MutAutoref) {
+                    continue;
+                }
                 budget.retain_bytes(128)?;
                 let candidate = match adjustment {
                     ReceiverAdjustment::Identity => root.clone(),
@@ -174,7 +180,10 @@ impl PlanCtx {
                 }
             }
             match root {
-                ir::Ty::Ref { referent, .. } => root = referent,
+                ir::Ty::Ref { kind, referent } => {
+                    through_shared |= *kind == ir::BorrowKind::Shared;
+                    root = referent;
+                }
                 _ => break,
             }
         }

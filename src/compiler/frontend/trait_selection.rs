@@ -93,6 +93,56 @@ fn match_trait_self<'actual>(
     }
 }
 impl PlanCtx {
+    /// A fully expected, direct trait result parameter fixes one exact goal.
+    /// Absence from enumerated applications is not failure evidence: ask the
+    /// canonical trait service, and preserve unsupported/resource errors.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn reject_unproved_expected_trait_result(
+        &self,
+        application: &ir::TraitRef,
+        item: ir::DeclId,
+        expected: &ir::Ty,
+        facts: &tr::ValidatedFacts,
+        budget: &ir::PlanBudget,
+        scratch: &mut tr::TraitScratch,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        let schema = self.raw_schema(item)?;
+        let ir::Ty::Param(parameter) = &schema.signature.result else {
+            return Ok(());
+        };
+        let owner = self.param_env(application.declaration)?;
+        if parameter.owner != owner.binder()
+            || parameter.index == 0
+            || schema.signature.params.len() != 1
+            || owner.arity() != application.args.len() + 1
+        {
+            return Ok(());
+        }
+        let index = usize::from(parameter.index) - 1;
+        if index >= application.args.len() {
+            return Ok(());
+        }
+        let mut arguments = self.selection_arguments(application.args.len(), budget)?;
+        arguments.extend(application.args.iter().cloned());
+        arguments[index] = expected.clone();
+        let required = ir::TraitRef {
+            declaration: application.declaration,
+            self_ty: application.self_ty.clone(),
+            args: arguments.into(),
+        };
+        match facts
+            .service()
+            .prove_goal_with(&ir::Predicate::Implements(required), facts, scratch)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?
+        {
+            tr::ProofOutcome::NotProven => Err(
+                "E0277: expected method result requires an unsatisfied trait application".into(),
+            ),
+            tr::ProofOutcome::Proved(_) => Ok(()),
+        }
+    }
+
     pub(super) fn trait_item(
         &self,
         trait_id: ir::DeclId,
@@ -779,6 +829,26 @@ impl PlanCtx {
         module: &ModuleId,
         budget: &ir::PlanBudget,
     ) -> Result<super::super::token_session::BudgetVec<(ir::TraitRef, ir::DeclId)>, String> {
+        self.method_trait_candidates_expected(owner, name, caller, module, budget, None)
+            .map(|(candidates, _)| candidates)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn method_trait_candidates_expected(
+        &self,
+        owner: &ir::Ty,
+        name: &AstIdent,
+        caller: ir::FactsCtx<'_>,
+        module: &ModuleId,
+        budget: &ir::PlanBudget,
+        expected: Option<(&ir::Ty, ReceiverKind)>,
+    ) -> Result<
+        (
+            super::super::token_session::BudgetVec<(ir::TraitRef, ir::DeclId)>,
+            bool,
+        ),
+        String,
+    > {
         use super::super::{expansion_budget::Storage, token_session::BudgetVec};
         self.check_budget(budget)?;
         self.program
@@ -795,6 +865,7 @@ impl PlanCtx {
         };
         let mut candidates = BudgetVec::new(self.program.names.budget(), Storage::Temporary)
             .map_err(selection_token_error)?;
+        let mut unproved_expected = false;
         // Resolve each in-scope trait import once, not once per declared trait
         // (traits x imports path resolutions, each charging token work).
         let implicit = self.program.implicit_prelude(*module)?;
@@ -831,8 +902,49 @@ impl PlanCtx {
             let Some(item) = self.trait_item_at(trait_index, name, member_key, budget)? else {
                 continue;
             };
+            if let Some((result, mode)) = expected {
+                let schema = self.raw_schema(item)?;
+                let environment = self.param_env(*trait_id)?;
+                // The authored result directly fixes the sole trait argument.
+                // Do not enumerate unrelated blanket impl outputs first: that
+                // frontier may be open even though this exact goal is closed.
+                if environment.arity() == 2
+                    && schema.signature.params.len() == 1
+                    && matches!(&schema.signature.result, ir::Ty::Param(parameter)
+                        if parameter.owner == environment.binder() && parameter.index == 1)
+                {
+                    // A dereference probe cannot move an unsized pointee into
+                    // a by-value receiver. Borrowed receiver probes still run.
+                    if matches!(mode, ReceiverKind::Value { .. })
+                        && matches!(owner, ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_))
+                    {
+                        continue;
+                    }
+                    if receiver_mode(self.declaration(item)?.receiver) != receiver_mode(mode) {
+                        continue;
+                    }
+                    budget.retain_bytes(std::mem::size_of::<ir::Ty>() + 32)?;
+                    let application = ir::TraitRef {
+                        declaration: *trait_id,
+                        self_ty: owner.clone(),
+                        args: Arc::from([result.clone()]),
+                    };
+                    match facts
+                        .service()
+                        .prove_goal(&ir::Predicate::Implements(application.clone()), facts)
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?
+                    {
+                        tr::ProofOutcome::NotProven => unproved_expected = true,
+                        tr::ProofOutcome::Proved(_) => candidates
+                            .push((application, item))
+                            .map_err(selection_token_error)?,
+                    }
+                    continue;
+                }
+            }
             for application in self
-                .trait_applications(owner, *trait_id, facts, budget)?
+                .trait_applications(owner, *trait_id, facts, budget)
+                .map_err(|error| format!("method application discovery: {error}"))?
                 .as_slice()
             {
                 candidates
@@ -840,7 +952,7 @@ impl PlanCtx {
                     .map_err(selection_token_error)?;
             }
         }
-        Ok(candidates)
+        Ok((candidates, unproved_expected))
     }
 }
 impl PlanCtx {
@@ -1043,6 +1155,25 @@ mod tests {
         super::super::parser_tests::stock_native_run(
             "struct Token;trait Convert<T>{fn convert(self)->T;}impl Convert<i32> for Token{fn convert(self)->i32{42}}impl Convert<bool> for Token{fn convert(self)->bool{true}}fn value()->i32{Token.convert()}fn flag()->bool{Token.convert()}fn main(){println!(\"{} {}\",value(),flag());}",
         );
+    }
+
+    #[test]
+    fn expected_result_absence_is_proved_trait_failure_not_ambiguity() {
+        let source = "struct Token;struct N;trait Convert<T>{fn convert(self)->T;}impl Convert<i32> for Token{fn convert(self)->i32{42}}impl Convert<bool> for Token{fn convert(self)->bool{true}}fn unused(){let _n:N=Token.convert();}fn main(){}";
+        let stock =
+            super::super::parser_tests::stock_compile(source, std::path::Path::new("unused"), true);
+        assert!(!stock.status.success());
+        assert!(String::from_utf8_lossy(&stock.stderr).contains("E0277"));
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = crate::compiler::compile(source.into(), workers, check)
+                    .err()
+                    .expect("unproved exact expected application must reject")
+                    .to_string();
+                assert!(error.contains("E0277"), "{error}");
+                assert!(!error.contains("unsupported:"), "{error}");
+            }
+        }
     }
 
     #[test]

@@ -9574,7 +9574,24 @@ impl<'a> Checker<'a> {
             {
                 return Ok(call);
             }
-            return self.method_through_deref(receiver, &ty, name, type_args, args, expected);
+            let fallback =
+                self.method_through_deref(receiver, &ty, name, type_args, args, expected);
+            if matches!(&fallback, Err(error) if error == "no applicable method or unresolved method generic arguments")
+                && self.signatures.plan()?.method_exists_with_unmet_bounds(
+                    &ty,
+                    name,
+                    &self.signatures.plan()?.budget,
+                )?
+            {
+                let name = self
+                    .names()?
+                    .spelling(*name)
+                    .map_err(native_adapter::name_diagnostic)?;
+                return Err(format!(
+                    "E0599: the method `{name}` exists but its trait bounds were not satisfied"
+                ));
+            }
+            return fallback;
         };
         let region_offset = match &selected.target {
             ir::Callee::Direct(target) => target.type_args.len().saturating_sub(type_args.len()),
@@ -9944,12 +9961,11 @@ impl<'a> Checker<'a> {
         let Some(target) = self.deref_target_hint(owner)? else {
             return Err(MISSING.into());
         };
-        let carrier = ir::Ty::Ref {
-            kind: ir::BorrowKind::Shared,
-            referent: Arc::new(target.clone()),
-        };
+        // Probe the actual dereferenced place. A synthetic &Target would
+        // admit reference-blanket methods requiring an extra autoref that
+        // the source receiver never supplied (e.g. Clone on a non-Clone slice).
         let selected = self
-            .method_selection_with_inference(&carrier, name, type_args, args, expected)?
+            .method_selection_with_inference(&target, name, type_args, args, expected)?
             .ok_or(MISSING)?;
         let kind = match (selected.mode, selected.depth, selected.adjustment) {
             (
@@ -9957,13 +9973,13 @@ impl<'a> Checker<'a> {
                     kind: ir::BorrowKind::Shared,
                 },
                 0,
-                ReceiverAdjustment::Identity,
+                ReceiverAdjustment::SharedAutoref,
             ) => ir::BorrowKind::Shared,
             (
                 ReceiverKind::Borrowed {
                     kind: ir::BorrowKind::Mut,
                 },
-                1,
+                0,
                 ReceiverAdjustment::MutAutoref,
             ) => ir::BorrowKind::Mut,
             _ => {

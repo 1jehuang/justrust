@@ -482,7 +482,10 @@ impl Solver<'_, '_, '_> {
         let ir::FactsCtx::Validated(facts) = checker.facts() else {
             return Ok(None);
         };
+        let expected_type = self.expected_method_result(expected)?;
         let mut discovered = None;
+        let mut unproved_expected = false;
+        let mut deferred_inherent = false;
         let mut same_trait: Vec<(ir::TraitRef, ir::DeclId)> = Vec::new();
         // Reuse the ordinary receiver/adjustment and inherent-before-trait order.
         // Returning Deferred stops at the first applicable frontier, rather than
@@ -498,17 +501,20 @@ impl Solver<'_, '_, '_> {
                     if let Some((nominal, _)) = nominal_parts(owner)
                         && self.candidate(nominal, name)?.is_some()
                     {
+                        deferred_inherent = true;
                         return Ok(MethodArguments::Deferred);
                     }
                     return Ok(MethodArguments::Missing);
                 }
-                let candidates = plan.method_trait_candidates(
+                let (candidates, unproved) = plan.method_trait_candidates_expected(
                     owner,
                     &name,
                     checker.facts(),
                     &checker.module,
                     &plan.budget,
+                    expected_type.as_ref().map(|result| (result, mode)),
                 )?;
+                unproved_expected |= unproved;
                 let mut applicable = None;
                 let mut collected: Vec<_> = Vec::new();
                 for (application, item) in candidates.as_slice() {
@@ -558,6 +564,11 @@ impl Solver<'_, '_, '_> {
             }
         }
         let Some((application, item)) = discovered else {
+            if unproved_expected && !deferred_inherent {
+                return Err(self.user_error(
+                    "E0277: expected method result requires an unsatisfied trait application",
+                ));
+            }
             return Ok(None);
         };
         let schema = plan.raw_schema(item)?;
@@ -603,6 +614,27 @@ impl Solver<'_, '_, '_> {
         self.schema(&schema.signature.result, &params, 0).map(Some)
     }
 
+    fn expected_method_result(&mut self, expected: Term) -> Result<Option<ir::Ty>, String> {
+        let mut target = self.resolve(expected, 0)?;
+        if target.is_none() {
+            let root = self.root(expected);
+            let mut found = None;
+            for (actual, wanted) in self.coercions.clone() {
+                self.checker.infer_work(0)?;
+                if self.root(actual) == root
+                    && let Some(ty) = self.resolve(wanted, 0)?
+                {
+                    if found.as_ref().is_some_and(|previous| *previous != ty) {
+                        return Ok(None);
+                    }
+                    found = Some(ty);
+                }
+            }
+            target = found;
+        }
+        Ok(target)
+    }
+
     /// Chooses among several proven applications of one trait by the
     /// expected method result, as stock inference does for `x.into()` with an
     /// annotated binding. An unknown expected type defers; a known one that
@@ -616,24 +648,7 @@ impl Solver<'_, '_, '_> {
         // a pending coercion (`let n: i64 = x.into()`); that target is the
         // expected type. Reference results would admit coercions, so only an
         // exact unique pending target is used.
-        let mut target = self.resolve(expected, 0)?;
-        if target.is_none() {
-            let root = self.root(expected);
-            let mut found = None;
-            for (actual, wanted) in self.coercions.clone() {
-                self.checker.infer_work(0)?;
-                if self.root(actual) == root
-                    && let Some(ty) = self.resolve(wanted, 0)?
-                {
-                    if found.as_ref().is_some_and(|f| *f != ty) {
-                        return Ok(None);
-                    }
-                    found = Some(ty);
-                }
-            }
-            target = found;
-        }
-        let Some(expected) = target else {
+        let Some(expected) = self.expected_method_result(expected)? else {
             return Ok(None);
         };
         let plan = self.checker.signatures.plan()?;
@@ -662,6 +677,19 @@ impl Solver<'_, '_, '_> {
             if result == expected && chosen.replace((application.clone(), *item)).is_some() {
                 return Err(super::super::trait_selection::trait_application_ambiguity());
             }
+        }
+        if chosen.is_none()
+            && let Some((application, item)) = applications.first()
+            && let ir::FactsCtx::Validated(facts) = self.checker.facts()
+        {
+            plan.reject_unproved_expected_trait_result(
+                application,
+                *item,
+                &expected,
+                facts,
+                &plan.budget,
+                &mut self.checker.trait_scratch.borrow_mut(),
+            )?;
         }
         chosen
             .map(Some)

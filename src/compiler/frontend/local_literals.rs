@@ -1425,8 +1425,15 @@ impl<'s> Solver<'_, '_, 's> {
                         };
                         ty = original;
                     }
+                    // Expected-result discovery uses the same written receiver
+                    // as final selection. A failed trait goal on `&T` must not
+                    // erase that borrow and manufacture mutable probes on `T`.
+                    let trait_receiver = match self.resolve(method.receiver, 0)? {
+                        Some(written @ ir::Ty::Ref { .. }) if method.depth == 0 => written,
+                        _ => ty.clone(),
+                    };
                     if let Some(result) = self.trait_method_constraints(
-                        &ty,
+                        &trait_receiver,
                         method.name,
                         &method.args,
                         &method.actuals,
