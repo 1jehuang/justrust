@@ -561,6 +561,87 @@ fn native_slot_source_genuine_and_universal_initialized_store() {
 }
 
 #[test]
+fn native_slot_source_rejects_cross_kind_stride_even_when_values_coincide() {
+    let plan = genuine_plan();
+    let slot = declaration(&plan, "slot");
+    for wrong in [
+        "size_of",
+        "storage_stride",
+        "storage_alignment",
+        "pointer_stride",
+    ] {
+        let mut program = plan.program.as_ref().clone();
+        let wrong_path = program.functions[named(&plan.program, wrong)].name.clone();
+        let Some(Expr::Cast { value, .. }) = program.functions[named(&plan.program, "slot")]
+            .body
+            .tail
+            .as_deref_mut()
+        else {
+            panic!("slot cast")
+        };
+        let Expr::Binary { right, .. } = value.as_mut() else {
+            panic!("slot sum")
+        };
+        let Expr::Binary { right, .. } = right.as_mut() else {
+            panic!("slot product")
+        };
+        let Expr::Apply { path, value } = right.as_mut() else {
+            panic!("stride application")
+        };
+        let arguments = path.segments.last().unwrap().args.clone();
+        path.anchor = wrong_path.anchor();
+        path.resolved_use = None;
+        path.segments = wrong_path
+            .segments()
+            .iter()
+            .map(|name| PathSegment {
+                name: *name,
+                region_args: Vec::new(),
+                args: Vec::new(),
+                associated_types: Vec::new(),
+            })
+            .collect();
+        path.segments.last_mut().unwrap().args = arguments;
+        let Expr::Call { name, .. } = value.as_mut() else {
+            panic!("stride call")
+        };
+        *name = wrong_path;
+        // Exercise the sealed role check itself, not an earlier registration
+        // failure. Only genuine registry rows are copied into this malformed
+        // fixture. It never becomes a PlanCtx or graph publication.
+        let mut registry = plan.registry.empty_like();
+        registry.declarations = plan.registry.declarations.clone();
+        registry.slots = plan.registry.slots.clone();
+        registry.functions = plan.registry.functions.clone();
+        registry.function_ids = plan.registry.function_ids.clone();
+        registry.callable_sources = plan.registry.callable_sources.clone();
+        registry.program = Arc::new(program);
+        assert!(
+            native_sequence::issue_slot(&registry, slot, &plan.budget)
+                .unwrap()
+                .is_none(),
+            "{wrong} cannot grant element-slot authority"
+        );
+    }
+    let mut program = plan.program.as_ref().clone();
+    program.functions[named(&plan.program, "element_stride")]
+        .body
+        .tail = Some(Box::new(Expr::TypeAlignment(Type::Int(ir::IntTy::U8))));
+    let mut registry = plan.registry.empty_like();
+    registry.declarations = plan.registry.declarations.clone();
+    registry.slots = plan.registry.slots.clone();
+    registry.functions = plan.registry.functions.clone();
+    registry.function_ids = plan.registry.function_ids.clone();
+    registry.callable_sources = plan.registry.callable_sources.clone();
+    registry.program = Arc::new(program);
+    assert!(
+        native_sequence::issue_slot(&registry, slot, &plan.budget)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn native_slot_source_copy_wrong_recipe_context_and_poison_reject() {
     let plan = genuine_plan();
     let slot = declaration(&plan, "slot");

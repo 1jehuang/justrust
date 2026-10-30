@@ -11474,6 +11474,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         }
         if self.builtin_macro_ahead("__justrust_align_of")?
             || self.builtin_macro_ahead("__justrust_storage_stride")?
+            || self.builtin_macro_ahead("__justrust_size_of")?
+            || self.builtin_macro_ahead("__justrust_element_stride")?
+            || self.builtin_macro_ahead("__justrust_pointer_stride")?
         {
             return self.type_alignment_expression();
         }

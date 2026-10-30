@@ -25,6 +25,184 @@ fn stock(source: &str, tag: &str) -> (std::path::PathBuf, std::process::Output) 
 }
 
 #[test]
+fn private_vec_element_storage_matches_stock() {
+    physical_matches_stock(
+        r#"
+enum E{A,B(u16)}
+static WORD:u16=513u16;
+fn main(){
+let boxed=Box::new(7u8);assert_eq!(*boxed.as_ref(),7u8);
+let rc=std::rc::Rc::new(513u16);let copied=rc.clone();assert_eq!(*copied,513u16);
+assert_eq!(WORD,513u16);
+let mut bytes=Vec::new();bytes.push(3u8);bytes.push(7u8);bytes.push(11u8);let p=bytes.as_ptr();unsafe{assert_eq!(*p.add(2usize),11u8);}assert_eq!(bytes[1],7u8);
+let mut rows=Vec::new();rows.push([257u16,513u16,769u16]);rows.push([1025u16,1281u16,1537u16]);let r=rows.as_ptr();unsafe{let row=*r.add(1usize);assert_eq!(row[2],1537u16);}assert_eq!(rows[0][1],513u16);
+let mut values:Vec<E>=Vec::new();assert!(values.as_ptr()as usize!=0usize);values.push(E::A);values.push(E::B(60000u16));match values.pop(){Some(E::B(v))=>assert_eq!(v,60000u16),_=>panic!("enum")}
+println!("private and element strides stay separate");
+}
+"#,
+        "private_vec_element_storage",
+    );
+}
+
+#[test]
+fn semantic_reference_metadata_matches_stock() {
+    physical_matches_stock(
+        r#"
+trait Inspect { fn value(&self)->u8; }
+struct Unknown {value:u8}
+fn reference<T:?Sized>()->usize{std::mem::size_of::<&T>()}
+fn main(){
+println!("{} {} {} {}",reference::<u8>(),reference::<str>(),reference::<[u16]>(),std::mem::size_of::<&dyn Inspect>());
+println!("{} {} {} {}",std::mem::size_of::<&mut[u16]>(),std::mem::size_of::<&str>(),std::mem::size_of::<*const u16>(),std::mem::size_of::<*mut u128>());
+println!("{} {}",std::mem::size_of::<&Unknown>(),std::mem::size_of::<[&str;3]>());
+}
+"#,
+        "semantic_reference_metadata",
+    );
+}
+
+#[test]
+fn semantic_scalars_arrays_matches_stock() {
+    physical_matches_stock(
+        r#"
+fn size<T>()->usize{std::mem::size_of::<T>()}
+fn main(){
+println!("{} {} {} {} {}",size::<()>(),size::<bool>(),size::<char>(),size::<f32>(),size::<f64>());
+println!("{} {} {} {} {} {}",size::<u8>(),size::<u16>(),size::<u32>(),size::<u64>(),size::<u128>(),size::<usize>());
+println!("{} {} {} {} {} {}",size::<i8>(),size::<i16>(),size::<i32>(),size::<i64>(),size::<i128>(),size::<isize>());
+println!("{} {} {} {}",size::<[u8;0]>(),size::<[u16;3]>(),size::<[[u8;3];2]>(),size::<[[[u32;2];3];4]>());
+println!("{} {} {} {}",size::<[[();3];5]>(),size::<[[u128;3];2]>(),size::<[u8;17]>(),size::<[bool;9]>());
+}
+"#,
+        "semantic_scalars_arrays",
+    );
+}
+
+#[test]
+fn semantic_size_closed_unsupported_never_inherits_private_layout() {
+    for (tag, source) in [
+        (
+            "nominal",
+            r#"struct N{value:u8}fn main(){let _n=std::mem::size_of::<N>();}"#,
+        ),
+        (
+            "tuple",
+            r#"fn main(){let _n=std::mem::size_of::<(u8,u16)>();}"#,
+        ),
+        (
+            "nested_enum",
+            r#"enum E{A,B}fn size<T>()->usize{std::mem::size_of::<[[T;3];2]>()}fn unused()->usize{size::<E>()}fn main(){}"#,
+        ),
+        (
+            "zero_enum",
+            r#"enum E{A,B}fn size<T>()->usize{std::mem::size_of::<[T;0]>()}fn unused()->usize{size::<E>()}fn main(){}"#,
+        ),
+        (
+            "closure",
+            r#"fn size<T>(_:T)->usize{std::mem::size_of::<T>()}fn unused()->usize{size(||3u8)}fn main(){}"#,
+        ),
+        (
+            "trait_dispatch",
+            r#"struct N{value:u8}struct W<T>(T);trait Inspect{fn width(&self)->usize;}impl<T> Inspect for W<T>{fn width(&self)->usize{std::mem::size_of::<T>()}}fn invoke<T:Inspect>(x:T)->usize{x.width()}fn unused()->usize{invoke(W(N{value:1u8}))}fn main(){}"#,
+        ),
+        (
+            "opaque_method",
+            r#"enum E{A,B}struct V;trait Inspect{fn width<T>(&self)->usize;}impl Inspect for V{fn width<T>(&self)->usize{std::mem::size_of::<T>()}}fn make()->impl Inspect{V}fn unused()->usize{make().width::<E>()}fn main(){}"#,
+        ),
+        (
+            "unsized_nominal_str_reference",
+            r#"struct Wrap<T:?Sized>{t:T}fn main(){let _n=std::mem::size_of::<&Wrap<str>>();}"#,
+        ),
+        (
+            "unsized_nominal_slice_raw",
+            r#"struct Wrap<T:?Sized>{t:T}fn main(){let _n=std::mem::size_of::<*const Wrap<[u8]>>();}"#,
+        ),
+        (
+            "unsized_nominal_generic_reference",
+            r#"struct Wrap<T:?Sized>{t:T}fn width<T:?Sized>()->usize{std::mem::size_of::<&T>()}fn unused()->usize{width::<Wrap<str>>()}fn main(){}"#,
+        ),
+        (
+            "pointer_nominal",
+            r#"struct N{value:u8}fn step<T>(p:*const T)->*const T{p.wrapping_add(1usize)}fn unused()->*const N{step(std::ptr::null::<N>())}fn main(){}"#,
+        ),
+    ] {
+        let (root, compiled) = stock(source, tag);
+        assert!(
+            compiled.status.success(),
+            "{tag}: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = compiler::compile(source.into(), workers, check)
+                    .err()
+                    .expect("closed unsupported size must fail CHECK and BUILD")
+                    .to_string();
+                assert!(
+                    (error.contains("unsupported")
+                        && (error.contains("size") || error.contains("stride")))
+                        || (tag.starts_with("unsized_nominal_") && error.contains("unsupported")),
+                    "{tag}: workers={workers},check={check}: {error}"
+                );
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn semantic_size_deferred_method_retains_physical_pointer_array_frontier() {
+    let template = "struct V;trait Inspect{fn width<Q>(&self)->usize;}impl Inspect for V{fn width<Q>(&self)->usize{let _p=std::ptr::null::<Q>().wrapping_add(1usize);std::mem::size_of::<Q>()}}fn make()->impl Inspect{V}fn unused()->usize{make().width::<REPLACE>()}fn main(){}";
+    for (tag, ty, expected) in [
+        (
+            "method_physical_extent",
+            "[u8;1048577]",
+            "array element extent exceeds native memory limit",
+        ),
+        (
+            "method_inner_extent_zero_outer",
+            "[[u8;1048577];0]",
+            "array element extent exceeds native memory limit",
+        ),
+        (
+            // These source lengths hit the existing parser ceiling first.
+            // Canonical helper units separately check the physical count bound.
+            "method_zst_count_parser_boundary",
+            "[();2147483648]",
+            "array length/index exceeds supported limit",
+        ),
+        (
+            "method_inner_zst_count_zero_outer_parser_boundary",
+            "[[();2147483648];0]",
+            "array length/index exceeds supported limit",
+        ),
+    ] {
+        let source = template.replace("REPLACE", ty);
+        let (root, compiled) = stock(&source, tag);
+        assert!(
+            compiled.status.success(),
+            "{tag}: {}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        for workers in [1, 8] {
+            let error = compiler::compile(source.clone(), workers, true)
+                .err()
+                .expect("unused physical pointer requirements must be checked without codegen")
+                .to_string();
+            assert!(
+                error.contains(expected),
+                "{tag}: workers={workers}: {error}"
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+    physical_matches_stock(
+        &template.replace("REPLACE", "u8"),
+        "method_physical_byte_control",
+    );
+}
+
+#[test]
 fn target_alignment_scalars_arrays_structs_and_generic_instances() {
     let source = r#"
 struct Narrow { first: u8, second: bool }

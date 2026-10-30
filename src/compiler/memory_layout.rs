@@ -17,6 +17,31 @@ pub(super) fn query_value(
         // authority is granted here; private storage_stride::<u8>() stays eight.
         return Ok(Some(1));
     }
+    if query.is_semantic_size() {
+        return semantic_size(query.queried_type(), facts, budget);
+    }
+    if query.is_private_element_stride() || query.is_supported_pointer_stride() {
+        if matches!(query.queried_type(), ir::Ty::Param(_)) {
+            return Ok(None);
+        }
+        let semantic = if query.is_supported_pointer_stride() {
+            let Some(size) = semantic_size(query.queried_type(), facts, budget)? else {
+                return Ok(None);
+            };
+            Some(size)
+        } else {
+            None
+        };
+        let stride = usize::try_from(super::backend::array_element_stride(
+            query.queried_type(),
+            budget,
+        )?)
+        .map_err(|_| "private element stride is negative")?;
+        if semantic.is_some_and(|size| size != stride) {
+            return Err("unsupported: public pointer stride requires exact semantic and physical representation agreement".into());
+        }
+        return Ok(Some(stride));
+    }
     if query.is_private_storage_alignment() {
         facts.validate_ty_with_budget(query.queried_type(), budget)?;
         return walk_alignment(query.queried_type(), budget, 0, true);
@@ -31,6 +56,124 @@ pub(super) fn query_value(
     usize::try_from(super::backend::value_size(query.queried_type(), budget)?)
         .map(Some)
         .map_err(|_| "private storage stride is negative".into())
+}
+
+/// Exact public size authority for the implemented Linux x86-64 domain.
+/// No aggregate/private carrier extent is a public representation proof.
+pub(super) fn semantic_size(
+    ty: &ir::Ty,
+    facts: ir::FactsCtx<'_>,
+    budget: &ir::PlanBudget,
+) -> Result<Option<usize>, String> {
+    facts.validate_ty_with_budget(ty, budget)?;
+    walk_size_authorized(ty, facts.validated(), budget, 0)
+}
+
+// This is public metadata authority, not private carrier classification.
+// Nominal tails require exact canonical Sized evidence, never private layout.
+fn pointer_metadata_size_authorized(
+    referent: &ir::Ty,
+    facts: Option<&super::traits::ValidatedFacts>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<Option<usize>, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match referent {
+        ir::Ty::Param(_) => Ok(None),
+        ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => Ok(Some(16)),
+        ir::Ty::Unit
+        | ir::Ty::Bool
+        | ir::Ty::Int(_)
+        | ir::Ty::Float(_)
+        | ir::Ty::Char
+        | ir::Ty::Never
+        | ir::Ty::Ref { .. }
+        | ir::Ty::RawPtr { .. } => Ok(Some(8)),
+        ir::Ty::Array { element, .. } => {
+            match pointer_metadata_size_authorized(element, facts, budget, depth + 1)? {
+                Some(8) => Ok(Some(8)),
+                None => Ok(None),
+                _ => Err("unsupported: array pointee requires a proven Sized element".into()),
+            }
+        }
+        _ => {
+            let Some(facts) = facts else {
+                return Ok(None);
+            };
+            match facts.require_sized(referent) {
+                Ok(()) => Ok(Some(8)),
+                Err(error)
+                    if error.kind() == super::traits::FactsErrorKind::Unproved
+                        && facts.phase() != super::traits::FactsPhase::Closed =>
+                {
+                    Ok(None)
+                }
+                Err(error) if error.kind() == super::traits::FactsErrorKind::Unproved => Err(
+                    "unsupported: nominal-tail pointer size metadata has no implemented public target representation".into(),
+                ),
+                Err(error) => Err(error.into_legacy_diagnostic(budget)),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+fn walk_size(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<Option<usize>, String> {
+    walk_size_authorized(ty, None, budget, depth)
+}
+fn walk_size_authorized(
+    ty: &ir::Ty,
+    facts: Option<&super::traits::ValidatedFacts>,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<Option<usize>, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    // Pointer metadata is checked before scalar_size_align: a reference to a
+    // rigid ?Sized parameter is not known to be a thin pointer yet.
+    if let ir::Ty::Ref { referent, .. }
+    | ir::Ty::RawPtr {
+        pointee: referent, ..
+    } = ty
+    {
+        return pointer_metadata_size_authorized(referent, facts, budget, depth + 1);
+    }
+    if let Some((size, _)) = super::c_abi::layout::scalar_size_align(ty) {
+        return Ok(Some(size));
+    }
+    match ty {
+        ir::Ty::Param(_) => Ok(None),
+        ir::Ty::Char => Ok(Some(4)),
+        ir::Ty::Array { element, len } => {
+            let Some(size) = walk_size_authorized(element, facts, budget, depth + 1)? else {
+                return Ok(None);
+            };
+            let extent = size
+                .checked_mul(*len)
+                .filter(|size| *size <= i64::MAX as usize)
+                .ok_or("unsupported: target array size exceeds the Linux x86-64 object limit")?;
+            Ok(Some(extent))
+        }
+        ir::Ty::Unit | ir::Ty::Bool | ir::Ty::Int(_) | ir::Ty::Float(_) => {
+            Err("target scalar size authority is missing".into())
+        }
+        ir::Ty::Tuple(_)
+        | ir::Ty::Struct(_)
+        | ir::Ty::Enum(_)
+        | ir::Ty::Closure(_)
+        | ir::Ty::FnItem(_) => Err(
+            "unsupported: target aggregate size requires a genuine public target representation"
+                .into(),
+        ),
+        ir::Ty::Opaque(_) | ir::Ty::AssociatedType(_) => {
+            Err("unsupported: target size requires graph-authorized type normalization".into())
+        }
+        ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) | ir::Ty::Never => {
+            Err("unsupported: target size requires an implemented Sized type".into())
+        }
+        ir::Ty::Ref { .. } | ir::Ty::RawPtr { .. } => unreachable!(),
+    }
 }
 
 /// `None` retains a genuinely symbolic generic query until ordinary instance
@@ -135,6 +278,114 @@ fn field_alignment<'a>(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn public_size_is_exact_for_scalars_and_recursive_fixed_arrays() {
+        let budget = ir::PlanBudget::default();
+        for (ty, size) in [
+            (ir::Ty::Unit, 0),
+            (ir::Ty::Bool, 1),
+            (ir::Ty::Char, 4),
+            (ir::Ty::Int(ir::IntTy::U8), 1),
+            (ir::Ty::Int(ir::IntTy::I8), 1),
+            (ir::Ty::Int(ir::IntTy::U16), 2),
+            (ir::Ty::Int(ir::IntTy::I16), 2),
+            (ir::Ty::Int(ir::IntTy::U32), 4),
+            (ir::Ty::Int(ir::IntTy::I32), 4),
+            (ir::Ty::Int(ir::IntTy::U64), 8),
+            (ir::Ty::Int(ir::IntTy::I64), 8),
+            (ir::Ty::Int(ir::IntTy::U128), 16),
+            (ir::Ty::Int(ir::IntTy::I128), 16),
+            (ir::Ty::Int(ir::IntTy::Usize), 8),
+            (ir::Ty::Int(ir::IntTy::Isize), 8),
+            (ir::Ty::Float(ir::FloatTy::F32), 4),
+            (ir::Ty::Float(ir::FloatTy::F64), 8),
+        ] {
+            assert_eq!(walk_size(&ty, &budget, 0).unwrap(), Some(size));
+            for len in [0, 1, 3, 17] {
+                let nested = ir::Ty::Array {
+                    element: Arc::new(ir::Ty::Array {
+                        element: Arc::new(ty.clone()),
+                        len,
+                    }),
+                    len: 3,
+                };
+                assert_eq!(
+                    walk_size(&nested, &budget, 0).unwrap(),
+                    Some(3 * len * size)
+                );
+                for limits in [
+                    ir::PlanLimits {
+                        depth: 0,
+                        ..Default::default()
+                    },
+                    ir::PlanLimits {
+                        work: 0,
+                        ..Default::default()
+                    },
+                ] {
+                    assert!(walk_size(&nested, &ir::PlanBudget::new(limits), 0).is_err());
+                }
+            }
+        }
+        for referent in [
+            ir::Ty::Int(ir::IntTy::U8),
+            ir::Ty::Str,
+            ir::Ty::Slice {
+                element: Arc::new(ir::Ty::Int(ir::IntTy::U16)),
+            },
+        ] {
+            let size = if matches!(referent, ir::Ty::Int(_)) {
+                8
+            } else {
+                16
+            };
+            for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+                assert_eq!(
+                    walk_size(
+                        &ir::Ty::Ref {
+                            kind,
+                            referent: Arc::new(referent.clone())
+                        },
+                        &budget,
+                        0
+                    )
+                    .unwrap(),
+                    Some(size)
+                );
+                assert_eq!(
+                    walk_size(
+                        &ir::Ty::RawPtr {
+                            kind,
+                            pointee: Arc::new(referent.clone())
+                        },
+                        &budget,
+                        0
+                    )
+                    .unwrap(),
+                    Some(size)
+                );
+            }
+        }
+        assert!(
+            walk_size(
+                &ir::Ty::Tuple(Arc::from([ir::Ty::Int(ir::IntTy::U8)])),
+                &budget,
+                0
+            )
+            .unwrap_err()
+            .contains("unsupported")
+        );
+        let overflow = ir::Ty::Array {
+            element: Arc::new(ir::Ty::Int(ir::IntTy::U128)),
+            len: usize::MAX,
+        };
+        assert!(
+            walk_size(&overflow, &budget, 0)
+                .unwrap_err()
+                .contains("object limit")
+        );
+    }
 
     #[test]
     fn private_alignment_walk_keeps_per_task_depth_and_work_limits() {

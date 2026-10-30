@@ -2,6 +2,308 @@ use super::*;
 use crate::compiler::memory_layout::domain::tests::{fixture_locals, fixture_plan};
 use crate::compiler::{frontend, memory_layout::domain::Local};
 
+#[test]
+fn semantic_size_domain_bounds_and_source_transfer_shapes_are_sealed() {
+    let (locals, root, budget, plan) = fixture_plan(
+        "fn size<T>()->usize{std::mem::size_of::<[T;3]>()}fn main(){}",
+        "size",
+    );
+    let summary = source_summary(&plan, root, &budget);
+    let required = summary.requirement(root).unwrap();
+    assert_eq!(required.parameters, [false]);
+    assert_eq!(
+        required.semantic_limits,
+        [Some(super::super::SEMANTIC_SIZE_LIMIT / 3)]
+    );
+    assert!(!required.deferred_dispatch);
+    let mut forged = summary.as_ref().clone();
+    Arc::make_mut(&mut forged.members)
+        .iter_mut()
+        .find(|(owner, _)| *owner == root)
+        .unwrap()
+        .1
+        .semantic_limits[0] = None;
+    assert!(forged.admit_symbolic(root).is_err());
+    let caller = locals.iter().find(|local| local.owner == root).unwrap();
+    let mut forged_local = caller.clone();
+    let mut edges = forged_local.edges.to_vec();
+    edges[0].arguments[0].2.arrays = Arc::from([2usize]);
+    forged_local.edges = edges.into();
+    assert!(forged_local.validate(&budget).is_err());
+    let headers = headers(locals, &budget);
+    let mut forged_header = headers
+        .iter()
+        .find(|header| header.owner == root)
+        .unwrap()
+        .as_ref()
+        .clone();
+    let transfers = Arc::make_mut(&mut forged_header.transfers);
+    let arguments = Arc::make_mut(&mut transfers[0].arguments);
+    arguments[0].2.arrays = Arc::from([2usize]);
+    assert!(forged_header.validate_receipt().is_err());
+}
+
+#[test]
+fn semantic_size_generic_reference_retains_metadata_shape_requirement() {
+    let (locals, root, budget, plan) = fixture_plan(
+        "fn width<T:?Sized>()->usize{std::mem::size_of::<&T>()}fn main(){}",
+        "width",
+    );
+    let summary = source_summary(&plan, root, &budget);
+    let required = summary.requirement(root).unwrap();
+    assert_eq!(required.metadata_pointees, [true]);
+    assert_eq!(required.thin_pointees, [false]);
+    let mut local = locals
+        .iter()
+        .find(|local| local.owner == root)
+        .unwrap()
+        .clone();
+    let mut edges = local.edges.to_vec();
+    edges[0].arguments[0].6.deferred_dispatch = true;
+    local.edges = edges.into();
+    assert!(local.validate(&budget).is_err());
+    let mut forged = summary.as_ref().clone();
+    Arc::make_mut(&mut forged.members)
+        .iter_mut()
+        .find(|(owner, _)| *owner == root)
+        .unwrap()
+        .1
+        .metadata_pointees[0] = false;
+    assert!(forged.admit_symbolic(root).is_err());
+    for (ty, deferred) in [
+        (ir::Ty::Int(ir::IntTy::U8), false),
+        (ir::Ty::Str, false),
+        (ir::Ty::Tuple(Arc::from([ir::Ty::Int(ir::IntTy::U8)])), true),
+    ] {
+        let target = ir::CallTarget {
+            declaration: root,
+            type_args: Arc::from([ty]),
+        };
+        let facts = plan
+            .callable_facts(root)
+            .unwrap()
+            .world()
+            .instance_facts(&target)
+            .unwrap();
+        assert_eq!(
+            summary
+                .closed_requirements(&target, &facts, &budget)
+                .unwrap(),
+            deferred
+        );
+    }
+}
+
+#[test]
+fn semantic_size_canonical_pointer_summary_and_array_transfer_are_sealed() {
+    let cap = crate::compiler::backend::MAX_FRAME_BYTES as usize;
+    // Select the real embedded declaration, not a user call through privacy.
+    let (locals, owner, budget, mut plan) = fixture_plan("fn main(){}", "pointer_stride");
+    let local = locals.iter().find(|local| local.owner == owner).unwrap();
+    let publication = local.publication.as_ref().unwrap();
+    publication
+        .validate_source(&local.source, &local.facts, &budget)
+        .unwrap();
+    let query = &local.queries.first().unwrap().1;
+    assert!(query.is_supported_pointer_stride());
+    query
+        .validate(ir::FactsCtx::Validated(&local.facts), &budget)
+        .unwrap();
+    let lowered = crate::compiler::cfg::lower_source_template(publication, &budget).unwrap();
+    let template = crate::compiler::ownership::verify_template(lowered).unwrap();
+    let summary = source_summary(&plan, owner, &budget);
+    assert_eq!(summary.requirement(owner).unwrap().pointer_strides, [true]);
+    let array = |element, len| ir::Ty::Array {
+        element: Arc::new(element),
+        len,
+    };
+    for (actual, expected) in [
+        (array(ir::Ty::Int(ir::IntTy::U8), cap), Ok(cap)),
+        (array(ir::Ty::Unit, ir::MAX_ARRAY_TYPE_LEN), Ok(0)),
+        (
+            array(ir::Ty::Int(ir::IntTy::U8), cap + 1),
+            Err("array element extent exceeds native memory limit"),
+        ),
+        (
+            array(array(ir::Ty::Int(ir::IntTy::U8), cap + 1), 0),
+            Err("array element extent exceeds native memory limit"),
+        ),
+    ] {
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([actual.clone()]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let instantiated = ir::instantiate_checked(
+            &template,
+            std::slice::from_ref(&actual),
+            &facts,
+            &mut plan,
+            &budget,
+        )
+        .unwrap();
+        let closed_query = instantiated
+            .exprs
+            .iter()
+            .find_map(|expression| match &expression.kind {
+                ir::ExprKind::TypeAlignment(query) => Some(query),
+                _ => None,
+            })
+            .expect("source-owned query survives exact verified substitution");
+        closed_query
+            .validate(ir::FactsCtx::Validated(&facts), &budget)
+            .unwrap();
+        let admitted = summary.closed_requirements(&target, &facts, &budget);
+        let value = crate::compiler::memory_layout::query_value(
+            closed_query,
+            ir::FactsCtx::Validated(&facts),
+            &budget,
+        );
+        match expected {
+            Ok(bytes) => {
+                assert!(!admitted.unwrap());
+                assert_eq!(value.unwrap(), Some(bytes));
+            }
+            Err(message) => {
+                assert!(admitted.unwrap_err().contains(message));
+                assert!(value.unwrap_err().contains(message));
+            }
+        }
+    }
+
+    // Canonical metadata rejects these before source substitution or backend
+    // count conversion. Even an outer zero cannot erase an invalid inner type.
+    for count in [ir::MAX_ARRAY_TYPE_LEN + 1, i32::MAX as usize + 1] {
+        for actual in [
+            array(ir::Ty::Unit, count),
+            array(array(ir::Ty::Unit, count), 0),
+        ] {
+            let target = ir::CallTarget {
+                declaration: owner,
+                type_args: Arc::from([actual]),
+            };
+            let error = local
+                .facts
+                .world()
+                .instance_facts(&target)
+                .expect_err("metadata count limit must reject canonical closed facts");
+            assert_eq!(error.kind(), traits::FactsErrorKind::Resource);
+            assert!(
+                error
+                    .into_legacy_diagnostic(&budget)
+                    .contains("array metadata length limit exceeded")
+            );
+        }
+    }
+
+    // The public null<[Q;3]> source call contributes a real open argument
+    // descriptor. It is sealed even when null itself does not consume stride.
+    let (locals, root, budget, _) = fixture_plan(
+        "fn open<Q>(){let _p=std::ptr::null::<[Q;3]>();}fn main(){}",
+        "open",
+    );
+    let local = locals.iter().find(|local| local.owner == root).unwrap();
+    local.validate(&budget).unwrap();
+    let (edge_index, argument_index) = local
+        .edges
+        .iter()
+        .enumerate()
+        .find_map(|(edge_index, edge)| {
+            edge.arguments
+                .iter()
+                .position(|argument| argument.4.physical_limits == [Some(cap / 3)])
+                .map(|argument_index| (edge_index, argument_index))
+        })
+        .expect("genuine source array argument retains physical cap/3");
+    let header = Header::capture(
+        local.source.clone(),
+        local.publication.clone(),
+        local.facts.clone(),
+        &budget,
+    )
+    .unwrap();
+    header.validate_receipt().unwrap();
+    for replacement in [None, Some(cap / 3 + 1)] {
+        let mut forged_local = local.clone();
+        let mut edges = forged_local.edges.to_vec();
+        edges[edge_index].arguments[argument_index]
+            .4
+            .physical_limits[0] = replacement;
+        forged_local.edges = edges.into();
+        assert!(forged_local.validate(&budget).is_err());
+        let mut forged_header = header.clone();
+        let transfers = Arc::make_mut(&mut forged_header.transfers);
+        let arguments = Arc::make_mut(&mut transfers[edge_index].arguments);
+        arguments[argument_index].4.physical_limits[0] = replacement;
+        assert!(forged_header.validate_receipt().is_err());
+    }
+}
+
+#[test]
+fn semantic_size_growing_arrays_have_finite_scc_requirements() {
+    let (_, root, budget, plan) = fixture_plan(
+        "fn size<T>()->usize{if false{size::<[T;2]>()}else{std::mem::size_of::<T>()}}fn main(){}",
+        "size",
+    );
+    let summary = source_summary(&plan, root, &budget);
+    let required = summary.requirement(root).unwrap();
+    assert_eq!(required.semantic_limits, [Some(0)]);
+    assert!(!required.deferred_dispatch);
+    for (ty, supported) in [(ir::Ty::Unit, true), (ir::Ty::Int(ir::IntTy::U8), false)] {
+        let target = ir::CallTarget {
+            declaration: root,
+            type_args: Arc::from([ty]),
+        };
+        let facts = plan
+            .callable_facts(root)
+            .unwrap()
+            .world()
+            .instance_facts(&target)
+            .unwrap();
+        assert_eq!(
+            summary
+                .closed_requirements(&target, &facts, &budget)
+                .is_ok(),
+            supported
+        );
+    }
+}
+
+#[test]
+fn semantic_size_argument_walk_retains_per_task_depth_work_and_byte_limits() {
+    use super::super::{Requirement, SizeArgument};
+    let ty = ir::Ty::Array {
+        element: Arc::new(ir::Ty::Array {
+            element: Arc::new(ir::Ty::Int(ir::IntTy::U16)),
+            len: 3,
+        }),
+        len: 2,
+    };
+    for limits in [
+        ir::PlanLimits {
+            depth: 0,
+            ..Default::default()
+        },
+        ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        },
+        ir::PlanLimits {
+            bytes: 0,
+            ..Default::default()
+        },
+    ] {
+        assert!(SizeArgument::capture(&ty, &[], &ir::PlanBudget::new(limits)).is_err());
+    }
+    let budget = ir::PlanBudget::default();
+    let shape = SizeArgument::capture(&ty, &[], &budget).unwrap();
+    let mut requirement = Requirement::empty(0, &budget).unwrap();
+    shape.apply(12, &mut requirement, &budget).unwrap();
+    requirement.admit().unwrap();
+    shape.apply(11, &mut requirement, &budget).unwrap();
+    assert!(requirement.admit().is_err());
+}
+
 fn headers(locals: Vec<Local>, budget: &ir::PlanBudget) -> Vec<Arc<Header>> {
     locals
         .into_iter()

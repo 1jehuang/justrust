@@ -1,5 +1,5 @@
 // Native Vec<T>: a growable heap buffer written in ordinary Rust source.
-use super::mem::{raw_realloc, size_of};
+use super::mem::{element_stride, raw_realloc};
 use super::option::Option;
 
 impl<A> super::iter::FromIterator<A> for Vec<A> {
@@ -22,7 +22,7 @@ pub struct Vec<T> {
 }
 
 fn slot<T>(base: *mut T, index: usize) -> *mut T {
-    (base as usize + index * size_of::<T>()) as *mut T
+    (base as usize + index * element_stride::<T>()) as *mut T
 }
 
 impl<T> Vec<T> {
@@ -147,7 +147,7 @@ impl<T> Vec<T> {
         if cap < needed {
             cap = needed;
         }
-        let size = size_of::<T>();
+        let size = element_stride::<T>();
         let bytes = cap * size;
         let old_bytes = if self.cap == 0usize { 0usize } else if size == 0usize { 8usize } else { self.cap * size };
         let fresh = raw_realloc(self.ptr as usize, old_bytes, if bytes == 0usize { 8usize } else { bytes }) as *mut T;
@@ -331,7 +331,7 @@ impl<T> Drop for IntoIter<T> {
             self.index += 1usize;
         }
         if self.cap != 0usize {
-            let size = size_of::<T>();
+            let size = element_stride::<T>();
             let bytes = if size == 0usize { 8usize } else { self.cap * size };
             super::mem::raw_free(self.ptr as usize, bytes);
         }
@@ -360,7 +360,7 @@ impl<T> Drop for Vec<T> {
         }
         self.len = 0usize;
         if self.cap != 0usize {
-            let size = size_of::<T>();
+            let size = element_stride::<T>();
             let bytes = if size == 0usize { 8usize } else { self.cap * size };
             super::mem::raw_free(self.ptr as usize, bytes);
         }

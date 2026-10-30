@@ -7,12 +7,22 @@ use std::sync::Arc;
 
 type Seed = traits::alignment_provider::ProviderDomainSeed;
 #[derive(Clone)]
+struct MethodReceipt {
+    declaration: ir::DeclId,
+    item: ir::DeclId,
+    prefix: Arc<[ir::Ty]>,
+    closed: Requirement,
+    own: Requirement,
+}
+
+#[derive(Clone)]
 struct Method {
     declaration: ir::DeclId,
     item: ir::DeclId,
     prefix: Arc<[ir::Ty]>,
     closed: Requirement,
     own: Requirement,
+    receipt: Arc<MethodReceipt>,
 }
 impl Method {
     fn bind(seed: Seed, summary: &Summary, budget: &ir::PlanBudget) -> Result<Self, String> {
@@ -34,22 +44,79 @@ impl Method {
             if required.raw_pointees[slot] {
                 super::super::normalize_raw_pointee(argument, &[], &mut closed, budget)?;
             }
+            if let Some(limit) = required.semantic_limits[slot] {
+                super::super::normalize_semantic_size(argument, &[], limit, &mut closed, budget)?;
+            }
+            if let Some(limit) = required.physical_limits[slot] {
+                super::super::normalize_physical_size(argument, &[], limit, &mut closed, budget)?;
+            }
+            if required.metadata_pointees[slot] {
+                super::super::normalize_metadata_pointee(argument, &[], &mut closed, budget)?;
+            }
+            if required.thin_pointees[slot] {
+                super::super::normalize_thin_pointee(argument, &[], &mut closed, budget)?;
+            }
+            if required.pointer_strides[slot] {
+                super::super::normalize_pointer_stride(argument, &[], &mut closed, budget, 0)?;
+            }
+            if required.mut_ref_pointees[slot] {
+                super::super::normalize_mut_ref_pointee(argument, &[], &mut closed, budget)?;
+            }
         }
         for slot in 0..arity {
             budget.charge_work(1)?;
             own.parameters[slot] = required.parameters[prefix.len() + slot];
             own.raw_pointees[slot] = required.raw_pointees[prefix.len() + slot];
+            own.semantic_limits[slot] = required.semantic_limits[prefix.len() + slot];
+            own.physical_limits[slot] = required.physical_limits[prefix.len() + slot];
+            own.thin_pointees[slot] = required.thin_pointees[prefix.len() + slot];
+            own.metadata_pointees[slot] = required.metadata_pointees[prefix.len() + slot];
+            own.pointer_strides[slot] = required.pointer_strides[prefix.len() + slot];
+            own.mut_ref_pointees[slot] = required.mut_ref_pointees[prefix.len() + slot];
         }
         closed.unsupported = closed.unsupported.or(required.unsupported);
         own.deferred_dispatch = required.deferred_dispatch;
-        budget.retain_bytes(std::mem::size_of_val(prefix))?;
+        budget.retain_bytes(std::mem::size_of_val(prefix) + 2 * std::mem::size_of::<usize>())?;
+        budget.retain_bytes(
+            std::mem::size_of::<MethodReceipt>()
+                + 2 * std::mem::size_of::<usize>()
+                + arity
+                    .checked_mul(6 + 2 * std::mem::size_of::<Option<usize>>())
+                    .ok_or("opaque method receipt arity overflow")?,
+        )?;
+        let prefix: Arc<[ir::Ty]> = Arc::from(prefix);
+        let receipt = Arc::new(MethodReceipt {
+            declaration: seed.declaration(),
+            item: seed.item(),
+            prefix: prefix.clone(),
+            closed: closed.clone(),
+            own: own.clone(),
+        });
         Ok(Self {
             declaration: seed.declaration(),
             item: seed.item(),
-            prefix: Arc::from(prefix),
+            prefix,
             closed,
             own,
+            receipt,
         })
+    }
+    fn validate_receipt(&self, budget: &ir::PlanBudget) -> Result<(), String> {
+        budget.charge_work(1 + self.own.parameters.len().saturating_mul(8))?;
+        if self.declaration != self.receipt.declaration
+            || self.item != self.receipt.item
+            || self.closed != self.receipt.closed
+            || self.own != self.receipt.own
+            || self.prefix.len() != self.receipt.prefix.len()
+        {
+            return Err("opaque method changed its immutable source binder receipt".into());
+        }
+        for (actual, original) in self.prefix.iter().zip(self.receipt.prefix.iter()) {
+            if !ir::identical_type(actual, original, budget)? {
+                return Err("opaque method changed its exact source prefix substitution".into());
+            }
+        }
+        Ok(())
     }
     fn instantiate(
         &self,
@@ -57,6 +124,7 @@ impl Method {
         facts: &traits::ValidatedFacts,
         budget: &ir::PlanBudget,
     ) -> Result<ir::CallTarget, String> {
+        self.validate_receipt(budget)?;
         if actuals.len() != self.own.parameters.len() {
             return Err("opaque source invocation changed own method arity".into());
         }
@@ -68,6 +136,24 @@ impl Method {
             }
             if self.own.raw_pointees[slot] {
                 super::super::normalize_raw_pointee(actual, &[], &mut required, budget)?;
+            }
+            if let Some(limit) = self.own.semantic_limits[slot] {
+                super::super::normalize_semantic_size(actual, &[], limit, &mut required, budget)?;
+            }
+            if let Some(limit) = self.own.physical_limits[slot] {
+                super::super::normalize_physical_size(actual, &[], limit, &mut required, budget)?;
+            }
+            if self.own.metadata_pointees[slot] {
+                super::super::normalize_metadata_pointee(actual, &[], &mut required, budget)?;
+            }
+            if self.own.thin_pointees[slot] {
+                super::super::normalize_thin_pointee(actual, &[], &mut required, budget)?;
+            }
+            if self.own.pointer_strides[slot] {
+                super::super::normalize_pointer_stride(actual, &[], &mut required, budget, 0)?;
+            }
+            if self.own.mut_ref_pointees[slot] {
+                super::super::normalize_mut_ref_pointee(actual, &[], &mut required, budget)?;
             }
         }
         required.admit()?;
@@ -91,7 +177,7 @@ impl Method {
 enum Bound {
     Concrete {
         public: ir::TraitRef,
-        method: Method,
+        method: Arc<Method>,
     },
     Forwarded {
         public: ir::TraitRef,
@@ -154,7 +240,13 @@ impl Header {
                             .ok_or("opaque source pack omitted provider summary")?;
                         Bound::Concrete {
                             public: public.clone(),
-                            method: Method::bind(seed.clone(), &summary, budget)?,
+                            method: {
+                                budget.retain_bytes(
+                                    std::mem::size_of::<Method>()
+                                        + 2 * std::mem::size_of::<usize>(),
+                                )?;
+                                Arc::new(Method::bind(seed.clone(), &summary, budget)?)
+                            },
                         }
                     }
                     traits::alignment_provider::BoundProvider::Forwarded {
@@ -281,6 +373,95 @@ mod tests {
     use crate::compiler::memory_layout::domain::{
         compact::tests::closed_header, tests::fixture_plan,
     };
+
+    #[test]
+    fn semantic_size_method_receipt_rejects_binder_and_requirement_mutation() {
+        let original = "struct W<T,V>(T,V);trait Inspect{fn width<Q>(&self)->usize;}impl<T,V> Inspect for W<T,V>{fn width<Q>(&self)->usize{let _p=std::ptr::null::<Q>().wrapping_add(1usize);let _a=std::ptr::null::<[Q;3]>().wrapping_add(1usize);std::mem::size_of::<[T;3]>()+std::mem::size_of::<[Q;2]>()}}fn make<T,V>(a:T,b:V)->impl Inspect{W(a,b)}fn main(){let _n=make(1u16,2u32).width::<u8>();}";
+        let (_, owner, budget, mut plan) = fixture_plan(original, "main");
+        let root = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([]),
+        };
+        let caller = closed_header(&mut plan, root, &budget);
+        let invocation = caller.opaque_calls().first().unwrap().clone();
+        let target = invocation.owner_target().unwrap();
+        let producer = closed_header(&mut plan, target.clone(), &budget);
+        let method = producer
+            .packs
+            .iter()
+            .flat_map(|pack| pack.methods.iter())
+            .find_map(|bound| match bound {
+                Bound::Concrete { method, .. } => Some(method.as_ref().clone()),
+                Bound::Forwarded { .. } => None,
+            })
+            .expect("genuine concrete source method");
+        assert_eq!(
+            method.prefix.as_ref(),
+            &[ir::Ty::Int(ir::IntTy::U16), ir::Ty::Int(ir::IntTy::U32)]
+        );
+        assert_eq!(
+            method.own.semantic_limits,
+            [Some(super::super::super::SEMANTIC_SIZE_LIMIT / 2)]
+        );
+        assert_eq!(
+            method.own.physical_limits,
+            [None],
+            "deferred trait-source own={:?}",
+            method.own
+        );
+        assert!(
+            method.own.deferred_dispatch,
+            "generic pointer trait calls require exact closed replay"
+        );
+        let facts = plan.instance_facts(&target).unwrap();
+        let actuals = [ir::Ty::Int(ir::IntTy::U8)];
+        method.validate_receipt(&budget).unwrap();
+        method.instantiate(&actuals, &facts, &budget).unwrap();
+        for field in 0..8 {
+            let mut changed = method.clone();
+            match field {
+                0 => changed.own.semantic_limits[0] = None,
+                1 => changed.own.thin_pointees[0] = true,
+                2 => changed.own.raw_pointees[0] = true,
+                3 => changed.own.mut_ref_pointees[0] = true,
+                4 => changed.own.pointer_strides[0] = !method.own.pointer_strides[0],
+                5 => changed.own.physical_limits[0] = Some(0),
+                6 => changed.own.metadata_pointees[0] = true,
+                _ => changed.own.parameters[0] = true,
+            }
+            assert!(
+                changed.instantiate(&actuals, &facts, &budget).is_err(),
+                "forged field {field}"
+            );
+        }
+        let mut bound = method.clone();
+        bound.own.semantic_limits[0] = method.own.semantic_limits[0].map(|limit| limit + 1);
+        assert!(bound.instantiate(&actuals, &facts, &budget).is_err());
+        let mut arity = method.clone();
+        arity.own.parameters.push(false);
+        assert!(arity.instantiate(&actuals, &facts, &budget).is_err());
+        let mut prefix = method.clone();
+        Arc::make_mut(&mut prefix.prefix).swap(0, 1);
+        assert!(prefix.instantiate(&actuals, &facts, &budget).is_err());
+        let mut prefix_arity = method.clone();
+        prefix_arity.prefix = Arc::from([ir::Ty::Int(ir::IntTy::U16)]);
+        assert!(prefix_arity.instantiate(&actuals, &facts, &budget).is_err());
+        let mut closed = method.clone();
+        closed.closed.unsupported = Some("unsupported: forged closed prefix domain");
+        assert!(closed.instantiate(&actuals, &facts, &budget).is_err());
+        let mut declaration = method.clone();
+        declaration.declaration = target.declaration;
+        assert!(declaration.instantiate(&actuals, &facts, &budget).is_err());
+        let mut item = method.clone();
+        assert_ne!(item.item, item.declaration);
+        item.item = item.declaration;
+        assert!(item.instantiate(&actuals, &facts, &budget).is_err());
+        let limited = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(method.validate_receipt(&limited).is_err());
+    }
 
     #[test]
     fn alignment_domain_opaque_resolution_keeps_exact_fact_and_owner_coordinates() {

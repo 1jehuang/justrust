@@ -63,6 +63,9 @@ impl type_check::Checker<'_> {
             .map_err(native_adapter::name_diagnostic)?
         {
             "align_of" => ir::TypeQueryKind::Alignment,
+            "size_of" => ir::TypeQueryKind::SemanticSize,
+            "element_stride" => ir::TypeQueryKind::PrivateElementStride,
+            "pointer_stride" => ir::TypeQueryKind::SupportedPointerStride,
             "storage_stride" => ir::TypeQueryKind::PrivateStorageStride,
             "storage_alignment" => ir::TypeQueryKind::PrivateStorageAlignment,
             "packed_reserve" => ir::TypeQueryKind::PackedByteReserveUnit,

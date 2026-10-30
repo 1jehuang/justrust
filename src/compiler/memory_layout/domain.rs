@@ -1,8 +1,9 @@
-//! Finite alignment-domain obligations, not closed instance expansion.
+//! Finite target-layout obligations, not closed instance expansion.
 //!
-//! Each bit names one exact rigid parameter in its owner's ordered environment.
-//! Substitution reduces arrays/fields immediately, so recursive calls such as
-//! `f::<[T; 2]>()` cannot grow the abstract state beyond those finite bits.
+//! Each bit or size bound names one exact rigid parameter in its owner's
+//! ordered environment. Substitution reduces arrays/fields immediately. Size
+//! bounds merge by minimum and divide along fixed-array extents, so recursive
+//! calls such as `f::<[T; 2]>()` converge without expanding concrete instances.
 pub(in crate::compiler) mod compact;
 use super::super::{ir, source_replay, traits};
 use std::sync::Arc;
@@ -11,6 +12,12 @@ use std::sync::Arc;
 struct Requirement {
     parameters: Vec<bool>,
     raw_pointees: Vec<bool>,
+    semantic_limits: Vec<Option<usize>>,
+    physical_limits: Vec<Option<usize>>,
+    thin_pointees: Vec<bool>,
+    metadata_pointees: Vec<bool>,
+    pointer_strides: Vec<bool>,
+    mut_ref_pointees: Vec<bool>,
     unsupported: Option<&'static str>,
     deferred_dispatch: bool,
 }
@@ -18,12 +25,18 @@ impl Requirement {
     fn empty(arity: usize, budget: &ir::PlanBudget) -> Result<Self, String> {
         budget.retain_bytes(
             arity
-                .checked_mul(2)
+                .checked_mul(6 + 2 * std::mem::size_of::<Option<usize>>())
                 .ok_or("alignment obligation arity overflow")?,
         )?;
         Ok(Self {
             parameters: vec![false; arity],
             raw_pointees: vec![false; arity],
+            semantic_limits: vec![None; arity],
+            physical_limits: vec![None; arity],
+            thin_pointees: vec![false; arity],
+            metadata_pointees: vec![false; arity],
+            pointer_strides: vec![false; arity],
+            mut_ref_pointees: vec![false; arity],
             unsupported: None,
             deferred_dispatch: false,
         })
@@ -31,6 +44,12 @@ impl Requirement {
     fn merge(&mut self, other: &Self, budget: &ir::PlanBudget) -> Result<bool, String> {
         if self.parameters.len() != other.parameters.len()
             || self.raw_pointees.len() != other.raw_pointees.len()
+            || self.semantic_limits.len() != other.semantic_limits.len()
+            || self.physical_limits.len() != other.physical_limits.len()
+            || self.thin_pointees.len() != other.thin_pointees.len()
+            || self.metadata_pointees.len() != other.metadata_pointees.len()
+            || self.pointer_strides.len() != other.pointer_strides.len()
+            || self.mut_ref_pointees.len() != other.mut_ref_pointees.len()
         {
             return Err("alignment obligation changed canonical owner arity".into());
         }
@@ -40,10 +59,36 @@ impl Requirement {
             .iter_mut()
             .zip(&other.parameters)
             .chain(self.raw_pointees.iter_mut().zip(&other.raw_pointees))
+            .chain(self.thin_pointees.iter_mut().zip(&other.thin_pointees))
+            .chain(
+                self.metadata_pointees
+                    .iter_mut()
+                    .zip(&other.metadata_pointees),
+            )
+            .chain(self.pointer_strides.iter_mut().zip(&other.pointer_strides))
+            .chain(
+                self.mut_ref_pointees
+                    .iter_mut()
+                    .zip(&other.mut_ref_pointees),
+            )
         {
             budget.charge_work(1)?;
             if *right && !*left {
                 *left = true;
+                changed = true;
+            }
+        }
+        for (left, right) in self
+            .semantic_limits
+            .iter_mut()
+            .zip(&other.semantic_limits)
+            .chain(self.physical_limits.iter_mut().zip(&other.physical_limits))
+        {
+            budget.charge_work(1)?;
+            if let Some(limit) = right
+                && left.is_none_or(|old| old > *limit)
+            {
+                *left = Some(*limit);
                 changed = true;
             }
         }
@@ -158,6 +203,355 @@ fn normalize_raw_pointee(
     Ok(())
 }
 
+const SEMANTIC_SIZE_LIMIT: usize = i64::MAX as usize;
+const SEMANTIC_SIZE_UNSUPPORTED: &str =
+    "unsupported: target aggregate size requires a genuine public target representation";
+const SEMANTIC_SIZE_OVERFLOW: &str =
+    "unsupported: target array size exceeds the Linux x86-64 object limit";
+
+// The supported size grammar has only one recursive child (fixed arrays).
+// Retain that source-sized chain, not a substituted type tree or body. Bounds
+// merge by minimum. A dependency path has at most usize::BITS non-unit
+// divisions before reaching zero. Permutations, alternative paths and zero
+// resets may require more solver updates: no global 64-update claim follows.
+// The finite source thresholds and non-increasing bounded integer slots give
+// the SCC solve a finite domain without expanding recursive type instances.
+#[derive(Clone, Copy)]
+enum SizeDomain {
+    Semantic,
+    Physical,
+}
+impl SizeDomain {
+    fn cap(self) -> usize {
+        match self {
+            Self::Semantic => SEMANTIC_SIZE_LIMIT,
+            Self::Physical => super::super::backend::MAX_FRAME_BYTES as usize,
+        }
+    }
+    fn overflow(self) -> &'static str {
+        match self {
+            Self::Semantic => SEMANTIC_SIZE_OVERFLOW,
+            Self::Physical => "unsupported: array element extent exceeds native memory limit",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum SizeLeaf {
+    Parameter(usize),
+    PointerParameter(usize),
+    Bytes(usize),
+    Unsupported,
+    Deferred,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SizeArgument {
+    arrays: Arc<[usize]>,
+    leaf: SizeLeaf,
+}
+impl SizeArgument {
+    fn capture(
+        ty: &ir::Ty,
+        parameters: &[ir::ParamId],
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        Self::capture_authorized(ty, parameters, None, budget)
+    }
+    fn capture_authorized(
+        ty: &ir::Ty,
+        parameters: &[ir::ParamId],
+        facts: Option<&traits::ValidatedFacts>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Self, String> {
+        let mut arrays = Vec::new();
+        let mut leaf_ty = ty;
+        while let ir::Ty::Array { element, len } = leaf_ty {
+            budget.check_depth(arrays.len())?;
+            budget.charge_work(1)?;
+            // Vec growth plus final immutable Arc storage coexist at capture.
+            budget.retain_bytes(4 * std::mem::size_of::<usize>())?;
+            arrays.push(*len);
+            leaf_ty = element;
+        }
+        budget.check_depth(arrays.len())?;
+        budget.charge_work(1)?;
+        let slot = |parameter: &ir::ParamId| {
+            parameters
+                .iter()
+                .position(|p| p == parameter)
+                .ok_or_else(|| "semantic size contains a foreign rigid parameter".to_string())
+        };
+        let leaf = match leaf_ty {
+            ir::Ty::Param(parameter) => SizeLeaf::Parameter(slot(parameter)?),
+            ir::Ty::Ref { referent, .. }
+            | ir::Ty::RawPtr {
+                pointee: referent, ..
+            } => match referent.as_ref() {
+                ir::Ty::Param(parameter) => SizeLeaf::PointerParameter(slot(parameter)?),
+                ir::Ty::AssociatedType(_) => SizeLeaf::Deferred,
+                _ => match super::pointer_metadata_size_authorized(
+                    referent,
+                    facts,
+                    budget,
+                    arrays.len() + 1,
+                ) {
+                    Ok(Some(size)) => SizeLeaf::Bytes(size),
+                    Ok(None) => SizeLeaf::Deferred,
+                    Err(error) if error.starts_with("unsupported:") => SizeLeaf::Unsupported,
+                    Err(error) => return Err(error),
+                },
+            },
+            ir::Ty::Char => SizeLeaf::Bytes(4),
+            ir::Ty::AssociatedType(_) => SizeLeaf::Deferred,
+            _ => match super::super::c_abi::layout::scalar_size_align(leaf_ty) {
+                Some((size, _)) => SizeLeaf::Bytes(size),
+                None => SizeLeaf::Unsupported,
+            },
+        };
+        Ok(Self {
+            arrays: arrays.into(),
+            leaf,
+        })
+    }
+    fn apply(
+        &self,
+        limit: usize,
+        out: &mut Requirement,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        self.apply_domain(limit, SizeDomain::Semantic, out, budget)
+    }
+    fn apply_physical(
+        &self,
+        limit: usize,
+        out: &mut Requirement,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        self.apply_domain(limit, SizeDomain::Physical, out, budget)
+    }
+    fn apply_domain(
+        &self,
+        mut limit: usize,
+        domain: SizeDomain,
+        out: &mut Requirement,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        for (depth, count) in self.arrays.iter().enumerate() {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            if matches!(domain, SizeDomain::Physical) && i32::try_from(*count).is_err() {
+                // Match the existing backend count failure even for ZSTs.
+                // Do not reclassify it as a semantic object-size failure.
+                out.unsupported = Some("array extent exceeds native memory limit");
+                return Ok(());
+            }
+            // Zero erases an outer extent bound, never the independently
+            // required layout/count/cap checks of its element layers.
+            limit = if *count == 0 {
+                domain.cap()
+            } else {
+                limit / count
+            };
+        }
+        budget.check_depth(self.arrays.len())?;
+        budget.charge_work(1)?;
+        match self.leaf {
+            SizeLeaf::Parameter(slot) => {
+                let limits = match domain {
+                    SizeDomain::Semantic => &mut out.semantic_limits,
+                    SizeDomain::Physical => &mut out.physical_limits,
+                };
+                let old = limits
+                    .get_mut(slot)
+                    .ok_or("semantic size changed canonical caller arity")?;
+                *old = Some(old.map_or(limit, |bound| bound.min(limit)));
+            }
+            SizeLeaf::PointerParameter(slot) if limit >= 16 => {
+                // Both supported metadata shapes fit. No pointee value-layout
+                // obligation follows from observing a pointer's size.
+                *out.metadata_pointees
+                    .get_mut(slot)
+                    .ok_or("pointer size changed canonical caller arity")? = true;
+            }
+            SizeLeaf::PointerParameter(slot) if limit >= 8 => {
+                *out.thin_pointees
+                    .get_mut(slot)
+                    .ok_or("pointer size changed canonical caller arity")? = true;
+            }
+            SizeLeaf::PointerParameter(_) => out.unsupported = Some(domain.overflow()),
+            SizeLeaf::Bytes(size) if size > limit => out.unsupported = Some(domain.overflow()),
+            SizeLeaf::Bytes(_) => {}
+            SizeLeaf::Unsupported => out.unsupported = Some(SEMANTIC_SIZE_UNSUPPORTED),
+            SizeLeaf::Deferred => out.deferred_dispatch = true,
+        }
+        Ok(())
+    }
+}
+
+fn normalize_semantic_size(
+    ty: &ir::Ty,
+    parameters: &[ir::ParamId],
+    limit: usize,
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    SizeArgument::capture(ty, parameters, budget)?.apply(limit, out, budget)
+}
+fn normalize_physical_size(
+    ty: &ir::Ty,
+    parameters: &[ir::ParamId],
+    limit: usize,
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    SizeArgument::capture(ty, parameters, budget)?.apply_physical(limit, out, budget)
+}
+fn normalize_metadata_pointee(
+    ty: &ir::Ty,
+    parameters: &[ir::ParamId],
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::Param(parameter) => {
+            let slot = parameters
+                .iter()
+                .position(|p| p == parameter)
+                .ok_or("pointer metadata contains a foreign rigid parameter")?;
+            out.metadata_pointees[slot] = true;
+        }
+        ir::Ty::AssociatedType(_) => out.deferred_dispatch = true,
+        ir::Ty::Array { element, .. } => normalize_thin_pointee(element, parameters, out, budget)?,
+        _ => match super::pointer_metadata_size_authorized(ty, None, budget, 0) {
+            Ok(Some(_)) => {}
+            Ok(None) => out.deferred_dispatch = true,
+            Err(error) if error.starts_with("unsupported:") => {
+                out.unsupported = Some(
+                    "unsupported: target pointer size metadata requires canonical pointee Sized evidence",
+                )
+            }
+            Err(error) => return Err(error),
+        },
+    }
+    Ok(())
+}
+fn normalize_thin_pointee(
+    mut ty: &ir::Ty,
+    parameters: &[ir::ParamId],
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    let mut depth = 0;
+    while let ir::Ty::Array { element, .. } = ty {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        ty = element;
+        depth += 1;
+    }
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::Param(parameter) => {
+            let slot = parameters
+                .iter()
+                .position(|p| p == parameter)
+                .ok_or("pointer size contains a foreign rigid parameter")?;
+            out.thin_pointees[slot] = true;
+        }
+        ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => {
+            out.unsupported = Some(SEMANTIC_SIZE_OVERFLOW)
+        }
+        ir::Ty::AssociatedType(_) => out.deferred_dispatch = true,
+        _ => normalize_metadata_pointee(ty, parameters, out, budget)?,
+    }
+    Ok(())
+}
+fn normalize_mut_ref_pointee(
+    ty: &ir::Ty,
+    parameters: &[ir::ParamId],
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::Param(parameter) => {
+            let slot = parameters
+                .iter()
+                .position(|p| p == parameter)
+                .ok_or("mutable pointer size contains a foreign rigid parameter")?;
+            out.mut_ref_pointees[slot] = true;
+        }
+        ir::Ty::Str => {
+            out.unsupported = Some(
+                "unsupported: public pointer stride requires exact semantic and physical representation agreement",
+            )
+        }
+        ir::Ty::AssociatedType(_) => out.deferred_dispatch = true,
+        _ => {}
+    }
+    Ok(())
+}
+fn normalize_pointer_stride(
+    ty: &ir::Ty,
+    parameters: &[ir::ParamId],
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::Param(parameter) => {
+            let slot = parameters
+                .iter()
+                .position(|p| p == parameter)
+                .ok_or("pointer stride contains a foreign rigid parameter")?;
+            out.pointer_strides[slot] = true;
+        }
+        ir::Ty::Array { element, .. } => {
+            normalize_physical_size(
+                ty,
+                parameters,
+                super::super::backend::MAX_FRAME_BYTES as usize,
+                out,
+                budget,
+            )?;
+            normalize_pointer_stride(element, parameters, out, budget, depth + 1)?
+        }
+        ir::Ty::RawPtr { pointee, .. } => normalize_raw_pointee(pointee, parameters, out, budget)?,
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent,
+        } => normalize_mut_ref_pointee(referent, parameters, out, budget)?,
+        ir::Ty::AssociatedType(_) => out.deferred_dispatch = true,
+        _ => {}
+    }
+    Ok(())
+}
+fn normalize_query(
+    query: &ir::TypeAlignmentQuery,
+    ty: &ir::Ty,
+    facts: &traits::ValidatedFacts,
+    parameters: &[ir::ParamId],
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    if query.is_semantic_size() || query.is_supported_pointer_stride() {
+        SizeArgument::capture_authorized(ty, parameters, Some(facts), budget)?.apply(
+            SEMANTIC_SIZE_LIMIT,
+            out,
+            budget,
+        )?;
+        if query.is_supported_pointer_stride() {
+            normalize_pointer_stride(ty, parameters, out, budget, 0)?;
+        }
+        Ok(())
+    } else {
+        normalize(ty, parameters, out, budget, 0)
+    }
+}
+
 fn may_own_drop(ty: &ir::Ty) -> bool {
     !matches!(
         ty,
@@ -173,13 +567,23 @@ fn may_own_drop(ty: &ir::Ty) -> bool {
     )
 }
 
+type Argument = (
+    Requirement,
+    Requirement,
+    SizeArgument,
+    Requirement,
+    Requirement,
+    Requirement,
+    Requirement,
+);
+
 /// Original immutable occurrence and the exact canonical selected direct call.
 #[derive(Clone)]
 struct Edge {
     occurrence: ir::ExprId,
     target: ir::CallTarget,
     proof: traits::DirectCallProof,
-    arguments: Vec<(Requirement, Requirement)>,
+    arguments: Vec<Argument>,
 }
 
 /// Producer-local source proof. Only its compact projection may be published.
@@ -242,8 +646,16 @@ impl Local {
                 if !query.is_private_storage_stride()
                     && !query.is_private_storage_alignment()
                     && !query.is_packed_byte_reserve()
+                    && !query.is_private_element_stride()
                 {
-                    normalize(query.queried_type(), &parameters, &mut direct, budget, 0)?;
+                    normalize_query(
+                        query,
+                        query.queried_type(),
+                        &facts,
+                        &parameters,
+                        &mut direct,
+                        budget,
+                    )?;
                 }
                 budget.retain_bytes(std::mem::size_of::<(ir::ExprId, ir::TypeAlignmentQuery)>())?;
                 queries.push((occurrence, query.clone()));
@@ -285,11 +697,19 @@ impl Local {
                 normalize(actual, &parameters, &mut requirement, budget, 0)?;
                 let mut raw = Requirement::empty(parameters.len(), budget)?;
                 normalize_raw_pointee(actual, &parameters, &mut raw, budget)?;
-                arguments.push((requirement, raw));
+                let size = SizeArgument::capture(actual, &parameters, budget)?;
+                let mut thin = Requirement::empty(parameters.len(), budget)?;
+                normalize_thin_pointee(actual, &parameters, &mut thin, budget)?;
+                let mut pointer = Requirement::empty(parameters.len(), budget)?;
+                normalize_pointer_stride(actual, &parameters, &mut pointer, budget, 0)?;
+                let mut mutable = Requirement::empty(parameters.len(), budget)?;
+                normalize_mut_ref_pointee(actual, &parameters, &mut mutable, budget)?;
+                let mut metadata = Requirement::empty(parameters.len(), budget)?;
+                normalize_metadata_pointee(actual, &parameters, &mut metadata, budget)?;
+                arguments.push((requirement, raw, size, thin, pointer, mutable, metadata));
             }
             budget.retain_bytes(
-                std::mem::size_of::<Edge>()
-                    + arguments.len() * std::mem::size_of::<(Requirement, Requirement)>(),
+                std::mem::size_of::<Edge>() + arguments.len() * std::mem::size_of::<Argument>(),
             )?;
             edges.push(Edge {
                 occurrence,
@@ -582,7 +1002,8 @@ impl Local {
                 ir::ExprKind::TypeAlignment(query)
                     if !query.is_private_storage_stride()
                         && !query.is_private_storage_alignment()
-                        && !query.is_packed_byte_reserve() =>
+                        && !query.is_packed_byte_reserve()
+                        && !query.is_private_element_stride() =>
                 {
                     query.validate(ir::FactsCtx::Validated(&self.facts), budget)?;
                     let closed = super::super::nominal_realization::substitution::substitute_ty_with_scratch(
@@ -590,7 +1011,7 @@ impl Local {
                         context, budget, engine, &mut scratch,
                     )?;
                     let mut required = Requirement::empty(0, budget)?;
-                    normalize(&closed, &[], &mut required, budget, 0)?;
+                    normalize_query(query, &closed, &facts, &[], &mut required, budget)?;
                     required.admit()?;
                     if required.deferred_dispatch {
                         return Err(
@@ -903,6 +1324,117 @@ impl ClosedCalls {
 mod tests {
     use super::*;
     use crate::compiler::{frontend, source};
+
+    #[test]
+    fn semantic_and_physical_extents_preserve_each_array_layer() {
+        let budget = ir::PlanBudget::default();
+        let cap = super::super::super::backend::MAX_FRAME_BYTES as usize;
+        let array = |element, len| ir::Ty::Array {
+            element: Arc::new(element),
+            len,
+        };
+        let check = |ty: &ir::Ty, physical: bool| {
+            let mut requirement = Requirement::empty(0, &budget).unwrap();
+            if physical {
+                normalize_physical_size(ty, &[], cap, &mut requirement, &budget).unwrap();
+            } else {
+                normalize_semantic_size(ty, &[], SEMANTIC_SIZE_LIMIT, &mut requirement, &budget)
+                    .unwrap();
+            }
+            requirement.unsupported
+        };
+        let byte = ir::Ty::Int(ir::IntTy::U8);
+        assert_eq!(
+            check(&array(byte.clone(), SEMANTIC_SIZE_LIMIT), false),
+            None
+        );
+        assert_eq!(
+            check(&array(byte.clone(), SEMANTIC_SIZE_LIMIT + 1), false),
+            Some(SEMANTIC_SIZE_OVERFLOW)
+        );
+        let oversized = array(byte.clone(), SEMANTIC_SIZE_LIMIT + 1);
+        assert_eq!(
+            check(&array(oversized, 0), false),
+            Some(SEMANTIC_SIZE_OVERFLOW)
+        );
+        assert_eq!(check(&array(ir::Ty::Unit, usize::MAX), false), None);
+        assert_eq!(
+            check(&array(array(byte.clone(), 0), usize::MAX), false),
+            None
+        );
+        assert_eq!(check(&array(byte.clone(), cap), true), None);
+        let physical_oversized = array(byte.clone(), cap + 1);
+        assert_eq!(check(&physical_oversized, false), None);
+        assert_eq!(
+            check(&physical_oversized, true),
+            Some(SizeDomain::Physical.overflow())
+        );
+        assert_eq!(
+            check(&array(physical_oversized, 0), true),
+            Some(SizeDomain::Physical.overflow())
+        );
+        assert_eq!(check(&array(ir::Ty::Unit, i32::MAX as usize), true), None);
+        let count_overflow = array(ir::Ty::Unit, i32::MAX as usize + 1);
+        assert_eq!(
+            check(&count_overflow, true),
+            Some("array extent exceeds native memory limit")
+        );
+        assert_eq!(
+            check(&array(count_overflow.clone(), 0), true),
+            Some("array extent exceeds native memory limit")
+        );
+        // Pure layer checks only: canonical metadata rejects these counts
+        // earlier, so this does not claim a closed fact admitted the type.
+        let physical =
+            |ty: &ir::Ty| super::super::super::backend::array_element_stride(ty, &budget);
+        assert_eq!(physical(&ir::Ty::Unit).unwrap(), 0);
+        assert_eq!(
+            physical(&array(ir::Ty::Unit, i32::MAX as usize)).unwrap(),
+            0
+        );
+        assert!(
+            physical(&count_overflow)
+                .unwrap_err()
+                .contains("array extent exceeds native memory limit")
+        );
+        assert!(
+            physical(&array(count_overflow, 0))
+                .unwrap_err()
+                .contains("array extent exceeds native memory limit")
+        );
+    }
+
+    #[test]
+    fn pointer_stride_retains_raw_and_mutable_metadata_boundaries() {
+        let budget = ir::PlanBudget::default();
+        let slice = ir::Ty::Slice {
+            element: Arc::new(ir::Ty::Int(ir::IntTy::U16)),
+        };
+        for referent in [ir::Ty::Str, slice] {
+            for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+                let raw = ir::Ty::RawPtr {
+                    kind,
+                    pointee: Arc::new(referent.clone()),
+                };
+                let mut required = Requirement::empty(0, &budget).unwrap();
+                normalize_pointer_stride(&raw, &[], &mut required, &budget, 0).unwrap();
+                assert!(required.unsupported.is_some());
+                let reference = ir::Ty::Ref {
+                    kind,
+                    referent: Arc::new(referent.clone()),
+                };
+                let mut required = Requirement::empty(0, &budget).unwrap();
+                normalize_pointer_stride(&reference, &[], &mut required, &budget, 0).unwrap();
+                assert_eq!(
+                    required.unsupported.is_some(),
+                    matches!(kind, ir::BorrowKind::Mut) && matches!(referent, ir::Ty::Str)
+                );
+            }
+        }
+        let mut unit = Requirement::empty(0, &budget).unwrap();
+        normalize_pointer_stride(&ir::Ty::Unit, &[], &mut unit, &budget, 0).unwrap();
+        assert!(unit.unsupported.is_none());
+    }
 
     fn fixture(text: &str, root_name: &str) -> (Vec<Local>, ir::DeclId, ir::PlanBudget) {
         let (locals, root, budget, _) = fixture_plan(text, root_name);

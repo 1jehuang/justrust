@@ -1,7 +1,7 @@
 // std::ptr and the raw pointer methods, as ordinary Rust source. The pointer
 // methods are trait methods of `ConstPtr`/`MutPtr` (injected by the prelude)
 // rather than compiler-intrinsic inherent methods. Address arithmetic is
-// plain integer arithmetic with the pointee size from `mem::size_of`.
+// plain integer arithmetic with an authenticated supported pointer stride.
 
 pub fn null<T>() -> *const T {
     0usize as *const T
@@ -27,11 +27,11 @@ pub fn eq<T>(a: *const T, b: *const T) -> bool {
 }
 
 fn step<T>(address: usize, count: usize) -> usize {
-    address + count * super::mem::size_of::<T>()
+    address + count * super::mem::pointer_stride::<T>()
 }
 
 fn back<T>(address: usize, count: usize) -> usize {
-    address - count * super::mem::size_of::<T>()
+    address - count * super::mem::pointer_stride::<T>()
 }
 
 fn signed<T>(address: usize, count: isize) -> usize {
@@ -43,7 +43,7 @@ fn signed<T>(address: usize, count: isize) -> usize {
 }
 
 fn wrapping_signed<T>(address: usize, count: isize) -> usize {
-    let size = super::mem::size_of::<T>() as isize;
+    let size = super::mem::pointer_stride::<T>() as isize;
     address.wrapping_add(count.wrapping_mul(size) as usize)
 }
 
@@ -83,7 +83,7 @@ impl<T> ConstPtr<T> for *const T {
         wrapping_signed::<T>(self as usize, count) as *const T
     }
     unsafe fn offset_from(self, origin: *const T) -> isize {
-        ((self as usize).wrapping_sub(origin as usize) as isize) / (super::mem::size_of::<T>() as isize)
+        ((self as usize).wrapping_sub(origin as usize) as isize) / (super::mem::pointer_stride::<T>() as isize)
     }
     unsafe fn read(self) -> T {
         let p = self as *mut T;
@@ -132,7 +132,7 @@ impl<T> MutPtr<T> for *mut T {
         wrapping_signed::<T>(self as usize, count) as *mut T
     }
     unsafe fn offset_from(self, origin: *const T) -> isize {
-        ((self as usize).wrapping_sub(origin as usize) as isize) / (super::mem::size_of::<T>() as isize)
+        ((self as usize).wrapping_sub(origin as usize) as isize) / (super::mem::pointer_stride::<T>() as isize)
     }
     unsafe fn read(self) -> T {
         unsafe { *self }

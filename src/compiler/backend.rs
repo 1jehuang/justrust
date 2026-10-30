@@ -51,7 +51,7 @@ const MAX_ARGS: usize = 4096;
 /// Expanded stack-word limit per call: every logical argument may occupy at
 /// most two words (shared slice: data, len) plus one sret word.
 const MAX_ARG_WORDS: usize = 2 * MAX_ARGS + 1;
-const MAX_FRAME_BYTES: i32 = 1024 * 1024;
+pub(super) const MAX_FRAME_BYTES: i32 = 1024 * 1024;
 // Reserved in every dynamically aligned frame. This is the stack address after
 // saving the caller's rbp, not the aligned local-storage base.
 const INCOMING_FRAME: i32 = -8;

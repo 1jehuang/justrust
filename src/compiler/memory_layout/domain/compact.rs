@@ -5,7 +5,7 @@
 pub(in crate::compiler) mod closed;
 #[cfg(test)]
 pub(super) mod tests;
-use super::{Local, Requirement, graph_components, ir, source_replay, traits};
+use super::{Argument, Local, Requirement, graph_components, ir, source_replay, traits};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 #[cfg(test)]
@@ -15,7 +15,7 @@ pub(in crate::compiler) use tests::closed_engine_fixture;
 struct Transfer {
     callee: ir::DeclId,
     occurrence: ir::ExprId,
-    arguments: Arc<[(Requirement, Requirement)]>,
+    arguments: Arc<[Argument]>,
 }
 
 #[derive(Clone)]
@@ -55,7 +55,12 @@ impl Header {
         }
         let transfers: Arc<[Transfer]> = transfers.into();
         budget.retain_bytes(
-            std::mem::size_of::<HeaderReceipt>() + local.direct.parameters.len().saturating_mul(2),
+            std::mem::size_of::<HeaderReceipt>()
+                + local
+                    .direct
+                    .parameters
+                    .len()
+                    .saturating_mul(6 + 2 * std::mem::size_of::<Option<usize>>()),
         )?;
         let receipt = Arc::new(HeaderReceipt {
             owner: local.owner,
@@ -273,7 +278,13 @@ impl Summary {
         for (index, header) in headers.iter().enumerate() {
             budget.charge_work(1)?;
             header.validate_receipt()?;
-            budget.retain_bytes(header.direct.parameters.len().saturating_mul(8))?;
+            budget.retain_bytes(
+                header
+                    .direct
+                    .parameters
+                    .len()
+                    .saturating_mul(4 * (6 + 2 * std::mem::size_of::<Option<usize>>())),
+            )?;
             if positions.insert(header.owner, index).is_some() {
                 return Err("alignment SCC repeats a local header".into());
             }
@@ -346,6 +357,24 @@ impl Summary {
                     }
                     if required.raw_pointees[slot] {
                         next.merge(&argument.1, budget)?;
+                    }
+                    if let Some(limit) = required.semantic_limits[slot] {
+                        argument.2.apply(limit, &mut next, budget)?;
+                    }
+                    if let Some(limit) = required.physical_limits[slot] {
+                        argument.2.apply_physical(limit, &mut next, budget)?;
+                    }
+                    if required.metadata_pointees[slot] {
+                        next.merge(&argument.6, budget)?;
+                    }
+                    if required.thin_pointees[slot] {
+                        next.merge(&argument.3, budget)?;
+                    }
+                    if required.pointer_strides[slot] {
+                        next.merge(&argument.4, budget)?;
+                    }
+                    if required.mut_ref_pointees[slot] {
+                        next.merge(&argument.5, budget)?;
                     }
                 }
             }
@@ -426,6 +455,24 @@ impl Summary {
             }
             if required.raw_pointees[slot] {
                 super::normalize_raw_pointee(argument, &[], &mut closed, budget)?;
+            }
+            if let Some(limit) = required.semantic_limits[slot] {
+                super::normalize_semantic_size(argument, &[], limit, &mut closed, budget)?;
+            }
+            if let Some(limit) = required.physical_limits[slot] {
+                super::normalize_physical_size(argument, &[], limit, &mut closed, budget)?;
+            }
+            if required.metadata_pointees[slot] {
+                super::normalize_metadata_pointee(argument, &[], &mut closed, budget)?;
+            }
+            if required.thin_pointees[slot] {
+                super::normalize_thin_pointee(argument, &[], &mut closed, budget)?;
+            }
+            if required.pointer_strides[slot] {
+                super::normalize_pointer_stride(argument, &[], &mut closed, budget, 0)?;
+            }
+            if required.mut_ref_pointees[slot] {
+                super::normalize_mut_ref_pointee(argument, &[], &mut closed, budget)?;
             }
         }
         closed.admit()?;

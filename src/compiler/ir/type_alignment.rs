@@ -4,6 +4,12 @@ use super::{DeclId, FactsCtx, ParamId, PlanBudget, Ty};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TypeQueryKind {
     Alignment,
+    /// Public Rust target size, never private carrier storage.
+    SemanticSize,
+    /// Physical Vec element spacing, separate from owning storage.
+    PrivateElementStride,
+    /// Public pointer spacing only where semantic and physical extents agree.
+    SupportedPointerStride,
     PrivateStorageStride,
     PrivateStorageAlignment,
     /// Exact original packed reserve helper only; never private u8 stride.
@@ -78,6 +84,18 @@ impl TypeAlignmentQuery {
             queried,
             packed: Some(authority),
         })
+    }
+
+    pub fn is_semantic_size(&self) -> bool {
+        self.kind == TypeQueryKind::SemanticSize
+    }
+
+    pub fn is_private_element_stride(&self) -> bool {
+        self.kind == TypeQueryKind::PrivateElementStride
+    }
+
+    pub fn is_supported_pointer_stride(&self) -> bool {
+        self.kind == TypeQueryKind::SupportedPointerStride
     }
 
     pub fn is_packed_byte_reserve(&self) -> bool {
@@ -178,7 +196,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    fn private_alignment_query_retains_canonical_source_kind_and_budget() {
+    fn target_query_retains_canonical_source_kind_and_budget() {
         use crate::compiler::source;
         let options = source::SourceOptions::default();
         let expansion = crate::compiler::expansion_budget::ExpansionBudget::default();
@@ -208,7 +226,14 @@ mod tests {
         let program = frontend::resolve(&parsed).unwrap();
         let budget = PlanBudget::default();
         let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
-        for name in ["storage_alignment", "align_of"] {
+        for name in [
+            "storage_alignment",
+            "storage_stride",
+            "align_of",
+            "size_of",
+            "element_stride",
+            "pointer_stride",
+        ] {
             let index = program
                 .functions
                 .iter()
@@ -255,18 +280,86 @@ mod tests {
                 .unwrap(),
                 None
             );
-            let mut forged = source.as_ref().clone();
-            let mut changed = query.clone();
-            changed.kind = if name == "storage_alignment" {
-                TypeQueryKind::Alignment
-            } else {
-                TypeQueryKind::PrivateStorageAlignment
-            };
-            assert!(!query.same_query(&changed, &budget).unwrap());
-            forged.exprs[index].kind = ir::ExprKind::TypeAlignment(changed);
+            assert_eq!(query.is_semantic_size(), name == "size_of");
+            assert_eq!(query.is_private_element_stride(), name == "element_stride");
+            assert_eq!(
+                query.is_supported_pointer_stride(),
+                name == "pointer_stride"
+            );
+            for kind in [
+                TypeQueryKind::Alignment,
+                TypeQueryKind::SemanticSize,
+                TypeQueryKind::PrivateStorageStride,
+                TypeQueryKind::PrivateStorageAlignment,
+                TypeQueryKind::PrivateElementStride,
+                TypeQueryKind::SupportedPointerStride,
+            ] {
+                if query.kind == kind {
+                    continue;
+                }
+                let mut forged = source.as_ref().clone();
+                let mut changed = query.clone();
+                changed.kind = kind;
+                assert!(!query.same_query(&changed, &budget).unwrap());
+                forged.exprs[index].kind = ir::ExprKind::TypeAlignment(changed);
+                assert!(
+                    publication
+                        .validate_source(&Arc::new(forged), publication.facts(), &budget)
+                        .is_err()
+                );
+            }
+            let mut wrong_type = source.as_ref().clone();
+            let mut changed_type = query.clone();
+            changed_type.queried = Ty::Int(ir::IntTy::U16);
+            wrong_type.exprs[index].kind = ir::ExprKind::TypeAlignment(changed_type);
             assert!(
                 publication
-                    .validate_source(&Arc::new(forged), publication.facts(), &budget)
+                    .validate_source(&Arc::new(wrong_type), publication.facts(), &budget)
+                    .is_err()
+            );
+            let target = ir::CallTarget {
+                declaration: owner,
+                type_args: Arc::from([Ty::Int(ir::IntTy::U16)]),
+            };
+            let closed = publication.facts().world().instance_facts(&target).unwrap();
+            let mut instantiated = query.clone();
+            instantiated.substitute(Ty::Int(ir::IntTy::U16));
+            instantiated
+                .validate(FactsCtx::Validated(&closed), &budget)
+                .unwrap();
+            assert_eq!(
+                crate::compiler::memory_layout::query_value(
+                    &instantiated,
+                    FactsCtx::Validated(&closed),
+                    &budget
+                )
+                .unwrap(),
+                Some(if name == "storage_stride" { 8 } else { 2 })
+            );
+            instantiated.substitute(Ty::Int(ir::IntTy::U8));
+            assert!(
+                instantiated
+                    .validate(FactsCtx::Validated(&closed), &budget)
+                    .is_err()
+            );
+            let mut foreign = query.clone();
+            foreign.owner = plan
+                .function_decl(
+                    program
+                        .functions
+                        .iter()
+                        .position(|f| {
+                            f.name
+                                .segments()
+                                .last()
+                                .is_some_and(|id| program.names.spelling(*id).unwrap() == "main")
+                        })
+                        .unwrap(),
+                )
+                .unwrap();
+            assert!(
+                foreign
+                    .validate(FactsCtx::Validated(publication.facts()), &budget)
                     .is_err()
             );
             let limited = PlanBudget::new(super::super::PlanLimits {

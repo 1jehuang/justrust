@@ -16,6 +16,7 @@ struct NativeStrideSource {
     _declaration: ir::DeclId,
     _source: crate::compiler::token_session::OriginalSpan,
     _issuer: crate::compiler::source::EmbeddedOriginalFile,
+    _kind: ir::TypeQueryKind,
 }
 
 impl NativeSequenceSlot {
@@ -90,11 +91,6 @@ fn binary(value: &Expr, expected: BinaryOp) -> Option<(&Expr, &Expr)> {
         _ => None,
     }
 }
-fn usize_literal(value: &Expr, expected: u128) -> bool {
-    matches!(value, Expr::Integer(value)
-        if value.magnitude == expected && value.suffix == Some(ir::IntTy::Usize))
-}
-
 fn original_function(
     registry: &DeclRegistry,
     declaration: ir::DeclId,
@@ -143,8 +139,8 @@ fn original_function(
     Ok(None)
 }
 
-/// Check the entire fixed source calculation of the public element stride:
-/// adjacent `[T;2]` addresses at 4096, without dereferencing their contents.
+/// Authenticate the exact original private physical-element query body.
+/// Public semantic size and private owning-carrier extents grant no slot role.
 fn stride_source(
     registry: &DeclRegistry,
     declaration: ir::DeclId,
@@ -176,96 +172,68 @@ fn stride_source(
     {
         return Ok(None);
     }
-    let [
-        Stmt::Let {
-            name: BindingName::Named(base),
-            mutable: false,
-            ty: Type::Infer,
-            value: base_value,
-        },
-        Stmt::Let {
-            name: BindingName::Named(second),
-            mutable: false,
-            ty: Type::Infer,
-            value: second_value,
-        },
-    ] = function.body.statements.as_slice()
+    let info = registry.declaration(declaration)?;
+    let Some(root) = registry.program.prelude_module else {
+        return Ok(None);
+    };
+    let DeclItemName::Source(item) = info.path.item else {
+        return Ok(None);
+    };
+    let Some(module) = registry
+        .program
+        .modules
+        .name(info.path.module)
+        .map_err(module_diagnostic)?
     else {
         return Ok(None);
     };
-    let Expr::Cast {
-        value,
-        target:
-            Type::RawPtr {
-                kind: ir::BorrowKind::Shared,
-                pointee,
-            },
-    } = base_value
-    else {
+    let Some(function_item) = function.name.segments().last().copied() else {
         return Ok(None);
     };
-    let Type::Array(element, 2) = pointee.as_ref() else {
-        return Ok(None);
-    };
-    if !usize_literal(value, 4096) || !parameter_ty(names, element, *parameter)? {
+    if info.owner.is_some()
+        || !same_name(
+            names,
+            function_item,
+            item,
+            LookupClass::Item(Namespace::Value),
+        )?
+        || registry
+            .program
+            .modules
+            .parent(info.path.module)
+            .map_err(module_diagnostic)?
+            != Some(root)
+        || names
+            .spelling(module)
+            .map_err(native_adapter::name_diagnostic)?
+            != "mem"
+        || names
+            .spelling(item)
+            .map_err(native_adapter::name_diagnostic)?
+            != "element_stride"
+        || !function.body.statements.is_empty()
+    {
         return Ok(None);
     }
-    let Expr::Cast { value, target } = second_value else {
+    let Some(Expr::TypeAlignment(queried)) = function.body.tail.as_deref() else {
         return Ok(None);
     };
-    if !raw_parameter_ty(names, target, *parameter, ir::BorrowKind::Shared)? {
-        return Ok(None);
-    }
-    let Expr::Unsafe(block) = value.as_ref() else {
-        return Ok(None);
-    };
-    if !block.statements.is_empty() {
-        return Ok(None);
-    }
-    let Some(Expr::BorrowValue {
-        kind: ir::BorrowKind::Shared,
-        value,
-    }) = block.tail.as_deref()
-    else {
-        return Ok(None);
-    };
-    let Expr::Index {
-        base: indexed,
-        index: 1,
-        ..
-    } = value.as_ref()
-    else {
-        return Ok(None);
-    };
-    let Expr::Deref { value } = indexed.as_ref() else {
-        return Ok(None);
-    };
-    if !variable(names, value, *base)? {
-        return Ok(None);
-    }
-    let Some(tail) = function.body.tail.as_deref() else {
-        return Ok(None);
-    };
-    let Some((left, right)) = binary(tail, BinaryOp::Sub) else {
-        return Ok(None);
-    };
-    let Some(left) = usize_cast(left) else {
-        return Ok(None);
-    };
-    if !variable(names, left, *second)? || !usize_literal(right, 4096) {
+    if !parameter_ty(names, queried, *parameter)? {
         return Ok(None);
     }
     Ok(Some(NativeStrideSource {
         _declaration: declaration,
         _source: source,
         _issuer: issuer,
+        _kind: ir::TypeQueryKind::PrivateElementStride,
     }))
 }
 
 /// Source schema issuance, never inferred from a printed callee name. The exact
-/// original declaration must calculate `base + index * size_of::<T>()` and its
-/// stride declaration must independently match the complete adjacent-element
-/// recipe above. Raw fixtures and alternate schema adapters cannot mint this.
+/// original declaration must calculate `base + index * element_stride::<T>()`.
+/// Its exact canonical original mem::element_stride declaration and typed query
+/// body are authenticated independently above. Raw fixtures, public Size and
+/// private carrier extents cannot mint this role.
 pub(in crate::compiler::frontend) fn issue_slot(
     registry: &DeclRegistry,
     declaration: ir::DeclId,
