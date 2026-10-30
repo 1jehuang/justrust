@@ -135,11 +135,14 @@ The investigation now has concrete native implementations, not only proposals:
   increase. This is mechanism evidence, not an end-to-end speed claim. See
   `associated-item-retention-20261030.md` for the matching private sysroot.
 * **Overlapping Cargo input validation:** `a93a0de7c` implements invocation-local
-  subtree maxima with symlink/error fallback. A follow-up gates native use on
+  subtree maxima with symlink/error fallback. `b0878ebcc` gates native use on
   explicit `JUSTRUST_CARGO_SUBTREE_CACHE=1`; client forwarding is committed in
-  `90b66b89d`. Final gated-binary acceptance and measurements must be recorded
-  in `cargo-subtree-cache.md`. Forwarding the flag does not install a new
-  Cargo binary on hosted machines.
+  `90b66b89d`. The same final binary, 32 samples per mode/scenario, measured
+  overlapping roots at 44.99 to 31.11 ms but a single root at 35.37 to 39.16 ms
+  (a regression). Default-unset/off/on reused artifacts, and edit/add/delete
+  checks rebuilt correctly. See `cargo-subtree-cache.md`. The regression and
+  missing comprehensive gate prohibit default promotion. Forwarding the flag
+  does not install a new Cargo binary on hosted machines.
 * **Module-local Clippy queries:** an opt-in subset of four stateless passes
   is under acceptance testing. Switching the cfg without source edits exposed
   stale green lint queries and missing diagnostics. The experiment therefore
