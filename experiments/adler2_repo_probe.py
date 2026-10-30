@@ -31,7 +31,9 @@ def executable(value):
     found = shutil.which(value)
     if found is None:
         raise ValueError(f"executable not found: {value}")
-    return Path(found).resolve()
+    # Dispatchers such as rustup choose the tool from argv[0]. Resolving the
+    # rustc symlink changes that contract into a call to rustup itself.
+    return Path(found).absolute()
 
 
 def default_repo():

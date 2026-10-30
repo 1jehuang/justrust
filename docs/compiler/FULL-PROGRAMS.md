@@ -23,7 +23,9 @@ milestone, not full Rust support (see RUST-COMPATIBILITY.md).
 
 ## Unchanged Adler2 repository probe
 
-Run the pinned Adler2 2.0.1 target without adapting its source:
+Run the pinned Adler2 2.0.1 target without adapting its source. The probe
+requires Python 3.11 or newer for standard-library `tomllib`; on hosts where
+`python3` is older, use `python3.11` explicitly instead.
 
 ```sh
 python3 experiments/adler2_repo_probe.py \

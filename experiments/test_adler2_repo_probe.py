@@ -34,6 +34,17 @@ class ProbeTests(unittest.TestCase):
                             repo / "src" / name)
         return repo
 
+    def test_executable_preserves_dispatcher_alias(self):
+        dispatcher = self.root / "rustup"
+        dispatcher.write_text("#!/bin/sh\nprintf '%s\\n' \"${0##*/}\"\n")
+        dispatcher.chmod(0o700)
+        alias = self.root / "rustc"
+        alias.symlink_to(dispatcher)
+        executable = probe.executable(str(alias))
+        self.assertEqual(executable, alias.absolute())
+        self.assertNotEqual(executable, dispatcher.resolve())
+        self.assertTrue(self.runner.run("alias", [executable], expected_stdout=b"rustc\n"))
+
     def test_source_pins_and_extra_files(self):
         repo = self.repository()
         self.assertEqual(probe.validate_repo(repo), probe.PINS)
