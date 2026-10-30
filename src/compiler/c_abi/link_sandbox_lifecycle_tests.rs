@@ -58,8 +58,8 @@ fn controlled_linker_dies_with_its_compiler() {
     fs::write(&source, r#"
 static long call(long n,long a,long b,long c){long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}
 void _start(void){
- long pid=call(39,0,0,0), fd=call(2,(long)"out/pid",65,0600);
- if(fd<0||call(1,fd,(long)&pid,8)!=8) {call(60,1,0,0);__builtin_unreachable();}
+ long fd=call(2,(long)"out/ready",65,0600);
+ if(fd<0||call(1,fd,(long)"ready",5)!=5) {call(60,1,0,0);__builtin_unreachable();}
  call(3,fd,0,0);
  long delay[2]={0,100000000};
  for(;;)call(35,(long)delay,0,0);
@@ -89,12 +89,28 @@ void _start(void){
         .env(CHILD, &scratch.0).stdout(Stdio::null()).stderr(Stdio::inherit()).spawn().unwrap());
     let deadline = Instant::now() + Duration::from_secs(15);
     let pid = loop {
-        if let Ok(bytes) = fs::read(scratch.0.join("out/pid")) {
-            if let Ok(bytes) = <[u8; 8]>::try_from(bytes) {
-                let pid = i64::from_ne_bytes(bytes);
-                assert!((1..=i32::MAX as i64).contains(&pid));
-                break pid as u32;
+        if fs::read(scratch.0.join("out/ready")).is_ok_and(|v| v == b"ready") {
+            // The tool cannot query its process identity. Observe the helper's
+            // sole child from the supervising test instead. Command::spawn
+            // runs on a test thread, so inspect every task's children list.
+            // Our live, unreaped helper pins this process identity throughout.
+            let tasks = fs::read_dir(format!("/proc/{}/task", helper.0.id())).unwrap();
+            let mut children = std::collections::BTreeSet::new();
+            for task in tasks {
+                let path = task.unwrap().path().join("children");
+                let Ok(text) = fs::read_to_string(path) else {
+                    continue;
+                };
+                for pid in text.split_whitespace() {
+                    children.insert(pid.parse::<u32>().unwrap());
+                }
             }
+            assert_eq!(
+                children.len(),
+                1,
+                "fixture compiler child identity ambiguous"
+            );
+            break *children.first().unwrap();
         }
         assert!(
             helper.0.try_wait().unwrap().is_none(),

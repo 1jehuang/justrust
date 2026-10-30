@@ -130,17 +130,12 @@ pub(super) fn confine(
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));
     }
     filter.push(instruction(0x06, 0, 0, 0x00050001));
-    // prlimit64 only on self. fcntl only descriptor/flag operations.
-    filter.extend([
-        instruction(0x15, 0, 4, 302),
-        instruction(0x20, 0, 0, 16),
-        instruction(0x15, 0, 1, 0),
-        instruction(0x06, 0, 0, 0x7fff0000),
-        instruction(0x06, 0, 0, 0x00050001),
-        instruction(0x15, 0, 14, 72),
-        instruction(0x20, 0, 0, 24),
-    ]);
-    for operation in [0, 1, 2, 3, 4, 1030] {
+    // fcntl only duplication and descriptor flags/status queries. F_SETFL
+    // could re-enable O_DIRECT/O_ASYNC after broker admission, so deny it.
+    // Resource-limit queries (including
+    // prlimit64 on self) are denied, just like other ambient observations.
+    filter.extend([instruction(0x15, 0, 12, 72), instruction(0x20, 0, 0, 24)]);
+    for operation in [0, 1, 2, 3, 1030] {
         filter.push(instruction(0x15, 0, 1, operation));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));
     }
@@ -152,10 +147,13 @@ pub(super) fn confine(
     // are denied; this linker receives explicit captured file paths.
     // Exact native numbers also exclude x32, process/network/namespace APIs,
     // io_uring, ioctl and capability manipulation.
+    // No direct machine/clock/resource/credential/affinity/entropy observations.
+    // Such native syscalls receive the same EPERM as unknown operations, not a
+    // fabricated host identity. This is only syscall confinement: auxv, vDSO,
+    // CPU instructions and staging-path observations remain outside this bound.
     for number in [
-        0u32, 1, 3, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 32, 33, 35, 39,
-        40, 60, 63, 74, 75, 77, 79, 95, 96, 97, 98, 99, 100, 102, 104, 107, 108, 110, 115, 158,
-        186, 202, 204, 218, 228, 229, 230, 231, 270, 271, 273, 318, 334, 436,
+        0u32, 1, 3, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 23, 24, 25, 26, 32, 33, 35, 40,
+        60, 74, 75, 77, 79, 95, 158, 202, 218, 230, 231, 270, 271, 273, 334, 436,
     ] {
         filter.push(instruction(0x15, 0, 1, number));
         filter.push(instruction(0x06, 0, 0, 0x7fff0000));

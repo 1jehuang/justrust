@@ -479,6 +479,10 @@ void _start(void){{
  if(call(1,{leaked},(long)"x",1)!=-9)die(30);
  if(call(77,{leaked},0,0)!=-9)die(31);
  long fd=call(2,(long)"input",0,0);if(fd<0||call(0,fd,(long)&byte,1)!=1||byte!='f')die(3);
+ if(call(72,fd,4,0x4000)!=-1)die(83);
+ if(call(72,fd,4,0x2000)!=-1)die(84);
+ if(call(72,fd,4,0)!=-1)die(85);
+ if(call(72,fd,3,0)<0)die(86);
  union {{unsigned long aligned;unsigned char bytes[144];}} statbuf,duplicate;
  if(call(5,fd,(long)statbuf.bytes,0)!=0)die(47);
  if(*(unsigned long*)(statbuf.bytes+48)!=6||*(unsigned long*)(statbuf.bytes+16)!=1)die(48);
@@ -512,6 +516,28 @@ void _start(void){{
  if(call(161,(long)"/",0,0)!=-1)die(10);
  if(call(0x40000000+39,0,0,0)!=-1)die(11);
  if(call(302,1,0,0)!=-1)die(13);
+ // Raw syscalls deliberately bypass libc/vDSO. Valid writable output buffers
+ // and invalid arguments must both receive uniform EPERM without writes.
+ static const long observations[]={{39,63,96,97,98,99,100,102,104,107,108,110,115,118,120,121,124,125,186,201,204,228,229,309}};
+ volatile unsigned char observation[512];
+ for(long i=0;i<512;i++)observation[i]=0xa5;
+ for(long i=0;i<(long)(sizeof observations/sizeof observations[0]);i++){{
+  long n=observations[i];
+  if(call(n,(long)observation,(long)observation,(long)observation)!=-1)die(71);
+  if(call(n,0,0,0)!=-1)die(72);
+ }}
+ if(call(97,3,(long)observation,0)!=-1)die(82);
+ if(call(98,0,(long)observation,0)!=-1)die(73);
+ if(call(204,0,512,(long)observation)!=-1)die(74);
+ if(call(228,0,(long)observation,0)!=-1)die(75);
+ if(call(229,0,(long)observation,0)!=-1)die(76);
+ if(call6(302,0,3,0,(long)observation,0,0)!=-1)die(77);
+ if(call6(302,0,3,(long)observation,0,0,0)!=-1)die(78);
+ // No kernel entropy is an admitted input either. AT_RANDOM is a separate
+ // auxv limitation, not a reason to allow direct getrandom observations.
+ if(call(318,(long)observation,512,0)!=-1)die(80);
+ if(call(318,(long)observation,512,1)!=-1)die(81);
+ for(long i=0;i<512;i++)if(observation[i]!=0xa5)die(79);
  if(call(72,1,8,1)!=-1)die(14);
  fd=call(2,(long)"out/allowed",65,0600);if(fd<0||call(1,fd,(long)"ok",2)!=2)die(12);
  call(1,1,(long)"confined\n",9);die(0);
