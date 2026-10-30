@@ -167,7 +167,7 @@ fn controlled_link_initial_auxv_random_is_normalized_across_launches() {
 .global _start
 .bss
 .balign 8
-observed: .skip 32
+observed: .skip 64
 .text
 _start:
  mov (%rsp),%rcx
@@ -197,21 +197,34 @@ _start:
  jne 5f
  mov %rax,observed+24(%rip)
  or $2,%r8d
-5: cmp $3,%rdx
+5: cmp $31,%rdx
+ jne 10f
+ test %rax,%rax
+ jz 9f
+ mov (%rax),%rcx
+ mov %rcx,observed+32(%rip)
+ mov 8(%rax),%rcx
+ mov %rcx,observed+40(%rip)
+ mov 16(%rax),%rcx
+ mov %rcx,observed+48(%rip)
+ mov 24(%rax),%rcx
+ mov %rcx,observed+56(%rip)
+ or $4,%r8d
+10: cmp $3,%rdx
  je 8f
  cmp $9,%rdx
  jne 2b
 8: test %rax,%rax
  jz 9f
  jmp 2b
-6: cmp $3,%r8d
+6: cmp $7,%r8d
  jne 9f
  mov $1,%eax
  mov $1,%edi
  lea observed(%rip),%rsi
- mov $32,%edx
+ mov $64,%edx
  syscall
- cmp $32,%rax
+ cmp $64,%rax
  jne 9f
  mov $60,%eax
  xor %edi,%edi
@@ -234,8 +247,18 @@ _start:
     let mut expected = b"jr-link-seed-v1!".to_vec();
     expected.extend_from_slice(&0u64.to_le_bytes());
     expected.extend_from_slice(&56u64.to_le_bytes());
+    expected.extend_from_slice(b"jr-controlled-ld");
+    expected.extend_from_slice(&[0; 16]);
+    let alternate = scratch.0.join("different-private-prefix-length");
+    fs::create_dir(&alternate).unwrap();
+    fs::copy(scratch.0.join("probe"), alternate.join("probe")).unwrap();
     for launch in 0..4 {
-        let mut command = Command::new(scratch.0.join("probe"));
+        let executable = if launch < 2 {
+            scratch.0.join("probe")
+        } else {
+            alternate.join("probe")
+        };
+        let mut command = Command::new(executable);
         command.env_clear();
         // Exercise both an empty and a nonempty initial environment and argv.
         if launch % 2 == 1 {

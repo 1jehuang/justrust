@@ -1,6 +1,7 @@
 //! Bounded native64 initial-stack normalization, while the exec trace stop
 //! prevents even the dynamic interpreter from executing. This changes only
-//! AT_RANDOM's sixteen bytes and the stack AT_SYSINFO_EHDR value. It does not
+//! AT_RANDOM's sixteen bytes, the stack AT_SYSINFO_EHDR value and the existing
+//! AT_EXECFN string. It does not
 //! remove the vDSO mapping, canonicalize addresses, CPU features or /proc auxv,
 //! or establish complete launch determinism. A public seed is intentional for
 //! this confined tool, not a source of cryptographic randomness.
@@ -17,6 +18,7 @@ use std::{
 };
 
 const SEED: [u8; 16] = *b"jr-link-seed-v1!";
+const EXECFN: &[u8] = b"jr-controlled-ld\0";
 const STACK_SPAN: u64 = 1024 * 1024;
 const MAX_POINTERS: u64 = 8192;
 const MAX_AUX: usize = 64;
@@ -32,6 +34,8 @@ fn invalid(reason: &str) -> io::Error {
 struct Plan {
     random: u64,
     sysinfo: Option<u64>,
+    execfn: u64,
+    stack_end: u64,
 }
 
 /// Inspect completely before writing anything. The kernel-built stack is
@@ -87,6 +91,7 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
     let mut seen = 0u64;
     let mut random = None;
     let mut sysinfo_index = None;
+    let mut execfn = None;
     let mut aux_ended = false;
     let aux_start = cursor;
     for index in 0..MAX_AUX {
@@ -112,7 +117,11 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
             4 if value != 56 => return Err(invalid("non-native program header size")),
             5 if !(1..=4096).contains(&value) => return Err(invalid("program header count")),
             6 if value != 4096 => return Err(invalid("non-native page size")),
-            15 | 24 | 31 => string(value)?,
+            15 | 24 => string(value)?,
+            31 => {
+                string(value)?;
+                execfn = Some(value);
+            }
             25 => random = Some(value),
             33 => sysinfo_index = Some(index),
             _ => {}
@@ -121,7 +130,7 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
     if !aux_ended {
         return Err(invalid("missing auxiliary terminator"));
     }
-    for required in [3, 4, 5, 6, 7, 9, 25] {
+    for required in [3, 4, 5, 6, 7, 9, 25, 31] {
         if seen & (1 << required) == 0 {
             return Err(invalid("missing required auxiliary tag"));
         }
@@ -130,10 +139,38 @@ fn plan(rsp: u64, mut read: impl FnMut(u64) -> io::Result<u64>) -> io::Result<Pl
     if random < cursor || random.checked_add(16).is_none_or(|end| end > first_string) {
         return Err(invalid("AT_RANDOM overlaps tables or strings"));
     }
+    let execfn = execfn.ok_or_else(|| invalid("missing AT_EXECFN"))?;
+    if execfn < cursor {
+        return Err(invalid("AT_EXECFN overlaps stack tables"));
+    }
     Ok(Plan {
         random,
         sysinfo: sysinfo_index.map(|index| aux_start + index as u64 * 16 + 8),
+        execfn,
+        stack_end: end,
     })
+}
+
+fn canonical_execfn(
+    address: u64,
+    stack_end: u64,
+    mut read: impl FnMut(u64) -> io::Result<u8>,
+) -> io::Result<Vec<u8>> {
+    let limit = stack_end.saturating_sub(address).min(4096);
+    for offset in 0..limit {
+        if read(address + offset)? == 0 {
+            let length = offset as usize + 1;
+            if length < EXECFN.len() {
+                return Err(invalid("AT_EXECFN string too short for canonical name"));
+            }
+            // Zero all former bytes, not just the new terminator. The old
+            // private path must not survive behind the canonical C string.
+            let mut bytes = vec![0; length];
+            bytes[..EXECFN.len()].copy_from_slice(EXECFN);
+            return Ok(bytes);
+        }
+    }
+    Err(invalid("unterminated or oversized AT_EXECFN string"))
 }
 
 struct Memory {
@@ -189,7 +226,7 @@ mod tests {
     fn words() -> Vec<u64> {
         vec![
             1, 0x1800, 0, 0x1810, 0, 3, 0x400040, 4, 56, 5, 8, 6, 4096, 7, 0, 9, 0x401000, 25,
-            0x1700, 33, 0x7fff0000, 0, 0,
+            0x1700, 33, 0x7fff0000, 31, 0x1900, 0, 0,
         ]
     }
     fn inspect(words: &[u64]) -> io::Result<Plan> {
@@ -206,6 +243,7 @@ mod tests {
         let result = inspect(&original).unwrap();
         assert_eq!(result.random, 0x1700);
         assert_eq!(result.sysinfo, Some(0x1000 + 20 * 8));
+        assert_eq!(result.execfn, 0x1900);
         assert_eq!(
             original,
             words(),
@@ -222,9 +260,12 @@ mod tests {
             (18, 0x1000),
             (18, 0x17ff),
             (18, u64::MAX),
-            (8, 32),  // incompatible PHENT
-            (11, 99), // unsupported auxiliary kind
-            (22, 1),  // nonzero AT_NULL
+            (8, 32),        // incompatible PHENT
+            (11, 99),       // unsupported auxiliary kind
+            (21, 30),       // missing EXECFN
+            (22, 0x1000),   // EXECFN overlaps tables
+            (22, USER_END), // EXECFN outside bounded stack
+            (24, 1),        // nonzero AT_NULL
         ] {
             let mut malformed = words();
             malformed[index] = replacement;
@@ -243,6 +284,32 @@ mod tests {
         absent.drain(19..21);
         assert!(inspect(&absent).unwrap().sysinfo.is_none());
     }
+
+    #[test]
+    fn controlled_link_launch_execfn_replacement_is_bounded_and_clears_suffix() {
+        let original = b"/private/tenant/scratch/lib64/ld-linux-x86-64.so.2\0";
+        let bytes = canonical_execfn(0x1000, 0x2000, |address| {
+            Ok(original[(address - 0x1000) as usize])
+        })
+        .unwrap();
+        assert_eq!(bytes.len(), original.len());
+        assert_eq!(&bytes[..EXECFN.len()], EXECFN);
+        assert!(bytes[EXECFN.len()..].iter().all(|byte| *byte == 0));
+        assert!(canonical_execfn(0x1000, 0x1001, |_| Ok(0)).is_err());
+        assert!(canonical_execfn(0x1000, 0x1000, |_| unreachable!()).is_err());
+        let mut reads = 0;
+        assert!(
+            canonical_execfn(0x1000, 0x10000, |_| {
+                reads += 1;
+                Ok(b'x')
+            })
+            .is_err()
+        );
+        assert_eq!(reads, 4096);
+        assert!(
+            canonical_execfn(0x1000, 0x2000, |_| Err(io::Error::from_raw_os_error(14))).is_err()
+        );
+    }
 }
 
 pub(super) fn normalize(procdir: &File, rsp: u64) -> io::Result<()> {
@@ -260,6 +327,12 @@ pub(super) fn normalize(procdir: &File, rsp: u64) -> io::Result<()> {
         deadline: Instant::now() + Duration::from_secs(5),
     };
     let plan = plan(rsp, |address| memory.word(address))?;
+    let name = canonical_execfn(plan.execfn, plan.stack_end, |address| {
+        let mut byte = [0];
+        memory.transfer(address, &mut byte, false)?;
+        Ok(byte[0])
+    })?;
+    memory.replace(plan.execfn, &name)?;
     memory.replace(plan.random, &SEED)?;
     if let Some(address) = plan.sysinfo {
         memory.replace(address, &0u64.to_le_bytes())?;
