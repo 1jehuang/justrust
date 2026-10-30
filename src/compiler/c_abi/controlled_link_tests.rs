@@ -602,6 +602,8 @@ void _start(void){{
  if(call(435,0,0,0)!=-1)die(6);
  if(call(41,2,1,0)!=-1)die(7);
  if(call(101,0,0,0)!=-1)die(8);
+ // A tool cannot disable the parent-owned timestamp trap or query its setting.
+ if(call(157,26,1,0)!=-1)die(100);
  if(call(272,0x10000000,0,0)!=-1)die(9);
  if(call(161,(long)"/",0,0)!=-1)die(10);
  if(call(0x40000000+39,0,0,0)!=-1)die(11);
@@ -618,6 +620,7 @@ void _start(void){{
  }}
  if(call(79,(long)observation,512,0)!=-1)die(83);
  if(call(95,022,0,0)!=-1)die(84);
+ if(call(157,25,(long)observation,0)!=-1)die(101);
  if(call(97,3,(long)observation,0)!=-1)die(82);
  if(call(98,0,(long)observation,0)!=-1)die(73);
  if(call(204,0,512,(long)observation)!=-1)die(74);
@@ -625,8 +628,8 @@ void _start(void){{
  if(call(229,0,(long)observation,0)!=-1)die(76);
  if(call6(302,0,3,0,(long)observation,0,0)!=-1)die(77);
  if(call6(302,0,3,(long)observation,0,0,0)!=-1)die(78);
- // No kernel entropy is an admitted input either. AT_RANDOM is a separate
- // auxv limitation, not a reason to allow direct getrandom observations.
+ // No kernel entropy is an admitted input either. Initial AT_RANDOM bytes
+ // are canonicalized before the first instruction, not read from getrandom.
  if(call(318,(long)observation,512,0)!=-1)die(80);
  if(call(318,(long)observation,512,1)!=-1)die(81);
  for(long i=0;i<512;i++)if(observation[i]!=0xa5)die(79);

@@ -220,6 +220,34 @@ impl Memory {
     }
 }
 
+pub(super) fn normalize(procdir: &File, rsp: u64) -> io::Result<()> {
+    unsafe extern "C" {
+        fn openat(directory: i32, path: *const std::ffi::c_char, flags: i32, ...) -> i32;
+    }
+    // The directory pins the original task and this file pins its stopped
+    // post-exec mm. Never reopen memory by a reusable numeric process ID.
+    let fd = unsafe { openat(procdir.as_raw_fd(), c"mem".as_ptr(), 2 | 0x80000) };
+    if fd == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    let memory = Memory {
+        file: unsafe { File::from_raw_fd(fd) },
+        deadline: Instant::now() + Duration::from_secs(5),
+    };
+    let plan = plan(rsp, |address| memory.word(address))?;
+    let name = canonical_execfn(plan.execfn, plan.stack_end, |address| {
+        let mut byte = [0];
+        memory.transfer(address, &mut byte, false)?;
+        Ok(byte[0])
+    })?;
+    memory.replace(plan.execfn, &name)?;
+    memory.replace(plan.random, &SEED)?;
+    if let Some(address) = plan.sysinfo {
+        memory.replace(address, &0u64.to_le_bytes())?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,32 +338,4 @@ mod tests {
             canonical_execfn(0x1000, 0x2000, |_| Err(io::Error::from_raw_os_error(14))).is_err()
         );
     }
-}
-
-pub(super) fn normalize(procdir: &File, rsp: u64) -> io::Result<()> {
-    unsafe extern "C" {
-        fn openat(directory: i32, path: *const std::ffi::c_char, flags: i32, ...) -> i32;
-    }
-    // The directory pins the original task and this file pins its stopped
-    // post-exec mm. Never reopen memory by a reusable numeric process ID.
-    let fd = unsafe { openat(procdir.as_raw_fd(), c"mem".as_ptr(), 2 | 0x80000) };
-    if fd == -1 {
-        return Err(io::Error::last_os_error());
-    }
-    let memory = Memory {
-        file: unsafe { File::from_raw_fd(fd) },
-        deadline: Instant::now() + Duration::from_secs(5),
-    };
-    let plan = plan(rsp, |address| memory.word(address))?;
-    let name = canonical_execfn(plan.execfn, plan.stack_end, |address| {
-        let mut byte = [0];
-        memory.transfer(address, &mut byte, false)?;
-        Ok(byte[0])
-    })?;
-    memory.replace(plan.execfn, &name)?;
-    memory.replace(plan.random, &SEED)?;
-    if let Some(address) = plan.sysinfo {
-        memory.replace(address, &0u64.to_le_bytes())?;
-    }
-    Ok(())
 }

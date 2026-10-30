@@ -84,9 +84,10 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
         .stderr
         .take()
         .ok_or_else(|| io::Error::other("missing linker stderr pipe"))?;
+    let trace_process = process.try_clone()?;
     broker.bind_process(process)?;
     broker.set_stdio(&stdout, &stderr)?;
-    child.detach()?;
+    child.resume()?;
     std::thread::scope(move |scope| {
         let mut child = child;
         let mut readers = [
@@ -113,7 +114,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
                         }
                     }
                 }
-                if let Some(status) = child.child.try_wait()? {
+                if let Some(status) = child.poll_exit(&trace_process)? {
                     return Ok(status);
                 }
                 if Instant::now() >= deadline {
@@ -128,7 +129,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
                     revents: 0,
                 };
                 // SAFETY: one live, writable native pollfd, bounded timeout.
-                if unsafe { poll(&mut fd, 1, 50) } < 0 {
+                if unsafe { poll(&mut fd, 1, 1) } < 0 {
                     let error = io::Error::last_os_error();
                     if error.kind() == io::ErrorKind::Interrupted {
                         continue;

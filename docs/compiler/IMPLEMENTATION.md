@@ -2104,11 +2104,18 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       restoration and pinned-map readback precede image execution. Failed setup
       kills/reaps the stopped child, never detaches a partially normalized image.
       Initial notification waits and captured diagnostics are bounded as well.
+      Execution remains parent-traced with child-only timestamp-counter faults.
+      Exact native RDTSC/RDTSCP faults receive an operation-local increasing
+      virtual counter and fixed RDTSCP CPU identifier, with register readback;
+      other faults retain their original signals. A trace-stop budget and
+      tracer-death kill supplement the existing deadline and teardown bounds.
+      Tools cannot reenable direct timestamp reads through prctl.
       Hosted acceptance includes real captured GNU ld, stock/native ABI parity
       at workers 1/8, canonical metadata, first-instruction ordering, kernel-map
-      removal, legacy vsyscall probes, floods and parent-death cleanup. CPU
-      instructions, address-layout observations and arbitrary mutable runtime
-      state are not sealed by these checks. Unsupported
+      removal, deterministic timestamp probes, legacy vsyscall probes, floods
+      and parent-death cleanup. Other CPU instructions, address-layout
+      observations and arbitrary mutable runtime state are not sealed by these
+      checks. Unsupported
       kernels or tools fail closed, without changing host policy or retrying unconstrained.
       Parent output acquisition rejects symlinks and special files, preventing a
       tool-created symlink from escaping confinement when its result is read.

@@ -22,6 +22,7 @@ pub(super) fn setup_error(error: &io::Error) -> String {
         11 => "bind linker lifetime to compiler",
         12 => "drop linker capabilities",
         13 => "establish parent exec tracer",
+        14 => "trap direct timestamp instructions",
         _ => "unknown boundary setup step",
     };
     format!(
@@ -239,6 +240,10 @@ pub(super) fn confine(
             // stop here: spawn must first observe the exec error pipe closing.
             // The successful exec generates SIGTRAP before image instructions.
             checked(syscall(101, 0usize, 0usize, 0usize, 0usize), 13)?;
+            // Child-only PR_SET_TSC / PR_TSC_SIGSEGV, inherited across exec.
+            // The parent tracer must emulate supported timestamp instructions
+            // before resuming the image, never let host counter values through.
+            checked(prctl(26, 2usize, 0usize, 0usize, 0usize) as c_long, 14)?;
             let program = Program {
                 length: filter.len() as u16,
                 filter: filter.as_ptr(),

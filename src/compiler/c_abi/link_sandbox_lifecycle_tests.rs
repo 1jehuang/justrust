@@ -10,6 +10,157 @@ use std::{
 };
 
 struct Scratch(PathBuf);
+
+#[test]
+fn controlled_link_timestamps_are_monotonic_local_and_preserve_native_registers() {
+    let root = std::env::temp_dir().join(format!(
+        "jr-link-tsc-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let scratch = Scratch(root);
+    fs::create_dir(scratch.0.join("out")).unwrap();
+    let source = scratch.0.join("probe.S");
+    fs::write(
+        &source,
+        r#"
+.global _start
+.bss
+.balign 8
+observed: .skip 32
+.text
+_start:
+ mov $0x12345678,%ebx
+ mov $0x23456789,%ebp
+ mov $0x34567890,%r8d
+ mov $0x45678901,%r9d
+ mov $0x56789012,%r10d
+ mov $0x67890123,%r11d
+ mov $0x78901234,%r12d
+ mov $0x12345678,%r13d
+ mov $0x23456789,%r14d
+ mov $0x34567890,%r15d
+ mov %rsp,%rsi
+ mov $0x87654321,%ecx
+ stc
+ pushfq
+ pop %rdi
+ rdtsc
+ mov %rax,observed(%rip)
+ pushfq
+ pop %rax
+ cmp %rdi,%rax
+ jne 9f
+ cmp $0,%edx
+ jne 9f
+ mov $0x87654321,%eax
+ cmp %rax,%rcx
+ jne 9f
+ mov $-1,%rcx
+ rdtscp
+ mov %rax,observed+8(%rip)
+ test %rcx,%rcx
+ jnz 9f
+ test %rdx,%rdx
+ jnz 9f
+ rdtsc
+ mov %rax,observed+16(%rip)
+ rdtscp
+ mov %rax,observed+24(%rip)
+ cmp %rsp,%rsi
+ jne 9f
+ cmp $0x12345678,%rbx
+ jne 9f
+ cmp $0x23456789,%rbp
+ jne 9f
+ cmp $0x34567890,%r8
+ jne 9f
+ cmp $0x45678901,%r9
+ jne 9f
+ cmp $0x56789012,%r10
+ jne 9f
+ cmp $0x67890123,%r11
+ jne 9f
+ cmp $0x78901234,%r12
+ jne 9f
+ cmp $0x12345678,%r13
+ jne 9f
+ cmp $0x23456789,%r14
+ jne 9f
+ cmp $0x34567890,%r15
+ jne 9f
+ mov $1,%eax
+ mov $1,%edi
+ lea observed(%rip),%rsi
+ mov $32,%edx
+ syscall
+ mov $60,%eax
+ xor %edi,%edi
+ syscall
+9: mov $60,%eax
+ mov $1,%edi
+ syscall
+"#,
+    )
+    .unwrap();
+    let compiled = Command::new("cc")
+        .args(["-nostdlib", "-static", "-no-pie"])
+        .arg(&source)
+        .arg("-o")
+        .arg(scratch.0.join("probe"))
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    fs::set_permissions(scratch.0.join("probe"), fs::Permissions::from_mode(0o555)).unwrap();
+    let expected: Vec<_> = [1u64, 2, 3, 4]
+        .into_iter()
+        .flat_map(u64::to_le_bytes)
+        .collect();
+    for _ in 0..4 {
+        let output = super::output(
+            Command::new(scratch.0.join("probe")).env_clear(),
+            &scratch.0,
+        )
+        .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(output.stdout, expected);
+        assert!(output.stderr.is_empty());
+    }
+    // Exact bytes only. Other architectural faults keep their original signal,
+    // including a prefixed timestamp instruction that we deliberately do not own.
+    use std::os::unix::process::ExitStatusExt;
+    for (instruction, signal) in [
+        ("xor %eax,%eax; mov (%rax),%rax", 11),
+        ("ud2", 4),
+        ("int3", 5),
+        (".byte 0x66,0x0f,0x31", 11),
+    ] {
+        fs::write(&source, format!(".global _start\n.text\n_start:\n{instruction}\nmov $60,%eax\nxor %edi,%edi\nsyscall\n")).unwrap();
+        let compiled = Command::new("cc")
+            .args(["-nostdlib", "-static", "-no-pie"])
+            .arg(&source)
+            .arg("-o")
+            .arg(scratch.0.join("fault"))
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        fs::set_permissions(scratch.0.join("fault"), fs::Permissions::from_mode(0o555)).unwrap();
+        let output = super::output(
+            Command::new(scratch.0.join("fault")).env_clear(),
+            &scratch.0,
+        )
+        .unwrap();
+        assert_eq!(
+            output.status.signal(),
+            Some(signal),
+            "{instruction}: {output:?}"
+        );
+    }
+}
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);

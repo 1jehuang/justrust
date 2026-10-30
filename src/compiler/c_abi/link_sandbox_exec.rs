@@ -1,4 +1,4 @@
-//! Same-thread ownership of the initial ptrace exec stop.
+//! Same-thread ownership from the initial exec stop through supervised exit.
 use std::{
     io,
     marker::PhantomData,
@@ -11,6 +11,8 @@ use std::{
 mod inject;
 #[path = "link_sandbox_launch.rs"]
 mod launch;
+#[path = "link_sandbox_tsc.rs"]
+mod tsc;
 
 unsafe extern "C" {
     fn ptrace(request: u32, pid: i32, address: usize, data: usize) -> i64;
@@ -19,7 +21,7 @@ unsafe extern "C" {
 }
 
 /// Never Send: Linux ptrace ownership belongs to the spawning thread, not
-/// merely its process. Until detach, do not use Rust Child wait methods:
+/// merely its process. Production stays traced. Do not use Rust Child wait methods:
 /// they can cache a ptrace stop as if it were a terminal exit status.
 pub(super) struct Guard {
     pub(super) child: Child,
@@ -27,6 +29,8 @@ pub(super) struct Guard {
     stopped: bool,
     reaped: bool,
     sealed: bool,
+    stops: usize,
+    timestamps: u64,
     owner: PhantomData<Rc<()>>,
 }
 impl Guard {
@@ -37,6 +41,8 @@ impl Guard {
             stopped: false,
             reaped: false,
             sealed: false,
+            stops: 0,
+            timestamps: 0,
             owner: PhantomData,
         }
     }
@@ -147,6 +153,64 @@ impl Guard {
         launch::normalize(procdir, registers[19])
     }
 
+    pub(super) fn resume(&mut self) -> io::Result<()> {
+        if !self.traced || !self.stopped || self.reaped || !self.sealed {
+            return Err(io::Error::other("linker resume requires sealed owned stop"));
+        }
+        // PTRACE_O_EXITKILL also kills if this exact tracer thread disappears.
+        if unsafe { ptrace(0x4200, self.child.id() as i32, 0, 0x100000) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        self.continue_signal(0)
+    }
+    fn continue_signal(&mut self, signal: usize) -> io::Result<()> {
+        if unsafe { ptrace(7, self.child.id() as i32, 0, signal) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        self.stopped = false;
+        Ok(())
+    }
+    pub(super) fn poll_exit(
+        &mut self,
+        process: &std::fs::File,
+    ) -> io::Result<Option<std::process::ExitStatus>> {
+        use std::os::unix::process::ExitStatusExt;
+        let mut status = 0;
+        let result = unsafe { waitpid(self.child.id() as i32, &mut status, 1) };
+        if result < 0 {
+            let error = io::Error::last_os_error();
+            return if error.kind() == io::ErrorKind::Interrupted {
+                Ok(None)
+            } else {
+                Err(error)
+            };
+        }
+        if result == 0 {
+            return Ok(None);
+        }
+        if status & 0xff != 0x7f {
+            self.reaped = true;
+            return Ok(Some(std::process::ExitStatus::from_raw(status)));
+        }
+        self.stopped = true;
+        self.stops += 1;
+        if self.stops > 100_000 {
+            return Err(io::Error::other(
+                "controlled linker exceeded 100000 trace stops",
+            ));
+        }
+        if status >> 16 != 0 {
+            return Err(io::Error::other(
+                "unexpected controlled linker ptrace event",
+            ));
+        }
+        let signal = ((status >> 8) & 0xff) as usize;
+        let emulate =
+            signal == 11 && tsc::emulate(self.child.id() as i32, process, &mut self.timestamps)?;
+        self.continue_signal(if emulate { 0 } else { signal })?;
+        Ok(None)
+    }
+    #[cfg(test)]
     pub(super) fn detach(&mut self) -> io::Result<()> {
         if !self.traced || !self.stopped || self.reaped || !self.sealed {
             return Err(io::Error::other(
@@ -183,9 +247,17 @@ impl Guard {
         unsafe {
             kill(self.child.id() as i32, 9);
         }
+        let deadline = Instant::now() + Duration::from_secs(5);
         loop {
+            if Instant::now() >= deadline {
+                break;
+            }
             let mut status = 0;
-            let result = unsafe { waitpid(self.child.id() as i32, &mut status, 0) };
+            let result = unsafe { waitpid(self.child.id() as i32, &mut status, 1) };
+            if result == 0 {
+                std::thread::sleep(Duration::from_millis(1));
+                continue;
+            }
             if result < 0 {
                 let error = io::Error::last_os_error();
                 if error.kind() == io::ErrorKind::Interrupted {

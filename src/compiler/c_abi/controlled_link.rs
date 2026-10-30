@@ -23,7 +23,7 @@ pub struct ControlledToolchain {
 impl ControlledToolchain {
     /// Change this framing whenever the execution boundary or fixed argv changes.
     pub(crate) fn policy(&self) -> &'static [u8] {
-        b"justrust-controlled-gnu-ld-glibc-x86-64-unmapped-vdso-vvar-v12"
+        b"justrust-controlled-gnu-ld-glibc-x86-64-virtual-tsc-v13"
     }
     pub(crate) fn library_directory(&self) -> &Path {
         &self.library_dir
