@@ -334,6 +334,8 @@ def environment(args, stack):
         env['RUSTFLAGS'] += ' -Zjr-cache-declarative-macros=yes'
     if stack == 'owned-demand':
         env['RUSTFLAGS'] += ' -Zjr-demand-query-cache=yes'
+    if stack == 'owned-cgu-traversal':
+        env['RUSTFLAGS'] += ' -Zjr-cgu-shared-inline-traversal=yes'
     if stack in ('owned-clif', 'owned-clif-threads4'):
         env['RUSTFLAGS'] += ' -Zcodegen-backend=cranelift'
     if stack in ('owned-threads4', 'owned-clif-threads4'):
@@ -419,6 +421,8 @@ def execute(args):
         stacks += ['owned-declarative']
     if getattr(args, 'demand_query_cache', False):
         stacks += ['owned-demand']
+    if getattr(args, 'cgu_inline_traversal', False):
+        stacks += ['owned-cgu-traversal']
     if getattr(args, 'native_backend_frontier', False):
         stacks += ['owned-clif', 'owned-threads4', 'owned-clif-threads4']
     if getattr(args, 'native_cargo', None):
@@ -615,6 +619,8 @@ def main():
                         help='add an isolated literal declarative cache stack, other reuse experiments and proc-macro cache off')
     parser.add_argument('--demand-query-cache', action='store_true',
                         help='add isolated demand-only query persistence, other reuse experiments and proc-macro cache off')
+    parser.add_argument('--cgu-inline-traversal', action='store_true',
+                        help='add isolated per-CGU inline traversal reuse, other reuse experiments and proc-macro cache off')
     parser.add_argument('--native-backend-frontier', action='store_true',
                         help='add isolated native Cranelift, four-thread frontend, and combined stacks; baseline profiles unchanged')
     parser.add_argument('--blaze-seed-cache', type=lambda s: Path(s).expanduser().absolute(),

@@ -366,7 +366,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False, frontier=False, native=False, served=True, native_mutation=False):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False, frontier=False, native=False, served=True, native_mutation=False, cgu=False):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -377,6 +377,7 @@ class HarnessTests(unittest.TestCase):
             binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
             owned_experiments=experiments, native_macro_cache=macro, demand_query_cache=demand,
             native_backend_frontier=frontier,
+            cgu_inline_traversal=cgu,
             native_cargo=root / 'native-cargo' if native else None,
             cargo=Path('/fake/cargo'), rustc=Path('/fake/rustc'),
             blaze_seed_cache=root / 'seed' if seeded else None,
@@ -471,6 +472,29 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(len(edits), 4)
                 self.assertEqual(len({data for _, data in edits}), 1)
                 self.assertIn('owned-off' if rep == 0 else 'all3on', edits[0][0])
+
+    def test_cgu_traversal_isolated_full_gates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            rows = self.exercise(root, cgu=True)
+            metadata = json.loads((root / 'out/metadata.json').read_text())
+            summary = json.loads((root / 'out/summary.json').read_text())
+            self.assertEqual(metadata['stacks'], ['owned-off', 'all3on', 'blaze', 'blaze-llvm', 'owned-cgu-traversal'])
+            self.assertIn('owned-cgu-traversal', summary['medians_seconds'])
+            candidate = h.environment(argparse.Namespace(output=root / 'env',
+                cargo=Path('/mock/cargo'), rustc=Path('/mock/rustc')), 'owned-cgu-traversal')
+            self.assertIn('-Zjr-cgu-shared-inline-traversal=yes', candidate['RUSTFLAGS'])
+            for flag in h.base.FLAGS:
+                self.assertIn(f'-Z{flag}=no', candidate['RUSTFLAGS'])
+            self.assertEqual(candidate['JUSTRUST_CACHE_PROC_MACROS'], '0')
+            self.assertNotIn('JUSTRUST_HOTPATCH', candidate)
+            for rep in range(2):
+                edits = [(name, data) for name, data in rows if name.startswith(f'edit-{rep:03d}')]
+                self.assertEqual(len(edits), 5)
+                self.assertEqual(len({data for _, data in edits}), 1)
+            phases = [name for name, _ in rows if name.endswith('-owned-cgu-traversal')]
+            for phase in ('prepare', 'type-error', 'type-recovery', 'test-failure', 'test-recovery'):
+                self.assertIn(f'{phase}-000-owned-cgu-traversal', phases)
 
     def test_demand_stack_full_gates(self):
         with tempfile.TemporaryDirectory() as temp:
