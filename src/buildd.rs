@@ -1025,6 +1025,10 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
 }
 
 fn native_empty_eligible(st: &State, req: &Request) -> bool {
+    // source_roots is a watch/stamp heuristic, not a dependency or isolation
+    // proof. Disjoint roots also do not exempt same-session wrong guesses
+    // from cancellation. Keep the global exclusion until coordination has
+    // an authority stronger than those paths.
     !req.prebuild
         && req
             .env
@@ -2043,6 +2047,58 @@ mod tests {
         assert_eq!(read_msg(&mut r).unwrap(), Some((b'O', b"hello".to_vec())));
         assert_eq!(read_msg(&mut r).unwrap(), Some((b'X', b"{}".to_vec())));
         assert_eq!(read_msg(&mut r).unwrap(), None);
+    }
+
+    #[test]
+    fn disjoint_watch_roots_are_not_dependency_isolation() {
+        let t =
+            std::env::temp_dir().join(format!("jr-buildd-disjoint-roots-{}", std::process::id()));
+        std::fs::create_dir_all(t.join("shared/src")).unwrap();
+        std::fs::write(
+            t.join("shared/Cargo.toml"),
+            "[package]\nname='shared'\nversion='0.1.0'\nedition='2021'\n",
+        )
+        .unwrap();
+        std::fs::write(t.join("shared/src/lib.rs"), "pub fn shared() {}\n").unwrap();
+        let workspaces: Vec<_> = ["a", "b"].iter().map(|n| t.join(n)).collect();
+        for ws in &workspaces {
+            std::fs::create_dir_all(ws.join("member/src")).unwrap();
+            std::fs::write(
+                ws.join("Cargo.toml"),
+                "[workspace]\nmembers=[\"member\"]\nresolver=\"2\"\n",
+            )
+            .unwrap();
+            std::fs::write(
+                ws.join("member/Cargo.toml"),
+                "[package]\nname='member'\nversion='0.1.0'\nedition='2021'\n[dependencies]\nshared={path=\"../../shared\"}\n",
+            )
+            .unwrap();
+            std::fs::write(ws.join("member/src/lib.rs"), "pub use shared::shared;\n").unwrap();
+        }
+        let a = source_roots(&workspaces[0]);
+        let b = source_roots(&workspaces[1]);
+        // The member manifests both resolve the same dependency, but the
+        // watch-root heuristic does not follow member manifests.
+        assert_eq!(a, vec![workspaces[0].clone()]);
+        assert_eq!(b, vec![workspaces[1].clone()]);
+        assert!(
+            !a.iter()
+                .any(|x| b.iter().any(|y| x.starts_with(y) || y.starts_with(x)))
+        );
+        for ws in &workspaces {
+            assert_eq!(
+                std::fs::canonicalize(ws.join("member/../../shared")).unwrap(),
+                std::fs::canonicalize(t.join("shared")).unwrap()
+            );
+        }
+        let mut st = State::default();
+        let r = req(&[("JUSTRUST_BUILDD_NATIVE_EMPTY", "1")], &["check"]);
+        st.builds
+            .insert("disjoint-workspace".into(), Arc::new(fake_build()));
+        assert!(!native_empty_eligible(&st, &r));
+        st.finished = std::mem::take(&mut st.builds);
+        assert!(!native_empty_eligible(&st, &r));
+        std::fs::remove_dir_all(t).unwrap();
     }
 
     #[test]
