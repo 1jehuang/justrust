@@ -1,0 +1,360 @@
+{
+  "id": "20261030-095427948-579324",
+  "args": [
+    "check",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "--tests",
+    "-j",
+    "6"
+  ],
+  "subcommand": "check",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "8905ce5931b3",
+    "dirty_files": 5
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793379267.9595306,
+  "wall": 30.26901149749756,
+  "exit": 101,
+  "cpu_secs": 57.115159000000006,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 146,
+    "processes": 44,
+    "sample_span_secs": 30.26777744293213,
+    "max_sample_gap_secs": 0.21263527870178223
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.23198390007019043,
+    "lock_wait": 0.0,
+    "compile": 29.99281620979309,
+    "build_gaps": 0.022100210189819336,
+    "test_run": 0.0,
+    "tail": 0.022111177444458008
+  },
+  "units": {
+    "compiled": 22,
+    "local": 22,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 414,
+    "rustc_cpu_secs": 55.62,
+    "rustc_wall_sum": 55.89955711364746,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "hir_ty",
+      "kind": "check",
+      "local": true,
+      "start": 4.194498300552368,
+      "wall": 9.074934244155884,
+      "wall_share": 9.074934244155884,
+      "cpu": 9.031405,
+      "max_rss_mb": 1129.2421875,
+      "frontend_threads": null,
+      "rmeta_secs": 9.006648540496826,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 80429
+    },
+    {
+      "name": "ra_jit (test)",
+      "kind": "test",
+      "local": true,
+      "start": 19.613109827041626,
+      "wall": 10.633790493011476,
+      "wall_share": 4.256304164727529,
+      "cpu": 10.565978,
+      "max_rss_mb": 1370.39453125,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 78807
+    },
+    {
+      "name": "hir_def",
+      "kind": "check",
+      "local": true,
+      "start": 0.23198390007019043,
+      "wall": 3.9575908184051514,
+      "wall_share": 3.9575908184051514,
+      "cpu": 3.938522,
+      "max_rss_mb": 726.38671875,
+      "frontend_threads": null,
+      "rmeta_secs": 3.9276647567749023,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 52753
+    },
+    {
+      "name": "jr_engine (test)",
+      "kind": "test",
+      "local": true,
+      "start": 19.641844511032104,
+      "wall": 9.953288316726685,
+      "wall_share": 3.5976074735323587,
+      "cpu": 9.907425,
+      "max_rss_mb": 1370.484375,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 78807
+    },
+    {
+      "name": "jr_engine",
+      "kind": "bin",
+      "local": true,
+      "start": 19.622549295425415,
+      "wall": 8.281240701675415,
+      "wall_share": 2.756903620560964,
+      "cpu": 8.237954,
+      "max_rss_mb": 1272.82421875,
+      "frontend_threads": null,
+      "rmeta_secs": 8.198317527770996,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 78807
+    },
+    {
+      "name": "hir_ty_codegen",
+      "kind": "check",
+      "local": true,
+      "start": 13.27617859840393,
+      "wall": 5.150320529937744,
+      "wall_share": 2.495259364446004,
+      "cpu": 5.121561,
+      "max_rss_mb": 851.2265625,
+      "frontend_threads": null,
+      "rmeta_secs": 5.099707841873169,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "hir",
+      "kind": "check",
+      "local": true,
+      "start": 14.677565813064575,
+      "wall": 2.5359854698181152,
+      "wall_share": 1.2679928541183472,
+      "cpu": 2.527478,
+      "max_rss_mb": 476.26171875,
+      "frontend_threads": null,
+      "rmeta_secs": 2.511045217514038,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "ide_db",
+      "kind": "check",
+      "local": true,
+      "start": 17.218426942825317,
+      "wall": 1.4298737049102783,
+      "wall_share": 0.8258377313613892,
+      "cpu": 1.424682,
+      "max_rss_mb": 395.75,
+      "frontend_threads": null,
+      "rmeta_secs": 1.4095704555511477,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "hir_ty_borrowck",
+      "kind": "check",
+      "local": true,
+      "start": 13.511404275894165,
+      "wall": 1.16111159324646,
+      "wall_share": 0.5341095527013143,
+      "cpu": 1.155713,
+      "max_rss_mb": 377.8515625,
+      "frontend_threads": null,
+      "rmeta_secs": 1.1471292972564695,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "blaze_lints",
+      "kind": "check",
+      "local": true,
+      "start": 18.65464949607849,
+      "wall": 0.9480695724487304,
+      "wall_share": 0.4548250397046407,
+      "cpu": 0.944203,
+      "max_rss_mb": 314.64453125,
+      "frontend_threads": null,
+      "rmeta_secs": 0.9324386119842528,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "blaze_doc",
+      "kind": "check",
+      "local": true,
+      "start": 18.65526509284973,
+      "wall": 0.6833126544952393,
+      "wall_share": 0.19037592013676963,
+      "cpu": 0.680375,
+      "max_rss_mb": 283.859375,
+      "frontend_threads": null,
+      "rmeta_secs": 0.6700589656829834,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "hir_ide",
+      "kind": "check",
+      "local": true,
+      "start": 13.276754140853882,
+      "wall": 0.5133275985717773,
+      "wall_share": 0.17180033524831134,
+      "cpu": 0.510984,
+      "max_rss_mb": 291.484375,
+      "frontend_threads": null,
+      "rmeta_secs": 0.5037813186645508,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 1.886918540591321,
+    "peak_build_cores": 3.786220429349206,
+    "peak_build_rss_mb": 3644.7265625,
+    "peak_unit_rss_mb": 1370.484375,
+    "min_mem_available_mb": 50018,
+    "avg_other_cores": 3.2464453622034855,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.23847199999999993,
+    "psi_mem_secs": 0.00015600000000000002,
+    "psi_io_secs": 0.007971
+  },
+  "diagnostics": {
+    "compile_errors": 1,
+    "warnings": 257,
+    "first_error": "error[E0502]: cannot borrow `db` as mutable because it is also borrowed as immutable",
+    "compile_failed": true
+  },
+  "rebuild_reasons": [
+    {
+      "package": "hir-def",
+      "reason": "the file `vendor/rust-analyzer/crates/hir-def/src/signatures.rs` has changed"
+    },
+    {
+      "package": "ra-jit",
+      "reason": "the file `crates` has changed"
+    },
+    {
+      "package": "hir-ty",
+      "reason": "the dependency `hir-def` was rebuilt"
+    },
+    {
+      "package": "hir-ty-wfcheck",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir-ide",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir-ty-codegen",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir-ty-borrowck",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir",
+      "reason": "the dependency `hir-ty-wfcheck` was rebuilt"
+    },
+    {
+      "package": "ide-db",
+      "reason": "the dependency `hir` was rebuilt"
+    },
+    {
+      "package": "load-cargo",
+      "reason": "the dependency `ide-db` was rebuilt"
+    },
+    {
+      "package": "blaze-doc",
+      "reason": "the dependency `hir-def` was rebuilt"
+    },
+    {
+      "package": "ide-diagnostics",
+      "reason": "the dependency `hir` was rebuilt"
+    },
+    {
+      "package": "blaze-lints",
+      "reason": "the dependency `hir` was rebuilt"
+    },
+    {
+      "package": "ra-jit-expand",
+      "reason": "the dependency `load-cargo` was rebuilt"
+    },
+    {
+      "package": "ra-jit-macro-wasm",
+      "reason": "the dependency `load-cargo` was rebuilt"
+    }
+  ],
+  "all_units": 22,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-095427948-579324.scope",
+    "final_weight": 508,
+    "setup_secs": 0.01101617,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

@@ -1,0 +1,8 @@
+# Historical receipts must remain exact bytes, not reformatted sources or logs.
+native/** -text -diff
+sessions/** -text -diff
+source-ready/** -text -diff
+baseline-head/** -text -diff
+exports/** -text -diff
+harness-captured/** -text -diff
+provenance/** -text -diff

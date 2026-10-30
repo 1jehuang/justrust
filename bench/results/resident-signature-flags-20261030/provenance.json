@@ -1,0 +1,18 @@
+{
+  "schema": "resident_signature_flags_evidence/v1",
+  "decision": "NOT_A_PERFORMANCE_WIN",
+  "promotion": false,
+  "baseline_revision": "8905ce5931b352545ec4a18a3bbb8e6f13bd1b63",
+  "final_pair": [
+    "rsb04",
+    "rsa10"
+  ],
+  "scope": "Native licensed Blaze-derived resident, not clean-room. Scoped descriptive timing only.",
+  "source_capture": "Historical worker exact-byte SOURCE READY receipts v13/v14/v15 plus original root before-build frozen sources, copied without reconstruction. Current live sources intentionally untouched.",
+  "source_ready_message_files": "No original DM text files were created. Original per-version SHA256SUMS and complete available source bytes/source.patch are the ready receipts, not invented messages.",
+  "older_source_claim": "Only v13-v15 genuinely captured files are present. No earlier full sources reconstructed.",
+  "raw_policy": "Original top-level runtime files and native meta/output/summary/units retained byte-for-byte. No binaries, cache trees, target trees, install IDs, or telemetry state.",
+  "harness_policy": "Harness copied at evidence capture time, not asserted to be an original historical harness snapshot.",
+  "working_source_policy": "No source restoration or source commit. Root continues independent coarse-root evaluation on uncommitted signature base.",
+  "validation_policy": "Offline portable replay only. Historical absolute paths are provenance, never dependencies."
+}

@@ -1,0 +1,52 @@
+test_01_original_inventory_and_replay (__main__.EvidenceTests.test_01_original_inventory_and_replay) ... ok
+test_02_portable_copy_without_git_or_original_paths (__main__.EvidenceTests.test_02_portable_copy_without_git_or_original_paths) ... ok
+test_03_missing_raw_journal (__main__.EvidenceTests.test_03_missing_raw_journal) ... ok
+test_04_inventory_detects_tampering (__main__.EvidenceTests.test_04_inventory_detects_tampering) ... ok
+test_05_promotion_forbidden (__main__.EvidenceTests.test_05_promotion_forbidden) ... ok
+test_06_decision_cannot_claim_win (__main__.EvidenceTests.test_06_decision_cannot_claim_win) ... ok
+test_07_wrong_frozen_source (__main__.EvidenceTests.test_07_wrong_frozen_source) ... ok
+test_08_wrong_ready_source (__main__.EvidenceTests.test_08_wrong_ready_source) ... ok
+test_09_patch_context_rejected (__main__.EvidenceTests.test_09_patch_context_rejected) ... ok
+test_10_patch_missing_file_rejected (__main__.EvidenceTests.test_10_patch_missing_file_rejected) ... ok
+test_11_changed_source_after (__main__.EvidenceTests.test_11_changed_source_after) ... ok
+test_12_full_gate_source_changed (__main__.EvidenceTests.test_12_full_gate_source_changed) ... ok
+test_13_export_id_binding (__main__.EvidenceTests.test_13_export_id_binding) ... ok
+test_14_export_pass_count_binding (__main__.EvidenceTests.test_14_export_pass_count_binding) ... ok
+test_15_export_wall_binding (__main__.EvidenceTests.test_15_export_wall_binding) ... ok
+test_16_native_meta_filter_binding (__main__.EvidenceTests.test_16_native_meta_filter_binding) ... ok
+test_17_native_summary_id_binding (__main__.EvidenceTests.test_17_native_summary_id_binding) ... ok
+test_18_v13_failure_cannot_be_erased (__main__.EvidenceTests.test_18_v13_failure_cannot_be_erased) ... ok
+test_19_v14_failure_cannot_be_erased (__main__.EvidenceTests.test_19_v14_failure_cannot_be_erased) ... ok
+test_20_original_workspace_diagnostic_required (__main__.EvidenceTests.test_20_original_workspace_diagnostic_required) ... ok
+test_21_original_e0502_required (__main__.EvidenceTests.test_21_original_e0502_required) ... ok
+test_22_filtered_fixture_must_run (__main__.EvidenceTests.test_22_filtered_fixture_must_run) ... ok
+test_23_all347_raw_names_pinned (__main__.EvidenceTests.test_23_all347_raw_names_pinned) ... ok
+test_24_full347_duplicate_names (__main__.EvidenceTests.test_24_full347_duplicate_names) ... ok
+test_25_zero_test_admission_rejected (__main__.EvidenceTests.test_25_zero_test_admission_rejected) ... ok
+test_26_blocked_v14_runtime_preserved (__main__.EvidenceTests.test_26_blocked_v14_runtime_preserved) ... ok
+test_27_suite_missing_phase (__main__.EvidenceTests.test_27_suite_missing_phase) ... ok
+test_28_runtime_error_status (__main__.EvidenceTests.test_28_runtime_error_status) ... ok
+test_29_runtime_error_diagnostic (__main__.EvidenceTests.test_29_runtime_error_diagnostic) ... ok
+test_30_runtime_assertion_diagnostic (__main__.EvidenceTests.test_30_runtime_assertion_diagnostic) ... ok
+test_31_runtime_marker_stale (__main__.EvidenceTests.test_31_runtime_marker_stale) ... ok
+test_32_runtime_marker_duplicate (__main__.EvidenceTests.test_32_runtime_marker_duplicate) ... ok
+test_33_runtime_name_parity (__main__.EvidenceTests.test_33_runtime_name_parity) ... ok
+test_34_workload_edit_hash (__main__.EvidenceTests.test_34_workload_edit_hash) ... ok
+test_35_timeout_cannot_be_accepted (__main__.EvidenceTests.test_35_timeout_cannot_be_accepted) ... ok
+test_36_nan_timing_rejected (__main__.EvidenceTests.test_36_nan_timing_rejected) ... ok
+test_37_suite_sample_summary_rejected (__main__.EvidenceTests.test_37_suite_sample_summary_rejected) ... ok
+test_38_engine_binary_identity_pinned (__main__.EvidenceTests.test_38_engine_binary_identity_pinned) ... ok
+test_39_toolchain_identity_pinned (__main__.EvidenceTests.test_39_toolchain_identity_pinned) ... ok
+test_40_source63_identity_pinned (__main__.EvidenceTests.test_40_source63_identity_pinned) ... ok
+test_41_remote_policy_rejected (__main__.EvidenceTests.test_41_remote_policy_rejected) ... ok
+test_42_shared_target_rejected (__main__.EvidenceTests.test_42_shared_target_rejected) ... ok
+test_43_host_mismatch (__main__.EvidenceTests.test_43_host_mismatch) ... ok
+test_44_comparison_reproducible (__main__.EvidenceTests.test_44_comparison_reproducible) ... ok
+test_45_safe_relative_artifact_paths (__main__.EvidenceTests.test_45_safe_relative_artifact_paths) ... ok
+test_46_inconsistent_raw_footer_verdict (__main__.EvidenceTests.test_46_inconsistent_raw_footer_verdict) ... ok
+test_47_effective_per_command_backend (__main__.EvidenceTests.test_47_effective_per_command_backend) ... ok
+
+----------------------------------------------------------------------
+Ran 47 tests in 2.752s
+
+OK

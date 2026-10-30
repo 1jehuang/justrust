@@ -1,0 +1,197 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/mod.rs b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+index 11ccebac9..fecfbb9c2 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/mod.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+@@ -38,7 +38,9 @@ use hir_def::{
+     },
+     hir::{BindingId, ExprId},
+     layout::{BackendRepr, Primitive, Scalar, TagEncoding, Variants},
+-    signatures::{FunctionSignature, StaticFlags, StaticSignature, StructFlags, StructSignature},
++    signatures::{
++        FnFlags, FunctionSignature, StaticFlags, StaticSignature, StructFlags, StructSignature,
++    },
+     src::HasSource,
+ };
+ use hir_expand::{FileRange, HirFileId, InFile, MacroDefKind, builtin::BuiltinFnLikeExpander};
+@@ -4454,7 +4456,7 @@ pub fn exported_symbol(db: &dyn HirDatabase, func: FunctionId) -> Option<String>
+ /// Whether a function is `#[rustc_comptime]`: one the const evaluator alone runs, such as
+ /// `TypeId::size` over the reflection intrinsics, of which rustc compiles no code.
+ pub fn compile_time_only(db: &dyn HirDatabase, func: FunctionId) -> bool {
+-    AttrFlags::has_word(db, func.into(), "rustc_comptime")
++    FunctionSignature::of(db, func).flags.contains(FnFlags::RUSTC_COMPTIME)
+ }
+ 
+ /// The symbol a static of the program, not of an `extern` block, is exported under when an
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index be57fd8ab..c94443c4e 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -11559,6 +11559,144 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
+ mod tests {
+     use super::*;
+ 
++    fn resident_signature_flags_functions(db: &RootDatabase, krate: Crate) -> Vec<FunctionId> {
++        let mut functions = Vec::new();
++        let map = hir_def::nameres::crate_def_map(db, krate.into());
++        for (_, module) in map.modules(db) {
++            let scope = module.scope(db);
++            for item in scope.declarations() {
++                match item {
++                    ModuleDefId::FunctionId(id) => functions.push(id),
++                    ModuleDefId::TraitId(id) => {
++                        for (_, item) in &id.trait_items(db).items {
++                            if let AssocItemId::FunctionId(id) = item {
++                                functions.push(*id);
++                            }
++                        }
++                    }
++                    _ => {}
++                }
++            }
++            for id in scope.impls() {
++                for (_, item) in &id.impl_items(db).items {
++                    if let AssocItemId::FunctionId(id) = item {
++                        functions.push(*id);
++                    }
++                }
++            }
++        }
++        functions
++    }
++
++    #[test]
++    fn resident_signature_flags_match_direct_attributes_across_revisions() {
++        use hir_def::{
++            attrs::AttrFlags,
++            signatures::{FnFlags, FunctionSignature},
++        };
++        use test_fixture::WithFixture;
++        // Both true and false cfg predicates are independent of fixture defaults.
++        let fixture = r#"
++fn plain() { let _ = 1; }
++#[rustc_comptime]
++fn bare() {}
++#[cfg_attr(all(), rustc_comptime)]
++fn enabled() {}
++#[cfg_attr(any(), rustc_comptime)]
++fn disabled() {}
++#[cfg_attr(all(), cfg_attr(all(), rustc_comptime))]
++fn nested() {}
++#[rustc_comptime()]
++fn tokens() {}
++#[rustc_comptime = "yes"]
++fn value() {}
++#[other::rustc_comptime]
++fn qualified() {}
++trait Tr {
++    #[rustc_comptime]
++    fn required();
++    #[cfg_attr(all(), rustc_comptime)]
++    fn provided() {}
++}
++struct S;
++impl S { #[rustc_comptime] fn inherent() {} }
++impl Tr for S { #[rustc_comptime] fn required() {} }
++"#;
++        let (mut db, file) = RootDatabase::with_single_file(fixture);
++        let file = file.file_id(&db);
++        let revisions = [
++            fixture.to_owned(),
++            fixture.replace("let _ = 1", "let _ = 2"),
++            fixture.replace("fn plain()", "#[rustc_comptime]\nfn plain()"),
++            fixture.replace("#[rustc_comptime]", ""),
++            fixture.replace("cfg_attr(all(),", "cfg_attr(any(),"),
++            fixture.replace("#[rustc_comptime()]", "#[rustc_comptime]"),
++            fixture.replace("#[rustc_comptime = \"yes\"]", "#[rustc_comptime]"),
++            fixture.to_owned(),
++        ];
++        assert_eq!(revisions.len(), 8);
++        let mut baseline: Vec<((String, String), String)> = Vec::new();
++        let mut comparisons = 0;
++        for (revision, text) in revisions.iter().enumerate() {
++            db.set_file_text(file, text);
++            hir::attach_db(&db, || {
++                let module = hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap();
++                let ids = resident_signature_flags_functions(&db, module.krate(&db));
++                assert_eq!(ids.len(), 12, "fixture must exercise every container");
++                assert_eq!(ids.iter().copied().collect::<FxHashSet<_>>().len(), 12);
++                for id in ids {
++                    comparisons += 1;
++                    // Read the cached result FIRST. Never replace this oracle with the
++                    // signature flag or the codegen helper that consumes that flag.
++                    let signature = FunctionSignature::of(&db, id).clone();
++                    let cached = signature.flags.contains(FnFlags::RUSTC_COMPTIME);
++                    let classified = hir_ty_codegen::compile_time_only(&db, id);
++                    let original = AttrFlags::has_word(&db, id.into(), "rustc_comptime");
++                    assert_eq!(classified, original, "codegen predicate revision {revision}");
++                    assert_eq!(cached, original, "revision {revision}: {:?}", signature.name);
++                    if revision == 0 {
++                        let name = signature.name.as_str();
++                        assert_eq!(
++                            original,
++                            matches!(
++                                name,
++                                "bare"
++                                    | "enabled"
++                                    | "nested"
++                                    | "required"
++                                    | "provided"
++                                    | "inherent"
++                            )
++                        );
++                        // Neither IDs nor signature IR may outlive this database
++                        // revision. Keep an owned key distinguishing trait/impl
++                        // methods with the same name, and the complete derived
++                        // Debug snapshot, while attached to this database. This
++                        // is a same-database, body-only regression check, not a
++                        // portable signature serialization or semantic hash.
++                        let key = (
++                            format!("{:?}", id.lookup(&db).container),
++                            signature.name.as_str().to_owned(),
++                        );
++                        baseline.push((key, format!("{signature:?}")));
++                    } else if revision == 1 {
++                        let key = (
++                            format!("{:?}", id.lookup(&db).container),
++                            signature.name.as_str().to_owned(),
++                        );
++                        let before = &baseline.iter().find(|(old, _)| *old == key).unwrap().1;
++                        assert_eq!(
++                            before,
++                            &format!("{signature:?}"),
++                            "body-only edit changed signature"
++                        );
++                    }
++                }
++            });
++        }
++        assert_eq!(comparisons, 12 * 8);
++    }
++
+     #[test]
+     fn a_fetched_crate_is_named_the_same_wherever_cargo_keeps_it() {
+         let fetched = "registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.7.4/src/lib.rs";
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/signatures.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/signatures.rs
+index df3535cc9..dea1268cf 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/signatures.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/signatures.rs
+@@ -613,6 +613,7 @@ bitflags! {
+         const EXPLICIT_SAFE = 1 << 12;
+         const HAS_LEGACY_CONST_GENERICS = 1 << 13;
+         const RUSTC_INTRINSIC = 1 << 14;
++        const RUSTC_COMPTIME = 1 << 15;
+     }
+ }
+ 
+@@ -644,6 +645,11 @@ impl FunctionSignature {
+ 
+         let mut flags = FnFlags::empty();
+         let attrs = AttrFlags::query(db, id.into());
++        // Preserve the word-only, cfg-expanded attribute semantics of the codegen
++        // predicate, and record its source dependencies in this existing query.
++        if AttrFlags::has_word(db, id.into(), "rustc_comptime") {
++            flags.insert(FnFlags::RUSTC_COMPTIME);
++        }
+         if attrs.contains(AttrFlags::RUSTC_ALLOW_INCOHERENT_IMPL) {
+             flags.insert(FnFlags::RUSTC_ALLOW_INCOHERENT_IMPL);
+         }

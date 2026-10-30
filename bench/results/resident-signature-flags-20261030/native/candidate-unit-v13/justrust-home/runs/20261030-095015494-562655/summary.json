@@ -1,0 +1,107 @@
+{
+  "id": "20261030-095015494-562655",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-def",
+    "-j",
+    "6",
+    "--",
+    "resident_signature_comptime",
+    "--nocapture"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "8905ce5931b3",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793379015.5087142,
+  "wall": 0.23932647705078125,
+  "exit": 101,
+  "cpu_secs": 0.449707,
+  "measurement_coverage": {
+    "samples": 3,
+    "processes": 1,
+    "sample_span_secs": 0.2386460304260254,
+    "max_sample_gap_secs": 0.20801377296447754
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.23932647705078125,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 0.0,
+    "tail": 0.0
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 0,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 1.8790524372469637,
+    "peak_build_cores": 0.9134010565369931,
+    "peak_build_rss_mb": 110.86328125,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 52716,
+    "avg_other_cores": 3.195515040593779,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.002065,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 0.0
+  },
+  "diagnostics": {
+    "compile_errors": 1,
+    "warnings": 46,
+    "first_error": "error: package `hir-def` cannot be tested because it requires dev-dependencies and is not a member of the workspace",
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-095015494-562655.scope",
+    "final_weight": 1000,
+    "setup_secs": 0.013066109,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

@@ -1,0 +1,4 @@
+724793541da40fe85a8f2fa738e39ae6bae70608c0b43e4b2ece80fe772c31a3  toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/signatures.rs
+0a50cf5d1abf3d812a4b942b0935810276ae0f90bfcb2b34b9b991c165e89d16  toolchain/resident/crates/hir-ty-codegen/mod.rs
+f551b94e111afc89adfc7b374efff6b8b9038accda325f5c50ec432c08ce4453  toolchain/resident/crates/ra-jit/src/main.rs
+7620661e053256d46aa4d7a27563bd8736092d86d1900d255db71b4488f7947f  docs/resident-signature-flags.md

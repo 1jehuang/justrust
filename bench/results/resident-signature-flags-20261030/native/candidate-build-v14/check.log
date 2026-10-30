@@ -1,0 +1,56 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+error[E0502]: cannot borrow `db` as mutable because it is also borrowed as immutable
+     --> crates/ra-jit/src/main.rs:11641:13
+      |
+11641 |             db.set_file_text(file, text);
+      |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ mutable borrow occurs here
+11642 |             hir::attach_db(&db, || {
+      |                                 -- immutable borrow occurs here
+11643 |                 let module = hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap();
+      |                                                   -- first borrow occurs due to use of `db` in closure
+...
+11671 |                         baseline.push((id, signature));
+      |                         -------- immutable borrow later captured here by closure
+
+For more information about this error, try `rustc --explain E0502`.
+error: could not compile `ra-jit` (bin "jr-engine" test) due to 1 previous error; 1 warning emitted
+
+error: could not compile `ra-jit` (bin "ra-jit" test) due to 1 previous error; 1 warning emitted
+
+
+justrust: FAILED to compile (1 error) in 30.3s
+  time    startup 0.23s | compile 29.99s | gaps 0.02s | after 0.02s
+  units   22 compiled (22 local, 0 deps, 0 build scripts), 414 fresh. Rebuilt because: hir-ty changed (4 crates); hir changed (3 crates); hir-def changed (2 crates)
+          hir_ty                             9.07s  cpu   9.0s   1129 MB
+          ra_jit (test)                      4.26s  cpu  10.6s   1370 MB
+          hir_def                            3.96s  cpu   3.9s    726 MB
+          jr_engine (test)                   3.60s  cpu   9.9s   1370 MB
+  cpu     57.1s total, avg 1.9/peak 3.8 of 16 cores; others used 3.2 cores
+  memory  peak 3645 MB build, 1370 MB largest rustc, 48.8 GB free; stalls cpu 0.24s mem 0.00s io 0.01s
+  output  3 warnings shown, 254 hidden; 471 progress and 0 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 15.0s  hir-ty, hir-ide, hir-ty-codegen, hir-ty-borrowck, hir, ide-db, blaze-doc, blaze-lints rebuilt only because hir, hir-def, hir-ty, hir-ty-wfcheck changed (edited vendor/rust-analyzer/crates/hir-def/src/signatures.rs and 1 more) (15.0s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~ 11.6s  15.4s went to recompiling oversized crates: hir_ty (80k lines, 9.1s, rebuilt for an upstream change), jr_engine (78k lines, 6.4s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+  more    `justrust log 20261030-095427948-579324` full output, `justrust show 20261030-095427948-579324` full profile

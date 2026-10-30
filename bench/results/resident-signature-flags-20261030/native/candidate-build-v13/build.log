@@ -1,0 +1,37 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: build succeeded, tests not run in 161.0s
+  time    startup 0.25s | compile 160.76s | gaps 0.01s | after 0.03s
+  units   15 compiled (15 local, 0 deps, 0 build scripts), 412 fresh. Rebuilt because: hir-ty changed (4 crates); hir changed (3 crates); hir-def changed (2 crates)
+          jr_engine                         57.64s  cpu 231.3s   2855 MB
+          hir_ty                            26.79s  cpu 161.9s   2088 MB
+          hir_ty_codegen                    16.65s  cpu  97.6s   1518 MB
+          hir_def                           15.01s  cpu  78.3s   1313 MB
+  cpu     787.8s total, avg 4.9/peak 6.4 of 16 cores; others used 3.1 cores
+  memory  peak 4573 MB build, 2855 MB largest rustc, 32.0 GB free; stalls cpu 1.33s mem 0.00s io 0.09s
+  output  3 warnings shown, 251 hidden; 458 progress and 0 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 84.9s  hir-ty, hir-ty-wfcheck, hir-ide, hir-ty-codegen, hir-ty-borrowck, hir, ide-db, blaze-doc, blaze-lints, ide-diagnostics rebuilt only because hir, hir-def, hir-ty, hir-ty-wfcheck changed (edited vendor/rust-analyzer/crates/hir-def/src/signatures.rs) (84.9s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~ 75.8s  105.7s went to recompiling oversized crates: jr_engine (78k lines, 57.6s), hir_ty (80k lines, 26.8s, rebuilt for an upstream change), hir_def (52k lines, 15.0s), ide_db (42k lines, 6.3s, rebuilt for an upstream change). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+  more    `justrust log 20261030-094734257-551851` full output, `justrust show 20261030-094734257-551851` full profile
