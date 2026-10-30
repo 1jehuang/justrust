@@ -80,8 +80,17 @@ impl type_check::Checker<'_> {
         kind: ir::BorrowKind,
         selected: &MethodSelection,
     ) -> Result<Option<(ir::ExprId, Option<ir::ImplicitBorrowKind>)>, String> {
+        let mut root = receiver;
+        let mut fields = Vec::new();
+        while let Expr::Field { base, field } = root {
+            if fields.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            fields.push(field);
+            root = base;
+        }
         let Some(carrier) =
-            self.overloaded_index_reference(kind, receiver, receiver as *const Expr as usize)?
+            self.overloaded_index_reference(kind, root, root as *const Expr as usize)?
         else {
             return Ok(None);
         };
@@ -104,9 +113,36 @@ impl type_check::Checker<'_> {
             .and_then(|bytes| bytes.checked_add(128))
             .ok_or_else(|| "resource limit: indexed receiver allocation overflow".to_string())?;
         self.charge_node(allocation)?;
+        let mut projection = Vec::new();
+        let mut projected_ty = carrier_ty.clone();
+        for field in fields.into_iter().rev() {
+            while let ir::Ty::Ref {
+                kind: layer,
+                referent,
+            } = &projected_ty
+            {
+                if kind == ir::BorrowKind::Mut && *layer == ir::BorrowKind::Shared {
+                    return Err("cannot borrow as mutable through a shared reference".into());
+                }
+                if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                    return Err("place projection nesting exceeds limit128".into());
+                }
+                projection.push(ir::Projection::Deref);
+                projected_ty = referent.as_ref().clone();
+            }
+            let (index, ty) = self.field_type(&projected_ty, field)?;
+            projection.push(ir::Projection::Field(index));
+            projected_ty = ty;
+        }
+        let remaining = if projection.is_empty() {
+            projection_count
+        } else {
+            projection_count - 1
+        };
+        projection.extend(std::iter::repeat_n(ir::Projection::Deref, remaining));
+        self.charge_node(projection.len() * std::mem::size_of::<ir::Projection>())?;
         let local = self.temporary("$index_receiver", carrier_ty, false)?;
         self.borrow_temporaries.push((local, false));
-        let projection = std::iter::repeat_n(ir::Projection::Deref, projection_count).collect();
         let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
         let ty = self.exprs[borrowed.0].ty.clone();
         let completion = self.exprs[carrier.0].completion;

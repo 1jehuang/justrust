@@ -12,6 +12,35 @@ mod closure_oracle;
 mod stock_rustc;
 
 #[test]
+fn indexed_field_method_receivers_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "indexed-field-method-receivers",
+        &[
+            Case {
+                name: "vec_noncopy_field_shared_receiver",
+                source: r#"struct Record { name: String }
+fn main() { let records=vec![Record{name:"hello".into()}]; println!("{}",records[0].name.as_str()); println!("{}",records[0].name.as_str()); }"#,
+                expect: Expect::Run("hello\nhello\n"),
+            },
+            Case {
+                name: "vec_nested_field_mutable_receiver",
+                source: r#"struct Inner { name: String } struct Record { inner: Inner }
+fn main() { let mut records=vec![Record{inner:Inner{name:String::from("hello")}}]; records[0].inner.name.push_str("!"); println!("{}",records[0].inner.name.as_str()); }"#,
+                expect: Expect::Run("hello!\n"),
+            },
+            Case {
+                name: "shared_vec_cannot_mutate_field",
+                source: r#"struct Record { name: String }
+fn main() { let records=vec![Record{name:String::from("hello")}]; let shared=&records; (*shared)[0].name.push_str("!"); }"#,
+                expect: Expect::Invalid("E0596"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn returned_reference_reborrows_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check_with_compiler(
