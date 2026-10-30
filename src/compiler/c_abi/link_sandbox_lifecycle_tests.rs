@@ -97,7 +97,7 @@ fn controlled_link_floods_never_publish_success_or_wait_for_wall_limit() {
         let source = scratch.0.join("probe.c");
         fs::write(&source, format!(r#"
 static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}}
-void _start(void){{
+__attribute__((force_align_arg_pointer)) void _start(void){{
  char bytes[4096];for(long i=0;i<4096;i++)bytes[i]='x';
  long left={size};while(left>0){{long n=left>4096?4096:left;long written=call(1,{fd},(long)bytes,n);if(written<=0)break;left-=written;}}
  long delay[2]={{0,100000000}};if({linger})for(;;)call(35,(long)delay,0,0);
@@ -107,6 +107,7 @@ void _start(void){{
         let compiled = Command::new("cc")
             .args([
                 "-nostdlib",
+                "-ffreestanding",
                 "-static",
                 "-fno-stack-protector",
                 "-no-pie",
