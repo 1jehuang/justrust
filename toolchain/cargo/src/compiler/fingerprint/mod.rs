@@ -1900,12 +1900,16 @@ fn calculate_normal(
     // Fill out a bunch more information that we'll be tracking typically
     // hashed to take up less space on disk as we just need to know when things
     // change.
-    let extra_flags = if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
+    let mut extra_flags = if unit.mode.is_doc() || unit.mode.is_doc_scrape() {
         &unit.rustdocflags
     } else {
         &unit.rustflags
     }
     .to_vec();
+
+    if let Some(flag) = super::jr_frontend::flag(build_runner, unit) {
+        extra_flags.push(flag);
+    }
 
     let profile_hash = util::hash_u64((
         &unit.profile,

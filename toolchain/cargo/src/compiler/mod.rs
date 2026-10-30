@@ -39,6 +39,7 @@ mod custom_build;
 pub(crate) mod fingerprint;
 pub mod future_incompat;
 pub(crate) mod job_queue;
+mod jr_frontend;
 pub(crate) mod layout;
 mod links;
 mod locking;
@@ -1370,6 +1371,9 @@ fn build_base_args(
     assert!(!unit.mode.is_run_custom_build());
 
     let bcx = build_runner.bcx;
+    if let Some(flag) = jr_frontend::flag(build_runner, unit) {
+        cmd.arg(flag);
+    }
     let Profile {
         ref opt_level,
         codegen_backend,

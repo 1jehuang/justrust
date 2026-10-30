@@ -123,6 +123,7 @@ mod install;
 mod install_upgrade;
 mod jobserver;
 mod jr_critical_path;
+mod jr_frontend;
 mod lints;
 mod lints_table;
 mod list_availables;
