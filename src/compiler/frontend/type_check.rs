@@ -5867,7 +5867,8 @@ impl<'a> Checker<'a> {
                 facts
                     .normal_drop_plan(ty)
                     .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?,
-                super::super::traits::NormalDropPlan::Destructor(_)
+                super::super::traits::NormalDropPlan::Destructor(ref destructor)
+                    if destructor.own_target().is_some() || !matches!(ty, ir::Ty::Tuple(_))
             )
         {
             return Err("unsupported: destructuring a normal Drop owner".into());

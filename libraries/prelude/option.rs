@@ -97,6 +97,16 @@ impl<T> Option<T> {
         }
     }
 
+    pub fn zip<U>(self, other: Option<U>) -> Option<(T, U)> {
+        match self {
+            Option::Some(left) => match other {
+                Option::Some(right) => Option::Some((left, right)),
+                Option::None => Option::None,
+            },
+            Option::None => Option::None,
+        }
+    }
+
     pub fn xor(self, other: Option<T>) -> Option<T> {
         match self {
             Option::Some(value) => match other {
@@ -167,6 +177,15 @@ impl<T> Option<T> {
 
 pub struct OptionIter<'a, T> {
     inner: Option<&'a T>,
+}
+
+impl<T, U> Option<(T, U)> {
+    pub fn unzip(self) -> (Option<T>, Option<U>) {
+        match self {
+            Option::Some((left, right)) => (Option::Some(left), Option::Some(right)),
+            Option::None => (Option::None, Option::None),
+        }
+    }
 }
 
 impl<'a, T> super::iter::Iterator for OptionIter<'a, T> {

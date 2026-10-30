@@ -5,6 +5,85 @@
 mod closure_oracle;
 
 #[test]
+fn option_pairs_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "option-pairs",
+        &[
+            Case {
+                name: "all_zip_branches_and_heterogeneous_unzip",
+                source: r#"fn main() {
+                    let (left, right) = Some(3i32).zip(Some(true)).unwrap();
+                    println!("{} {}", left, right);
+                    println!("{} {} {}", Some(1).zip(None::<bool>).is_none(), None::<i32>.zip(Some(true)).is_none(), None::<i32>.zip(None::<bool>).is_none());
+                    let (left, right) = Some((7i32, false)).unzip();
+                    println!("{} {}", left.unwrap(), right.unwrap());
+                    let (left, right) = None::<(i32, bool)>.unzip();
+                    println!("{} {}", left.is_none(), right.is_none());
+                }"#,
+                expect: Expect::Run("3 true\ntrue true true\n7 false\ntrue true\n"),
+            },
+            Case {
+                name: "zip_evaluates_both_operands_left_to_right",
+                source: r#"fn left() -> Option<i32> { println!("left"); None }
+                fn right() -> Option<bool> { println!("right"); Some(true) }
+                fn main() { println!("{}", left().zip(right()).is_none()); }"#,
+                expect: Expect::Run("left\nright\ntrue\n"),
+            },
+            Case {
+                name: "noncopy_pairs_transfer_and_drop_in_order",
+                source: r#"struct Value { id: i32 }
+                impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.id); } }
+                fn main() {
+                    { let pair = Some(Value { id: 1 }).zip(Some(Value { id: 2 }));
+                      println!("paired"); let (left, right) = pair.unzip();
+                      { let value = left.unwrap(); println!("left {}", value.id); }
+                      { let value = right.unwrap(); println!("right {}", value.id); } }
+                    println!("{}", Some(Value { id: 3 }).zip(None::<Value>).is_none());
+                    println!("{}", None::<Value>.zip(Some(Value { id: 4 })).is_none());
+                    { let pair = Some(Value { id: 5 }).zip(Some(Value { id: 6 })); println!("discard pair"); }
+                }"#,
+                expect: Expect::Run(
+                    "paired\nleft 1\ndrop 1\nright 2\ndrop 2\ndrop 3\ntrue\ndrop 4\ntrue\ndiscard pair\ndrop 5\ndrop 6\n",
+                ),
+            },
+            Case {
+                name: "tuple_partial_binding_retains_unmoved_sibling_cleanup",
+                source: r#"struct Value { id: i32 }
+                impl Drop for Value { fn drop(&mut self) { println!("drop {}", self.id); } }
+                fn main() {
+                    { let pair = (Value { id: 1 }, Value { id: 2 });
+                      let (left, _) = pair; println!("left {}", left.id); }
+                    { let pair = (Value { id: 3 }, Value { id: 4 });
+                      let (_, right) = pair; println!("right {}", right.id); }
+                }"#,
+                expect: Expect::Run("left 1\ndrop 1\ndrop 2\nright 4\ndrop 4\ndrop 3\n"),
+            },
+            Case {
+                name: "zip_requires_option_even_in_unused_body",
+                source: "fn unused(){let _=Some(1).zip(true);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unzip_requires_pair_even_in_unused_body",
+                source: "fn unused(){let _=Some(1).unzip();}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "zip_moves_noncopy_input",
+                source: "struct Value;fn main(){let value=Some(Value);let _=value.zip(Some(1));let _=value.unwrap();}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "unzip_moves_noncopy_pair",
+                source: "struct Value;fn main(){let value=Some((Value,1));let _=value.unzip();let _=value.unwrap();}",
+                expect: Expect::Invalid("E0382"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn option_reference_values_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

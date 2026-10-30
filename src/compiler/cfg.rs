@@ -4384,7 +4384,10 @@ impl Lowerer<'_> {
                     ty,
                     bindings,
                 } => {
-                    if drop_normal::descriptor(ty, self.facts)?.is_some() && !bindings.is_empty() {
+                    if let Some(destructor) = drop_normal::descriptor(ty, self.facts)?
+                        && !bindings.is_empty()
+                        && (destructor.own_target().is_some() || !matches!(ty, Ty::Tuple(_)))
+                    {
                         return Err("unsupported: destructuring a normal Drop owner".into());
                     }
                     self.source.validate_pattern_bindings_with_facts(

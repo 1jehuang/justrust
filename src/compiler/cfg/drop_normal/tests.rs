@@ -15,6 +15,71 @@ fn publish(text: &str, budget: &ir::PlanBudget) -> Arc<CanonicalSourcePublicatio
 const TWO: &str = "fn f(){let a=D{v:1};let b=D{v:2};} struct D{v:i32} impl Drop for D{fn drop(&mut self){self.v=0;}} fn main(){}";
 
 #[test]
+fn structural_tuple_destructuring_retains_move_and_cleanup_proof() {
+    for pattern in ["(left, right)", "(left, _)", "(_, right)"] {
+        let text = format!(
+            "fn f(){{let pair=(D{{v:1}},D{{v:2}});let {pattern}=pair;}} struct D{{v:i32}} impl Drop for D{{fn drop(&mut self){{}}}} fn main(){{}}"
+        );
+        let budget = ir::PlanBudget::default();
+        let publication = publish(&text, &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        ownership::analyze_closed(
+            close(
+                Arc::new(function.clone()),
+                publication.facts().clone(),
+                &budget,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        let mut forged = function;
+        let operand = forged
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find_map(|statement| match &mut statement.value {
+                Statement::Assign {
+                    value: Rvalue::Use(operand),
+                    ..
+                } => {
+                    let selected = matches!(
+                        &*operand,
+                        Operand::Move(place) if !place.projection.is_empty()
+                    );
+                    selected.then_some(operand)
+                }
+                _ => None,
+            })
+            .expect("tuple binding must move a selected field");
+        let Operand::Move(selected) = operand else {
+            unreachable!()
+        };
+        *operand = Operand::Copy(selected.clone());
+        assert!(
+            forged
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        assert!(close(Arc::new(forged), publication.facts().clone(), &budget).is_err());
+    }
+}
+
+#[test]
+fn structural_tuple_admission_does_not_allow_own_drop_destructuring() {
+    let text = "fn f(){let owner=Owner{child:D{v:1}};let Owner{child}=owner;} struct D{v:i32} impl Drop for D{fn drop(&mut self){}} struct Owner{child:D} impl Drop for Owner{fn drop(&mut self){}} fn main(){}";
+    let budget = ir::PlanBudget::default();
+    let program = frontend::parse(text).unwrap();
+    let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    assert!(
+        context
+            .publish_callable_body(context.function_decl(0).unwrap(), &budget)
+            .is_err(),
+        "an owner's own Drop must still prohibit extracting its non-Copy field"
+    );
+}
+
+#[test]
 fn own_drop_enum_borrow_copy_and_wildcard_are_not_e0509() {
     for body in [
         "match e{E::One(ref d)=>()}",
