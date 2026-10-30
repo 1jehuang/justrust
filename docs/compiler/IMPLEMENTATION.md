@@ -2059,7 +2059,7 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       | Network/unlocked/alternate registry acquisition, noncanonical cache aliases, Cargo configuration, reviewed probes, external tools/linkers | Legacy compatibility remains explicitly unproven or frozen mode rejects. Archive links and unsupported header extensions reject. |
       | Compiler runtime evidence on Linux/x86-64 | Executable/mapped code and bounded process configuration. Canonical MXCSR/x87 control state is required and rechecked across capture; sticky exception status is excluded. Unsupported floating environments cannot mint evidence. Arbitrary mutable process state is not sealed. |
       | Build scripts, proc macros, arbitrary process/in-memory state, atomic host snapshots | Not closed by this namespace capture. Complete-input-capture remains incomplete. |
-      | Artifact reuse and global sharing | Disabled. No persistent or global private cache is enabled by this foundation. |
+      | Artifact reuse and global sharing | Explicit opt-in trusted-local reuse is available for supported owned lowering, optimization, machine-object and native-link operations. It does not restore graph authority or authorize global sharing. Global artifact sharing remains disabled. See `GLOBAL-CACHE-CONTRACT.md`. |
 
       Controlled GNU/glibc native linking now captures the linker, ELF interpreter,
       transitive shared libraries, startup objects and selected c/m libraries into
