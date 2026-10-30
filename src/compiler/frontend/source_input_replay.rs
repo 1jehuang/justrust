@@ -295,6 +295,7 @@ pub(super) fn supported(
     node: &sr::SourceNode,
     function: &Function,
     inventory: &SourceInventory,
+    original: Option<&OriginalSource>,
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<bool, FactsError> {
@@ -326,6 +327,7 @@ pub(super) fn supported(
                 &site.node.child(3, 0, budget)?,
                 function,
                 inventory,
+                original,
                 budget,
                 depth + 1,
             )
@@ -337,6 +339,7 @@ pub(super) fn supported(
                     &node.child(12, index, budget)?,
                     function,
                     inventory,
+                    original,
                     budget,
                     depth + 1,
                 )? {
@@ -352,6 +355,7 @@ pub(super) fn supported(
                     &node.child(14, index, budget)?,
                     function,
                     inventory,
+                    original,
                     budget,
                     depth + 1,
                 )? {
@@ -367,6 +371,7 @@ pub(super) fn supported(
                     &node.child(14, index, budget)?,
                     function,
                     inventory,
+                    original,
                     budget,
                     depth + 1,
                 )? {
@@ -382,6 +387,7 @@ pub(super) fn supported(
                     &node.child(14, index, budget)?,
                     function,
                     inventory,
+                    original,
                     budget,
                     depth + 1,
                 )? {
@@ -395,6 +401,7 @@ pub(super) fn supported(
             &node.child(7, 0, budget)?,
             function,
             inventory,
+            original,
             budget,
             depth + 1,
         ),
@@ -403,6 +410,7 @@ pub(super) fn supported(
             &node.child(11, 0, budget)?,
             function,
             inventory,
+            original,
             budget,
             depth + 1,
         ),
@@ -413,6 +421,7 @@ pub(super) fn supported(
                     &node.child(9, index, budget)?,
                     function,
                     inventory,
+                    original,
                     budget,
                     depth + 1,
                 )? {
@@ -430,8 +439,86 @@ pub(super) fn supported(
             && args.is_empty()
             && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
         {
-            // This is syntax eligibility only. Replay below authenticates the
-            // exact source occurrence, declaration schema and receiver root.
+            // Intrinsic candidates have their own canonical occurrence proof
+            // (for example SliceLen), not a source Call producer receipt.
+            // Conservatively keep these source occurrences on that existing
+            // proof path. This excludes candidates only, never grants intrinsic
+            // authority from a method spelling or a checked result type.
+            sr::work(budget, inventory.calls.len())?;
+            let Some(site) = inventory.calls.iter().find(|site| site.node == *node) else {
+                return Ok(false);
+            };
+            if let Some(original) = original {
+                let index = inventory
+                    .calls
+                    .iter()
+                    .position(|site| site.node == *node)
+                    .ok_or_else(|| {
+                        FactsError::invalid(budget, "method producer occurrence missing")
+                    })?;
+                sr::work(budget, original.call_mapping.len())?;
+                sr::work(
+                    budget,
+                    original.builtin_len_mapping.len()
+                        + original.builtin_leading_zeros_mapping.len()
+                        + original.builtin_intrinsic_mapping.len(),
+                )?;
+                if original
+                    .builtin_len_mapping
+                    .iter()
+                    .any(|row| row.source_index == index)
+                    || original
+                        .builtin_leading_zeros_mapping
+                        .iter()
+                        .any(|row| row.source_index == index)
+                    || original
+                        .builtin_intrinsic_mapping
+                        .iter()
+                        .any(|row| row.source_index == index)
+                {
+                    return Ok(false);
+                }
+                let (_, _, target) = original
+                    .call_mapping
+                    .iter()
+                    .find(|(source, _, _)| *source == index)
+                    .ok_or_else(|| {
+                        FactsError::invalid(budget, "method producer original receipt missing")
+                    })?;
+                let ir::Callee::Direct(target) = target else {
+                    return Ok(false);
+                };
+                let view = original.facts.original_callable_schema(
+                    tr::OriginalCallableSubject::Direct(target.declaration),
+                )?;
+                view.validate_for(&original.facts)?;
+                if !target.type_args.is_empty()
+                    || view.generic_env().total_arity() != 0
+                    || !original.facts.is_source_callable(target.declaration)?
+                {
+                    return Ok(false);
+                }
+                let declaration = original
+                    .plan
+                    .registry
+                    .declaration(target.declaration)
+                    .map_err(|e| source_error(budget, &e))?;
+                if declaration.path.associated.is_none()
+                    || !matches!(
+                        declaration.receiver,
+                        ReceiverKind::Borrowed {
+                            kind: ir::BorrowKind::Shared
+                        }
+                    )
+                {
+                    return Ok(false);
+                }
+            } else if site.len_candidate || site.leading_zeros_candidate || site.intrinsic_candidate
+            {
+                return Ok(false);
+            }
+            // Source method replay still authenticates the exact declaration,
+            // original source occurrence and lexical receiver root.
             let receiver = node.child(10, 0, budget)?;
             Ok(inventory.operand_nodes.contains_key(&receiver.path))
         }
@@ -1876,6 +1963,63 @@ mod literal_context_tests {
     use super::*;
 
     #[test]
+    fn builtin_method_producers_keep_canonical_occurrence_authority() {
+        let program = parse("fn consume(a:&usize){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();consume(&n);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected source")
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        let function = plan.callable_body(&plan.program, declaration).unwrap();
+        let inventory =
+            SourceInventory::build(&plan.program, function, original.identity.clone(), &budget)
+                .unwrap();
+        let call = inventory
+            .calls
+            .iter()
+            .position(|site| site.ordinary.is_some())
+            .unwrap();
+        assert!(
+            !recursive_argument_sources_supported(&plan, declaration, &inventory, call, &budget)
+                .unwrap()
+        );
+        assert!(
+            !recursive_argument_sources_supported_with_original(
+                &plan,
+                declaration,
+                &inventory,
+                call,
+                Some(&original),
+                &budget,
+            )
+            .unwrap()
+        );
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        let length = checked
+            .exprs
+            .iter()
+            .position(|expr| matches!(expr.kind, ir::ExprKind::SliceLen { .. }))
+            .unwrap();
+        for mutation in 0..2 {
+            let mut forged = checked.as_ref().clone();
+            if mutation == 0 {
+                forged.exprs[length].ty = ir::Ty::Bool;
+            } else {
+                forged.exprs[length].kind = ir::ExprKind::Bool(true);
+            }
+            let error =
+                replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                    .expect_err("forged builtin length must fail");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+    }
+
+    #[test]
     fn source_concrete_method_producer_rejects_forged_authority() {
         for source in [
             "struct Owner{n:i32}impl Owner{fn get(&self)->&i32{&self.n}}fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let owner=Owner{n:7};let sibling=Owner{n:9};let row;{let rows=[(owner.get(),3usize)];row=first(&rows);}}",
@@ -1931,8 +2075,7 @@ mod literal_context_tests {
                 }
                 let error =
                     replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
-                        .err()
-                        .expect("forged method evidence must fail");
+                        .expect_err("forged method evidence must fail");
                 assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
             }
             let mut forged = original.clone();
@@ -1940,8 +2083,7 @@ mod literal_context_tests {
                 .call_mapping
                 .retain(|(_, expression, _)| *expression != method);
             let error = replay_source_body(&forged, checked, publication.facts(), &budget)
-                .err()
-                .expect("missing original method receipt must fail");
+                .expect_err("missing original method receipt must fail");
             assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
         }
     }

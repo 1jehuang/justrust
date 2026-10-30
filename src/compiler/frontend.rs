@@ -6762,6 +6762,24 @@ fn recursive_argument_sources_supported(
     index: usize,
     budget: &ir::PlanBudget,
 ) -> Result<bool, FactsError> {
+    recursive_argument_sources_supported_with_original(
+        plan,
+        declaration,
+        inventory,
+        index,
+        None,
+        budget,
+    )
+}
+
+fn recursive_argument_sources_supported_with_original(
+    plan: &PlanCtx,
+    declaration: ir::DeclId,
+    inventory: &SourceInventory,
+    index: usize,
+    original: Option<&OriginalSource>,
+    budget: &ir::PlanBudget,
+) -> Result<bool, FactsError> {
     let Some(arguments) = inventory.argument_syntax.get(&index) else {
         return Ok(false);
     };
@@ -6770,7 +6788,9 @@ fn recursive_argument_sources_supported(
         .map_err(|e| source_error(budget, &e))?;
     for (position, argument) in arguments.iter().enumerate() {
         let node = inventory.calls[index].node.child(9, position, budget)?;
-        if !source_input_replay::supported(argument, &node, function, inventory, budget, 0)? {
+        if !source_input_replay::supported(
+            argument, &node, function, inventory, original, budget, 0,
+        )? {
             return Ok(false);
         }
     }
@@ -7470,11 +7490,12 @@ pub(super) fn replay_source_body_with_scratch(
             new_reference |= contains_source_ref(actual, budget, 0)?;
         }
         let generalized = shared_local_input_candidate(&view, signature, args.len(), budget)?
-            && recursive_argument_sources_supported(
+            && recursive_argument_sources_supported_with_original(
                 &original.plan,
                 original.declaration,
                 &fresh,
                 index,
+                Some(original),
                 budget,
             )?;
         if !new_reference && !generalized {

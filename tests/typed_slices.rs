@@ -444,6 +444,21 @@ fn stock_all() {
 fn shared_reference_elements_stock_native_workers1_8() {
     let cases = [
         (
+            "cloned_vec_keeps_canonical_mut_slice_adaptation",
+            r###"fn touch<T:Copy>(s:&mut[T]){let first=s[0];s[0]=first;}fn main(){let data=vec![3i32,1,2];let mut cloned=data.clone();touch(&mut cloned);if cloned[0]==3i32&&data[0]==3i32{println!("ok");}}"###,
+            true,
+        ),
+        (
+            "cloned_vec_requires_mutable_slice_receiver",
+            r###"fn touch<T:Copy>(s:&mut[T]){}fn main(){let data=vec![3i32,1,2];let cloned=data.clone();touch(&mut cloned);}"###,
+            false,
+        ),
+        (
+            "cloned_vec_cannot_mutate_while_shared_element_live",
+            r###"fn touch<T:Copy>(s:&mut[T]){}fn main(){let data=vec![3i32,1,2];let mut cloned=data.clone();let item=&cloned[0];touch(&mut cloned);println!("{}",*item);}"###,
+            false,
+        ),
+        (
             "shared_tuple_elements_keep_original_borrow",
             r###"fn first<T:Copy>(s:&[T])->T{s[0]}fn main(){let text=String::from("ok");let row;{let rows=[(text.as_str(),3usize)];row=first(&rows);}if row.1==3usize{println!("{}",row.0);}}"###,
             true,
