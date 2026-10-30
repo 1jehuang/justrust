@@ -871,12 +871,14 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
     let key = request_key(&req);
     let roots = source_roots(&cwd);
     let (stamp, _files) = source_stamp(&roots, &cwd, &req.env);
+    let scan_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let wait_start = Instant::now();
     if !req.prebuild {
         cancel_stale_prebuild(dm, &key, &stamp);
         cancel_wrong_guess(dm, &key, &session_of(&req));
         settle_compile_only(dm, &key, &stamp);
     }
-    let waited_ms = t0.elapsed().as_secs_f64() * 1000.0;
+    let waited_ms = wait_start.elapsed().as_secs_f64() * 1000.0;
     let (build, attached, replayed) = {
         let mut st = dm.state.lock().unwrap();
         st.served += 1;
@@ -956,7 +958,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         return Ok(());
     }
     log(&format!(
-        "{} {} in {} ({:.1} ms, {:.0} ms waiting for a compile-only prebuild, stamp {})",
+        "{} {} in {} ({:.1} ms lookup, {:.1} ms source validation, {:.1} ms prebuild coordination, stamp {})",
         if replayed {
             "replay"
         } else if attached {
@@ -967,6 +969,7 @@ fn run(dm: &Arc<Daemon>, req: Request, mut s: UnixStream) -> Result<()> {
         req.argv.join(" "),
         req.cwd,
         lookup_ms,
+        scan_ms,
         waited_ms,
         &build.stamp[..8]
     ));
