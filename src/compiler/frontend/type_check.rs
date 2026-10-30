@@ -10072,6 +10072,14 @@ impl<'a> Checker<'a> {
                     scrutinee_scope: false,
                 }
             }
+            // A diverging operand (`loop {} as u8`) coerces to any castable type.
+            // No value is produced, so evaluate the operand as a statement.
+            (ir::Ty::Never, ir::Ty::Int(_) | ir::Ty::Float(_)) => {
+                ir::ExprKind::Block(ir::TypedBlock {
+                    statements: vec![ir::TypedStmt::Expr(value)],
+                    tail: None,
+                })
+            }
             _ => {
                 let from = ir::NumTy::of(&source.ty).ok_or_else(|| {
                     if matches!(source.ty, ir::Ty::Bool) {

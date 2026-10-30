@@ -1655,16 +1655,19 @@ fn cast_completion_and_once_only_operands_do_not_create_values_or_origins() {
     };
     assert_eq!(dead.exprs[value.0].ty, ir::Ty::Int(ir::IntTy::I32));
     assert_eq!(dead.exprs[value.0].completion, ir::Completion::Never);
+    // Stock accepts diverging and bool operands.
     for source in [
         "fn main(){let x=(loop{}) as u8;}",
         "fn main(){let x=true as u8;}",
-        "fn main(){let x=1i32;let r=&x;let n=r as usize;}",
     ] {
+        parse(source).and_then(|p| check(&p)).unwrap();
+    }
+    for source in ["fn main(){let x=1i32;let r=&x;let n=r as usize;}"] {
         assert!(
             parse(source)
                 .and_then(|p| check(&p))
                 .unwrap_err()
-                .contains("unsupported")
+                .contains("E0606")
         );
     }
     let within = format!("fn main(){{let x=1i32{};}}", " as u8".repeat(120));

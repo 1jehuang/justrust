@@ -1820,7 +1820,8 @@ fn finite_drop_presence_finishes_every_owning_equation_before_answering() {
             argument(&ir::Ty::Bool, caller, &budget, 0).unwrap(),
             (false, 0)
         );
-        assert!(argument(&root, ir::FactsCtx::Concrete, &budget, 0).is_err());
+        // Closed callers reuse the authenticated component height.
+        assert!(argument(&root, ir::FactsCtx::Concrete, &budget, 0).is_ok());
         assert!(
             !publication
                 .facts()

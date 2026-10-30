@@ -281,8 +281,8 @@ fn raw_projection_inventory_uses_exact_closed_component_without_admitting_it() {
         assert!(capability.is_component());
         let realized = capability.definition().unwrap();
         assert!(!raw_type_has_projection(&realized, &budget, 0).unwrap());
-        // Projection inventory is not executable admission under raw facts.
-        assert!(validate_argument(&realized, ir::FactsCtx::Concrete, &budget, 0).is_err());
+        // A closed caller reuses the authenticated component height.
+        assert!(validate_argument(&realized, ir::FactsCtx::Concrete, &budget, 0).is_ok());
         let ir::Ty::Struct(original) = &realized else {
             panic!("expected Ingress struct")
         };

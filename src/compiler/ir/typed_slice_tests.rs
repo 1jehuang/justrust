@@ -324,7 +324,10 @@ fn shared_slice_carrier_domain_is_typed_and_cannot_be_forged_into_an_array() {
     let mutable = Ty::Ref {
         kind: BorrowKind::Mut,
         referent: Arc::new(Ty::Slice {
-            element: Arc::new(shared(Ty::Bool)),
+            element: Arc::new(Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Bool),
+            }),
         }),
     };
     assert!(
