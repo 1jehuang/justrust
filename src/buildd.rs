@@ -547,6 +547,27 @@ fn normalize(p: &Path) -> PathBuf {
 /// `.cargo`, whose config changes builds), plus cargo config files in the
 /// ancestors of `cwd` and in CARGO_HOME.
 pub fn source_stamp(roots: &[PathBuf], cwd: &Path, env: &[(String, String)]) -> (String, usize) {
+    source_stamp_observed(roots, cwd, env, |_| {})
+}
+
+// The empty production observer is optimized away. The ignored diagnostic
+// below measures the actual traversal without changing its inputs or policy.
+fn source_stamp_observed(
+    roots: &[PathBuf],
+    cwd: &Path,
+    env: &[(String, String)],
+    phase: impl FnMut(&'static str),
+) -> (String, usize) {
+    source_stamp_with_sort(roots, cwd, env, phase, sort_stamp_root_entries)
+}
+
+fn source_stamp_with_sort(
+    roots: &[PathBuf],
+    cwd: &Path,
+    env: &[(String, String)],
+    mut phase: impl FnMut(&'static str),
+    mut sort: impl FnMut(&mut [(PathBuf, std::fs::Metadata)]),
+) -> (String, usize) {
     let mut h = crate::depcache::H128::new();
     let mut files = 0usize;
     let mut add = |p: &Path, m: &std::fs::Metadata| {
@@ -558,6 +579,7 @@ pub fn source_stamp(roots: &[PathBuf], cwd: &Path, env: &[(String, String)]) -> 
         h.field(&crate::sys::file_id(m).1.to_le_bytes());
     };
     for r in roots {
+        phase("root-start");
         let mut stack = vec![r.clone()];
         let mut entries: Vec<(PathBuf, std::fs::Metadata)> = Vec::new();
         while let Some(d) = stack.pop() {
@@ -581,11 +603,16 @@ pub fn source_stamp(roots: &[PathBuf], cwd: &Path, env: &[(String, String)]) -> 
                 }
             }
         }
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        phase("enumerate-metadata");
+        sort(&mut entries);
+        phase("sort");
         files += entries.len();
         for (p, m) in &entries {
             add(p, m);
         }
+        phase("hash");
+        drop(entries);
+        phase("drop-entries");
     }
     let cargo_home = env
         .iter()
@@ -605,7 +632,41 @@ pub fn source_stamp(roots: &[PathBuf], cwd: &Path, env: &[(String, String)]) -> 
             add(&c, &m);
         }
     }
+    phase("configs");
     (h.hex(), files)
+}
+
+/// These paths come from readdir under one unchanged root spelling. Their
+/// common prefix may contain `.`/`..` or repeated separators, but every suffix
+/// component is a real directory entry, never `.` or `..`. On Unix, replacing
+/// separators with NUL gives exactly Path's component order: a component end
+/// sorts before every filename byte. NUL cannot occur in a filesystem name.
+///
+/// Reuse the owned path buffers, sort raw keys, then restore every byte before
+/// hashing. No metadata is reused between traversals and no path is omitted.
+fn sort_stamp_root_entries<T>(entries: &mut [(PathBuf, T)]) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::{OsStrExt, OsStringExt};
+        let replace = |path: &mut PathBuf, from, to| {
+            let mut bytes = std::mem::take(path).into_os_string().into_vec();
+            for byte in &mut bytes {
+                if *byte == from {
+                    *byte = to;
+                }
+            }
+            *path = std::ffi::OsString::from_vec(bytes).into();
+        };
+        for (path, _) in entries.iter_mut() {
+            replace(path, b'/', 0);
+        }
+        entries.sort_by(|a, b| a.0.as_os_str().as_bytes().cmp(b.0.as_os_str().as_bytes()));
+        for (path, _) in entries.iter_mut() {
+            replace(path, 0, b'/');
+        }
+    }
+    #[cfg(not(unix))]
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
 }
 
 /// Request identity without the source stamp: cwd, argv, and the
@@ -1522,6 +1583,125 @@ fn reap(dm: &Daemon, key: &str, b: &Arc<Build>) {
 mod tests {
     use super::*;
 
+    #[test]
+    #[cfg(unix)]
+    fn stamp_component_keys_match_path_order_and_restore_bytes() {
+        use std::os::unix::ffi::OsStringExt;
+        for root in ["", ".", "./", "/", "//", "a/./b/../c//", "/a//./b/../c/"] {
+            let mut entries = Vec::new();
+            for suffix in ["a", "a/b", "a.b", "a-/b", ".hidden/x", "aa", "a../x"] {
+                entries.push((Path::new(root).join(suffix), entries.len()));
+            }
+            let mut state = 0x1234_5678_9abc_def0u64;
+            for index in 0..4000 {
+                let mut path = PathBuf::from(root);
+                for _ in 0..(index % 7 + 1) {
+                    let mut name = Vec::new();
+                    for _ in 0..(index % 13 + 1) {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        let mut byte = (state % 255 + 1) as u8;
+                        if byte == b'/' {
+                            byte = b'_';
+                        }
+                        name.push(byte);
+                    }
+                    if name == b"." || name == b".." {
+                        name.push(b'_');
+                    }
+                    path.push(std::ffi::OsString::from_vec(name));
+                }
+                entries.push((path, entries.len()));
+            }
+            let mut oracle = entries.clone();
+            oracle.sort_by(|a, b| a.0.cmp(&b.0));
+            sort_stamp_root_entries(&mut entries);
+            assert_eq!(entries, oracle, "root {root:?}");
+        }
+    }
+
+    #[test]
+    #[ignore = "controlled same-metadata full-checkout sort and hash oracle"]
+    fn source_stamp_sort_oracle_checkout() {
+        let cwd = std::env::var_os("JUSTRUST_STAMP_PROFILE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let roots = source_roots(&cwd);
+        let env: Vec<_> = std::env::vars().collect();
+        let hash = |entries: &[(PathBuf, std::fs::Metadata)]| {
+            let mut h = crate::depcache::H128::new();
+            for (path, metadata) in entries {
+                h.field(path.as_os_str().as_encoded_bytes());
+                h.field(&metadata.len().to_le_bytes());
+                let (s, ns) = crate::sys::mtime(metadata);
+                h.field(&s.to_le_bytes());
+                h.field(&ns.to_le_bytes());
+                h.field(&crate::sys::file_id(metadata).1.to_le_bytes());
+            }
+            h.hex()
+        };
+        for sample in 0..5 {
+            source_stamp_with_sort(
+                &roots,
+                &cwd,
+                &env,
+                |_| {},
+                |entries| {
+                    let mut oracle = entries.to_vec();
+                    let start = Instant::now();
+                    oracle.sort_by(|a, b| a.0.cmp(&b.0));
+                    let old_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    let start = Instant::now();
+                    sort_stamp_root_entries(entries);
+                    let new_ms = start.elapsed().as_secs_f64() * 1000.0;
+                    assert!(
+                        entries
+                            .iter()
+                            .zip(&oracle)
+                            .all(|(a, b)| a.0.as_os_str() == b.0.as_os_str())
+                    );
+                    let expected = hash(&oracle);
+                    assert_eq!(hash(entries), expected);
+                    eprintln!(
+                        "stamp-sort-oracle sample={sample} files={} old_ms={old_ms:.3} new_ms={new_ms:.3} identical_hash={expected}",
+                        entries.len()
+                    );
+                },
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "controlled full-checkout source stamp timing diagnostic"]
+    fn source_stamp_profile_checkout() {
+        let cwd = std::env::var_os("JUSTRUST_STAMP_PROFILE_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let roots = source_roots(&cwd);
+        let env: Vec<_> = std::env::vars().collect();
+        for sample in 0..5 {
+            let start = Instant::now();
+            let mut last = start;
+            let mut timings = std::collections::BTreeMap::<&str, Duration>::new();
+            let (stamp, files) = source_stamp_observed(&roots, &cwd, &env, |name| {
+                let now = Instant::now();
+                if name != "root-start" {
+                    *timings.entry(name).or_default() += now.duration_since(last);
+                }
+                last = now;
+            });
+            eprintln!(
+                "stamp-profile sample={sample} files={files} stamp={stamp} total_ms={:.3} phases_ms={:?}",
+                start.elapsed().as_secs_f64() * 1000.0,
+                timings
+                    .iter()
+                    .map(|(name, time)| (*name, time.as_secs_f64() * 1000.0))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+
     fn req(env: &[(&str, &str)], argv: &[&str]) -> Request {
         Request {
             build: String::new(),
@@ -1703,6 +1883,18 @@ mod tests {
         assert_eq!(roots, vec![dep.clone(), ws.clone()]);
         let (s0, n) = source_stamp(&roots, &ws, &[]);
         assert_eq!(n, 4);
+        assert_eq!(
+            source_stamp_with_sort(
+                &roots,
+                &ws,
+                &[],
+                |_| {},
+                |entries| {
+                    entries.sort_by(|a, b| a.0.cmp(&b.0));
+                }
+            ),
+            (s0.clone(), n)
+        );
         // Build output does not change the stamp.
         std::fs::write(ws.join("target/debug/x"), "x").unwrap();
         assert_eq!(source_stamp(&roots, &ws, &[]).0, s0);
