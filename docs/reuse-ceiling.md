@@ -274,3 +274,28 @@ profile-off/on native gate also passed all five cases, including binary artifact
 equality for successful compilations. Full benchmark Python discovery passed
 508 tests in 9.617 seconds. These are correctness and observation checks, not a
 performance comparison or an established maximum reuse fraction.
+
+### Provider-only protocol correction
+
+Real-project replay exposed fed query values in the original shared hash/allocation
+path. See `bench/results/reexecuted-value-20261030/CORRECTION.md` and its retained
+`real-mixed/` captures. Original report bytes remain historical evidence, but their
+provider-only interpretation is withdrawn. Local `def_kind` has no provider and
+is fed when definitions are created.
+
+The distinct `native_provider_reexecution_results` field recognizes only:
+
+* `jr_incremental_provider_reexecuted_same_value`
+* `jr_incremental_provider_reexecuted_different_value`
+* `jr_incremental_provider_reexecuted_no_hash`
+* `jr_incremental_provider_eval_always_same_value`
+* `jr_incremental_provider_eval_always_different_value`
+* `jr_incremental_provider_eval_always_no_hash`
+
+These new labels are emitted only by the query-provider entry point. Fed values
+and generic non-query tasks are excluded. Legacy labels never populate this
+field, even if every other field is identical. Both inventories retain unknown
+absence and null avoidable-call, provider-time, CPU-work and saved-time values.
+Two additional regressions check historical separation, all six new marker
+shapes and unsafe names. Fresh native captures, not old mixed reports, must
+validate the corrected provider boundary.

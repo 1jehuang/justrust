@@ -116,6 +116,37 @@ class ReuseTests(unittest.TestCase):
             self.assertEqual(result['native_green_reuse']['markers'][marker]
                              ['records_without_query_name'], 1)
 
+    def test_provider_markers_do_not_reinterpret_legacy_feed_records(self):
+        legacy = rc.REEXECUTION_MARKERS[0]
+        provider = rc.PROVIDER_REEXECUTION_MARKERS[0]
+        rows = [self.marker(label=legacy), self.marker(label=provider)]
+        rows[1]['event_id'] += 1
+        args = {rows[0]['event_id']: legacy + '\x1edef_kind',
+                rows[1]['event_id']: provider + '\x1etype_of'}
+        result = rc.summarize_records(rows, args.__getitem__)
+        old = result['native_reexecution_results']
+        new = result['native_provider_reexecution_results']
+        self.assertEqual(old['markers'][legacy]['query_name_interval_records'], {'def_kind': 1})
+        self.assertEqual(new['markers'][provider]['query_name_interval_records'], {'type_of': 1})
+        self.assertIn('Fed results and generic non-query tasks excluded', new['scope'])
+        self.assertIsNone(new['avoidable_provider_calls'])
+        self.assertIsNone(new['provider_elapsed_ns'])
+        self.assertNotIn(legacy, new['markers'])
+        absent = rc.summarize_records([rows[0]], args.__getitem__)['native_provider_reexecution_results']
+        self.assertTrue(all(v['interval_records'] is None for v in absent['markers'].values()))
+
+    def test_provider_marker_validation_all_six(self):
+        for label in rc.PROVIDER_REEXECUTION_MARKERS:
+            for change in ({'kind': 'Query'}, {'record_type': 'instant'},
+                           {'thread': -1}, {'end_ns': -1}):
+                row = self.marker(label=label)
+                row.update(change)
+                with self.subTest(label=label, change=change), self.assertRaises(ValueError):
+                    rc.summarize_records([row])
+            result = rc.summarize_records([self.marker(label=label)], lambda _: label + '\x1eprivate/path')
+            self.assertEqual(result['native_provider_reexecution_results']['markers'][label]
+                             ['records_without_query_name'], 1)
+
     def test_reexecution_absence_retains_unknowns(self):
         report = rc.summarize_records([])['native_reexecution_results']
         self.assertIn('fed query results', report['scope'])

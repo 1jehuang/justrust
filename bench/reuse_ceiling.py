@@ -34,6 +34,13 @@ REEXECUTION_MARKERS = tuple(
 )
 
 
+PROVIDER_REEXECUTION_MARKERS = tuple(
+    f'jr_incremental_provider_{family}_{outcome}'
+    for family in ('reexecuted', 'eval_always')
+    for outcome in ('same_value', 'different_value', 'no_hash')
+)
+
+
 def interval_union_ns(intervals):
     """Union within one profiler thread and epoch, never CPU or saved time."""
     for start, stop in intervals:
@@ -93,9 +100,9 @@ def optional_branch_summary(markers):
                 scope='Optional native branch inventory only. Counts are branch entries, not query keys or avoided work. Per-thread elapsed unions are not summed across threads or markers and imply no CPU work, saved time, or critical path.')
 
 
-def reexecution_summary(markers):
+def reexecution_summary(markers, provider_only=False):
     result = {}
-    for marker in REEXECUTION_MARKERS:
+    for marker in (PROVIDER_REEXECUTION_MARKERS if provider_only else REEXECUTION_MARKERS):
         values = markers[marker]
         names = Counter()
         unknown_names = 0
@@ -116,7 +123,7 @@ def reexecution_summary(markers):
     return dict(markers=result, capture_complete=None, marker_filter_enabled=None,
                 changed_input_queries=None, avoidable_provider_calls=None,
                 provider_elapsed_ns=None, cpu_work_ns=None, time_saved_ns=None,
-                scope='Legacy mixed result-hash classifications for existing keys at allocation: includes provider execution AND fed query results. These records do not establish provider execution. Eval-always is separate. New keys are excluded; no_hash is unknown value equality. Same value does not prove changed inputs, avoidable execution, or prospective reuse. Marker durations are not provider durations.')
+                scope=('Provider-only result-hash classifications after query provider execution for existing keys. Fed results and generic non-query tasks excluded. Eval-always is separate. New keys excluded; no_hash unknown. Equal values do not prove changed inputs, avoidability or prospective reuse. Marker durations are not provider durations.' if provider_only else 'Legacy mixed result-hash classifications for existing keys at allocation: includes provider execution AND fed query results. These records do not establish provider execution. Eval-always is separate. New keys are excluded; no_hash is unknown value equality. Same value does not prove changed inputs, avoidable execution, or prospective reuse. Marker durations are not provider durations.'))
 
 
 def summarize_records(records, resolve_event=None):
@@ -129,11 +136,12 @@ def summarize_records(records, resolve_event=None):
     markers = defaultdict(list)
     optional_markers = defaultdict(list)
     reexecution_markers = defaultdict(list)
+    provider_reexecution_markers = defaultdict(list)
     for event in records:
         kind, typ = event['kind'], event['record_type']
         kinds[kind] += 1
         unresolved += not event['label_resolved']
-        if event.get('label') in NATIVE_MARKERS + OPTIONAL_BRANCH_MARKERS + REEXECUTION_MARKERS:
+        if event.get('label') in NATIVE_MARKERS + OPTIONAL_BRANCH_MARKERS + REEXECUTION_MARKERS + PROVIDER_REEXECUTION_MARKERS:
             if kind != 'GenericActivity' or typ != 'interval':
                 raise ValueError('invalid native marker event type')
             if type(event.get('thread')) is not int or event['thread'] < 0:
@@ -146,7 +154,8 @@ def summarize_records(records, resolve_event=None):
             parts = resolve_event(event['event_id']).split('\x1e') if resolve_event else []
             name = (parts[1] if len(parts) == 2 and parts[0] == event['label']
                     and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', parts[1]) else None)
-            destination = reexecution_markers if event['label'] in REEXECUTION_MARKERS else markers
+            destination = (provider_reexecution_markers if event['label'] in PROVIDER_REEXECUTION_MARKERS
+                           else reexecution_markers if event['label'] in REEXECUTION_MARKERS else markers)
             destination[event['label']].append((event, name))
         expected = {'Query': 'interval', 'QueryCacheHit': 'instant',
                     'QueryCacheHitCount': 'integer', 'IncrementalLoadResult': 'interval'}
@@ -191,6 +200,7 @@ def summarize_records(records, resolve_event=None):
         native_green_reuse=native_summary(markers),
         optional_branch_inventory=optional_branch_summary(optional_markers),
         native_reexecution_results=reexecution_summary(reexecution_markers),
+        native_provider_reexecution_results=reexecution_summary(provider_reexecution_markers, provider_only=True),
     )
 
 
