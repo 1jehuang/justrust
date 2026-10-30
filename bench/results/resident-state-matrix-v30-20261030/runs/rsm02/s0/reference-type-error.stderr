@@ -1,0 +1,3 @@
+error: `justrust` reaches functions blaze could not compile, so it is not built:
+  justrust::summary::tests::shares_overlapping_time: frontend: mir: HasErrors
+(what blaze said is in /home/jeremy/rsm02/s0/reference/blaze-home/workers/87155064eeeecad2/log)

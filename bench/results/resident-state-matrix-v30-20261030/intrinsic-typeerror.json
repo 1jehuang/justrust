@@ -1,0 +1,135 @@
+{
+  "policy": "Explicit offline intrinsic-only derivative. Original cross-engine exclusions unchanged. Not native re-execution, cross-engine admission, median promotion or a complete passing matrix.",
+  "cases": [
+    {
+      "replicate": 0,
+      "stack": "engine",
+      "phase": "type-error",
+      "nonce": "3940eafe52834e8da9bff8e4e6128268",
+      "original_cross_engine_accepted": false,
+      "original_failures": [
+        "reference state oracle unavailable/failed"
+      ],
+      "original_status": 101,
+      "raw": {
+        "stdout": {
+          "path": "/home/jeremy/rsm02/s0/engine-type-error.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "path": "/home/jeremy/rsm02/s0/engine-type-error.stderr",
+          "bytes": 366,
+          "sha256": "4d910e787373d097c394997f22836af2828b75466767279a9124879bf9aca726"
+        }
+      },
+      "intrinsic_failures": [],
+      "intrinsic_accepted": true,
+      "summary_source_sha256": "7b45d1ebff9997506b05298595027fb5ae19dfc78792bcacd21f267b62ededf3"
+    },
+    {
+      "replicate": 1,
+      "stack": "engine",
+      "phase": "type-error",
+      "nonce": "3679c72ba683470fad187251cb4e5657",
+      "original_cross_engine_accepted": false,
+      "original_failures": [
+        "reference state oracle unavailable/failed"
+      ],
+      "original_status": 101,
+      "raw": {
+        "stdout": {
+          "path": "/home/jeremy/rsm02/s1/engine-type-error.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "path": "/home/jeremy/rsm02/s1/engine-type-error.stderr",
+          "bytes": 366,
+          "sha256": "f8a0fb8b7d8bc49e046eeb9a78d825dfec849f7e004337e8a17e34f2d85cc183"
+        }
+      },
+      "intrinsic_failures": [],
+      "intrinsic_accepted": true,
+      "summary_source_sha256": "74b003491c4f15deb5c7831befb0eb3a68b1957e98a1b89a45dc0fc77fa6c4a9"
+    },
+    {
+      "replicate": 2,
+      "stack": "engine",
+      "phase": "type-error",
+      "nonce": "bf32894be5ad4f80b6e20ca7ed753dcc",
+      "original_cross_engine_accepted": false,
+      "original_failures": [
+        "reference state oracle unavailable/failed"
+      ],
+      "original_status": 101,
+      "raw": {
+        "stdout": {
+          "path": "/home/jeremy/rsm02/s2/engine-type-error.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "path": "/home/jeremy/rsm02/s2/engine-type-error.stderr",
+          "bytes": 366,
+          "sha256": "742b4c574ba2d5c6c8e84c245279add851c3dc1610ff1d3763fa289e90650628"
+        }
+      },
+      "intrinsic_failures": [],
+      "intrinsic_accepted": true,
+      "summary_source_sha256": "e886c7ae34f595d56eb3c83119652aa76f9295c1e86d6aeb62cf4d554e405cd9"
+    },
+    {
+      "replicate": 3,
+      "stack": "engine",
+      "phase": "type-error",
+      "nonce": "51d4a8aeefe24ca2a0bf6e978ee5f9c1",
+      "original_cross_engine_accepted": false,
+      "original_failures": [
+        "reference state oracle unavailable/failed"
+      ],
+      "original_status": 101,
+      "raw": {
+        "stdout": {
+          "path": "/home/jeremy/rsm02/s3/engine-type-error.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "path": "/home/jeremy/rsm02/s3/engine-type-error.stderr",
+          "bytes": 366,
+          "sha256": "96b8dfefe91659e16c3db0fb4ac2bb5d9a1cdded8a74c89d09ae5364a346573f"
+        }
+      },
+      "intrinsic_failures": [],
+      "intrinsic_accepted": true,
+      "summary_source_sha256": "e1e0cce86daf8d6fd3ddb8431d70dc96b3c28a4d6190a02b5dbe17bc5e5f7398"
+    },
+    {
+      "replicate": 4,
+      "stack": "engine",
+      "phase": "type-error",
+      "nonce": "75c732c44cf3455884fd9c0a232bfa42",
+      "original_cross_engine_accepted": false,
+      "original_failures": [
+        "reference state oracle unavailable/failed"
+      ],
+      "original_status": 101,
+      "raw": {
+        "stdout": {
+          "path": "/home/jeremy/rsm02/s4/engine-type-error.stdout",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "stderr": {
+          "path": "/home/jeremy/rsm02/s4/engine-type-error.stderr",
+          "bytes": 366,
+          "sha256": "4e54ac6d98a456f48ef81d9696a50e59f5e17dc6f7ebea1cff7eabab05b1f341"
+        }
+      },
+      "intrinsic_failures": [],
+      "intrinsic_accepted": true,
+      "summary_source_sha256": "3cf0a4f0dbf730ac9438b149bb4a67a5f64cc2c0d27ecc01dfea405f0b4c323c"
+    }
+  ]
+}
