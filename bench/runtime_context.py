@@ -22,9 +22,29 @@ def provenance():
 
 
 def require_matching_context(a, b):
-    """Old result files without policy metadata used the inherited context."""
-    inherited = {"policy": "inherited"}
-    if a.get("env", {}).get("runtime_context", inherited) != b.get("env", {}).get("runtime_context", inherited):
+    """Validate explicit policies, leaving missing-env reporting to the caller.
+
+    Legacy/synthetic results may have no environment object at all. That means
+    no declared runtime policy, not a malformed explicit policy. The synthetic
+    reporter remains responsible for blocking its missing environment evidence.
+    """
+    def declared_context(result):
+        if not isinstance(result, dict):
+            raise ValueError("malformed benchmark result provenance")
+        env = result.get("env")
+        if env is None:
+            return {"policy": "inherited"}
+        if not isinstance(env, dict):
+            raise ValueError("malformed benchmark environment provenance")
+        if "runtime_context" not in env:
+            return {"policy": "inherited"}
+        context = env["runtime_context"]
+        if (not isinstance(context, dict)
+                or context.get("policy") not in ("inherited", POLICY)):
+            raise ValueError("malformed or unsupported benchmark runtime context provenance")
+        return context
+
+    if declared_context(a) != declared_context(b):
         raise ValueError("benchmark runtime contexts differ, results are not comparable")
 
 

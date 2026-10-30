@@ -86,6 +86,26 @@ class RuntimeContextTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "runtime contexts differ"):
             runtime.require_matching_context(legacy, selected)
 
+    def test_missing_or_null_environment_defers_to_synthetic_reporting(self):
+        for legacy in ({}, {"env": None}, {"env": {}}):
+            with self.subTest(legacy=legacy):
+                runtime.require_matching_context(legacy, {"env": {}})
+                runtime.require_matching_context(legacy, legacy)
+                with self.assertRaisesRegex(ValueError, "runtime contexts differ"):
+                    runtime.require_matching_context(legacy, {"env": {"runtime_context": {"policy": runtime.POLICY}}})
+
+    def test_explicit_malformed_context_is_rejected_even_if_both_match(self):
+        for context in (None, False, [], "inherited", {}, {"policy": None},
+                        {"policy": []}, {"policy": "unknown-v2"}):
+            result = {"env": {"runtime_context": context}}
+            with self.subTest(context=context), self.assertRaisesRegex(ValueError, "runtime context provenance"):
+                runtime.require_matching_context(result, result)
+
+    def test_malformed_result_or_environment_raises_valueerror_not_attributeerror(self):
+        for result in (None, [], {"env": []}, {"env": "invalid"}):
+            with self.subTest(result=result), self.assertRaisesRegex(ValueError, "provenance"):
+                runtime.require_matching_context(result, result)
+
     def test_counted_execution_records_policy_without_secrets_or_paths(self):
         with patch.dict(os.environ, {runtime.SELECTOR: runtime.POLICY}, clear=True):
             log = Path(self.temp.name) / "output.log"
