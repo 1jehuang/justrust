@@ -66,6 +66,20 @@ These checks are **not** an atomic filesystem snapshot or content proof tying
 source bytes to historical compiler outputs. Concurrent same-timestamp edits,
 mutation after capture, or uncovered discovery changes can still race. Hence
 `trusted` and replay eligibility remain false regardless of the observations.
+Each unit explicitly reports `compiler_read_content_bound_to_outputs: false`,
+and the top-level denials include
+`compiler-read-content-to-output-binding-not-captured`. A fresh mtime decision
+plus newly observed content hashes cannot establish that those bytes produced
+an older artifact. The public backdated same-length edit regression exercises
+this exact counterexample through actual native Cargo, not a simulated receipt.
+
+A future checksum-backed path must distinguish checksums derived from bytes
+actually loaded by the compiler from checksums obtained by reopening tracked
+files when dep-info is written. The current compiler's `write_out_deps` uses
+SourceFile checksums for ordinary source-map files but reopens extra tracked
+files. A checksum-looking field alone is therefore not a complete historical
+read proof. None of these observations removes the planning/config/discovery/
+toolchain or remote-mapping replay denials.
 
 Environment values are represented by presence and SHA-256, never copied in
 plaintext. File paths, content hashes, variable names, and compiler identity are
@@ -101,7 +115,15 @@ Observed validation runs:
   already documented by the subtree-cache work. No warning-free whole-tree
   claim is made.
 
-The hosted endpoint's DNS lookup timed out for this validation, so justrust
+The backdated same-length counterexample also passed through actual hosted
+native Cargo: check `20261029-215544105-3156861`, five public CLI tests
+`20261029-215552085-3156859`, and normal Clippy
+`20261029-215712627-3167092` with the same ten inherited warnings. The test
+observed `native_fresh: true` while the source digest changed, and verified the
+explicit false compiler-read binding and replay denials. This is a rejected
+unsafe replay hypothesis, not a new cache hit or speedup.
+
+The hosted endpoint's DNS lookup timed out for the original validation, so justrust
 explicitly fell back to local execution. The public tests used the actual final
 native Cargo binary, including parentless-sink and non-UTF8-path fail-open
 hardening. This validates producer behavior, not a hosted consumer or a no-op

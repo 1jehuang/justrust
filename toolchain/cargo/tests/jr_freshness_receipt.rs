@@ -64,6 +64,46 @@ fn receipt(root: &Path) -> Value {
 }
 
 #[test]
+fn backdated_same_length_edit_is_observational_not_content_authority() {
+    let temp = fixture("", "pub const VALUE: u8 = 1;\n");
+    let root = temp.path();
+    run(&mut command(root));
+    run(&mut command(root));
+    let before = receipt(root);
+    assert_eq!(before["prerequisite_supported"], true);
+    let path = root.join("src/lib.rs");
+    let old_mtime = filetime::FileTime::from_last_modification_time(&fs::metadata(&path).unwrap());
+    fs::write(&path, "pub const VALUE: u8 = 2;\n").unwrap();
+    filetime::set_file_mtime(&path, old_mtime).unwrap();
+    run(&mut command(root));
+    let after = receipt(root);
+    // Native mtime freshness is intentionally still Cargo's decision. The
+    // producer must not upgrade a newly observed digest into historical proof.
+    assert_eq!(after["units"][0]["native_fresh"], true, "{after:#}");
+    assert_eq!(
+        after["units"][0]["compiler_read_content_bound_to_outputs"],
+        false
+    );
+    let digest = |value: &Value| {
+        value["units"][0]["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|file| file["path"] == path.to_str().unwrap())
+            .unwrap()["sha256"]
+            .clone()
+    };
+    assert_ne!(digest(&before), digest(&after));
+    assert!(
+        after["replay_denials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "compiler-read-content-to-output-binding-not-captured")
+    );
+}
+
+#[test]
 fn fresh_leaf_reports_native_depinfo_environment_outputs_and_nonce() {
     let temp = fixture(
         "",

@@ -78,6 +78,7 @@ impl Capture {
             "content_snapshot_authorizes_freshness": false,
             "trust": "observational-prerequisite-not-replay-authority",
             "replay_denials": [
+                "compiler-read-content-to-output-binding-not-captured",
                 "planning-and-resolution-closure-not-captured",
                 "config-files-and-config-environment-closure-not-captured",
                 "directory-discovery-and-negative-input-closure-not-captured",
@@ -253,6 +254,7 @@ pub fn observe(
         "target": unit.target.name(),
         "mode": unit.mode,
         "native_fresh": fresh,
+        "compiler_read_content_bound_to_outputs": false,
         "supported": reasons.is_empty(),
         "unsupported_reasons": reasons,
         "native_fingerprint": crate::util::to_hex(fingerprint.hash_u64()),
