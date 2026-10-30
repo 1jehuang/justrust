@@ -51,7 +51,7 @@ def type_error_bytes(original):
 
 
 def type_error_detected(args, stack, row):
-    if row['status'] is None or row['status'] <= 0 or row.get('timed_out'):
+    if row['status'] != 101 or row.get('timed_out') or row.get('error'):
         return False
     prefix = args.output / f'type-error-000-{stack}'
     diagnostic = b''.join(prefix.with_suffix('.' + ext).read_bytes()
@@ -106,7 +106,7 @@ def environment(args, stack):
                          'RUSTUP_TOOLCHAIN', 'CARGO_BUILD_RUSTC', 'CARGO_BUILD_RUSTFLAGS')}
     root = args.output / stack
     for name in ('home', 'cache', 'runtime', 'config', 'data', 'target', 'daemon', 'store', 'bin'):
-        (root / name).mkdir(parents=True, exist_ok=True)
+        (root / name).mkdir(parents=True, exist_ok=True, mode=0o700)
     normal_home = Path(os.environ.get('HOME', str(Path.home())))
     env.update(HOME=str(root / 'home'),
                CARGO_HOME=os.environ.get('CARGO_HOME', str(normal_home / '.cargo')),
@@ -116,7 +116,7 @@ def environment(args, stack):
                XDG_DATA_HOME=str(root / 'data'))
     if stack == 'blaze':
         blaze_home = root / 'blaze-home'
-        blaze_home.mkdir()
+        blaze_home.mkdir(mode=0o700)
         installed = Path(os.environ.get('BLAZE_HOME', str(normal_home / '.blaze'))) / 'toolchains'
         if not installed.is_dir():
             raise ValueError('Blaze toolchains must be installed by caller before benchmarking')
