@@ -36,20 +36,29 @@ fn identity(
     let mut data = 0usize;
     let mut work = 0usize;
     for (name, object) in functions {
-        if !object.vtables.is_empty() {
+        // No `..`: new object fields cannot silently disappear from identity.
+        let backend::Object {
+            code: object_code,
+            exports,
+            calls,
+            strings,
+            vtables,
+            receipt: _, // Paid storage is not an ELF semantic input.
+        } = object;
+        if !vtables.is_empty() {
             return None;
         }
-        code = code.checked_add(object.code.len())?;
+        code = code.checked_add(object_code.len())?;
         work = work
             .checked_add(name.len())?
-            .checked_add(object.code.len())?;
+            .checked_add(object_code.len())?;
         // Bound hashing work and output size before traversing payloads.
         if code > MAX_ENTRY_BYTES || work > MAX_ENTRY_BYTES {
             return None;
         }
         key.field(name.as_bytes());
-        key.field(&object.code);
-        for entries in [&object.exports, &object.calls] {
+        key.field(object_code);
+        for entries in [exports, calls] {
             key.field(&(entries.len() as u64).to_le_bytes());
             for (offset, symbol) in entries {
                 work = work.checked_add(8)?.checked_add(symbol.len())?;
@@ -60,8 +69,8 @@ fn identity(
                 key.field(symbol.as_bytes());
             }
         }
-        key.field(&(object.strings.len() as u64).to_le_bytes());
-        for (offset, bytes) in &object.strings {
+        key.field(&(strings.len() as u64).to_le_bytes());
+        for (offset, bytes) in strings {
             data = data.checked_add(bytes.len())?;
             work = work.checked_add(8)?.checked_add(bytes.len())?;
             if data > MAX_ENTRY_BYTES || work > MAX_ENTRY_BYTES {

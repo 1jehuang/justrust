@@ -495,11 +495,16 @@ impl Encoder<'_, '_> {
                 self.meter.work(1)?;
                 let symbol = (self.resolve)(target)?;
                 self.bytes(symbol.as_bytes())?;
-                self.n(signature.params.len())?;
-                for p in &signature.params {
+                let ir::Signature {
+                    ref_contract: _, // Current graph authority, not machine bytes.
+                    params,
+                    result,
+                } = signature;
+                self.n(params.len())?;
+                for p in params {
                     self.ty(p, 0)?;
                 }
-                self.ty(&signature.result, 0)?;
+                self.ty(result, 0)?;
                 self.operands(args)?;
                 self.place(destination)?;
                 self.n(next.0)
@@ -514,34 +519,62 @@ impl Encoder<'_, '_> {
         }
     }
     fn function(&mut self) -> Result<()> {
-        let f = self.function;
-        self.ty(&f.result, 0)?;
-        self.n(f.locals.len())?;
-        for l in &f.locals {
-            self.ty(&l.ty, 0)?;
+        // No `..`: adding a CFG field must require an input-contract decision.
+        // Proofs remain current graph authority. Loans are only read by the
+        // Borrow operation, which this encoder rejects. Names are diagnostics.
+        let cfg::Function {
+            runtime_sites,
+            lowering_proof: _,
+            body_substitution: _,
+            call_evidence: _,
+            ref_contract: _,
+            loan_sites: _,
+            name: _,
+            params,
+            result,
+            locals,
+            blocks,
+            entry,
+            return_local,
+        } = self.function;
+        self.ty(result, 0)?;
+        self.n(locals.len())?;
+        for local in locals {
+            let ir::LocalDecl {
+                name: _,
+                ty,
+                mutable: _, // Checked before backend input publication.
+            } = local;
+            self.ty(ty, 0)?;
         }
-        self.n(f.params.len())?;
-        for p in &f.params {
+        self.n(params.len())?;
+        for p in params {
             self.n(p.0)?;
         }
-        self.n(f.return_local.0)?;
-        self.n(f.entry.0)?;
-        self.n(f.blocks.len())?;
-        for (bi, b) in f.blocks.iter().enumerate() {
-            self.n(b.statements.len())?;
-            for (si, s) in b.statements.iter().enumerate() {
+        self.n(return_local.0)?;
+        self.n(entry.0)?;
+        self.n(blocks.len())?;
+        for (bi, block) in blocks.iter().enumerate() {
+            let cfg::BasicBlock {
+                statements,
+                terminator,
+            } = block;
+            self.n(statements.len())?;
+            for (si, statement) in statements.iter().enumerate() {
                 // CfgRuntimeSites is indexed by physical operation, NOT origin.
                 self.meter.work(usize::BITS as usize)?;
-                let location = f.runtime_sites.get(cfg::BlockId(bi), si);
+                let location = runtime_sites.get(cfg::BlockId(bi), si);
                 self.flag(location.is_some())?;
                 if let Some(l) = location {
                     self.bytes(l.path.as_bytes())?;
                     self.n(l.line)?;
                     self.n(l.column)?;
                 }
-                self.statement(&s.value)?;
+                let cfg::Located { value, origin: _ } = statement;
+                self.statement(value)?;
             }
-            self.terminator(&b.terminator.value)?;
+            let cfg::Located { value, origin: _ } = terminator;
+            self.terminator(value)?;
         }
         Ok(())
     }

@@ -57,10 +57,11 @@ impl Writer<'_, '_> {
         match l {
             None => self.byte(0),
             Some(l) => {
+                let RuntimeLocation { path, line, column } = l.as_ref();
                 self.byte(1)?;
-                self.text(&l.path)?;
-                self.put(&(l.line as u64).to_le_bytes())?;
-                self.put(&(l.column as u64).to_le_bytes())
+                self.text(path)?;
+                self.put(&(*line as u64).to_le_bytes())?;
+                self.put(&(*column as u64).to_le_bytes())
             }
         }
     }
@@ -72,13 +73,19 @@ impl Writer<'_, '_> {
         Ok(())
     }
     fn target(&mut self, t: &SsaTarget) -> Result<(), String> {
-        self.u32(t.block.0)?;
-        self.values(&t.args)
+        let SsaTarget { block, args } = t;
+        self.u32(block.0)?;
+        self.values(args)
     }
     fn inst(&mut self, i: &Inst) -> Result<(), String> {
-        self.location(&i.runtime_location)?;
-        self.u32(i.result.0)?;
-        match &i.kind {
+        let Inst {
+            runtime_location,
+            result,
+            kind,
+        } = i;
+        self.location(runtime_location)?;
+        self.u32(result.0)?;
+        match kind {
             InstKind::Const { ty, bits } => {
                 self.byte(0)?;
                 self.ty(*ty)?;
@@ -165,30 +172,45 @@ impl Writer<'_, '_> {
         }
     }
     fn function(&mut self, f: &SsaFunction) -> Result<(), String> {
+        // No `..`: extending an SSA record requires a wire/key decision here,
+        // independently of whatever defaults its decoder might gain.
+        let SsaFunction {
+            params,
+            ret,
+            blocks,
+            panics,
+        } = f;
         self.put(MAGIC)?;
-        self.len(f.params.len())?;
-        for t in &f.params {
+        self.len(params.len())?;
+        for t in params {
             self.ty(*t)?;
         }
-        self.ty(f.ret)?;
-        self.len(f.blocks.len())?;
-        for b in &f.blocks {
-            self.location(&b.panic_location)?;
-            self.len(b.params.len())?;
-            for (v, t) in &b.params {
+        self.ty(*ret)?;
+        self.len(blocks.len())?;
+        for block in blocks {
+            let BlockData {
+                panic_location,
+                params,
+                insts,
+                term,
+            } = block;
+            self.location(panic_location)?;
+            self.len(params.len())?;
+            for (v, t) in params {
                 self.u32(v.0)?;
                 self.ty(*t)?;
             }
-            self.len(b.insts.len())?;
-            for i in &b.insts {
+            self.len(insts.len())?;
+            for i in insts {
                 self.inst(i)?;
             }
-            self.term(&b.term)?;
+            self.term(term)?;
         }
-        self.len(f.panics.len())?;
-        for p in &f.panics {
-            self.text(&p.message)?;
-            self.text(&p.location)?;
+        self.len(panics.len())?;
+        for panic in panics {
+            let SsaPanicText { message, location } = panic;
+            self.text(message)?;
+            self.text(location)?;
         }
         Ok(())
     }
