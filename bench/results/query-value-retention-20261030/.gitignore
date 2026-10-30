@@ -1,0 +1,3 @@
+# Private capture contents are retained locally, not versioned.
+*/
+# The selected acceptance.json reports are explicitly force-added.

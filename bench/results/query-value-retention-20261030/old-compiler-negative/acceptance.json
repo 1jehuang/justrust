@@ -1,0 +1,118 @@
+{
+  "schema": 1,
+  "scope": "query-value-retention-correctness-only-no-speedup-claim",
+  "flag": "-Zjr-cache-small-query-values",
+  "verify_ich": true,
+  "verdict": "failed",
+  "planned_cases": 22,
+  "completed_cases": 0,
+  "observations": [
+    {
+      "name": "initial",
+      "expected_stdout": "15\n",
+      "source": "#![allow(dead_code)]\nextern crate retention_dep;\nconst fn value() -> u32 { 7 }\nfn ordinary() -> u32 { let closure = || { fn nested() -> u32 { 2 } nested() }; closure() }\nasync fn asynchronous() -> u32 { 3 }\nmacro_rules! amount { () => { 4u32 }; }\nfn main() { println!(\"{}\", value() + ordinary() + amount!() + retention_dep::number(1)); }\n",
+      "dependency_source": "pub fn number(x: u32) -> u32 { x + 1 }\n",
+      "modes": {
+        "off": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc",
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/dep-incremental",
+              "-o",
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "compile": {
+            "command": [
+              "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc",
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/main.rs",
+              "--crate-name=retention_fixture",
+              "--extern",
+              "retention_dep=/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/libretention_dep.rlib",
+              "-C",
+              "incremental=/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/main-incremental",
+              "-o",
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "050a87b4c4658e11908d98c9aff2fb57a20f1b6c629b5f238eadfd8f582c781a",
+          "runtime": {
+            "command": [
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "15\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "dependency": {
+            "command": [
+              "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc",
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/on/dep.rs",
+              "--crate-name=retention_dep",
+              "--crate-type=rlib",
+              "-C",
+              "incremental=/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/on/dep-incremental",
+              "-o",
+              "/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/on/libretention_dep.rlib",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-Zjr-cache-small-query-values"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error: unknown unstable option: `jr-cache-small-query-values`\n\n"
+          }
+        }
+      }
+    }
+  ],
+  "compiler": {
+    "path": "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc",
+    "sha256": "3df9dfd4a663435e1c6f40cbd1387f46e42627661afbb9100e647ee8c8fded17",
+    "version": {
+      "command": [
+        "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc",
+        "-vV"
+      ],
+      "status": 0,
+      "stdout": "rustc 1.101.0-nightly (910e39a6c 2026-10-14)\nbinary: rustc\ncommit-hash: 910e39a6c3ef8b6fe54663a4f513213687b9bf4b\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "stderr": ""
+    }
+  },
+  "sysroot_query": {
+    "command": [
+      "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc",
+      "--print",
+      "sysroot"
+    ],
+    "status": 0,
+    "stdout": "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2\n",
+    "stderr": ""
+  },
+  "drivers": [
+    {
+      "path": "/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/lib/librustc_driver-5eec39586e530d64.so",
+      "sha256": "16617750423a7a56a1bcc335ccd9f12d6f52d82cdb78a4646b2bb59e2e0a8dd8"
+    }
+  ],
+  "error": "Dependency failed: {\n  \"dependency\": {\n    \"command\": [\n      \"/home/jeremy/justrust/toolchain/rustc/build/x86_64-unknown-linux-gnu/stage2/bin/rustc\",\n      \"/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/on/dep.rs\",\n      \"--crate-name=retention_dep\",\n      \"--crate-type=rlib\",\n      \"-C\",\n      \"incremental=/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/on/dep-incremental\",\n      \"-o\",\n      \"/home/jeremy/justrust/bench/results/query-value-retention-20261030/old-compiler-negative/on/libretention_dep.rlib\",\n      \"--edition=2024\",\n      \"-Zincremental-verify-ich\",\n      \"-Cdebuginfo=0\",\n      \"-Zjr-cache-small-query-values\"\n    ],\n    \"status\": 1,\n    \"stdout\": \"\",\n    \"stderr\": \"error: unknown unstable option: `jr-cache-small-query-values`\\n\\n\"\n  }\n}"
+}
