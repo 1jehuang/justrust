@@ -1,0 +1,12 @@
+{
+  "command": [
+    "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+    "check",
+    "--lib"
+  ],
+  "source_commit": "f97fcc2",
+  "status": 0,
+  "wall_seconds": 25.961999503997504,
+  "blaze_sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174",
+  "target": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/blaze-smoke-target"
+}

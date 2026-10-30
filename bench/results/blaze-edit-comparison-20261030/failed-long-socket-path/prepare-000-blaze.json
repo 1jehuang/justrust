@@ -1,0 +1,55 @@
+{
+  "stack": "blaze",
+  "phase": "prepare",
+  "replicate": 0,
+  "command": [
+    "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+    "check",
+    "--lib"
+  ],
+  "cwd": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/source",
+  "environment": {
+    "BLAZE_CACHE": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/cache/blaze",
+    "BLAZE_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/blaze-home",
+    "CARGO_HOME": "/home/jeremy/.cargo",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/target",
+    "HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/home",
+    "RA_JIT_CACHE": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/store",
+    "RA_JIT_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/daemon",
+    "RUSTUP_HOME": "/home/jeremy/.rustup",
+    "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/cache",
+    "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/config",
+    "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/data",
+    "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/blaze/runtime"
+  },
+  "started_utc": "2026-10-30T08:41:30.687816+00:00",
+  "perf_counter_start": 55631.267916777,
+  "elapsed_seconds": 26.422330364002846,
+  "status": 101,
+  "error": null,
+  "noise": {
+    "before": {
+      "busy_seconds": 242229.54,
+      "loadavg": [
+        9.9736328125,
+        7.57275390625,
+        5.52001953125
+      ]
+    },
+    "after": {
+      "busy_seconds": 242524.88,
+      "loadavg": [
+        13.3212890625,
+        8.60498046875,
+        5.9296875
+      ]
+    },
+    "child_cpu_seconds": 0.021815999999986957,
+    "contamination": "unknown",
+    "reason": "System CPU minus waited child CPU is only a proxy. Daemons, scheduling, IO and thermal noise are not attributed.",
+    "other_cpu_seconds_estimate": 295.3181839999965
+  },
+  "timed_out": false,
+  "timeout_seconds": 360,
+  "source_sha256": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde"
+}

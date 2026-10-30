@@ -1,0 +1,20 @@
+error[E0308]: mismatched types
+  --> src/runs.rs:21:18
+   |
+21 |     let _: u64 = "blaze_edit_compare_type_error";
+   |            ---   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ expected `u64`, found `&str`
+   |            |
+   |            expected due to this
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib) due to 1 previous error
+
+
+justrust: FAILED to compile (1 error) in 0.9s
+  time    startup 0.04s | compile 0.86s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 47 fresh. Rebuilt because: edited src/runs.rs (justrust)
+          justrust                           0.86s  cpu   0.9s    317 MB
+  cpu     0.9s total, avg 1.0/peak 1.0 of 16 cores; others used 5.8 cores
+  memory  peak 340 MB build, 317 MB largest rustc, 49.3 GB free; stalls cpu 0.01s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261030-014346636-523396` full output, `justrust show 20261030-014346636-523396` full profile

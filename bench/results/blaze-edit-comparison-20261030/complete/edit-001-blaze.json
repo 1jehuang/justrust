@@ -1,0 +1,55 @@
+{
+  "stack": "blaze",
+  "phase": "edit",
+  "replicate": 1,
+  "command": [
+    "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+    "check",
+    "--lib"
+  ],
+  "cwd": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/source",
+  "environment": {
+    "BLAZE_CACHE": "/home/jeremy/.jcode/scratch/bz30/blaze/cache/blaze",
+    "BLAZE_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/blaze-home",
+    "CARGO_HOME": "/home/jeremy/.cargo",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bz30/blaze/target",
+    "HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/home",
+    "RA_JIT_CACHE": "/home/jeremy/.jcode/scratch/bz30/blaze/store",
+    "RA_JIT_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/daemon",
+    "RUSTUP_HOME": "/home/jeremy/.rustup",
+    "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/cache",
+    "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/config",
+    "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/data",
+    "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bz30/blaze/runtime"
+  },
+  "started_utc": "2026-10-30T08:44:26.856788+00:00",
+  "perf_counter_start": 55807.436889445,
+  "elapsed_seconds": 0.11400084300112212,
+  "status": 0,
+  "error": null,
+  "noise": {
+    "before": {
+      "busy_seconds": 243806.53,
+      "loadavg": [
+        17.92431640625,
+        11.38916015625,
+        7.30419921875
+      ]
+    },
+    "after": {
+      "busy_seconds": 243807.15,
+      "loadavg": [
+        17.92431640625,
+        11.38916015625,
+        7.30419921875
+      ]
+    },
+    "child_cpu_seconds": 0.011283000000005927,
+    "contamination": "unknown",
+    "reason": "System CPU minus waited child CPU is only a proxy. Daemons, scheduling, IO and thermal noise are not attributed.",
+    "other_cpu_seconds_estimate": 0.6087169999953375
+  },
+  "timed_out": false,
+  "timeout_seconds": 360,
+  "source_sha256": "85e80bc195ea1d831a9a6c074ac9bcb8046e56b9045b5d3c8eb3c9b0050f71a0"
+}

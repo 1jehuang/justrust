@@ -1,0 +1,28 @@
+{
+  "verdict": "passed",
+  "matched_edits": 9,
+  "expected_error_and_recovery_stacks": 3,
+  "exported_owned_calls": 12,
+  "run_ids": [
+    "20261030-014312087-514422",
+    "20261030-014328375-519919",
+    "20261030-014329342-520145",
+    "20261030-014423179-537062",
+    "20261030-014426972-537737",
+    "20261030-014428104-537853",
+    "20261030-014330259-520203",
+    "20261030-014346636-523396",
+    "20261030-014347603-523504",
+    "20261030-014424407-537353",
+    "20261030-014425841-537523",
+    "20261030-014429020-538041"
+  ],
+  "medians_seconds": {
+    "owned-off": 1.0156029049976496,
+    "owned-on": 1.015780032001203,
+    "blaze": 0.1141291980020469
+  },
+  "identities_unchanged": true,
+  "contamination": "unknown",
+  "scope": "retained focused check-only observation audit, not a general speed or default-promotion gate"
+}

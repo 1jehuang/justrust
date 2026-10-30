@@ -1,0 +1,14 @@
+{
+  "medians_seconds": {
+    "owned-off": 1.0156029049976496,
+    "owned-on": 1.015780032001203,
+    "blaze": 0.1141291980020469
+  },
+  "descriptive_ratios_owned_off_over": {
+    "owned-off": 1.0,
+    "owned-on": 0.9998256246451268,
+    "blaze": 8.89871236087574
+  },
+  "interpretation": "Descriptive only. No significance, cleanliness, default-promotion or general speed claim. Failed and incomplete stacks are excluded.",
+  "identities_unchanged": true
+}

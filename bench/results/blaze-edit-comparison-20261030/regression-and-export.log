@@ -1,0 +1,56 @@
+justrust export: added 6 new runs to data/runs/xps14-blaze-owned-off-20261030 (6 scratch; 6 redacted as private), 0 already exported, 0 without a summary
+justrust export: added 6 new runs to data/runs/xps14-blaze-owned-on-20261030 (6 scratch; 6 redacted as private), 0 already exported, 0 without a summary
+[stderr] ............................usage: profile [--incremental {on,off}]
+[stderr] profile: error: expected suite run arguments
+[stderr] ....usage: profile --debug-info {0,1,2} [--lto {off}]
+[stderr] profile: error: expected suite run arguments after --debug-info
+[stderr] ..................frontend mapping: report output already exists
+[stderr] frontend mapping: report and graph output paths must differ
+FIXTURE /home/jeremy/.jcode/scratch/headless-launch-xch9yd76
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 553527, "child": 553529, "mode": "plain", "probe": {"pid": 553529, "sid": 553527, "pgid": 553529, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [553529], "reaped": [553529], "remaining": []}, "stderr": ""}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 553570, "child": 553572, "mode": "command", "exit": 87, "cleanup": {"killed": [553575], "reaped": [553574, 553575], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 01:46:01 AM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nFri Oct 30 01:46:01 AM PDT 2026\n'
+PRIVATE_TMUX_EARLY_KILL {"pid": 553592, "sid": 553592, "pgid": 553592, "start": "9179587", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 553592, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+OBSERVED {"supervisor": 553656, "child": 553660, "mode": "timeout", "probe": {"pid": 553661, "sid": 553656, "pgid": 553660, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [553660, 553661], "reaped": [553660, 553661], "remaining": []}, "stderr": ""}
+PRIVATE_TMUX_NATURAL_EXIT {"pid": 553682, "sid": 553682, "pgid": 553682, "start": "9179631", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 553682, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 553799, "child": 553802, "mode": "command", "exit": 23, "cleanup": {"killed": [553806], "reaped": [553804, 553806], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 01:46:02 AM PDT 2026\nEXIT 23\nFri Oct 30 01:46:02 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 553869, "child": 553873, "mode": "command", "exit": 143, "cleanup": {"killed": [553877], "reaped": [553875, 553877], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 01:46:02 AM PDT 2026\nTerminated                 /usr/bin/python3 /home/jeremy/.jcode/scratch/headless-launch-xch9yd76/public-status-143/home/payload.py\nEXIT 143\nFri Oct 30 01:46:02 AM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 553941, "child": 553944, "mode": "command", "exit": 0, "cleanup": {"killed": [553948], "reaped": [553946, 553948], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 01:46:03 AM PDT 2026\nEXIT 0\nFri Oct 30 01:46:03 AM PDT 2026\n'
+OBSERVED {"supervisor": 553951, "child": 553952, "mode": "setsid", "probe": {"pid": 553953, "sid": 553953, "pgid": 553953, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+CHILD_STDERR 'setsid: child 553975 did not exit normally: Success\n'
+OBSERVED {"supervisor": 553973, "child": 553974, "mode": "setsid", "probe": {"pid": 553975, "sid": 553975, "pgid": 553975, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 553975 did not exit normally: Success\n"}
+CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 554016, "child": 554021, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+[stderr] ................................................................................................................usage: python3 -m unittest [-h] [--repo REPO] [--patch PATCH |
+[stderr]                            --source-commit SOURCE_COMMIT]
+[stderr]                            [--allow-file ALLOW_FILE]
+[stderr]                            [--baseline-result BASELINE_RESULT] --out OUT
+[stderr]                            [-n N] [--warmup WARMUP] [--mode {hosted,local}]
+[stderr]                            [--toolchain TOOLCHAIN]
+[stderr] python3 -m unittest: error: refusing to overwrite an existing result
+[stderr] ......frontend mapping: report output already exists
+[stderr] frontend mapping: report and graph output paths must differ
+table
+saved /home/jeremy/.jcode/scratch/tmpzq4572lm/baseline.json
+round 1 remote fresh-check measured=True: failed exit=1 wall=0.000s
+[stderr] .....................................................................................................................................................................................................................................................................................bench: desktop-noop-test (1/1)
+[stderr] .bench: desktop-noop-test (1/1)
+[stderr] bench: desktop-noop-test (1/1)
+[stderr] ......................................bench: desktop-noop-test (1/1)
+[stderr] ......................................................
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 538 tests in 10.726s
+[stderr] 
+[stderr] OK
+
+--- Command finished with exit code: 0 ---

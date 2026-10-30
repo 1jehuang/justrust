@@ -1,0 +1,20 @@
+{
+  "scope": "postmeasurement daemon cache isolation",
+  "observed_processes": {
+    "523723": {
+      "HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/home",
+      "BLAZE_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/blaze-home",
+      "BLAZE_CACHE": "/home/jeremy/.jcode/scratch/bz30/blaze/cache/blaze",
+      "RA_JIT_CACHE": "/home/jeremy/.jcode/scratch/bz30/blaze/cache/blaze",
+      "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/cache"
+    },
+    "523739": {
+      "HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/home",
+      "BLAZE_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/blaze-home",
+      "BLAZE_CACHE": "/home/jeremy/.jcode/scratch/bz30/blaze/cache/blaze",
+      "RA_JIT_CACHE": "/home/jeremy/.jcode/scratch/bz30/blaze/cache/blaze",
+      "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bz30/blaze/cache"
+    }
+  },
+  "private_store_exists": true
+}

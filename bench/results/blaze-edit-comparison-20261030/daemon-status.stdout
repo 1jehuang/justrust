@@ -1,0 +1,5 @@
+plain cargo: not through blaze (`blaze enable` turns it on)
+daemon: pid 523723, version 0.20261027.0-29590431-bfa6a50-18e3415538dddad4, exits after 1800s idle, workers hold at most 31897 MB
+  worker: pid 523739, /home/jeremy/.jcode/scratch/blaze-comparison-20261030/source/, holds 2223 MB, log /home/jeremy/.jcode/scratch/bz30/blaze/blaze-home/checkers/48a2af9c833a6d28/log
+    /home/jeremy/.jcode/scratch/blaze-comparison-20261030/source/: checks
+store: 325 MB, at most 32768 MB (`blaze cache gc` collects it), /home/jeremy/.jcode/scratch/bz30/blaze/cache/blaze

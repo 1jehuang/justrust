@@ -1,0 +1,70 @@
+{
+  "stack": "owned-on",
+  "phase": "edit",
+  "replicate": 0,
+  "command": [
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+    "check",
+    "--lib"
+  ],
+  "cwd": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/source",
+  "environment": {
+    "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+    "CARGO_HOME": "/home/jeremy/.cargo",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bz30/owned-on/target",
+    "HOME": "/home/jeremy/.jcode/scratch/bz30/owned-on/home",
+    "JUSTRUST_BUILDD": "0",
+    "JUSTRUST_BUILDD_PREBUILD": "0",
+    "JUSTRUST_CACHE_PROC_MACROS": "0",
+    "JUSTRUST_CARGO_FORK": "0",
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bz30/owned-on/home/.justrust",
+    "JUSTRUST_LOCALCACHE": "0",
+    "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_PREBUILT": "off",
+    "JUSTRUST_PREBUILT_ALWAYS": "0",
+    "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+    "JUSTRUST_REMOTE": "off",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+    "RUSTC": "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+    "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes",
+    "RUSTUP_HOME": "/home/jeremy/.rustup",
+    "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bz30/owned-on/cache",
+    "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bz30/owned-on/config",
+    "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bz30/owned-on/data",
+    "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bz30/owned-on/runtime"
+  },
+  "started_utc": "2026-10-30T08:44:24.402055+00:00",
+  "perf_counter_start": 55804.982158721,
+  "elapsed_seconds": 1.3222710989939515,
+  "status": 0,
+  "error": null,
+  "noise": {
+    "before": {
+      "busy_seconds": 243789.8,
+      "loadavg": [
+        18.6142578125,
+        11.4130859375,
+        7.28955078125
+      ]
+    },
+    "after": {
+      "busy_seconds": 243798.87,
+      "loadavg": [
+        18.6142578125,
+        11.4130859375,
+        7.28955078125
+      ]
+    },
+    "child_cpu_seconds": 1.3680550000000125,
+    "contamination": "unknown",
+    "reason": "System CPU minus waited child CPU is only a proxy. Daemons, scheduling, IO and thermal noise are not attributed.",
+    "other_cpu_seconds_estimate": 7.7019450000069725
+  },
+  "timed_out": false,
+  "timeout_seconds": 360,
+  "source_sha256": "cd3588de7290201600b524322ce22b88ba2c448f5e850b4799fe7c0f25930655"
+}

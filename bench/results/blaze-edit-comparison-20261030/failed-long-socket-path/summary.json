@@ -1,0 +1,12 @@
+{
+  "medians_seconds": {
+    "owned-off": 1.0165182089986047,
+    "owned-on": 0.9665683030034415
+  },
+  "descriptive_ratios_owned_off_over": {
+    "owned-off": 1.0,
+    "owned-on": 1.051677575024913
+  },
+  "interpretation": "Descriptive only. No significance, cleanliness, default-promotion or general speed claim. Failed and incomplete stacks are excluded.",
+  "identities_unchanged": true
+}

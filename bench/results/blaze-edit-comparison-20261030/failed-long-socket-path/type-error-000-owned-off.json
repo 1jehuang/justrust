@@ -1,0 +1,71 @@
+{
+  "stack": "owned-off",
+  "phase": "type-error",
+  "replicate": 0,
+  "command": [
+    "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+    "check",
+    "--lib"
+  ],
+  "cwd": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/source",
+  "environment": {
+    "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+    "CARGO_HOME": "/home/jeremy/.cargo",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/target",
+    "HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/home",
+    "JUSTRUST_BUILDD": "0",
+    "JUSTRUST_BUILDD_PREBUILD": "0",
+    "JUSTRUST_CACHE_PROC_MACROS": "0",
+    "JUSTRUST_CARGO_FORK": "0",
+    "JUSTRUST_DEPCACHE": "0",
+    "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/home/.justrust",
+    "JUSTRUST_LOCALCACHE": "0",
+    "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+    "JUSTRUST_PEER_CACHE": "0",
+    "JUSTRUST_PREBUILT": "off",
+    "JUSTRUST_PREBUILT_ALWAYS": "0",
+    "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+    "JUSTRUST_REMOTE": "off",
+    "JUSTRUST_REMOTE_CACHE": "0",
+    "JUSTRUST_TOOLCHAIN": "system",
+    "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+    "RUSTC": "/home/jeremy/.jcode/scratch/provider-profile-20261030/sysroot/bin/rustc",
+    "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no",
+    "RUSTUP_HOME": "/home/jeremy/.rustup",
+    "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/cache",
+    "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/config",
+    "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/data",
+    "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/matched-check/owned-off/runtime"
+  },
+  "started_utc": "2026-10-30T08:41:12.544739+00:00",
+  "perf_counter_start": 55613.12483815,
+  "elapsed_seconds": 0.8163006460017641,
+  "status": 101,
+  "error": null,
+  "noise": {
+    "before": {
+      "busy_seconds": 242097.41,
+      "loadavg": [
+        10.0048828125,
+        7.44873046875,
+        5.4462890625
+      ]
+    },
+    "after": {
+      "busy_seconds": 242101.38,
+      "loadavg": [
+        10.0048828125,
+        7.44873046875,
+        5.4462890625
+      ]
+    },
+    "child_cpu_seconds": 0.8131570000000039,
+    "contamination": "unknown",
+    "reason": "System CPU minus waited child CPU is only a proxy. Daemons, scheduling, IO and thermal noise are not attributed.",
+    "other_cpu_seconds_estimate": 3.1568430000011602
+  },
+  "timed_out": false,
+  "timeout_seconds": 360,
+  "source_sha256": "56f8c8fb832f0ba5fe99cdd4c4ffa8e149d9b28c01b0cc221f5622bd13609d4c",
+  "gate_passed": true
+}

@@ -1,0 +1,9 @@
+error[E0308]: expected u64, found &'static str
+  --> src/runs.rs:21:18
+   |
+21 |     let _: u64 = "blaze_edit_compare_type_error";
+   |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib) due to 1 previous error
+note: blaze built this with its own toolchain, blaze-2026-10-27 (Rust nightly-2026-10-27), not 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1), the toolchain cargo was started with; an error 1.99.1 (58cf8f9c3 2026-10-13) (Arch Linux rust 1:1.99.1-1) would not give may come from that difference, or be blaze's own if `cargo +nightly-2026-10-27 check` gives none either
