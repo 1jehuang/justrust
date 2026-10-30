@@ -23,6 +23,21 @@ blocked by an existing benchmark snapshot lock. No general speed claim or
 hosted native activation. Safe local whole-command result replay, authoritative
 input receipts, and a resident expansion/semantic graph remain unfinished.
 
+Follow-through shipped and installed `f3a7dc752` (derived watch-directory set
+reuse) and `1c3656078` (linear sorted-manifest diff), with 834 tests passing.
+Both retain fresh source scanning, registration retries and the remote barrier.
+Real installed warm Clippy observations: 1.4 s (`20261029-211321346-2704621`)
+and 1.2 s (`20261029-211322726-2703167`), 62 fresh units and 0.03 s Cargo each.
+These are not matched before/after speedup evidence. `edce4013a` subsequently
+bulk-builds fresh observed manifests, preserving last-observation duplicate
+semantics against 1,555 sequences, with fresh filesystem mutation regressions.
+Native input-prerequisite producer `c6004a097` passes four real Cargo CLI tests
+(`20261029-211619753-2745232`) but always denies trust/command replay. It does
+not close planning, config, negative-input, toolchain or remote-mapping gaps.
+See `docs/caching-levels.md` and the linked component evidence. Further hosted
+acceptance is paused for coordinated fleet maintenance, not replaced with local
+results or described as a completed subsecond outcome.
+
 ## 2026-10-29: Clippy's cached path still paid for ignored build-tree scans
 
 Fixed ignored-lockfile discovery in `29c6e250b`: collapse ignored directories
