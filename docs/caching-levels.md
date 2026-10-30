@@ -124,6 +124,39 @@ focused diagnostics, not replacements for the broad gate. Existing benchmarks
 share a snapshot lock; wait/coordinate rather than mutating their inputs.
 Record an unavailable gate as unavailable and keep unproven experiments off.
 
+## Implemented experiments and activation status
+
+The investigation now has concrete native implementations, not only proposals:
+
+* **Associated-item query retention:** `84c0f3e16` adds tracked, default-off
+  `-Zjr-cache-associated-items=yes`. Ordered real-compiler acceptance covered
+  34 cases and five existing incremental fixtures in each mode. Proven-green
+  provider executions fell from 10 to 0, at a measured 1,522-byte query-cache
+  increase. This is mechanism evidence, not an end-to-end speed claim. See
+  `associated-item-retention-20261030.md` for the matching private sysroot.
+* **Overlapping Cargo input validation:** `a93a0de7c` implements invocation-local
+  subtree maxima with symlink/error fallback. A follow-up gates native use on
+  explicit `JUSTRUST_CARGO_SUBTREE_CACHE=1`; client forwarding is committed in
+  `90b66b89d`. Final gated-binary acceptance and measurements must be recorded
+  in `cargo-subtree-cache.md`. Forwarding the flag does not install a new
+  Cargo binary on hosted machines.
+* **Module-local Clippy queries:** an opt-in subset of four stateless passes
+  is under acceptance testing. Switching the cfg without source edits exposed
+  stale green lint queries and missing diagnostics. The experiment therefore
+  needs a versioned incremental-cache namespace, not merely a cfg-based pass
+  switch. Until that regression and diagnostic equivalence pass, it is not a
+  validated improvement. Stateful and cross-module passes remain crate-wide.
+
+The comprehensive baseline was unavailable because another measurement held
+its shared snapshot lock, including a ten-minute timed-out wait. These
+experiments remain default-off. Focused acceptance cannot substitute for the
+session-weighted benchmark needed to promote defaults.
+
+None of these changes implements authoritative whole-command result replay.
+A truly local unchanged-result hit is the way to avoid both remote admission
+and transport. That still requires complete positive/negative input receipts,
+not a source-only timestamp or a cached terminal transcript.
+
 ## Primary design references
 
 The implementation inventory above comes from this checkout. These independent
