@@ -1,0 +1,43 @@
+{
+  "process": {
+    "command": [
+      "/home/jeremy/.jcode/scratch/demand-query-cache-20261030/sysroot/bin/rustc",
+      "-vV"
+    ],
+    "status": 0,
+    "error": null,
+    "timed_out": false,
+    "elapsed_seconds": 0.007428437005728483,
+    "noise": {
+      "before": {
+        "busy_seconds": 339666.9,
+        "loadavg": [
+          2.6865234375,
+          4.6044921875,
+          6.67431640625
+        ]
+      },
+      "after": {
+        "busy_seconds": 339666.93,
+        "loadavg": [
+          2.6865234375,
+          4.6044921875,
+          6.67431640625
+        ]
+      },
+      "child_cpu_seconds": 0.007260999999999999,
+      "contamination": "unknown",
+      "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+      "other_cpu_seconds_estimate": 0.022738999969732016
+    },
+    "environment": {
+      "HOME": "/home/jeremy",
+      "XDG_RUNTIME_DIR": "/run/user/1000"
+    }
+  },
+  "stdout": "rustc 1.101.0-nightly (9be8eca50 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 9be8eca50cac24ba3fdac0ad53bd658c60ddd2dc\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+  "stderr": "",
+  "sha256_before": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "sha256_after": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "nightly": true
+}
