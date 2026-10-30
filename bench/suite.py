@@ -873,9 +873,8 @@ def run_once(s: Scenario, root: Path, target: Path) -> dict:
             f" (justrust log {rid})\n{p.stderr[-3000:]}"
         )
     if tests_failed and not s.expect_test_fail:
-        # The timing is still valid; a flaky test in a pinned snapshot must
-        # not abort an hour of benchmarking. Recorded per sample.
-        print(f"  note {s.name}: {tests_failed} test(s) failed (justrust log {rid})", file=sys.stderr)
+        sys.exit(f"bench: {s.name}: {tests_failed} unexpected failing test(s), sample rejected"
+                 f" (justrust log {rid})\n{p.stderr[-3000:]}")
     try:
         workspace_threads = workspace_thread_provenance(sm, WORKSPACE_THREADS)
     except ValueError as e:
@@ -1000,7 +999,8 @@ def run_scenario(s: Scenario, n: int, warmup: int, quiet_wait: float) -> dict:
         restore(root, s.edit)
     if s.edit is None and not s.cold and any(x["units"] for x in samples):
         print(f"  WARNING {s.name}: a no-op run compiled units (cache invalidation?)", file=sys.stderr)
-    return {"what": s.what, "cmd": s.cmd, "samples": samples, "stats": stats(samples)}
+    return {"what": s.what, "cmd": s.cmd, "expect_test_fail": s.expect_test_fail,
+            "samples": samples, "stats": stats(samples)}
 
 
 def toolchain_rustc(spec: str) -> Path:
@@ -1547,6 +1547,35 @@ def cmd_show(args) -> None:
     print(table(r))
 
 
+def named_test_failure_issues(result: dict) -> list[str]:
+    """Never compare historical aggregates containing unexpected failed tests.
+
+    Old files predate explicit expectation metadata, so known intentional-failure
+    scenarios fall back to their declared scenario contract, not a blanket ban.
+    Check every retained sample, including noisy samples, not only the median.
+    """
+    issues = []
+    for name, scenario in result.get("scenarios", {}).items():
+        declared = BY_NAME.get(name)
+        expected = scenario.get("expect_test_fail", bool(declared and declared.expect_test_fail))
+        if type(expected) is not bool:
+            issues.append(f"{name}: malformed expected-test-failure provenance")
+            continue
+        if expected and declared is not None and not declared.expect_test_fail:
+            issues.append(f"{name}: expected-test-failure provenance contradicts scenario")
+            continue
+        records = [scenario, scenario.get("stats", {}), *scenario.get("samples", [])]
+        for record in records:
+            count = record.get("tests_failed", 0)
+            if type(count) is not int or count < 0:
+                issues.append(f"{name}: malformed failing-test count")
+                break
+            if count and not expected:
+                issues.append(f"{name}: unexpected failing tests in retained samples or aggregate")
+                break
+    return issues
+
+
 def cmd_compare(args) -> None:
     from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
@@ -1593,6 +1622,10 @@ def cmd_compare(args) -> None:
         return
     if a["env"]["snapshots"] != b["env"]["snapshots"]:
         sys.exit("bench: different pinned snapshots, numbers are not comparable")
+    for label, result in (("A", a), ("B", b)):
+        issues = named_test_failure_issues(result)
+        if issues:
+            sys.exit(f"bench: {label}: comparison blocked: " + "; ".join(issues))
     if a["env"].get("foreign_rustc_policy") != b["env"].get("foreign_rustc_policy"):
         sys.exit("bench: different foreign_rustc_policy, numbers are not comparable")
     if a["env"].get("host") != b["env"].get("host"):
