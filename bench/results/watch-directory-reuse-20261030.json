@@ -1,0 +1,13 @@
+{
+  "scope": "paired derived watch-directory reconstruction only, not command latency",
+  "run_id": "20261029-210919207-2652800",
+  "execution": "hosted real mirrored source manifest",
+  "files": 67139,
+  "directories": 6433,
+  "rebuild_ns": [92188422, 91638699, 91619958, 91419028, 91482088],
+  "reuse_ns": [14230, 210, 40, 170, 120],
+  "assertions": "each reused and reconstructed directory set equals the independent expected set",
+  "excluded": ["source scan", "watch registration retry", "transport", "admission", "Cargo"],
+  "general_speed_claim": false,
+  "comprehensive_gate": "unavailable, another benchmark retains shared snapshot lock"
+}

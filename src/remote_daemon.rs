@@ -244,11 +244,35 @@ impl Link {
 
 struct Root {
     manifest: Manifest,
+    /// Derived only from manifest paths. Watches are still retried every flush.
+    watch_dirs: Option<std::collections::BTreeSet<PathBuf>>,
     /// Files over `MAX_FILE`, not mirrored.
     oversized: Vec<PathBuf>,
     /// A new agent connection cannot trust the previous connection's manifest.
     /// Resync on demand, not all remembered workspaces before the first build.
     needs_full_sync: bool,
+}
+
+impl Root {
+    fn watch_directories(
+        &mut self,
+        root: &Path,
+        new: &Manifest,
+        diff: &remote_sync::Diff,
+    ) -> &std::collections::BTreeSet<PathBuf> {
+        // Stamps do not affect directory membership. A failed watch, renamed
+        // inode or replaced directory still gets retried by watch_all, using
+        // this cached path set. Never skip source scanning or the sync barrier.
+        let topology_changed = !diff.deleted.is_empty()
+            || diff
+                .changed
+                .iter()
+                .any(|path| !self.manifest.contains_key(path));
+        if self.watch_dirs.is_none() || topology_changed {
+            self.watch_dirs = Some(remote_sync::dirs(root, new));
+        }
+        self.watch_dirs.as_ref().unwrap()
+    }
 }
 
 /// Everything network operations touch. Held across them.
@@ -802,8 +826,8 @@ fn update_root_info(d: &Daemon, st: &Sync) {
 }
 
 /// Watch every directory that holds a mirrored file (new ones included).
-fn refresh_watches(d: &Daemon, root: &Path, m: &Manifest) {
-    let n = d.watcher.watch_all(&remote_sync::dirs(root, m));
+fn refresh_watches(d: &Daemon, root: &Path, dirs: &std::collections::BTreeSet<PathBuf>) {
+    let n = d.watcher.watch_all(dirs);
     if n > 0 {
         log(&format!("watching {n} more dirs under {}", root.display()));
     }
@@ -920,7 +944,8 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
         n,
         t.elapsed().as_secs_f64()
     ));
-    refresh_watches(d, root, &scan.files);
+    let watch_dirs = remote_sync::dirs(root, &scan.files);
+    refresh_watches(d, root, &watch_dirs);
     log(&format!(
         "source mirror {}: total {:.3}s, prepare {:.3}s, scan {:.3}s ({} files, {} oversized), seed {:.3}s, checksum rsync {:.3}s, finalize {:.3}s",
         root.display(),
@@ -940,6 +965,7 @@ fn add_root(d: &Daemon, st: &mut Sync, link: &Link, root: &Path) -> Result<()> {
         root.to_path_buf(),
         Root {
             manifest: scan.files,
+            watch_dirs: Some(watch_dirs),
             oversized: scan.oversized,
             needs_full_sync: false,
         },
@@ -1020,7 +1046,9 @@ fn push_root(d: &Daemon, st: &mut Sync, root: &Path) -> Result<usize> {
     }
     let n = diff.changed.len() + diff.deleted.len();
     let sent = total.elapsed();
-    refresh_watches(d, root, &new);
+    let tracked = st.roots.get_mut(root).context("unknown root")?;
+    let dirs = tracked.watch_directories(root, &new, &diff);
+    refresh_watches(d, root, dirs);
     if total.elapsed() >= Duration::from_secs(1) {
         log(&format!(
             "source push {}: total {:.3}s, scan {:.3}s ({} files, {} oversized), diff {:.3}s, transfer {:.3}s ({} changed, {} deleted), watches {:.3}s",
@@ -1464,6 +1492,109 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "focused real-manifest watch-directory reconstruction diagnostic"]
+    fn representative_watch_directory_reuse() {
+        let root = std::env::var_os("JUSTRUST_SCAN_BENCH_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")));
+        let manifest = remote_sync::scan(&root).unwrap().files;
+        let expected = remote_sync::dirs(&root, &manifest);
+        let mut tracked = Root {
+            manifest: manifest.clone(),
+            watch_dirs: Some(expected.clone()),
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        let diff = remote_sync::Diff::default();
+        for iteration in 0..5 {
+            let start = Instant::now();
+            let rebuilt = std::hint::black_box(remote_sync::dirs(&root, &manifest));
+            let rebuild_ns = start.elapsed().as_nanos();
+            assert_eq!(rebuilt, expected);
+            let start = Instant::now();
+            let cached = std::hint::black_box(tracked.watch_directories(&root, &manifest, &diff));
+            let reuse_ns = start.elapsed().as_nanos();
+            assert_eq!(cached, &expected);
+            eprintln!(
+                "watch dirs {iteration}: rebuild_ns={rebuild_ns} reuse_ns={reuse_ns} files={} dirs={}",
+                manifest.len(),
+                expected.len()
+            );
+        }
+    }
+
+    #[test]
+    fn cached_watch_directories_follow_paths_not_stamps() {
+        let root = Path::new("/workspace");
+        let mut tracked = Root {
+            manifest: Manifest::from([(PathBuf::from("src/lib.rs"), UNKNOWN)]),
+            watch_dirs: None,
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        for paths in [
+            vec!["src/lib.rs"],
+            vec!["src/lib.rs"],
+            vec!["src/lib.rs", "new/deep/file.rs"],
+            vec!["other/file.rs"],
+            vec![],
+            vec!["src/lib.rs"],
+        ] {
+            let next: Manifest = paths
+                .into_iter()
+                .map(|p| {
+                    (
+                        PathBuf::from(p),
+                        remote_sync::Stamp {
+                            mtime_ns: 123,
+                            size: 7,
+                            mode: 0o644,
+                        },
+                    )
+                })
+                .collect();
+            let diff = remote_sync::diff(&tracked.manifest, &next);
+            let expected = remote_sync::dirs(root, &next);
+            assert_eq!(tracked.watch_directories(root, &next, &diff), &expected);
+            tracked.manifest = next;
+        }
+    }
+
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn cached_watch_directories_retry_lost_registration() {
+        let root = std::env::temp_dir().join(format!("jr-watch-cache-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        let mut tracked = Root {
+            manifest: Manifest::from([(PathBuf::from("src/lib.rs"), UNKNOWN)]),
+            watch_dirs: None,
+            oversized: Vec::new(),
+            needs_full_sync: false,
+        };
+        let (tx, _rx) = channel();
+        let watcher = Watcher::new(tx).unwrap();
+        let next = tracked.manifest.clone();
+        let diff = remote_sync::diff(&tracked.manifest, &next);
+        assert_eq!(
+            watcher.watch_all(tracked.watch_directories(&root, &next, &diff)),
+            2
+        );
+        assert_eq!(
+            watcher.watch_all(tracked.watch_directories(&root, &next, &diff)),
+            0
+        );
+        // A new watcher has no registrations but can reuse exactly the same
+        // cached paths. No absence of filesystem events is trusted.
+        let (tx, _rx) = channel();
+        let replacement = Watcher::new(tx).unwrap();
+        assert_eq!(
+            replacement.watch_all(tracked.watch_directories(&root, &next, &diff)),
+            2
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn disk_recovery_resends_other_roots_exact_failed_writes_and_deletes() {
         let base = std::env::temp_dir().join(format!("jr-disk-repair-{}", std::process::id()));
         let a = base.join("a");
@@ -1475,6 +1606,7 @@ mod tests {
         std::fs::write(b.join("lib.rs"), b"current B source").unwrap();
         let make_root = |path: &Path| Root {
             manifest: remote_sync::scan(path).unwrap().files,
+            watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
         };
@@ -1600,6 +1732,7 @@ mod tests {
             manifest: (0..=remote_sync::RSYNC_ABOVE)
                 .map(|i| (PathBuf::from(format!("gone-{i}")), UNKNOWN))
                 .collect(),
+            watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
         };
@@ -1650,6 +1783,7 @@ mod tests {
         let entry = PathBuf::from("src/lib.rs");
         let make_root = || Root {
             manifest: Manifest::from([(entry.clone(), stamp)]),
+            watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
         };
@@ -1711,6 +1845,7 @@ mod tests {
         std::fs::create_dir_all(&b).unwrap();
         let make_root = || Root {
             manifest: Manifest::new(),
+            watch_dirs: None,
             oversized: Vec::new(),
             needs_full_sync: false,
         };
