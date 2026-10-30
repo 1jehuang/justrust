@@ -1,0 +1,59 @@
+{"t":1793352601.4033148,"s":"e","l":"       Fresh unicode-ident v1.0.26"}
+{"t":1793352601.403317,"s":"e","l":"       Fresh proc-macro2 v1.0.107"}
+{"t":1793352601.4033177,"s":"e","l":"       Fresh serde_core v1.0.229"}
+{"t":1793352601.4033897,"s":"e","l":"       Fresh quote v1.0.47"}
+{"t":1793352601.4033904,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793352601.403391,"s":"e","l":"       Fresh utf8parse v0.2.2"}
+{"t":1793352601.4033911,"s":"e","l":"       Fresh memchr v2.8.3"}
+{"t":1793352601.4033916,"s":"e","l":"       Fresh colorchoice v1.0.5"}
+{"t":1793352601.4033918,"s":"e","l":"       Fresh anstyle-query v1.1.5"}
+{"t":1793352601.4033926,"s":"e","l":"       Fresh is_terminal_polyfill v1.70.2"}
+{"t":1793352601.4033928,"s":"e","l":"       Fresh winnow v1.0.4"}
+{"t":1793352601.403393,"s":"e","l":"       Fresh anstyle v1.0.14"}
+{"t":1793352601.4033935,"s":"e","l":"       Fresh regex-syntax v0.8.11"}
+{"t":1793352601.4033937,"s":"e","l":"       Fresh strsim v0.11.1"}
+{"t":1793352601.4034336,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793352601.403434,"s":"e","l":"       Fresh syn v3.0.6"}
+{"t":1793352601.4034345,"s":"e","l":"       Fresh anstyle-parse v1.0.0"}
+{"t":1793352601.4034717,"s":"e","l":"       Fresh toml_parser v1.1.3+spec-1.1.0"}
+{"t":1793352601.4034724,"s":"e","l":"       Fresh toml_datetime v1.1.1+spec-1.1.0"}
+{"t":1793352601.403473,"s":"e","l":"       Fresh aho-corasick v1.1.5"}
+{"t":1793352601.403509,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793352601.4035096,"s":"e","l":"       Fresh toml_writer v1.1.2+spec-1.1.0"}
+{"t":1793352601.40351,"s":"e","l":"       Fresh option-ext v0.2.0"}
+{"t":1793352601.4035103,"s":"e","l":"       Fresh clap_lex v1.1.1"}
+{"t":1793352601.403545,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793352601.40358,"s":"e","l":"       Fresh libc v0.2.190"}
+{"t":1793352601.4035819,"s":"e","l":"       Fresh anstream v1.0.0"}
+{"t":1793352601.4035823,"s":"e","l":"       Fresh clap_derive v4.6.7"}
+{"t":1793352601.4036193,"s":"e","l":"       Fresh zmij v1.0.23"}
+{"t":1793352601.4036198,"s":"e","l":"       Fresh regex-automata v0.4.18"}
+{"t":1793352601.4036205,"s":"e","l":"       Fresh serde_derive v1.0.229"}
+{"t":1793352601.4036207,"s":"e","l":"       Fresh indexmap v2.14.2"}
+{"t":1793352601.4036562,"s":"e","l":"       Fresh serde_spanned v1.1.1"}
+{"t":1793352601.4036572,"s":"e","l":"       Fresh iana-time-zone v0.1.65"}
+{"t":1793352601.4036577,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793352601.403693,"s":"e","l":"       Fresh dirs-sys v0.5.0"}
+{"t":1793352601.4036937,"s":"e","l":"       Fresh num-traits v0.2.19"}
+{"t":1793352601.4036942,"s":"e","l":"       Fresh clap_builder v4.6.7"}
+{"t":1793352601.40373,"s":"e","l":"       Fresh serde_json v1.0.151"}
+{"t":1793352601.4037306,"s":"e","l":"       Fresh serde v1.0.229"}
+{"t":1793352601.4037309,"s":"e","l":"       Fresh regex v1.13.1"}
+{"t":1793352601.403767,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793352601.4037678,"s":"e","l":"       Fresh toml v1.1.6+spec-1.1.0"}
+{"t":1793352601.403768,"s":"e","l":"       Fresh toml_edit v0.25.15+spec-1.1.0"}
+{"t":1793352601.4038036,"s":"e","l":"       Fresh clap v4.6.7"}
+{"t":1793352601.4038043,"s":"e","l":"       Fresh dirs v6.0.0"}
+{"t":1793352601.4038045,"s":"e","l":"       Fresh chrono v0.4.45"}
+{"t":1793352601.4038413,"s":"e","l":"       Dirty justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source): the file `src/summary.rs` has changed (1793352601.360049801s, 4s after last build at 1793352597.771434330s)"}
+{"t":1793352601.4038422,"s":"e","l":"   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source)"}
+{"t":1793352601.4039273,"s":"e","l":"     Running `/home/jeremy/.jcode/scratch/br31/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=ca7c44864225c396 -C extra-filename=-be688cf0e0173f41 --out-dir /home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/justrust/be688cf0e0173f41/out -C incremental=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/incremental -C strip=debuginfo -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/aho-corasick/e26cd474dcdeea20/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/anstream/9da4c945bc52fdfc/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/anstyle-parse/a2ba7d2bd236aab4/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/anstyle-query/3d9f11255d95df20/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/anstyle/ae13368dfb98ae0a/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/clap_builder/5acf29314488c418/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/clap_derive/5ca2f3594aee0ef4/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/clap_lex/f80d2fad735b016f/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/colorchoice/acfd34a52120dcdf/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/dirs-sys/120a46d7283b764b/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/equivalent/547225e09c96240a/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/hashbrown/5adb4a6979bc9498/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/iana-time-zone/6435bbac801149af/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/indexmap/222767195d2358d0/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/is_terminal_polyfill/7047cb55a0a3d521/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/itoa/ef5351037fbfbf46/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/libc/dbccaae8bc9eb7ee/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/memchr/916519e96ed1ded2/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/num-traits/fa55a3a114c335be/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/option-ext/98b9a8ed205f5ed6/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/regex-automata/6a68b522dd83e56c/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/regex-syntax/7fc352cae44a21d1/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde_core/0193eb0d517a5dfb/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde_derive/4f935a2e83f228e2/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde_spanned/8c1c7bc646f071b0/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/strsim/4eae9ded194d3ab3/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml_datetime/243a9abab4d88024/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml_parser/06d1a6f0aa98aa19/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml_writer/f17012b26611542b/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/utf8parse/b83db8a3656a4c9f/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/winnow/4d0c6a5f703da8ce/out -L dependency=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/zmij/71c0ed8cd9019cb9/out --extern anyhow=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/anyhow/ea17b3ec76b90f1c/out/libanyhow-ea17b3ec76b90f1c.rlib --extern anyhow=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/anyhow/ea17b3ec76b90f1c/out/libanyhow-ea17b3ec76b90f1c.rmeta --extern chrono=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/chrono/86e155b740168247/out/libchrono-86e155b740168247.rlib --extern chrono=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/chrono/86e155b740168247/out/libchrono-86e155b740168247.rmeta --extern clap=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/clap/6a1bea4a26bc2ae5/out/libclap-6a1bea4a26bc2ae5.rlib --extern clap=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/clap/6a1bea4a26bc2ae5/out/libclap-6a1bea4a26bc2ae5.rmeta --extern dirs=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/dirs/9b134590804e3ed7/out/libdirs-9b134590804e3ed7.rlib --extern dirs=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/dirs/9b134590804e3ed7/out/libdirs-9b134590804e3ed7.rmeta --extern libc=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/libc/dbccaae8bc9eb7ee/out/liblibc-dbccaae8bc9eb7ee.rlib --extern libc=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/libc/dbccaae8bc9eb7ee/out/liblibc-dbccaae8bc9eb7ee.rmeta --extern regex=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/regex/dfab4d6367d84bfa/out/libregex-dfab4d6367d84bfa.rlib --extern regex=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/regex/dfab4d6367d84bfa/out/libregex-dfab4d6367d84bfa.rmeta --extern serde=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde/dda5e7006c0ef820/out/libserde-dda5e7006c0ef820.rlib --extern serde=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde/dda5e7006c0ef820/out/libserde-dda5e7006c0ef820.rmeta --extern serde_json=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde_json/daf1d606fb6dc61d/out/libserde_json-daf1d606fb6dc61d.rlib --extern serde_json=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/serde_json/daf1d606fb6dc61d/out/libserde_json-daf1d606fb6dc61d.rmeta --extern toml=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml/2e7554d29b1d7e9f/out/libtoml-2e7554d29b1d7e9f.rlib --extern toml=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml/2e7554d29b1d7e9f/out/libtoml-2e7554d29b1d7e9f.rmeta --extern toml_edit=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml_edit/c2ec30821f590236/out/libtoml_edit-c2ec30821f590236.rlib --extern toml_edit=/home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/toml_edit/c2ec30821f590236/out/libtoml_edit-c2ec30821f590236.rmeta -Zjr-empty-lint-level-fast-path=no -Zjr-cache-small-query-values=no -Zjr-cache-associated-items=no --force-warn=unused_crate_dependencies`"}
+{"t":1793352602.3785934,"s":"e","l":"    Finished `test` profile [unoptimized] target(s) in 0.99s"}
+{"t":1793352602.3813362,"s":"e","l":"     Running `/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client __test-runner --pool=env /home/jeremy/.jcode/scratch/br31/owned-off/target/debug/build/justrust/be688cf0e0173f41/out/justrust-be688cf0e0173f41 'summary::tests::' --test-threads=1 --nocapture`"}
+{"t":1793352602.3835592,"s":"o","l":"running 4 tests"}
+{"t":1793352602.383696,"s":"o","l":"test summary::tests::parses_libtest_results ... ok <0.000s>"}
+{"t":1793352602.3837435,"s":"o","l":"test summary::tests::shares_overlapping_time ... JR_RUNTIME_EXECUTED_2"}
+{"t":1793352602.3838098,"s":"o","l":"ok <0.000s>"}
+{"t":1793352602.3838778,"s":"o","l":"test summary::tests::splits_passes_without_double_counting ... ok <0.000s>"}
+{"t":1793352602.3839328,"s":"o","l":"test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>"}
+{"t":1793352602.3839395,"s":"o","l":"test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s"}

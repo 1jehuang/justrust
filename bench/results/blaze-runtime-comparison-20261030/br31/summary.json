@@ -1,0 +1,10 @@
+{
+  "medians_seconds": {
+    "owned-off": 1.1860283619971597,
+    "all3on": 1.1848879379977006
+  },
+  "excluded": [
+    "blaze"
+  ],
+  "policy": "Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only."
+}

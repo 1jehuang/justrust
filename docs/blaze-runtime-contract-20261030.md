@@ -29,14 +29,23 @@ quiet. No native compiler bootstrap runs during this measurement window.
 
 ## Backend boundary established before timing
 
-The pinned Blaze stable `0.20261027.0` successfully compiles and runs the four
-real tests with its Cranelift backend. Its LLVM backend fails before execution
-with unsupported writable statics `__RUST_STD_INTERNAL_VAL` and `MIN`. Full
-compatibility logs are retained privately under
-`/home/jeremy/.jcode/scratch/ba30/smoke-{cranelift,llvm}/`.
+The pinned Blaze stable `0.20261027.0` compiled and ran the four
+real tests in the initial explicit Cranelift compatibility probe and the first
+runtime attempt. The LLVM probe failed before execution with unsupported writable
+statics `__RUST_STD_INTERNAL_VAL` and `MIN`. However, subsequent fresh Cranelift
+runs also failed with those statics, even with backend and optimization explicitly
+pinned and all tracked source hashes and tool identities unchanged. The earlier
+interpretation that this was an LLVM-only limitation was therefore incorrect.
+Full compatibility and failure logs are retained, and the cause remains under
+investigation. A successful initial observation does not establish reliable
+support across fresh stores.
 
-The primary comparison therefore matches the requested observable test workflow,
-not the backend implementation: Blaze/Cranelift versus owned rustc/LLVM. We do
+The intended primary comparison matches the requested observable test workflow,
+not the backend implementation: Blaze/Cranelift versus owned rustc/LLVM. An
+accepted complete comparison has not yet been obtained: the first attempt
+excluded owned stacks because the reporting UI suppressed successful raw test
+output, and later attempts accepted owned stacks but excluded Blaze. We do
+not combine these different attempts into a headline timing ratio. We do
 not pretend this isolates in-memory reuse from codegen backend differences, nor
 rank the unsupported LLVM attempt as a successful result. The test fixture and
 acceptance gates are not weakened to accommodate that failure.

@@ -1,0 +1,8 @@
+{
+  "verdict": "passed",
+  "accepted_complete_cross_engine_comparison": false,
+  "retained_attempts": 3,
+  "exported_owned_calls": 42,
+  "native_correctness_invocations": 224,
+  "scope": "acceptance/provenance audit, not significance, savings or default promotion"
+}

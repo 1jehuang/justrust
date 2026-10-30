@@ -1,0 +1,30 @@
+symbols: 0 in 577.5µs
+load workspace: 21.0s
+resolve: 69 crates in 2.0s
+frozen, of 68 crates: def maps of 22, impls of 22, lang items of 22 from the store, 138 written in 97.5ms
+standard library: from the store, 17 crates
+manifest: none used, the store has none of this build (30.5ms)
+store: 27300 functions found, 17053 compiled and added
+entries: 280 found, 38773 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+not found: [("no entry", 34923)]
+cold: compiled 3850 of 3877 fns (+35093 instances) in 8.9s (+158.3µs emit)
+     20  unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol  (e.g. test::test_main_inner)
+      7  unsupported: writable static `MIN` without a rustc symbol  (e.g. justrust[baadcb47f5ef2310]::slots::tests::join_waits_for_identical_running_build_only)
+Error: `src/lib.rs` reaches 27 functions blaze could not compile, and a build with nothing of rustc's has nothing else to compile them, so it is not built:
+  test::test_main_inner: unsupported: callee `add_spawn_hook`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::remote_watch::tests::new_directories_are_watched: unsupported: callee `recv_timeout`: callee `recv_deadline`: callee `recv`: callee `with`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::sched::tests::counts_only_young_running_siblings: unsupported: callee `default`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::slots::tests::join_waits_for_identical_running_build_only: unsupported: callee `spawn`: callee `spawn`: callee `spawn_unchecked`: callee `spawn_unchecked`: callee `unwrap_or_else`: callee `{closure}`: unsupported: writable static `MIN` without a rustc symbol
+  justrust::slots::tests::stale_units_never_replace_newer_slot_units: unsupported: callee `collect`: callee `from_iter`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::split::tests::typical_cost_prefers_quiet_check_runs: unsupported: callee `{closure}`: callee `from`: callee `from_iter`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  <justrust::depcache::Plan>::restore: unsupported: callee `default`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::history::extract_session: unsupported: callee `default`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::remote_hosted::tests::mock: unsupported: callee `spawn`: callee `spawn`: callee `spawn_unchecked`: callee `spawn_unchecked`: callee `unwrap_or_else`: callee `{closure}`: unsupported: writable static `MIN` without a rustc symbol
+  <justrust::remote_watch::Watcher>::new: unsupported: callee `spawn`: callee `spawn`: callee `spawn_unchecked`: callee `spawn_unchecked`: callee `unwrap_or_else`: callee `{closure}`: unsupported: writable static `MIN` without a rustc symbol
+  justrust::sched::enter: unsupported: callee `spawn`: callee `spawn`: callee `spawn_unchecked`: callee `spawn_unchecked`: callee `unwrap_or_else`: callee `{closure}`: unsupported: writable static `MIN` without a rustc symbol
+  justrust::slots::refresh: unsupported: callee `scope`: callee `catch_unwind`: callee `catch_unwind`: callee `do_call`: callee `call_once`: callee `{closure}`: callee `{closure}`: callee `spawn`: callee `spawn_scoped`: callee `spawn_unchecked`: callee `unwrap_or_else`: callee `{closure}`: unsupported: writable static `MIN` without a rustc symbol
+  <justrust::split::Sources>::read: unsupported: callee `default`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  <justrust::record::Meta as core::default::Default>::default: unsupported: callee `default`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  justrust::slots::slot_sizes: unsupported: callee `scope`: callee `catch_unwind`: callee `catch_unwind`: callee `do_call`: callee `call_once`: callee `{closure}`: callee `{closure}`: callee `collect`: callee `from_iter`: callee `from_iter`: callee `from_iter`: callee `spec_extend`: callee `extend_trusted`: callee `for_each`: callee `fold`: callee `fold`: callee `{closure}`: callee `{closure}`: callee `spawn`: callee `spawn_scoped`: callee `spawn_unchecked`: callee `unwrap_or_else`: callee `{closure}`: unsupported: writable static `MIN` without a rustc symbol
+  justrust::split::graphs: unsupported: callee `collect`: callee `from_iter`: callee `default`: callee `new`: callee `{closure}::fn_pointer`: callee `{closure}`: unsupported: writable static `__RUST_STD_INTERNAL_VAL` without a rustc symbol
+  and 11 more

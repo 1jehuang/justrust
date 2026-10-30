@@ -1,0 +1,54 @@
+{
+  "command": [
+    "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+    "test",
+    "--lib",
+    "--",
+    "summary::tests::",
+    "--test-threads=1",
+    "--nocapture"
+  ],
+  "status": 101,
+  "error": null,
+  "timed_out": false,
+  "elapsed_seconds": 33.402048880998336,
+  "noise": {
+    "before": {
+      "busy_seconds": 258627.28,
+      "loadavg": [
+        4.22314453125,
+        6.19873046875,
+        6.68798828125
+      ]
+    },
+    "after": {
+      "busy_seconds": 259029.53,
+      "loadavg": [
+        10.7919921875,
+        7.54150390625,
+        7.1162109375
+      ]
+    },
+    "child_cpu_seconds": 0.041664,
+    "contamination": "unknown",
+    "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+    "other_cpu_seconds_estimate": 402.208336
+  },
+  "environment": {
+    "BLAZE_BACKEND": "cranelift",
+    "BLAZE_CACHE": "/home/jeremy/.jcode/scratch/ba30/compat-env-replay/store",
+    "BLAZE_HOME": "/home/jeremy/.jcode/scratch/ba30/compat-env-replay/bh",
+    "BLAZE_OPT": "0",
+    "CARGO_PROFILE_DEV_DEBUG": "0",
+    "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+    "CARGO_PROFILE_TEST_DEBUG": "0",
+    "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+    "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+    "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/ba30/compat-env-replay/target",
+    "HOME": "/home/jeremy",
+    "XDG_RUNTIME_DIR": "/run/user/1000"
+  },
+  "parsed": null,
+  "source_unchanged": true,
+  "scope": "one permitted compatibility invocation, no ranking or fixture change"
+}
