@@ -82,6 +82,7 @@ const FORWARDED_ENV: &[&str] = &[
     "JUSTRUST_CACHE_PROC_MACROS",
     "JUSTRUST_CUTOFF",
     "JUSTRUST_CARGO_CUTOFF",
+    "JUSTRUST_CARGO_SUBTREE_CACHE",
     "JUSTRUST_CARGO_FORK",
     "JUSTRUST_CARGO_DAEMON",
     "JUSTRUST_CARGO_DAEMON_TRACE",
@@ -1642,6 +1643,7 @@ mod tests {
             "JUSTRUST_TEST_PARALLEL",
             "JUSTRUST_TEST_JOBS",
             "JUSTRUST_TEST_SPLIT",
+            "JUSTRUST_CARGO_SUBTREE_CACHE",
         ] {
             for value in ["1", "8", "0", "off", ""] {
                 assert_eq!(
@@ -1689,6 +1691,7 @@ mod tests {
             "JUSTRUST_CACHE_PROC_MACROS",
             "JUSTRUST_CUTOFF",
             "JUSTRUST_CARGO_CUTOFF",
+            "JUSTRUST_CARGO_SUBTREE_CACHE",
             "JUSTRUST_CARGO_FORK",
             "JUSTRUST_CARGO_DAEMON",
             "JUSTRUST_CARGO_DAEMON_TRACE",
