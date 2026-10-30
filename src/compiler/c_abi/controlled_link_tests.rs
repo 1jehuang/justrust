@@ -127,6 +127,25 @@ fn controlled_link_reproducible_across_staged_roots() {
     let second = directory.0.join("second");
     fs::create_dir(&first).unwrap();
     fs::create_dir(&second).unwrap();
+    let command_a = capsule.command(&first, 2, &[]).unwrap();
+    let command_b = capsule.command(&second, 2, &[]).unwrap();
+    let arguments = command_a.get_args().collect::<Vec<_>>();
+    assert_eq!(arguments, command_b.get_args().collect::<Vec<_>>());
+    assert!(arguments.iter().all(|argument| {
+        !argument
+            .as_encoded_bytes()
+            .windows(first.as_os_str().as_encoded_bytes().len())
+            .any(|window| window == first.as_os_str().as_encoded_bytes())
+    }));
+    assert!(arguments.contains(&std::ffi::OsStr::new("inputs/0.o")));
+    assert!(arguments.contains(&std::ffi::OsStr::new("inputs/1.o")));
+    assert!(arguments.contains(&std::ffi::OsStr::new("out/program")));
+    assert_eq!(
+        command_a.get_program(),
+        first.join("lib64/ld-linux-x86-64.so.2")
+    );
+    assert_eq!(command_a.get_current_dir(), Some(first.as_path()));
+    assert_eq!(command_a.get_envs().count(), 0);
     let a = capsule.execute(&first, &[], &own, &[]).unwrap();
     let b = capsule.execute(&second, &[], &own, &[]).unwrap();
     assert_eq!(a, b);

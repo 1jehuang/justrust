@@ -23,7 +23,7 @@ pub struct ControlledToolchain {
 impl ControlledToolchain {
     /// Change this framing whenever the execution boundary or fixed argv changes.
     pub(crate) fn policy(&self) -> &'static [u8] {
-        b"justrust-controlled-gnu-ld-glibc-x86-64-owned-exec-stop-v7"
+        b"justrust-controlled-gnu-ld-glibc-x86-64-relative-argv-v8"
     }
     pub(crate) fn library_directory(&self) -> &Path {
         &self.library_dir
@@ -184,52 +184,7 @@ impl ControlledToolchain {
             std::fs::write(root.join(format!("inputs/{index}.o")), bytes)
                 .map_err(infrastructure)?;
         }
-        // Execute the captured interpreter, never the host PT_INTERP target.
-        let staged = |path: &Path| root.join(path.strip_prefix("/").unwrap());
-        let loader = staged(Path::new("/lib64/ld-linux-x86-64.so.2"));
-        let library_paths = self
-            .files
-            .keys()
-            .filter_map(|p| p.parent())
-            .map(staged)
-            .collect::<std::collections::BTreeSet<_>>();
-        let library_paths = std::env::join_paths(library_paths)
-            .map_err(|e| format!("infrastructure: native library paths: {e}"))?;
-        let mut command = Command::new(&loader);
-        command
-            .env_clear()
-            .current_dir(root)
-            .args(["--inhibit-cache", "--library-path"])
-            .arg(library_paths)
-            .arg(staged(Path::new("/usr/bin/ld")))
-            .args([
-                "-m",
-                "elf_x86_64",
-                "--build-id=none",
-                "--fatal-warnings",
-                "--eh-frame-hdr",
-                "-z",
-                "relro",
-                "-z",
-                "noexecstack",
-                "-o",
-            ])
-            .arg(root.join("out/program"))
-            .args(["--dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
-            .arg(staged(&self.library_dir.join("crt1.o")))
-            .arg(staged(&self.library_dir.join("crti.o")))
-            .arg(root.join("inputs/native.o"));
-        for index in 0..objects.len() {
-            command.arg(root.join(format!("inputs/{index}.o")));
-        }
-        if libraries.iter().any(|name| name == "m") {
-            command.arg(staged(&self.library_dir.join("libm.so.6")));
-        }
-        command
-            .arg(staged(&self.library_dir.join("libc.so.6")))
-            .arg(staged(&self.library_dir.join("libc_nonshared.a")))
-            .arg(loader)
-            .arg(staged(&self.library_dir.join("crtn.o")));
+        let mut command = self.command(root, objects.len(), libraries)?;
         let output = super::link_sandbox_run::output(&mut command, root).map_err(|e| {
             format!(
                 "infrastructure: controlled native linker boundary: {}",
@@ -249,6 +204,64 @@ impl ControlledToolchain {
             MAX_EXECUTABLE_BYTES,
             "native executable",
         )
+    }
+
+    pub(super) fn command(
+        &self,
+        root: &Path,
+        objects: usize,
+        libraries: &[String],
+    ) -> Result<Command, String> {
+        use std::os::unix::process::CommandExt;
+        // Only the kernel's executable lookup uses the private absolute root.
+        // Tool-visible argument strings use the captured namespace instead.
+        let relative = |path: &Path| path.strip_prefix("/").unwrap().to_path_buf();
+        let loader = root.join("lib64/ld-linux-x86-64.so.2");
+        let library_paths = self
+            .files
+            .keys()
+            .filter_map(|p| p.parent())
+            .map(relative)
+            .collect::<std::collections::BTreeSet<_>>();
+        let library_paths = std::env::join_paths(library_paths)
+            .map_err(|e| format!("infrastructure: native library paths: {e}"))?;
+        let mut command = Command::new(&loader);
+        command
+            .arg0("lib64/ld-linux-x86-64.so.2")
+            .env_clear()
+            .current_dir(root)
+            .args(["--inhibit-cache", "--library-path"])
+            .arg(library_paths)
+            .arg(relative(Path::new("/usr/bin/ld")))
+            .args([
+                "-m",
+                "elf_x86_64",
+                "--build-id=none",
+                "--fatal-warnings",
+                "--eh-frame-hdr",
+                "-z",
+                "relro",
+                "-z",
+                "noexecstack",
+                "-o",
+            ])
+            .arg("out/program")
+            .args(["--dynamic-linker", "/lib64/ld-linux-x86-64.so.2"])
+            .arg(relative(&self.library_dir.join("crt1.o")))
+            .arg(relative(&self.library_dir.join("crti.o")))
+            .arg("inputs/native.o");
+        for index in 0..objects {
+            command.arg(format!("inputs/{index}.o"));
+        }
+        if libraries.iter().any(|name| name == "m") {
+            command.arg(relative(&self.library_dir.join("libm.so.6")));
+        }
+        command
+            .arg(relative(&self.library_dir.join("libc.so.6")))
+            .arg(relative(&self.library_dir.join("libc_nonshared.a")))
+            .arg("lib64/ld-linux-x86-64.so.2")
+            .arg(relative(&self.library_dir.join("crtn.o")));
+        Ok(command)
     }
 }
 
