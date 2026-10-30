@@ -228,6 +228,8 @@ def environment(args, stack):
         env['RUSTFLAGS'] += ' -Zcache-proc-macros=yes'
     if stack == 'owned-declarative':
         env['RUSTFLAGS'] += ' -Zjr-cache-declarative-macros=yes'
+    if stack == 'owned-demand':
+        env['RUSTFLAGS'] += ' -Zjr-demand-query-cache=yes'
     if stack in ('all4hotpatch', 'owned-macro-hotpatch'):
         env['JUSTRUST_HOTPATCH'] = '1'
     if stack.startswith('blaze'):
@@ -307,6 +309,8 @@ def execute(args):
         stacks += ['owned-macro', 'owned-macro-hotpatch']
     if getattr(args, 'declarative_macro_cache', False):
         stacks += ['owned-declarative']
+    if getattr(args, 'demand_query_cache', False):
+        stacks += ['owned-demand']
     records, medians, environments = [], {}, {}
     metadata = {'scope': 'scoped filtered tests, not full suite or general speed claim',
                 'source_before': source_hashes(args.source, args.output),
@@ -484,6 +488,8 @@ def main():
                         help='UNSAFE external-input experiment: add native proc-macro cache stacks; known stale derive/attribute env/file output, not correctness-certified')
     parser.add_argument('--declarative-macro-cache', action='store_true',
                         help='add an isolated literal declarative cache stack, other reuse experiments and proc-macro cache off')
+    parser.add_argument('--demand-query-cache', action='store_true',
+                        help='add isolated demand-only query persistence, other reuse experiments and proc-macro cache off')
     parser.add_argument('--blaze-seed-cache', type=lambda s: Path(s).expanduser().absolute(),
                         help='copy a private successful store into each fresh Blaze cache; warm-store scope only')
     parser.add_argument('--timeout', type=float, default=360)

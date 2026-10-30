@@ -24,6 +24,25 @@ def output(names=(NAME,), marker='', failed=False):
 
 
 class HarnessTests(unittest.TestCase):
+    def test_demand_only_stack(self):
+        with tempfile.TemporaryDirectory() as temp:
+            args = argparse.Namespace(output=Path(temp), cargo=Path('/mock/cargo'),
+                                      rustc=Path('/mock/rustc'), compiler_nightly=True)
+            with patch.dict(os.environ, {'JUSTRUST_CACHE_PROC_MACROS': '1',
+                                        'RUSTFLAGS': '-Zcache-proc-macros=yes'}, clear=False):
+                env = h.environment(args, 'owned-demand')
+                baseline = h.environment(args, 'owned-off')
+            self.assertEqual(env['JUSTRUST_CACHE_PROC_MACROS'], '0')
+            self.assertIn('-Zjr-demand-query-cache=yes', env['RUSTFLAGS'])
+            self.assertNotIn('-Zjr-demand-query-cache', baseline['RUSTFLAGS'])
+            self.assertNotIn('-Zcache-proc-macros=yes', env['RUSTFLAGS'])
+            self.assertNotIn('-Zjr-cache-declarative-macros=yes', env['RUSTFLAGS'])
+            for flag in h.base.FLAGS:
+                self.assertIn(f'-Z{flag}=no', env['RUSTFLAGS'])
+            self.assertNotIn('JUSTRUST_HOTPATCH', env)
+            self.assertNotEqual(env['JUSTRUST_HOME'], baseline['JUSTRUST_HOME'])
+            self.assertNotEqual(env['CARGO_TARGET_DIR'], baseline['CARGO_TARGET_DIR'])
+
     def test_declarative_only_stack(self):
         with tempfile.TemporaryDirectory() as temp:
             args = argparse.Namespace(output=Path(temp), cargo=Path('/mock/cargo'),
@@ -192,7 +211,7 @@ class HarnessTests(unittest.TestCase):
             self.assertFalse(row['timed_out'])
             self.assertEqual(row['status'], -signal.SIGTERM)
 
-    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None):
+    def exercise(self, root, crash=False, stale=False, raw_mode='valid', experiments=False, seeded=False, journal=True, macro=False, missing_journal_phase=None, demand=False):
         source = root / 'source'
         (source / 'src').mkdir(parents=True)
         pinned = source / 'src/summary.rs'
@@ -201,7 +220,7 @@ class HarnessTests(unittest.TestCase):
             edit_file='src/summary.rs', edit_test=NAME, edit_anchor='fn shares_overlapping_time() {',
             blaze_llvm=True, command='test', test_filter='summary::tests::', timeout=1,
             binary='justrust', blaze=Path('/fake/blaze'), justrust=Path('/fake/justrust'),
-            owned_experiments=experiments, native_macro_cache=macro,
+            owned_experiments=experiments, native_macro_cache=macro, demand_query_cache=demand,
             cargo=Path('/fake/cargo'), rustc=Path('/fake/rustc'),
             blaze_seed_cache=root / 'seed' if seeded else None,
             wild=root / 'fake-wild' if experiments or macro else None)
@@ -281,6 +300,19 @@ class HarnessTests(unittest.TestCase):
                 self.assertEqual(len(edits), 4)
                 self.assertEqual(len({data for _, data in edits}), 1)
                 self.assertIn('owned-off' if rep == 0 else 'all3on', edits[0][0])
+
+    def test_demand_stack_full_gates(self):
+        with tempfile.TemporaryDirectory() as temp:
+            rows = self.exercise(Path(temp), demand=True)
+            root = Path(temp) / 'out'
+            metadata = json.loads((root / 'metadata.json').read_text())
+            summary = json.loads((root / 'summary.json').read_text())
+            self.assertEqual(metadata['stacks'], ['owned-off', 'all3on', 'blaze', 'blaze-llvm', 'owned-demand'])
+            self.assertIn('owned-demand', summary['medians_seconds'])
+            for rep in range(2):
+                edits = [(name, data) for name, data in rows if name.startswith(f'edit-{rep:03d}')]
+                self.assertEqual(len(edits), 5)
+                self.assertEqual(len({data for _, data in edits}), 1)
 
     def test_owned_experiments_isolation_flags_and_logging(self):
         with tempfile.TemporaryDirectory() as temp:
