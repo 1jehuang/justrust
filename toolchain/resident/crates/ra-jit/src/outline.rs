@@ -702,6 +702,89 @@ pub(crate) fn skeleton(db: &RootDatabase, file: FileId) -> Option<u64> {
 }
 
 fn skeleton_of(tree: &SyntaxNode) -> Option<u64> {
+    skeleton_with(tree, is_unseen_body)
+}
+
+/// Diagnostic cache identity only. Unlike the executable outline, a resolved built-in
+/// `#[test]` may hide its body here. Never use this key for codepatch or function listing.
+/// Resolution is repeated in every relevant crate, and uncertain contexts fail closed.
+pub(crate) fn diagnostic_skeleton(
+    db: &RootDatabase,
+    file: FileId,
+    within: Option<&FxHashSet<ide_db::base_db::Crate>>,
+) -> Option<u64> {
+    let crates: Vec<_> = relevant_crates(db, file)
+        .iter()
+        .copied()
+        .filter(|it| within.is_none_or(|within| within.contains(it)))
+        .collect();
+    // The semantic API has fallback contexts when none of `within` owns a file.
+    // No proof is available for that fallback, so do not cache it.
+    if crates.is_empty() {
+        return None;
+    }
+    let edition = crates.first().map_or(Edition::CURRENT, |it| it.data(db).edition);
+    let tree = EditionedFileId::new(db, file, edition).parse(db).syntax_node();
+    let mut proven = None::<FxHashSet<TextRange>>;
+    for &krate in crates.iter() {
+        // One syntax tree cannot stand for different edition parses or multiple module
+        // contexts. Refuse the optimization rather than guess which resolver was used.
+        if krate.data(db).edition != edition {
+            return None;
+        }
+        let sema =
+            hir::Semantics::new_within(db, std::sync::Arc::new(FxHashSet::from_iter([krate])));
+        let modules: Vec<_> = sema.file_to_module_defs(file).collect();
+        if modules.len() != 1 || ide_db::base_db::Crate::from(modules[0].krate(db)) != krate {
+            return None;
+        }
+        let source = sema.parse(EditionedFileId::new(db, file, edition));
+        let mut here = FxHashSet::default();
+        for func in source.syntax().descendants().filter_map(ast::Fn::cast) {
+            let mut test = false;
+            let inert = func.attrs().all(|attr| {
+                let Some(name) = attr.simple_name() else { return false };
+                if INERT.contains(&name.as_str()) {
+                    return true;
+                }
+                // Only the ordinary, argument-free spelling. `is_test` on a function
+                // is a syntactic flag, not evidence about a shadowing attribute macro.
+                if name != "test" || attr.as_simple_atom().is_none() {
+                    return false;
+                }
+                let Some(path) = attr.path() else { return false };
+                let Some(hir::PathResolution::Def(hir::ModuleDef::Macro(mac))) =
+                    sema.resolve_path(&path)
+                else {
+                    return false;
+                };
+                let id: hir_def::MacroId = mac.into();
+                let expander = match id {
+                    hir_def::MacroId::Macro2Id(id) => id.lookup(db).expander,
+                    hir_def::MacroId::MacroRulesId(id) => id.lookup(db).expander,
+                    hir_def::MacroId::ProcMacroId(_) => return false,
+                };
+                let builtin = matches!(expander,
+                    hir_def::MacroExpander::BuiltInAttr(it) if it.is_test());
+                test |= builtin;
+                builtin
+            });
+            if inert && test {
+                here.insert(func.syntax().text_range());
+            }
+        }
+        match &mut proven {
+            Some(proven) => proven.retain(|range| here.contains(range)),
+            None => proven = Some(here),
+        }
+    }
+    let proven = proven.unwrap_or_default();
+    skeleton_with(&tree, |node| {
+        is_unseen_body_with(node, |func| proven.contains(&func.text_range()) || is_inert(func))
+    })
+}
+
+fn skeleton_with(tree: &SyntaxNode, unseen: impl Fn(&SyntaxNode) -> bool) -> Option<u64> {
     let written_by_macro = |node: &SyntaxNode| {
         node.kind() == SyntaxKind::MACRO_CALL
             && node.parent().is_some_and(|it| {
@@ -725,11 +808,11 @@ fn skeleton_of(tree: &SyntaxNode) -> Option<u64> {
         })
     };
     for node in tree.descendants() {
-        if written_by_macro(&node) || is_unseen_body(&node) && has_items(&node) {
+        if written_by_macro(&node) || unseen(&node) && has_items(&node) {
             return None;
         }
     }
-    Some(hash_outside_bodies(tree, &FxHashSet::default(), &FxHashSet::default()).0)
+    Some(hash_outside_bodies_with(tree, &FxHashSet::default(), &FxHashSet::default(), unseen).0)
 }
 
 /// The hash, and how many of the `declaring` functions were come by. The functions at
@@ -738,6 +821,15 @@ fn hash_outside_bodies(
     file: &SyntaxNode,
     declaring: &FxHashSet<TextRange>,
     skipped: &FxHashSet<TextRange>,
+) -> (u64, usize) {
+    hash_outside_bodies_with(file, declaring, skipped, is_unseen_body)
+}
+
+fn hash_outside_bodies_with(
+    file: &SyntaxNode,
+    declaring: &FxHashSet<TextRange>,
+    skipped: &FxHashSet<TextRange>,
+    unseen: impl Fn(&SyntaxNode) -> bool,
 ) -> (u64, usize) {
     let mut hasher = FxHasher::default();
     let mut found = 0;
@@ -753,7 +845,7 @@ fn hash_outside_bodies(
                 node.kind().hash(&mut hasher);
                 if node.kind() == SyntaxKind::FN && declaring.contains(&node.text_range()) {
                     found += 1;
-                } else if is_unseen_body(&node)
+                } else if unseen(&node)
                     && node.parent().is_none_or(|it| !declaring.contains(&it.text_range()))
                 {
                     walk.skip_subtree();
@@ -778,6 +870,10 @@ fn hash_outside_bodies(
 /// Whether the node is the body of a function that nothing else sees into, going by how the
 /// function is written. What its body declares takes name resolution to tell.
 fn is_unseen_body(node: &SyntaxNode) -> bool {
+    is_unseen_body_with(node, is_inert)
+}
+
+fn is_unseen_body_with(node: &SyntaxNode, inert: impl Fn(&SyntaxNode) -> bool) -> bool {
     if node.kind() != SyntaxKind::BLOCK_EXPR {
         return false;
     }
@@ -788,7 +884,7 @@ fn is_unseen_body(node: &SyntaxNode) -> bool {
     let names_its_type = func.ret_type().is_some_and(|it| {
         it.syntax().descendants().any(|it| it.kind() == SyntaxKind::IMPL_TRAIT_TYPE)
     });
-    if names_its_type || !is_inert(func.syntax()) {
+    if names_its_type || !inert(func.syntax()) {
         return false;
     }
     // rustc copies the body into the callers, also the ones it compiled for us.
@@ -1162,6 +1258,158 @@ mod tests {
         ] {
             assert_eq!(skeleton(text), None, "{text}");
         }
+    }
+
+    // Real resolver fixtures, not a syntactic stand-in for attribute provenance.
+    // Keep the built-in definition explicit: a bare #[test] with no core/prelude
+    // in a fixture is unresolved and must not qualify. Attribute builtins are
+    // registered by collect_macro_def (macro2), not collect_macro_rules.
+    const DIAGNOSTIC_BUILTIN_TEST: &str = "\
+//- /main.rs crate:main cfg:test
+#[rustc_builtin_macro]
+pub macro test($item:item) {}
+";
+
+    fn diagnostic_key(fixture: &str) -> Option<u64> {
+        use test_fixture::WithFixture;
+        let (db, files) = RootDatabase::with_many_files(fixture);
+        hir::attach_db(&db, || diagnostic_skeleton(&db, files[0].file_id(&db), None))
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_omits_only_resolved_builtin_test_bodies() {
+        let file = |body: &str| {
+            format!("{DIAGNOSTIC_BUILTIN_TEST}#[test]\nfn f() {{ {body} }}\nfn after() {{}}")
+        };
+        let before = diagnostic_key(&file("1;"));
+        assert!(before.is_some());
+        for body in ["2;", "let changed = 123456;", "{ let nested_block = 0; }"] {
+            assert_eq!(diagnostic_key(&file(body)), before, "{body}");
+        }
+        // The global executable/function-ID key still sees a test's body.
+        assert_ne!(skeleton(&file("1;")), skeleton(&file("2;")));
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_keeps_test_signatures_and_attributes() {
+        let key = |item: &str| diagnostic_key(&format!("{DIAGNOSTIC_BUILTIN_TEST}{item}"));
+        let before = key("#[test] fn f() { 1; }");
+        assert!(before.is_some());
+        for item in [
+            "#[test] fn renamed() { 1; }",
+            "#[test] fn f(x: u8) { 1; }",
+            "#[test] fn f() -> u8 { 1; }",
+            "#[test] #[allow(dead_code)] fn f() { 1; }",
+            "#[test] #[ignore] fn f() { 1; }",
+            "fn f() { 1; }",
+        ] {
+            assert_ne!(key(item), before, "{item}");
+        }
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_rejects_nested_test_items_and_item_macros() {
+        for body in [
+            "fn nested() {}",
+            "struct Nested;",
+            "const N: u8 = 1;",
+            "static N: u8 = 1;",
+            "mod nested {}",
+            "impl T { items!(); }",
+        ] {
+            let file = format!("{DIAGNOSTIC_BUILTIN_TEST}#[test] fn f() {{ {body} }}");
+            assert_eq!(diagnostic_key(&file), None, "{body}");
+        }
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_keeps_unresolved_and_proc_shadowed_test_bodies() {
+        for prefix in [
+            "//- /main.rs crate:main cfg:test\n",
+            "//- proc_macros: identity\n//- /main.rs crate:main cfg:test\nuse proc_macros::identity as test;\n",
+            "//- /main.rs crate:main cfg:test\nmacro_rules! test { ($i:item) => { $i } }\n",
+        ] {
+            let before = diagnostic_key(&format!("{prefix}#[test] fn f() {{ 1; }}"));
+            let after = diagnostic_key(&format!("{prefix}#[test] fn f() {{ 2; }}"));
+            assert!(before.is_none() || before != after, "{prefix}");
+        }
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_preserves_all_body_visibility_guards() {
+        for (attrs, signature, body) in [
+            ("#[test] #[unknown]", "fn f()", "VALUE;"),
+            ("#[test] #[inline(always)]", "fn f()", "VALUE;"),
+            ("#[test]", "const fn f()", "VALUE;"),
+            ("#[test]", "async fn f()", "VALUE;"),
+            ("#[test]", "fn f() -> impl Sized", "VALUE"),
+            ("#[test]", "fn f()", "#![allow(unused)] VALUE;"),
+            ("#[test]", "fn f()", "macro_rules! exported { () => { VALUE } }"),
+            ("#[test() ]", "fn f()", "VALUE;"),
+        ] {
+            let file = |value| {
+                format!(
+                    "{DIAGNOSTIC_BUILTIN_TEST}{attrs} {signature} {{ {} }}",
+                    body.replace("VALUE", value)
+                )
+            };
+            let before = diagnostic_key(&file("1"));
+            let after = diagnostic_key(&file("2"));
+            assert!(before.is_none() || before != after, "{attrs} {signature}: {body}");
+        }
+        let file = |body| {
+            format!("{DIAGNOSTIC_BUILTIN_TEST}#[unknown] mod m {{ #[test] fn f() {{ {body} }} }}")
+        };
+        let before = diagnostic_key(&file("1;"));
+        assert!(before.is_none() || before != diagnostic_key(&file("2;")));
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_refuses_multiple_module_contexts() {
+        let fixture = "\
+//- /main.rs crate:main cfg:test
+#[path = \"shared.rs\"] mod a;
+#[path = \"shared.rs\"] mod b;
+//- /shared.rs
+#[test] fn f() { 1; }
+";
+        use test_fixture::WithFixture;
+        let (db, files) = RootDatabase::with_many_files(fixture);
+        hir::attach_db(&db, || {
+            assert_eq!(diagnostic_skeleton(&db, files[1].file_id(&db), None), None);
+        });
+    }
+
+    #[test]
+    fn resident_diagnostic_skeleton_resolves_within_active_test_crate() {
+        use test_fixture::WithFixture;
+        let key = |body: &str| {
+            let fixture = format!(
+                "\
+//- /plain.rs crate:plain
+mod shared;
+//- /tests.rs crate:tests cfg:test
+mod shared;
+//- /shared.rs
+#[rustc_builtin_macro]
+pub macro test($item:item) {{}}
+#[cfg(test)] mod tests {{ use super::test; #[test] fn f() {{ {body} }} }}
+"
+            );
+            let (db, files) = RootDatabase::with_many_files(&fixture);
+            hir::attach_db(&db, || {
+                let sema = hir::Semantics::new(&db);
+                let krate =
+                    sema.file_to_module_defs(files[1].file_id(&db)).next().unwrap().krate(&db);
+                let within = FxHashSet::from_iter([krate.into()]);
+                let shared = files[2].file_id(&db);
+                assert_eq!(diagnostic_skeleton(&db, shared, Some(&FxHashSet::default())), None);
+                diagnostic_skeleton(&db, shared, Some(&within))
+            })
+        };
+        let before = key("1;");
+        assert!(before.is_some());
+        assert_eq!(before, key("let longer_edit = 2;"));
     }
 
     #[test]

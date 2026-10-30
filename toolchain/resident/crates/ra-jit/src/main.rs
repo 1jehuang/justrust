@@ -6749,7 +6749,7 @@ fn broken_in(
     Some(errors::Said(said))
 }
 
-/// What the last check of a file found nothing wrong in: the file's [`outline::skeleton`] then,
+/// What the last check of a file found nothing wrong in: its [`outline::diagnostic_skeleton`],
 /// and a hash of how each of its functions was written. An edit that leaves the skeleton as it
 /// was changed no more than bodies nothing else sees into, and a body's errors are its own:
 /// the next check asks only for the bodies whose functions are written otherwise.
@@ -6764,6 +6764,13 @@ type CleanKey = (vfs::FileId, Option<(usize, u64)>, (bool, bool));
 
 static CLEAN: std::sync::LazyLock<std::sync::Mutex<FxHashMap<CleanKey, Clean>>> =
     std::sync::LazyLock::new(Default::default);
+
+#[cfg(test)]
+thread_local! {
+    static DIAGNOSTICS_LAST_ASKED: std::cell::Cell<(usize, usize)> = const {
+        std::cell::Cell::new((0, 0))
+    };
+}
 
 /// Startup-only opt-in inherited from a dedicated measurement daemon by its workers.
 /// This is not a dynamically forwarded or worker-identity configuration variable.
@@ -6984,7 +6991,7 @@ fn errors_of(
         (set.len(), hashes.fold(0, |all, it| all ^ it))
     });
     let key = (file, crates, (lints, refuse_borrowck));
-    let skeleton = outline::skeleton(db, file);
+    let skeleton = outline::diagnostic_skeleton(db, file, within.as_deref());
     let was = skeleton.and_then(|now| lock(&CLEAN).remove(&key).filter(|it| it.skeleton == now));
     drop(skeleton_phase);
     let functions = std::cell::RefCell::new(FxHashMap::default());
@@ -7062,6 +7069,8 @@ fn errors_of(
         let (n, of) = asked_of.get();
         eprintln!("check: {file:?}: the bodies of {n} of {of} functions asked");
     }
+    #[cfg(test)]
+    DIAGNOSTICS_LAST_ASKED.set(asked_of.get());
     if let Some(skeleton) = skeleton.filter(|_| found.is_empty()) {
         lock(&CLEAN).insert(key, Clean { skeleton, functions: functions.into_inner() });
     }
@@ -12014,6 +12023,102 @@ extern "C" fn exported() {}
                 assert!(!hir_ty_codegen::compile_time_only(&db, it));
             }
         });
+    }
+
+    /// Each revision checks the real selective path against CLEAN-empty diagnostics,
+    /// including exact file ranges, codes and messages. The oracle never consumes the
+    /// sequence's cached state or clears another file's key, even if an assertion panics.
+    #[test]
+    fn resident_diagnostic_skeleton_cache_matches_fresh_errors_after_each_edit() {
+        use ide_db::base_db::salsa::Durability;
+        use test_fixture::WithFixture;
+
+        struct SavedClean {
+            key: CleanKey,
+            previous: Option<Clean>,
+        }
+        impl SavedClean {
+            fn take(key: CleanKey) -> Self {
+                Self { key, previous: lock(&CLEAN).remove(&key) }
+            }
+        }
+        impl Drop for SavedClean {
+            fn drop(&mut self) {
+                let mut clean = lock(&CLEAN);
+                clean.remove(&self.key);
+                if let Some(previous) = self.previous.take() {
+                    clean.insert(self.key, previous);
+                }
+            }
+        }
+
+        const SOURCE: &str = "\
+//- /main.rs crate:main cfg:test
+#[rustc_builtin_macro]
+pub macro test($item:item) {}
+#[test] fn first() { let _: u8 = 1; }
+#[test] fn second() { let _: u8 = 2; }
+";
+        let (mut db, file) = RootDatabase::with_single_file(SOURCE);
+        let file = file.file_id(&db);
+        let key = (file, None, (false, false));
+        let _restore_original = SavedClean::take(key);
+        let config = ide_diagnostics::DiagnosticsConfig::test_sample();
+        // Labels distinguish full invalidation from recovery after an unclean result.
+        let variants = [
+            ("cold", SOURCE.to_owned(), false),
+            ("unchanged", SOURCE.to_owned(), false),
+            ("body", SOURCE.replace("u8 = 1", "u8 = 3"), false),
+            ("body error", SOURCE.replace("u8 = 1", "u8 = true"), true),
+            ("recovery", SOURCE.to_owned(), false),
+            ("signature", SOURCE.replace("fn first()", "fn first(x: u8)"), false),
+            ("signature recovery", SOURCE.to_owned(), false),
+            (
+                "attribute",
+                SOURCE.replace("#[test] fn first", "#[test] #[allow(unused)] fn first"),
+                false,
+            ),
+            ("attribute recovery", SOURCE.to_owned(), false),
+            (
+                "nested item",
+                SOURCE.replace("let _: u8 = 1;", "fn nested() { let _: u8 = true; }"),
+                true,
+            ),
+            ("nested recovery", SOURCE.to_owned(), false),
+            ("final unchanged", SOURCE.to_owned(), false),
+        ];
+        for (label, source, expect_error) in variants {
+            // Fixture directives are comments and are intentionally kept in the updated
+            // text. The crate graph/cfg remains the one installed by WithFixture.
+            db.set_file_text_with_durability(file, &source, Durability::LOW);
+            hir::attach_db(&db, || {
+                let actual = errors_of(&db, &config, file, None, (false, false));
+                let (asked, total) = DIAGNOSTICS_LAST_ASKED.get();
+                assert!(total >= 2, "{label}: fixture did not visit test functions");
+                match label {
+                    "cold" | "recovery" | "signature" | "attribute" | "nested item" => {
+                        assert_eq!(asked, total, "{label}")
+                    }
+                    // A None skeleton does not evict the previous clean entry. Restoring
+                    // exactly its source can reuse it, unlike recovery from a Some key
+                    // whose erroneous revision already consumed that entry.
+                    "unchanged" | "nested recovery" | "final unchanged" => {
+                        assert_eq!(asked, 0, "{label}")
+                    }
+                    "body" | "body error" => assert_eq!(asked, 1, "{label}"),
+                    _ => {}
+                }
+                let fresh = {
+                    let _restore_sequence = SavedClean::take(key);
+                    errors_of(&db, &config, file, None, (false, false))
+                };
+                assert_eq!(actual, fresh, "{label}: selective diagnostics differ from fresh");
+                assert_eq!(!actual.is_empty(), expect_error, "{label}: unexpected verdict");
+                if expect_error {
+                    assert!(actual.iter().any(|(_, code, _)| *code == "E0308"), "{label}");
+                }
+            });
+        }
     }
 
     /// Compare with the uncached traversal after each real database revision, not
