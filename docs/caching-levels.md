@@ -157,6 +157,16 @@ The investigation now has concrete native implementations, not only proposals:
   remain crate-wide too. See `clippy-module-cache-experiment.md`. Default off,
   with no end-to-end speed claim.
 
+* **Native input-receipt prerequisite:** `c6004a097` adds an explicit local,
+  opt-in producer at Cargo's actual freshness decision. A bounded fresh leaf
+  check can record dep-info inputs, hashed environment and output context with
+  a caller nonce and private atomic output. Four actual native CLI tests pass.
+  Every record remains `trusted: false` and `command_replay_eligible: false`:
+  planning, config, discovery/negative inputs, toolchain and remote path mapping
+  are not complete. No client consumer or hosted forwarding is installed.
+  See `cargo-freshness-receipt.md`. This adds evidence production, not a
+  finished local result cache or a latency improvement.
+
 The comprehensive baseline was unavailable because another measurement held
 its shared snapshot lock, including a ten-minute timed-out wait. These
 experiments remain default-off. Focused acceptance cannot substitute for the

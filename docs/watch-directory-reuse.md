@@ -10,6 +10,9 @@ invalidate it. Stamp-only edits and unchanged scans reuse it. Every flush still
 calls `watch_all` over those paths, so failed registrations and forgotten inode
 watches can be retried. The source scan, diff, transfer and authoritative remote
 barrier remain unchanged. Watcher silence is never used to infer freshness.
+The cache retains one additional path set per tracked root, bounded by that
+manifest's directory count. Topology changes rebuild it rather than preserving
+historical directory sets. Stamp-only changes do not add retained entries.
 
 Regression tests compare the cached set with a full reconstruction across
 unchanged files, stamp changes, nested additions, removals, an empty tree and
