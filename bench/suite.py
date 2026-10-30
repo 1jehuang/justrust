@@ -1322,6 +1322,8 @@ def optimization_env() -> dict:
 
 
 def env_info() -> dict:
+    from runtime_context import provenance as runtime_provenance
+
     def tryrun(cmd):
         try:
             return sh(cmd)
@@ -1361,6 +1363,7 @@ def env_info() -> dict:
             [str(toolchain_rustc(TOOLCHAIN)), "-V"]),
         "toolchain": TOOLCHAIN,
         "optimization_env": optimization_env(),
+        "runtime_context": runtime_provenance(),
         "rustc_threads": RUSTC_THREADS,
         "workspace_threads": WORKSPACE_THREADS,
         "pass_times": PASS_TIMES,
@@ -1545,7 +1548,9 @@ def cmd_show(args) -> None:
 
 
 def cmd_compare(args) -> None:
+    from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    require_matching_context(a, b)
     if "synth" in a or "synth" in b:
         if not ("synth" in a and "synth" in b):
             sys.exit("bench: compare a synthetic result with another synthetic result")

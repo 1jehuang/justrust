@@ -151,6 +151,16 @@ def read_counters(fds: list[int]) -> int | None:
 
 
 def run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> dict:
+    from runtime_context import runtime_context, provenance
+    with runtime_context(env, cwd) as child_env:
+        result = _run_counted(argv, cwd, child_env, log)
+    policy = provenance()
+    if policy["policy"] != "inherited":
+        result["runtime_context"] = policy
+    return result
+
+
+def _run_counted(argv: list[str], cwd: Path, env: dict[str, str], log: Path) -> dict:
     """Run argv; wall, tree CPU, peak RSS and user instructions of the tree."""
     r, w = os.pipe()
     t0 = time.monotonic()
@@ -605,7 +615,9 @@ def cmd_report(args) -> None:
 
 
 def cmd_compare(args) -> None:
+    from runtime_context import require_matching_context
     a, b = (json.loads(Path(f).read_text()) for f in (args.a, args.b))
+    require_matching_context(a, b)
     if "synth" in a or "synth" in b:
         if not ("synth" in a and "synth" in b):
             sys.exit("versus: compare a synthetic result with another synthetic result")
