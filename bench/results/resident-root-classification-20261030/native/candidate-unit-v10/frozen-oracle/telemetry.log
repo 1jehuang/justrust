@@ -1,0 +1,8 @@
+
+running 3 tests
+test cargo::telemetry_tests::both_telemetry_spellings_are_client_only ... ok
+test cargo::telemetry_tests::disabled_phase_needs_no_clock_or_span ... ok
+test cargo::cli::tests::telemetry_does_not_select_a_build_or_worker ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 344 filtered out; finished in 0.00s
+

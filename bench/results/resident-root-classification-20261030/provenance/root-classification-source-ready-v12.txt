@@ -1,0 +1,13 @@
+SOURCE READY v12: native compile_time_only primitive backdating hypothesis
+Frozen authorized paths and SHA256:
+ee2ef625d670c5a646acf2f180495a4294123cfb92f0fb83b967418167e2e03c  /home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs
+304e148fdf9ef75d77a11f5f4802d81698c1104b88a1caeb0cb5fe2b2fbeb45e  /home/jeremy/justrust/toolchain/resident/crates/hir-ty-codegen/mod.rs
+501047a0a6ee1a560740777fded8485c37eb8d63195f482ed4293cee5304b19d  /home/jeremy/justrust/docs/resident-root-classification.md
+
+V11-to-v12 production delta ONLY one added #[salsa::tracked(returns(copy))] annotation on actual hir_ty_codegen::compile_time_only. Original AttrFlags::has_word body unchanged. main.rs provider production logic unchanged. Full original classifier oracle now directly calls original AttrFlags::has_word(db, it.into(), "rustc_comptime") for BOTH rooted/provided filters, independent of new primitive. Existing real attribute-toggle revisions remain unchanged.
+
+Per-provider counters remain [export, root, main], exact positive cold[2,2,1], unchanged[2,2,1], body[2,2,1] required. Counts printed each revision; root native observation pending. Filter resident_root_classification, exact test resident_root_classification_reuses_providers_after_body_only_edits. Also run resident_graph_reuse and the_roots_of_a_listed_crate, full original oracle and telemetry. Use --nocapture to record passing counts.
+
+Prior v10 failed complete-reuse and v11 native selective-reuse evidence retained in prior receipts and described in doc. V11 prospective measurements did not establish reliable totalwin and do not justify promotion. V12 must independently pass root-native correctness/runtime/fulltests and matched prospective raw performance. Last bounded primitive hypothesis, reject nonwin. No speedup claim.
+
+Worker ran source-only rustfmt --edition 2024 --config skip_children=true on both Rust paths, git diff --check on all3, and inspected codegen diff is exactly single annotation. No native compiles/builds/tests/workloads or commits. All3 paths now frozen pending root requests.

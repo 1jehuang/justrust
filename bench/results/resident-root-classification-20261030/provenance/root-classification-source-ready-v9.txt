@@ -1,0 +1,12 @@
+SOURCE READY v9: native resident root classification
+Frozen owned paths and SHA256:
+e09c8ec5984a73cd32b11d12f4337b6d4d2ea872f536891b4e59ec9700fe77d4  /home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs
+0ad2c4b04168ce7aaaa34c844a63f797a6c82f8ba9a3e7a98df0a34490082300  /home/jeremy/justrust/docs/resident-root-classification.md
+
+New native test filter: resident_root_classification
+Exact test: resident_root_classification_reuses_providers_after_body_only_edits
+Also extended filters: resident_graph_reuse, the_roots_of_a_listed_crate
+
+Native Salsa exported_function/rooted_function/main_function providers. Original short circuits, order, provided differences, compile-time-before-generic, module/body declaration queries and parallel lower warmup preserved. Static kept query intentionally unchanged. cfg(test) thread-local provider counter positively asserts cold execution and exact repeat/body-edit reuse in small single-thread export fixture. Original classifier oracle compares all ordered fields. Existing graph fixture adds attribute/link/generic/main/provided/static transitions plus core-origin allocator and external trait rename/restore transitions.
+
+Worker ran only rustfmt --edition 2024 --config skip_children=true on owned main.rs and git diff --check for owned paths. No builds, compiles, tests, workloads, or commits. Both paths now frozen pending root-owned native correctness and prospective raw matched performance gates. No performance claim. Root must wait for sunflower's separate typed-planner restoration confirmation before build. Reject nonwin.

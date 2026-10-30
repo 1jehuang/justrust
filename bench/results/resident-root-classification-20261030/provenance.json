@@ -1,0 +1,29 @@
+{
+  "schema": "resident_root_classification_evidence/v1",
+  "decision": "REJECTED",
+  "promotion": false,
+  "scope": "Licensed Blaze-derived engine, not clean-room. Descriptive scoped timings, no general speedup claim.",
+  "capture_head": "5e57bc13e4f562513a9f1c27760660e948dacded",
+  "older_full_source": {
+    "v9": "unknown/not captured",
+    "v10": "unknown/not captured",
+    "v11": "unknown/not captured"
+  },
+  "source_reconstruction_claim": false,
+  "final_pair": [
+    "rsb03",
+    "rsa09"
+  ],
+  "sessions": [
+    "rsb02",
+    "rsa07",
+    "rsa08",
+    "rsb03",
+    "rsa09"
+  ],
+  "source_original_paths": [
+    "toolchain/resident/crates/ra-jit/src/main.rs",
+    "toolchain/resident/crates/hir-ty-codegen/mod.rs"
+  ],
+  "capture_notes": "Copied original top-level session artifacts byte-for-byte, excluding private cache/build directories. Native run output/meta/summary retained, install IDs and telemetry delivery state excluded. Harness source captured at evidence time, not asserted to be a historical snapshot. No older source reconstruction. Machine paths in original receipts are historical, not needed by validator."
+}

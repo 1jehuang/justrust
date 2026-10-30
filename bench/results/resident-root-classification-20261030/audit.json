@@ -1,0 +1,77 @@
+{
+  "decision": "REJECTED",
+  "promotion": false,
+  "immutable_files": 424,
+  "native_tests_passed": 347,
+  "v11_counts": [
+    [
+      2,
+      2,
+      1
+    ],
+    [
+      2,
+      2,
+      1
+    ],
+    [
+      2,
+      4,
+      1
+    ]
+  ],
+  "v12_counts": [
+    [
+      2,
+      2,
+      1
+    ],
+    [
+      2,
+      2,
+      1
+    ],
+    [
+      2,
+      2,
+      1
+    ]
+  ],
+  "sessions": {
+    "rsb02": {
+      "reference": 0.11289635200228076,
+      "engine": 0.11065568300546147
+    },
+    "rsa07": {
+      "reference": 0.11127808800665662,
+      "engine": 0.10947471899271477
+    },
+    "rsa08": {
+      "reference": 0.1080551899940474,
+      "engine": 0.10508691098948475
+    },
+    "rsb03": {
+      "reference": 0.11027367199130822,
+      "engine": 0.1132492939941585
+    },
+    "rsa09": {
+      "reference": 0.10919611400458962,
+      "engine": 0.12630999599059578
+    }
+  },
+  "comparisons": {
+    "rsb02/rsa07": {
+      "raw_percent": -1.0672420798201632,
+      "reference_normalized_percent": 0.3714896866750417
+    },
+    "rsb02/rsa08": {
+      "raw_percent": -5.032522383601279,
+      "reference_normalized_percent": -0.7777249538841957
+    },
+    "rsb03/rsa09": {
+      "raw_percent": 11.532700589825273,
+      "reference_normalized_percent": 12.63331624264794
+    }
+  },
+  "claim": "mechanism proven, total optimization rejected"
+}

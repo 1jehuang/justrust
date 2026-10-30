@@ -1,0 +1,6 @@
+
+running 1 test
+test tests::resident_graph_reuse_tracks_nested_items_and_macro_edits ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 346 filtered out; finished in 0.01s
+

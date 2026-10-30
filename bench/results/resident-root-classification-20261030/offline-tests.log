@@ -1,0 +1,40 @@
+test_assert_failure_requires_actual_runtime_marker (__main__.AuditTests.test_assert_failure_requires_actual_runtime_marker) ... ok
+test_binary_identity_binds_build_to_measurement (__main__.AuditTests.test_binary_identity_binds_build_to_measurement) ... ok
+test_compile_errors_must_be_original (__main__.AuditTests.test_compile_errors_must_be_original) ... ok
+test_compile_failure_must_remain_failure (__main__.AuditTests.test_compile_failure_must_remain_failure) ... ok
+test_cross_session_toolchain_identity_required (__main__.AuditTests.test_cross_session_toolchain_identity_required) ... ok
+test_fabricated_median_rejected (__main__.AuditTests.test_fabricated_median_rejected) ... ok
+test_failed_mechanism_must_block_timing (__main__.AuditTests.test_failed_mechanism_must_block_timing) ... ok
+test_full_native_all_individual_raw_tests_required (__main__.AuditTests.test_full_native_all_individual_raw_tests_required) ... ok
+test_full_native_exit_must_pass (__main__.AuditTests.test_full_native_exit_must_pass) ... ok
+test_manifest_cannot_drop_original_artifact (__main__.AuditTests.test_manifest_cannot_drop_original_artifact) ... ok
+test_matched_edits_require_same_source_hash (__main__.AuditTests.test_matched_edits_require_same_source_hash) ... ok
+test_missing_edit_record_rejected (__main__.AuditTests.test_missing_edit_record_rejected) ... ok
+test_native_direct_contract_cannot_be_replaced_by_wrapper (__main__.AuditTests.test_native_direct_contract_cannot_be_replaced_by_wrapper) ... ok
+test_negative_duration_rejected (__main__.AuditTests.test_negative_duration_rejected) ... ok
+test_negative_performance_decision_requires_actual_regression (__main__.AuditTests.test_negative_performance_decision_requires_actual_regression) ... ok
+test_no_promotion_of_nonwin (__main__.AuditTests.test_no_promotion_of_nonwin) ... ok
+test_no_sample_exclusion (__main__.AuditTests.test_no_sample_exclusion) ... ok
+test_noise_unknown_cannot_be_presented_as_quiet (__main__.AuditTests.test_noise_unknown_cannot_be_presented_as_quiet) ... ok
+test_old_source_receipts_not_reconstructed (__main__.AuditTests.test_old_source_receipts_not_reconstructed) ... ok
+test_older_full_source_remains_unknown (__main__.AuditTests.test_older_full_source_remains_unknown) ... ok
+test_original_compare_output_must_match_all_sample_math (__main__.AuditTests.test_original_compare_output_must_match_all_sample_math) ... ok
+test_original_evidence_passes (__main__.AuditTests.test_original_evidence_passes) ... ok
+test_original_v10_failed_counts_preserved (__main__.AuditTests.test_original_v10_failed_counts_preserved) ... ok
+test_patch_replays_exactly_against_archived_baseline (__main__.AuditTests.test_patch_replays_exactly_against_archived_baseline) ... ok
+test_recovery_requires_actual_test_names (__main__.AuditTests.test_recovery_requires_actual_test_names) ... ok
+test_relocated_bundle_is_portable_without_historical_paths (__main__.AuditTests.test_relocated_bundle_is_portable_without_historical_paths) ... ok
+test_restored_head_bytes_are_bound_to_receipt (__main__.AuditTests.test_restored_head_bytes_are_bound_to_receipt) ... ok
+test_runtime_edit_marker_required (__main__.AuditTests.test_runtime_edit_marker_required) ... ok
+test_source_build_receipt_binds_original_hash (__main__.AuditTests.test_source_build_receipt_binds_original_hash) ... ok
+test_type_error_requires_actual_diagnostic (__main__.AuditTests.test_type_error_requires_actual_diagnostic) ... ok
+test_unsafe_paths_rejected (__main__.AuditTests.test_unsafe_paths_rejected) ... ok
+test_unsealed_corruption_fails_integrity (__main__.AuditTests.test_unsealed_corruption_fails_integrity) ... ok
+test_v11_selective_reuse_cannot_be_retconned (__main__.AuditTests.test_v11_selective_reuse_cannot_be_retconned) ... ok
+test_v12_body_provider_reexecution_is_not_accepted (__main__.AuditTests.test_v12_body_provider_reexecution_is_not_accepted) ... ok
+test_wrong_final_pair_rejected (__main__.AuditTests.test_wrong_final_pair_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 35 tests in 2.430s
+
+OK

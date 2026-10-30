@@ -1,0 +1,17 @@
+{
+  "event": "scoped rejected production restoration",
+  "verified_at": "2026-10-30T16:24:27Z",
+  "head_at_capture": "5e57bc13e4f562513a9f1c27760660e948dacded",
+  "candidate_patch_sha256": "b79b5b51bda859f2442aa24df05ca2922fc0883b7cc0a081339d6e3283ae8124",
+  "restored_sha256": {
+    "toolchain/resident/crates/ra-jit/src/main.rs": "471f0b5c10187ecbea879acfe3e5eae52925161e32bce6feeebe49b67af0368f",
+    "toolchain/resident/crates/hir-ty-codegen/mod.rs": "581a1df6694cc2a77a08197c12cf6a8e046d03067efa9408a2268e2e7e09fb5e"
+  },
+  "checks_observed": [
+    "cmp live main.rs against archived git-show HEAD main.rs: exit 0",
+    "cmp live hir-ty-codegen/mod.rs against archived git-show HEAD codegen: exit 0",
+    "git diff --exit-code HEAD -- toolchain/resident/crates/ra-jit/src/main.rs toolchain/resident/crates/hir-ty-codegen/mod.rs: exit 0"
+  ],
+  "source_ownership_released": true,
+  "scope": "Only the two owned production files were reversed after final candidate bytes and patch were preserved. This records the restoration event, not an invariant on later workers' live source edits. No original raw receipt was rewritten."
+}

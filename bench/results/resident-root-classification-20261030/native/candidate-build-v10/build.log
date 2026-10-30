@@ -1,0 +1,36 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: build succeeded, tests not run in 67.1s
+  time    startup 0.25s | compile 66.77s | gaps 0.01s | after 0.02s
+  units   3 compiled (3 local, 0 deps, 0 build scripts), 424 fresh. Rebuilt because: blaze-metadata changed (blaze-tree); edited crates/blaze-metadata/src/lib.rs (blaze-metadata); ra-jit changed (ra-jit)
+          jr_engine                         59.86s  cpu 236.5s   2748 MB
+          blaze_metadata                     3.56s  cpu  21.8s    452 MB
+          blaze_tree                         3.36s  cpu  13.7s    348 MB
+  cpu     272.6s total, avg 4.1/peak 6.6 of 16 cores; others used 3.2 cores
+  memory  peak 2834 MB build, 2748 MB largest rustc, 23.6 GB free; stalls cpu 0.62s mem 0.00s io 0.06s
+  output  3 warnings shown, 251 hidden; 434 progress and 0 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 44.7s  59.9s went to recompiling oversized crates: jr_engine (78k lines, 59.9s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  3.4s  blaze-tree rebuilt only because blaze-metadata changed (edited crates/blaze-metadata/src/lib.rs) (3.4s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+  more    `justrust log 20261030-085924987-44714` full output, `justrust show 20261030-085924987-44714` full profile

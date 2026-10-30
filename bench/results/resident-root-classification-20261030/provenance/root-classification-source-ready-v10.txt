@@ -1,0 +1,12 @@
+SOURCE READY v10: native resident root classification, return-mode repair
+Frozen owned paths and SHA256:
+fdddfb3d0bd68f5e304c2e427a48b918a706edb94e76d98b37b4cd88f86bb3b5  /home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs
+0ad2c4b04168ce7aaaa34c844a63f797a6c82f8ba9a3e7a98df0a34490082300  /home/jeremy/justrust/docs/resident-root-classification.md
+
+Only v9-to-v10 delta: exported_function, rooted_function and main_function now explicitly use #[salsa::tracked(returns(copy))]. This addresses root-reported native v9 E0308/E0277 caused by reference-return defaults. No test weakening or logic changes. Prior v9 receipt/hash retained unchanged.
+
+New native test filter: resident_root_classification
+Exact test: resident_root_classification_reuses_providers_after_body_only_edits
+Additional extended filters: resident_graph_reuse, the_roots_of_a_listed_crate
+
+Source-only rustfmt --edition 2024 --config skip_children=true and git diff --check passed. No native builds, tests, workloads, or commits performed by worker. Paths frozen pending root-owned fresh v10 native correctness, runtime and prospective matched raw performance gates. No speedup claim. Reject nonwin.

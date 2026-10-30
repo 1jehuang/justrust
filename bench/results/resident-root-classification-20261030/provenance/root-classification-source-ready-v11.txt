@@ -1,0 +1,13 @@
+SOURCE READY v11: strict per-provider invalidation diagnosis
+Frozen owned paths and SHA256:
+aaab4f1312d1d4f35523d8687f8ba1925b7b8f4d1442e267d27d44cc78d1b5fe  /home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs
+0e6ee52ab0de478da674ac7a56fc6260e0079f846aaf811b05d138e5770bed36  /home/jeremy/justrust/docs/resident-root-classification.md
+
+V10-to-v11: NO production logic change. cfg(test) counter now separates [export, root, main]. Native resident_root_classification fixture prints counts each revision and strictly expects cold[2,2,1], unchanged[2,2,1], body[2,4,1]. Full original classifier parity remains checked every revision. Arbitrary two-provider reexecution is NOT accepted. Only export and main body-edit reuse is hypothesized; root provider reexecution is explicitly expected due compile_time_only -> untracked AttrFlags::has_word -> collect_attrs/attrs_source AST dependency. Exact native observations pending. Original v10 failing receipt/log/hash retained. Docs explicitly describe failure and selective-reuse hypothesis, not complete reuse.
+
+Actual native filter: resident_root_classification
+Exact test: resident_root_classification_reuses_providers_after_body_only_edits
+Other unchanged extended filters: resident_graph_reuse, the_roots_of_a_listed_crate
+Use --nocapture as needed to retain exact per-revision counts in root logs.
+
+Source-only rustfmt --edition 2024 --config skip_children=true and git diff --check passed. Worker ran no native builds/tests/timings and made no commits. Freeze resumed for exact v11 root-native check/build/full-oracle and matched prospective raw timing. Native reuse is not a speedup claim. Reject nonwin.

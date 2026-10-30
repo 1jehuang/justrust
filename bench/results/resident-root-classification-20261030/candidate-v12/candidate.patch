@@ -1,0 +1,325 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/mod.rs b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+index 11ccebac9..3fb321ed9 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/mod.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+@@ -4453,6 +4453,7 @@ pub fn exported_symbol(db: &dyn HirDatabase, func: FunctionId) -> Option<String>
+ 
+ /// Whether a function is `#[rustc_comptime]`: one the const evaluator alone runs, such as
+ /// `TypeId::size` over the reflection intrinsics, of which rustc compiles no code.
++#[salsa::tracked(returns(copy))]
+ pub fn compile_time_only(db: &dyn HirDatabase, func: FunctionId) -> bool {
+     AttrFlags::has_word(db, func.into(), "rustc_comptime")
+ }
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index be57fd8ab..a6b3854f8 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -3780,7 +3780,7 @@ struct ListedCrate {
+ 
+ /// Whether the function, or the `impl` it is in, takes types or constants. A method a trait
+ /// provides takes `Self`.
+-fn is_generic_function(db: &RootDatabase, func: FunctionId) -> bool {
++fn is_generic_function(db: &dyn HirDatabase, func: FunctionId) -> bool {
+     let generic = |def: hir::GenericDef| !def.type_or_const_params(db).is_empty();
+     if generic(hir::Function::from(func).into()) {
+         return true;
+@@ -4059,20 +4059,20 @@ impl ListedCrate {
+         let main = functions
+             .iter()
+             .copied()
+-            .find(|&it| hir::Function::from(it).is_main(db))
++            .find(|&it| main_function(db, it))
+             .filter(|_| !has_no_main(db, krate));
+         let exported = exported(db, &functions);
+         let shared_paths = Default::default();
+         let rooted = functions
+             .iter()
+             .zip(&exported)
+-            .filter(|&(&it, _)| !hir_ty_codegen::compile_time_only(db, it))
+-            .map(|(&it, &exported)| (it, exported, is_generic_function(db, it)))
++            .filter_map(|(&it, &exported)| {
++                rooted_function(db, it).map(|generic| (it, exported, generic))
++            })
+             .collect();
+         let provided = in_provided
+             .iter()
+-            .filter(|&&it| !hir_ty_codegen::compile_time_only(db, it))
+-            .map(|&it| (it, is_generic_function(db, it)))
++            .filter_map(|&it| rooted_function(db, it).map(|generic| (it, generic)))
+             .collect();
+         ListedCrate {
+             functions,
+@@ -4088,15 +4088,57 @@ impl ListedCrate {
+     }
+ }
+ 
++// Separate queries preserve the original demand: provided bodies need no export
++// classification, const-evaluator-only functions need no generic classification,
++// and main discovery stops at the first match. Salsa owns every dependency and
++// validates these results after edits, including changes outside the function.
++#[salsa::tracked(returns(copy))]
++fn exported_function(db: &dyn HirDatabase, func: FunctionId) -> bool {
++    #[cfg(test)]
++    classification_executed(0);
++    exported_symbol(db, func).is_some()
++        || linked_symbol(db, func).is_some()
++        || serves_allocator(db, func)
++}
++
++#[salsa::tracked(returns(copy))]
++fn rooted_function(db: &dyn HirDatabase, func: FunctionId) -> Option<bool> {
++    #[cfg(test)]
++    classification_executed(1);
++    if hir_ty_codegen::compile_time_only(db, func) {
++        None
++    } else {
++        Some(is_generic_function(db, func))
++    }
++}
++
++#[salsa::tracked(returns(copy))]
++fn main_function(db: &dyn HirDatabase, func: FunctionId) -> bool {
++    #[cfg(test)]
++    classification_executed(2);
++    hir::Function::from(func).is_main(db)
++}
++
++#[cfg(test)]
++thread_local! {
++    // Export, root (compile-time/generic), main, in that order.
++    static CLASSIFICATION_EXECUTIONS: std::cell::Cell<[usize; 3]> = const { std::cell::Cell::new([0; 3]) };
++}
++
++#[cfg(test)]
++fn classification_executed(provider: usize) {
++    CLASSIFICATION_EXECUTIONS.with(|count| {
++        let mut counts = count.get();
++        counts[provider] += 1;
++        count.set(counts);
++    });
++}
++
+ /// For each of `functions`, whether a runtime looks it up by name. Its attributes say, which
+ /// are read off the source: on every core, as a build waits for this of every crate it builds.
+ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+     let exported = |db: &RootDatabase, functions: &[FunctionId]| -> Vec<bool> {
+-        let exported = |&it| {
+-            exported_symbol(db, it).is_some()
+-                || linked_symbol(db, it).is_some()
+-                || serves_allocator(db, it)
+-        };
++        let exported = |&it| exported_function(db, it);
+         functions.iter().map(exported).collect()
+     };
+     let threads = std::thread::available_parallelism().map_or(1, |it| it.get());
+@@ -4123,7 +4165,7 @@ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+ /// Whether a function is a method of an `impl GlobalAlloc`. The program calls the allocator
+ /// through symbols rustc writes for the `#[global_allocator]`, so no call in the source names
+ /// these methods, and they run all the same.
+-fn serves_allocator(db: &RootDatabase, func: FunctionId) -> bool {
++fn serves_allocator(db: &dyn HirDatabase, func: FunctionId) -> bool {
+     let Some(item) = hir::Function::from(func).as_assoc_item(db) else { return false };
+     let AssocItemContainer::Impl(implementation) = item.container(db) else { return false };
+     implementation.trait_(db).is_some_and(|it| {
+@@ -11729,6 +11771,11 @@ extern "C" fn exported() {}
+             let sema = hir::Semantics::new(&db);
+             let module = sema.file_to_module_defs(file.file_id(&db)).next().unwrap();
+             let listed = ListedCrate::new(&db, module.krate(&db));
++            assert_original_classification(&db, module.krate(&db), &listed);
++            let executions = CLASSIFICATION_EXECUTIONS.with(|count| count.get());
++            let repeated = ListedCrate::new(&db, module.krate(&db));
++            assert_eq!(CLASSIFICATION_EXECUTIONS.with(|count| count.get()), executions);
++            assert_original_classification(&db, module.krate(&db), &repeated);
+             let name = |func: FunctionId| hir::Function::from(func).name(&db).as_str().to_owned();
+             let before: Vec<(FunctionId, bool)> = listed
+                 .functions
+@@ -11767,6 +11814,102 @@ extern "C" fn exported() {}
+         });
+     }
+ 
++    #[test]
++    fn resident_root_classification_reuses_providers_after_body_only_edits() {
++        use test_fixture::WithFixture;
++        let source = "fn main() { let _ = 1; }\nfn generic<T>() {}";
++        let (mut db, file) = RootDatabase::with_single_file(source);
++        let file = file.file_id(&db);
++        CLASSIFICATION_EXECUTIONS.with(|count| count.set([0; 3]));
++        let mut executions = None;
++        for (revision, source) in
++            [source.to_owned(), source.to_owned(), source.replace("= 1", "= 2")]
++                .into_iter()
++                .enumerate()
++        {
++            db.set_file_text_with_durability(
++                file,
++                &source,
++                ide_db::base_db::salsa::Durability::LOW,
++            );
++            hir::attach_db(&db, || {
++                let krate =
++                    hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++                let listed = ListedCrate::new(&db, krate);
++                assert_original_classification(&db, krate, &listed);
++                let count = CLASSIFICATION_EXECUTIONS.with(|count| count.get());
++                eprintln!("classification revision {revision}: [export, root, main] = {count:?}");
++                assert!(count.iter().all(|&it| it > 0), "cold fixture must execute every provider");
++                if let Some(previous) = executions {
++                    if revision == 1 {
++                        assert_eq!(count, previous, "unchanged repeat must reuse every provider");
++                    } else {
++                        // The native compile_time_only primitive may reexecute its raw
++                        // attribute read, but its unchanged boolean must backdate so all
++                        // three downstream classification providers stay green.
++                        assert_eq!(
++                            count, previous,
++                            "body edit must reuse export, root and main providers"
++                        );
++                    }
++                } else {
++                    assert_eq!(count, [2, 2, 1], "count the full cold classification demand");
++                }
++                executions = Some(count);
++            });
++        }
++    }
++
++    /// The full pre-cache classifier. Do not use the tracked classification queries here:
++    /// every field and its ordering must agree with the original expressions after edits.
++    fn assert_original_classification(db: &RootDatabase, krate: Crate, actual: &ListedCrate) {
++        let Declared { functions, statics, in_provided, .. } = declared_in(db, krate);
++        let exported: Vec<_> = functions
++            .iter()
++            .map(|&it| {
++                exported_symbol(db, it).is_some()
++                    || linked_symbol(db, it).is_some()
++                    || serves_allocator(db, it)
++            })
++            .collect();
++        let rooted: Vec<_> = functions
++            .iter()
++            .zip(&exported)
++            .filter(|&(&it, _)| {
++                !hir_def::attrs::AttrFlags::has_word(db, it.into(), "rustc_comptime")
++            })
++            .map(|(&it, &exported)| (it, exported, is_generic_function(db, it)))
++            .collect();
++        let provided: Vec<_> = in_provided
++            .iter()
++            .filter(|&&it| !hir_def::attrs::AttrFlags::has_word(db, it.into(), "rustc_comptime"))
++            .map(|&it| (it, is_generic_function(db, it)))
++            .collect();
++        let kept: Vec<_> = statics
++            .iter()
++            .copied()
++            .filter(|&it| {
++                hir_def::attrs::AttrFlags::query(db, it.into())
++                    .contains(hir_def::attrs::AttrFlags::USED)
++                    || hir_def::attrs::AttrFlags::link_section(db, it.into()).is_some()
++                    || exported_static(db, it).is_some()
++            })
++            .collect();
++        let main = functions
++            .iter()
++            .copied()
++            .find(|&it| hir::Function::from(it).is_main(db))
++            .filter(|_| !has_no_main(db, krate));
++        assert_eq!(actual.functions, functions);
++        assert_eq!(actual.statics, statics);
++        assert_eq!(actual.in_provided, in_provided);
++        assert_eq!(actual.exported, exported);
++        assert_eq!(actual.rooted, rooted);
++        assert_eq!(actual.provided, provided);
++        assert_eq!(actual.kept, kept);
++        assert_eq!(actual.main, main);
++    }
++
+     /// Compare with the uncached traversal after each real database revision, not
+     /// just with a hand-written list of top-level declarations.
+     #[test]
+@@ -11777,9 +11920,20 @@ macro_rules! nested { () => { fn expanded() {} }; }
+ fn main() { fn inner() {} nested!(); let _ = 1; }
+ trait Tr { fn default() { fn provided_inner() {} } }
+ static VALUE: usize = { fn static_inner() {} 1 };
++fn attributed() {}
++fn generic<T>() {}
++struct S;
++impl S { fn method() {} }
++trait AllocLike { fn alloc(); }
++impl core::alloc::GlobalAlloc for S { fn alloc() {} }
+ "#;
+-        let (mut db, file) = RootDatabase::with_single_file(source);
+-        let file = file.file_id(&db);
++        let core = "pub mod alloc { pub trait GlobalAlloc { fn alloc(); } }";
++        let fixture = format!(
++            "//- /main.rs crate:app deps:core\n{source}\n//- /core.rs crate:core\n{core}\n"
++        );
++        let (mut db, files) = RootDatabase::with_many_files(&fixture);
++        let file = files[0].file_id(&db);
++        let core_file = files[1].file_id(&db);
+         let variants = [
+             source.to_owned(),
+             source.replace("let _ = 1", "let _ = 2"),
+@@ -11787,6 +11941,24 @@ static VALUE: usize = { fn static_inner() {} 1 };
+             source.replace("fn expanded() {}", "fn changed_expansion() {}"),
+             source.replace("fn provided_inner() {}", "fn changed_provided() {}"),
+             source.replace("fn static_inner() {}", "fn changed_static() {}"),
++            source.replace("fn attributed()", "#[no_mangle] fn attributed()"),
++            source.replace("fn attributed()", "#[export_name = \"visible\"] fn attributed()"),
++            source.replace("fn attributed()", "#[panic_handler] fn attributed()"),
++            source.replace("fn attributed()", "#[lang = \"eh_personality\"] fn attributed()"),
++            source.replace("fn attributed()", "#[rustc_comptime] fn attributed()"),
++            source.replace("fn generic<T>()", "fn generic<const N: usize>()"),
++            source.replace("fn generic<T>()", "fn generic()"),
++            source.replace("impl S", "impl<T> S"),
++            source.replace("impl core::alloc::GlobalAlloc", "impl AllocLike"),
++            source.replace("fn provided_inner()", "#[rustc_comptime] fn provided_inner()"),
++            source.replace("fn provided_inner()", "#[no_mangle] fn provided_inner<T>()"),
++            source.replace("trait Tr", "trait Tr<T>"),
++            source.replace("fn main()", "fn renamed_main()"),
++            format!("#![no_main]\n{source}"),
++            source.replace("static VALUE", "#[used] static VALUE"),
++            source.replace("static VALUE", "#[link_section = \"kept\"] static VALUE"),
++            source.replace("static VALUE", "#[no_mangle] static VALUE"),
++            source.replace("static VALUE", "#[export_name = \"value\"] static VALUE"),
+             source.replace("fn inner() {}", ""),
+             source.to_owned(),
+         ];
+@@ -11822,6 +11994,7 @@ static VALUE: usize = { fn static_inner() {} 1 };
+                 // This flag is traversal state, not part of the declaration graph.
+                 expected.under_provided = actual.under_provided;
+                 assert!(actual == expected, "tracked declaration graph differs from full walk");
++                assert_original_classification(&db, krate, &ListedCrate::new(&db, krate));
+                 let names: Vec<_> = actual
+                     .in_provided
+                     .iter()
+@@ -11830,6 +12003,30 @@ static VALUE: usize = { fn static_inner() {} 1 };
+                 assert!(names.iter().any(|it| it.ends_with("provided") || it == "provided_inner"));
+             });
+         }
++        // No text of the implementation changes here. Trait resolution and the
++        // defining crate's origin must remain dependencies of the cached flags.
++        for core in
++            [core.to_owned(), core.replace("GlobalAlloc", "RenamedAllocator"), core.to_owned()]
++        {
++            db.set_file_text_with_durability(
++                core_file,
++                &core,
++                ide_db::base_db::salsa::Durability::LOW,
++            );
++            hir::attach_db(&db, || {
++                let krate =
++                    hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++                let listed = ListedCrate::new(&db, krate);
++                assert_original_classification(&db, krate, &listed);
++                let allocator = listed
++                    .functions
++                    .iter()
++                    .copied()
++                    .find(|&it| hir::Function::from(it).name(&db).as_str() == "alloc")
++                    .unwrap();
++                assert_eq!(exported_function(&db, allocator), core.contains("trait GlobalAlloc"));
++            });
++        }
+     }
+ 
+     /// The symbols of the standard library's object are read once for as long as the file is the

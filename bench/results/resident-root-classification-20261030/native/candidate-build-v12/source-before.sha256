@@ -1,0 +1,10 @@
+304e148fdf9ef75d77a11f5f4802d81698c1104b88a1caeb0cb5fe2b2fbeb45e  crates/hir-ty-codegen/mod.rs
+ee2ef625d670c5a646acf2f180495a4294123cfb92f0fb83b967418167e2e03c  crates/ra-jit/src/main.rs
+a25deb958d403ade47c440ae2227cf376a13fb04e9a76e00c7c04154727643e5  crates/ra-jit/src/jr_engine.rs
+e921580836226b26455c81bfc26efe84b9b6dc6260ed5e7a58f500b3ca995241  crates/ra-jit/Cargo.toml
+7b2c813f9fbba24c6d84ff8dc79f9192f3d57577bf2f656bb41f768153bab49b  crates/ra-jit/build.rs
+27ce50f12c8697c20b1c6fa345da88327ec110eb353d6c54ba766814e1c898ac  crates/ra-jit/src/cargo/mod.rs
+34b391dd07b92e735b7f640641c8298897c4ec9d3c239493682985c43a473b81  crates/ra-jit/src/cargo/whole.rs
+c45fa198e06c94398c19a42ba361fd8da8e0f136d14f14312a1eed7b73a436ea  crates/ra-jit/src/cargo/cli.rs
+1c913b348bb893d478d9bba1ab21c80180fafa0aef104d116d31bf7e45d27b48  crates/ra-jit/src/cargo/metadata.rs
+af59a6616646759334113567cd8818d2066a111999d2878d16ea879811e48dd5  crates/blaze-metadata/src/lib.rs

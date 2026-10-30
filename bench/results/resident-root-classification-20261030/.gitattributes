@@ -1,0 +1,4 @@
+# Original byte-for-byte command output and unified-diff context must not be normalized.
+*.stdout -whitespace
+*.log -whitespace
+candidate-v12/candidate.patch -whitespace
