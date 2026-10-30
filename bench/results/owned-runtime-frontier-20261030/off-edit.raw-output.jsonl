@@ -1,0 +1,59 @@
+{"t":1793357557.6759515,"s":"e","l":"       Fresh unicode-ident v1.0.26"}
+{"t":1793357557.6760561,"s":"e","l":"       Fresh proc-macro2 v1.0.107"}
+{"t":1793357557.676057,"s":"e","l":"       Fresh serde_core v1.0.229"}
+{"t":1793357557.6760576,"s":"e","l":"       Fresh utf8parse v0.2.2"}
+{"t":1793357557.6760583,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793357557.6760588,"s":"e","l":"       Fresh memchr v2.8.3"}
+{"t":1793357557.6760592,"s":"e","l":"       Fresh anstyle-parse v1.0.0"}
+{"t":1793357557.6760597,"s":"e","l":"       Fresh anstyle-query v1.1.5"}
+{"t":1793357557.6760602,"s":"e","l":"       Fresh is_terminal_polyfill v1.70.2"}
+{"t":1793357557.676061,"s":"e","l":"       Fresh anstyle v1.0.14"}
+{"t":1793357557.6761131,"s":"e","l":"       Fresh colorchoice v1.0.5"}
+{"t":1793357557.6761138,"s":"e","l":"       Fresh winnow v1.0.4"}
+{"t":1793357557.6761143,"s":"e","l":"       Fresh toml_datetime v1.1.1+spec-1.1.0"}
+{"t":1793357557.6761618,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793357557.6761625,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793357557.6762094,"s":"e","l":"       Fresh quote v1.0.47"}
+{"t":1793357557.67621,"s":"e","l":"       Fresh toml_parser v1.1.3+spec-1.1.0"}
+{"t":1793357557.6762576,"s":"e","l":"       Fresh anstream v1.0.0"}
+{"t":1793357557.6762583,"s":"e","l":"       Fresh aho-corasick v1.1.5"}
+{"t":1793357557.6762588,"s":"e","l":"       Fresh option-ext v0.2.0"}
+{"t":1793357557.676306,"s":"e","l":"       Fresh regex-syntax v0.8.11"}
+{"t":1793357557.6763065,"s":"e","l":"       Fresh clap_lex v1.1.1"}
+{"t":1793357557.6763072,"s":"e","l":"       Fresh toml_writer v1.1.2+spec-1.1.0"}
+{"t":1793357557.6763074,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793357557.676353,"s":"e","l":"       Fresh strsim v0.11.1"}
+{"t":1793357557.676398,"s":"e","l":"       Fresh syn v3.0.6"}
+{"t":1793357557.6763988,"s":"e","l":"       Fresh libc v0.2.190"}
+{"t":1793357557.6764445,"s":"e","l":"       Fresh zmij v1.0.23"}
+{"t":1793357557.6764474,"s":"e","l":"       Fresh indexmap v2.14.2"}
+{"t":1793357557.6764479,"s":"e","l":"       Fresh clap_builder v4.6.7"}
+{"t":1793357557.6764941,"s":"e","l":"       Fresh regex-automata v0.4.18"}
+{"t":1793357557.6764948,"s":"e","l":"       Fresh serde_spanned v1.1.1"}
+{"t":1793357557.6764953,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793357557.6765416,"s":"e","l":"       Fresh iana-time-zone v0.1.65"}
+{"t":1793357557.6765423,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793357557.676587,"s":"e","l":"       Fresh serde_derive v1.0.229"}
+{"t":1793357557.6765878,"s":"e","l":"       Fresh clap_derive v4.6.7"}
+{"t":1793357557.6765883,"s":"e","l":"       Fresh dirs-sys v0.5.0"}
+{"t":1793357557.6765888,"s":"e","l":"       Fresh num-traits v0.2.19"}
+{"t":1793357557.6766343,"s":"e","l":"       Fresh toml_edit v0.25.15+spec-1.1.0"}
+{"t":1793357557.676635,"s":"e","l":"       Fresh regex v1.13.1"}
+{"t":1793357557.6766806,"s":"e","l":"       Fresh toml v1.1.6+spec-1.1.0"}
+{"t":1793357557.676681,"s":"e","l":"       Fresh serde_json v1.0.151"}
+{"t":1793357557.6766815,"s":"e","l":"       Fresh serde v1.0.229"}
+{"t":1793357557.6767342,"s":"e","l":"       Fresh chrono v0.4.45"}
+{"t":1793357557.6767347,"s":"e","l":"       Fresh dirs v6.0.0"}
+{"t":1793357557.6767354,"s":"e","l":"       Fresh clap v4.6.7"}
+{"t":1793357557.6767826,"s":"e","l":"       Dirty justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source): the file `src/summary.rs` has changed (1793357557.628985165s, 8s after last build at 1793357549.555813215s)"}
+{"t":1793357557.6767838,"s":"e","l":"   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/ba30/source)"}
+{"t":1793357557.6769826,"s":"e","l":"     Running `/home/jeremy/.jcode/scratch/bp36/off/all4on/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=ca7c44864225c396 -C extra-filename=-4034fefd348fc82c --out-dir /home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/justrust/4034fefd348fc82c/out -C incremental=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/incremental -C strip=debuginfo -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/aho-corasick/312711baef6a7376/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/anstream/a11ec4b89dfd2f26/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/anstyle-parse/b06a0abe01828ce4/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/anstyle-query/aebdd289041b5c78/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/anstyle/5146e9a4dd34a81a/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/clap_builder/3e621a7d86c0b1f7/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/clap_derive/32b8d682d9e91e7d/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/clap_lex/c8ef336b989a7cd0/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/colorchoice/7ff1587df20a5218/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/dirs-sys/3fc08dc737727ebd/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/equivalent/592c1c932e482ae9/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/hashbrown/190a3f118f3fc5bb/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/iana-time-zone/80973ee535cd80f9/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/indexmap/989fa81f891fa0b9/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/is_terminal_polyfill/fe9bc92852c606c2/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/itoa/6787c52c5c922061/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/libc/552fe9b9d7810802/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/memchr/bc437312c83f8e79/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/num-traits/a40bd0e320c0cf36/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/option-ext/3d21db166377825a/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/regex-automata/f5c9c60233cd8552/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/regex-syntax/a18f7b44b460ec28/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde_core/6e9415738d9b570d/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde_derive/8442f247e7fffafa/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde_spanned/7527b496638d5465/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/strsim/ec2d8e968ecce0b9/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml_datetime/07ed1c309ef914a9/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml_parser/4e2701896125f44e/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml_writer/896b27c38fc443d1/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/utf8parse/b3ce1c4114d0b9fd/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/winnow/f28fb0727fe81b56/out -L dependency=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/zmij/030ea881c2cf7504/out --extern anyhow=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/anyhow/ce528da7e086e3e3/out/libanyhow-ce528da7e086e3e3.rlib --extern anyhow=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/anyhow/ce528da7e086e3e3/out/libanyhow-ce528da7e086e3e3.rmeta --extern chrono=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/chrono/d2ca373960e9501f/out/libchrono-d2ca373960e9501f.rlib --extern chrono=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/chrono/d2ca373960e9501f/out/libchrono-d2ca373960e9501f.rmeta --extern clap=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/clap/ed4a227247948466/out/libclap-ed4a227247948466.rlib --extern clap=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/clap/ed4a227247948466/out/libclap-ed4a227247948466.rmeta --extern dirs=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/dirs/728643982b754a29/out/libdirs-728643982b754a29.rlib --extern dirs=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/dirs/728643982b754a29/out/libdirs-728643982b754a29.rmeta --extern libc=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/libc/552fe9b9d7810802/out/liblibc-552fe9b9d7810802.rlib --extern libc=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/libc/552fe9b9d7810802/out/liblibc-552fe9b9d7810802.rmeta --extern regex=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/regex/2afc636d724f9d09/out/libregex-2afc636d724f9d09.rlib --extern regex=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/regex/2afc636d724f9d09/out/libregex-2afc636d724f9d09.rmeta --extern serde=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde/2e95a526c5adbb0c/out/libserde-2e95a526c5adbb0c.rlib --extern serde=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde/2e95a526c5adbb0c/out/libserde-2e95a526c5adbb0c.rmeta --extern serde_json=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde_json/0a7a0f52d6bcbe84/out/libserde_json-0a7a0f52d6bcbe84.rlib --extern serde_json=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/serde_json/0a7a0f52d6bcbe84/out/libserde_json-0a7a0f52d6bcbe84.rmeta --extern toml=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml/85c5736d4bb234ba/out/libtoml-85c5736d4bb234ba.rlib --extern toml=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml/85c5736d4bb234ba/out/libtoml-85c5736d4bb234ba.rmeta --extern toml_edit=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml_edit/7ad315b321340a33/out/libtoml_edit-7ad315b321340a33.rlib --extern toml_edit=/home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/toml_edit/7ad315b321340a33/out/libtoml_edit-7ad315b321340a33.rmeta -Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=no --force-warn=unused_crate_dependencies`"}
+{"t":1793357558.944891,"s":"e","l":"    Finished `test` profile [unoptimized] target(s) in 1.29s"}
+{"t":1793357558.9477248,"s":"e","l":"     Running `/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client __test-runner /home/jeremy/.jcode/scratch/bp36/off/all4on/target/debug/build/justrust/4034fefd348fc82c/out/justrust-4034fefd348fc82c 'summary::tests::' --test-threads=1 --nocapture`"}
+{"t":1793357558.9498549,"s":"o","l":"running 4 tests"}
+{"t":1793357558.9501264,"s":"o","l":"test summary::tests::parses_libtest_results ... ok <0.000s>"}
+{"t":1793357558.950142,"s":"o","l":"test summary::tests::shares_overlapping_time ... JR_RUNTIME_EXECUTED_37"}
+{"t":1793357558.9502058,"s":"o","l":"ok <0.000s>"}
+{"t":1793357558.9502735,"s":"o","l":"test summary::tests::splits_passes_without_double_counting ... ok <0.000s>"}
+{"t":1793357558.950376,"s":"o","l":"test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>"}
+{"t":1793357558.9503837,"s":"o","l":"test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s"}

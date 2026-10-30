@@ -1,0 +1,900 @@
+{
+  "scope": "instrumented-runtime-phase-diagnostic-not-benchmark",
+  "status": "completed",
+  "source_before": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "identities_before": {
+    "rustc": {
+      "path": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+      "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144"
+    },
+    "cargo": {
+      "path": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+      "sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+    },
+    "blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "rustc_driver_0": {
+      "path": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e"
+    },
+    "blaze_companion:blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "blaze_companion:blaze-proc-macro-srv": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze-proc-macro-srv",
+      "sha256": "66676f4baa898bccc0551d343f392c72b73d07a98ab87918d083dde877c8a79b"
+    },
+    "blaze_companion:ra-jit": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit",
+      "sha256": "04e84de57aad8a19102edd454e2cdd8ac2e4b58461a4070479919207f3a5590e"
+    },
+    "blaze_companion:ra-jit-rustc": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc",
+      "sha256": "c20dfcb986324ac357d568501f977d0232cc4bbf8e1e8bbb5f2744d4dd1fa8bd"
+    },
+    "blaze_companion:ra-jit-rustc-first": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc-first",
+      "sha256": "82c2d0b0dde382bf26a6ec4855e052f1a2753380d4b4596aa63a9ab46378117b"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f93c96982673433e3b6c16039aa765aea0397a305ab06aa44e1a9e42ede56dcb"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so",
+      "sha256": "e81ee13275c3e0965051ced606e35fa388cdc3c2ff4ef22e04fa9454edcb431f"
+    }
+  },
+  "rows": [
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 16.89775580699643,
+      "noise": {
+        "before": {
+          "busy_seconds": 303304.53,
+          "loadavg": [
+            11.5263671875,
+            20.4052734375,
+            25.435546875
+          ]
+        },
+        "after": {
+          "busy_seconds": 303435.3,
+          "loadavg": [
+            10.888671875,
+            19.6953125,
+            25.0947265625
+          ]
+        },
+        "child_cpu_seconds": 68.072675,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 62.697324999960415
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bp36/off/all4on/target",
+        "HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=no",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bp36/off/all4on/runtime"
+      },
+      "mode": "off",
+      "phase": "prepare",
+      "raw_output": {
+        "run_id": "20261030-035220729-1587989",
+        "artifact": "off-prepare.raw-output.jsonl",
+        "sha256": "e9fc30b81b5f17f8281702b88198797ddc61ba110dda4e13edba5a2889966e45",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 1.3326734560032492,
+      "noise": {
+        "before": {
+          "busy_seconds": 303435.31,
+          "loadavg": [
+            10.888671875,
+            19.6953125,
+            25.0947265625
+          ]
+        },
+        "after": {
+          "busy_seconds": 303441.0,
+          "loadavg": [
+            10.888671875,
+            19.6953125,
+            25.0947265625
+          ]
+        },
+        "child_cpu_seconds": 1.6124879999999848,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 4.0775120000023435
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bp36/off/all4on/target",
+        "HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=no",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bp36/off/all4on/runtime"
+      },
+      "mode": "off",
+      "phase": "edit",
+      "raw_output": {
+        "run_id": "20261030-035237630-1591346",
+        "artifact": "off-edit.raw-output.jsonl",
+        "sha256": "82d565fbbcea585fe006917366b0e1a9162bc69419d429b1b82cea766f05dd84",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "source_sha256": "3b5af4f7cf95809ed44875803a201ed38b219a8214b47325e21a12ce7df8b1a2",
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 1.180626449000556,
+      "noise": {
+        "before": {
+          "busy_seconds": 303441.01,
+          "loadavg": [
+            10.888671875,
+            19.6953125,
+            25.0947265625
+          ]
+        },
+        "after": {
+          "busy_seconds": 303445.81,
+          "loadavg": [
+            10.888671875,
+            19.6953125,
+            25.0947265625
+          ]
+        },
+        "child_cpu_seconds": 1.4162650000000099,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 3.3837349999883486
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bp36/off/all4on/target",
+        "HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=no",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bp36/off/all4on/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bp36/off/all4on/runtime"
+      },
+      "mode": "off",
+      "phase": "restore",
+      "raw_output": {
+        "run_id": "20261030-035238964-1591756",
+        "artifact": "off-restore.raw-output.jsonl",
+        "sha256": "9e8d4052b2889675785c5105b3d0bcbff73459d4bf26bb5c05d5b4215dc0b99c",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 17.87910288499552,
+      "noise": {
+        "before": {
+          "busy_seconds": 303445.81,
+          "loadavg": [
+            10.888671875,
+            19.6953125,
+            25.0947265625
+          ]
+        },
+        "after": {
+          "busy_seconds": 303580.01,
+          "loadavg": [
+            11.11376953125,
+            19.1787109375,
+            24.80908203125
+          ]
+        },
+        "child_cpu_seconds": 66.162117,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 68.03788300001165
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bp36/on/all4on/target",
+        "HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=yes",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bp36/on/all4on/runtime"
+      },
+      "mode": "on",
+      "phase": "prepare",
+      "raw_output": {
+        "run_id": "20261030-035240147-1592142",
+        "artifact": "on-prepare.raw-output.jsonl",
+        "sha256": "c76eee255997cbe0d1b4c2f92ab92174cb8633306107c5a2121466d8cdc8ab33",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 1.3514851939980872,
+      "noise": {
+        "before": {
+          "busy_seconds": 303580.02,
+          "loadavg": [
+            11.11376953125,
+            19.1787109375,
+            24.80908203125
+          ]
+        },
+        "after": {
+          "busy_seconds": 303585.54,
+          "loadavg": [
+            11.11376953125,
+            19.1787109375,
+            24.80908203125
+          ]
+        },
+        "child_cpu_seconds": 1.5637429999999881,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 3.9562569999604307
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bp36/on/all4on/target",
+        "HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=yes",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bp36/on/all4on/runtime"
+      },
+      "mode": "on",
+      "phase": "edit",
+      "raw_output": {
+        "run_id": "20261030-035258029-1595722",
+        "artifact": "on-edit.raw-output.jsonl",
+        "sha256": "452604220a89d882333a1d86abef3293cf44c75befe44a09be9fe5f470962611",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "source_sha256": "3b5af4f7cf95809ed44875803a201ed38b219a8214b47325e21a12ce7df8b1a2",
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      }
+    },
+    {
+      "command": [
+        "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+        "test",
+        "--lib",
+        "--",
+        "summary::tests::",
+        "--test-threads=1",
+        "--nocapture"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 1.1846365379969939,
+      "noise": {
+        "before": {
+          "busy_seconds": 303585.54,
+          "loadavg": [
+            11.11376953125,
+            19.1787109375,
+            24.80908203125
+          ]
+        },
+        "after": {
+          "busy_seconds": 303590.64,
+          "loadavg": [
+            11.11376953125,
+            19.1787109375,
+            24.80908203125
+          ]
+        },
+        "child_cpu_seconds": 1.4206490000000258,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 3.679351000034899
+      },
+      "environment": {
+        "CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "CARGO_HOME": "/home/jeremy/.cargo",
+        "CARGO_PROFILE_DEV_DEBUG": "0",
+        "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+        "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+        "CARGO_PROFILE_TEST_DEBUG": "0",
+        "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+        "CARGO_PROFILE_TEST_OPT_LEVEL": "0",
+        "CARGO_TARGET_DIR": "/home/jeremy/.jcode/scratch/bp36/on/all4on/target",
+        "HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/home",
+        "JUSTRUST_BUILDD": "0",
+        "JUSTRUST_BUILDD_PREBUILD": "0",
+        "JUSTRUST_CACHE_PROC_MACROS": "0",
+        "JUSTRUST_CARGO_FORK": "0",
+        "JUSTRUST_DEPCACHE": "0",
+        "JUSTRUST_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/home/.justrust",
+        "JUSTRUST_LOCALCACHE": "0",
+        "JUSTRUST_LOCALCACHE_TARGET_BOUND": "0",
+        "JUSTRUST_PEER_CACHE": "0",
+        "JUSTRUST_PREBUILT": "off",
+        "JUSTRUST_PREBUILT_ALWAYS": "0",
+        "JUSTRUST_REAL_CARGO": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+        "JUSTRUST_REMOTE": "off",
+        "JUSTRUST_REMOTE_CACHE": "0",
+        "JUSTRUST_TOOLCHAIN": "system",
+        "JUSTRUST_TOOLCHAIN_AUTO_INSTALL": "0",
+        "JUSTRUST_TOOLCHAIN_NIGHTLY": "1",
+        "RUSTC": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+        "RUSTFLAGS": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes -Zcache-proc-macros=yes",
+        "RUSTUP_HOME": "/home/jeremy/.rustup",
+        "XDG_CACHE_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/cache",
+        "XDG_CONFIG_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/config",
+        "XDG_DATA_HOME": "/home/jeremy/.jcode/scratch/bp36/on/all4on/data",
+        "XDG_RUNTIME_DIR": "/home/jeremy/.jcode/scratch/bp36/on/all4on/runtime"
+      },
+      "mode": "on",
+      "phase": "restore",
+      "raw_output": {
+        "run_id": "20261030-035259382-1596095",
+        "artifact": "on-restore.raw-output.jsonl",
+        "sha256": "a01ef5d72e87132e6ff02e71314f6c5b6001249af7743b2b7319e0196e13bd3c",
+        "hotpatch": {
+          "present": false,
+          "outcomes": []
+        }
+      },
+      "source_sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+      "parsed": {
+        "tests": [
+          [
+            "summary::tests::parses_libtest_results",
+            "ok"
+          ],
+          [
+            "summary::tests::shares_overlapping_time",
+            "ok"
+          ],
+          [
+            "summary::tests::splits_passes_without_double_counting",
+            "ok"
+          ],
+          [
+            "summary::tests::test_failures_are_not_compile_errors",
+            "ok"
+          ]
+        ],
+        "passed": 4,
+        "failed": 0,
+        "ignored": 0,
+        "filtered": 144
+      }
+    }
+  ],
+  "source_after": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "identities_after": {
+    "rustc": {
+      "path": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/bin/rustc",
+      "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144"
+    },
+    "cargo": {
+      "path": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "justrust": {
+      "path": "/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client",
+      "sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+    },
+    "blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "rustc_driver_0": {
+      "path": "/home/jeremy/.jcode/scratch/dead-item-cache-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e"
+    },
+    "blaze_companion:blaze": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze",
+      "sha256": "767cb0f22328a12256b675be6f9b6e18f05c84ea98f71329b85dadddff606174"
+    },
+    "blaze_companion:blaze-proc-macro-srv": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/blaze-proc-macro-srv",
+      "sha256": "66676f4baa898bccc0551d343f392c72b73d07a98ab87918d083dde877c8a79b"
+    },
+    "blaze_companion:ra-jit": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit",
+      "sha256": "04e84de57aad8a19102edd454e2cdd8ac2e4b58461a4070479919207f3a5590e"
+    },
+    "blaze_companion:ra-jit-rustc": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc",
+      "sha256": "c20dfcb986324ac357d568501f977d0232cc4bbf8e1e8bbb5f2744d4dd1fa8bd"
+    },
+    "blaze_companion:ra-jit-rustc-first": {
+      "path": "/home/jeremy/.jcode/scratch/blaze-comparison-20261030/cargo/bin/ra-jit-rustc-first",
+      "sha256": "82c2d0b0dde382bf26a6ec4855e052f1a2753380d4b4596aa63a9ab46378117b"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc",
+      "sha256": "6ff2b1ce1a1f378dd2964ccf2e39ccf10d37de18d801987b468bc5ab479171e8"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo",
+      "sha256": "f93c96982673433e3b6c16039aa765aea0397a305ab06aa44e1a9e42ede56dcb"
+    },
+    "blaze_toolchain:toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so": {
+      "path": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/librustc_driver-aaa8b10abbb2de39.so",
+      "sha256": "e81ee13275c3e0965051ced606e35fa388cdc3c2ff4ef22e04fa9454edcb431f"
+    }
+  },
+  "source_restored": true,
+  "identities_unchanged": true
+}
