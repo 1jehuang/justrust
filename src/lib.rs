@@ -6,6 +6,7 @@
 pub mod compiler;
 pub mod engine;
 pub mod fixtures;
+pub mod persistent_cache;
 pub mod project;
 
 pub use engine::{

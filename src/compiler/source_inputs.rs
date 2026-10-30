@@ -345,6 +345,9 @@ impl Identity {
 fn option_identity(options: &SourceOptions) -> Option<[u8; 32]> {
     // Exhaustive destructuring makes new public configuration require a decision.
     let SourceOptions {
+        // Storage placement is not a semantic source input. Cache hits remain
+        // graph outputs and do not authorize source/artifact sharing.
+        local_cache: _,
         compiler_image,
         project_inputs,
         source_snapshot,

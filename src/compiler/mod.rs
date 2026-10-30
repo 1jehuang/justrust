@@ -19,6 +19,7 @@ mod instances;
 pub mod ir;
 pub(crate) mod keys;
 mod lexer;
+pub mod link_cache;
 mod literal_scan;
 mod literal_values;
 mod macro_cursor;
@@ -1025,6 +1026,7 @@ impl Provider for CompilerProvider {
             TEMPLATE_BODY => 3,
             SOURCE_ADMISSION => 4,
             ADMIT => 2,
+            BUILD => 2,
             RESOLVE => 4,
             SIGNATURES => 2,
             _ => 1,
@@ -3056,24 +3058,34 @@ impl Provider for CompilerProvider {
                     // "every required check passed" fact.
                     cx.read(cx.request(keys::CheckRoot.key()).get(0)).await?;
                     let native = &this.0.source_options.native_link;
-                    let bytes = if types.has_c_abi()
+                    let (bytes, cache_outcome) = if types.has_c_abi()
                         || native.emit_object
                         || !native.objects.is_empty()
                         || !native.libraries.is_empty()
                     {
-                        c_abi::elf::link_with_panic(
-                            &objects,
-                            native,
-                            this.0.source_options.panic_unwind,
-                            &this.0.budget,
+                        (
+                            c_abi::elf::link_with_panic(
+                                &objects,
+                                native,
+                                this.0.source_options.panic_unwind,
+                                &this.0.budget,
+                            ),
+                            link_cache::Outcome::Ineligible,
                         )
                     } else {
-                        backend::link_with_panic(&objects, this.0.source_options.panic_unwind)
-                    }
-                    .map_err(Error::new)?;
+                        link_cache::link(
+                            &objects,
+                            this.0.source_options.panic_unwind,
+                            this.0.source_options.local_cache.as_ref(),
+                            this.0.source_options.compiler_image.as_deref(),
+                            &this.0.budget,
+                        )
+                    };
+                    let bytes = bytes.map_err(Error::new)?;
                     if let Some(runtime) = &runtime {
                         runtime.validate_runtime()?;
                     }
+                    cx.publish_fact(1, cache_outcome)?;
                     cx.publish_fact(0, bytes)
                 }
                 _ => Err(Error::new("unknown compiler operation")),
@@ -3176,6 +3188,9 @@ fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
 
 /// One snapshot may serve check and build roots together without redoing checks.
 pub struct Compilation {
+    /// Outcome for the native linked-byte output only. CHECK never looks up
+    /// executable results, and all required checks still run before a hit.
+    pub link_cache: link_cache::Outcome,
     /// Running-image evidence read back from the prepared-source graph fact.
     /// Includes executable mapped files and bounded process configuration, not
     /// arbitrary in-memory state. Missing evidence never authorizes reuse.
@@ -3617,6 +3632,9 @@ fn compile_input_configured(
         }
     }
     Ok(Compilation {
+        link_cache: engine
+            .fact_of::<link_cache::Outcome>(&keys::BuildRoot.key(), 1)
+            .map_or(link_cache::Outcome::Disabled, |outcome| *outcome),
         compiler_image,
         executable: executable.map(|bytes| bytes.as_ref().clone()),
         report,

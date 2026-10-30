@@ -12,6 +12,7 @@ const MAX_IMAGE_BYTES: u64 = 512 * 1024 * 1024;
 pub struct CompilerImage {
     bytes: u64,
     digest: [u8; 32],
+    implementation_digest: [u8; 32],
 }
 impl crate::engine::Fact for CompilerImage {}
 impl CompilerImage {
@@ -43,6 +44,13 @@ impl CompilerImage {
     }
     pub fn digest(&self) -> &[u8; 32] {
         &self.digest
+    }
+    /// Version identity for pure operations with explicit semantic inputs.
+    /// Includes the executable, mapped libraries and mapped code, but not
+    /// invocation arguments, cwd, environment or resource limits. This is not
+    /// permission to reuse operations that actually consume those inputs.
+    pub fn implementation_digest(&self) -> &[u8; 32] {
+        &self.implementation_digest
     }
     pub fn matches_current(&self) -> bool {
         self.validate_current().is_ok()
@@ -185,8 +193,7 @@ fn capture_runtime() -> io::Result<CompilerImage> {
     let executable = capture(File::open("/proc/self/exe")?, MAX_IMAGE_BYTES)?;
     let mut bytes = executable.bytes;
     let mut hash = blake3::Hasher::new();
-    hash.update(b"justrust-running-compiler-runtime-v5");
-    hash.update(&process);
+    hash.update(b"justrust-running-compiler-runtime-v6");
     hash.update(&executable.digest);
     let memory = File::open("/proc/self/mem")?;
     let mut remaining_code = 128 * 1024 * 1024u64;
@@ -249,9 +256,12 @@ fn capture_runtime() -> io::Result<CompilerImage> {
     {
         return Err(invalid("runtime mappings changed during capture"));
     }
+    let implementation_digest = *hash.finalize().as_bytes();
+    hash.update(&process);
     Ok(CompilerImage {
         bytes,
         digest: *hash.finalize().as_bytes(),
+        implementation_digest,
     })
 }
 
@@ -492,6 +502,7 @@ fn capture(mut file: File, limit: u64) -> io::Result<CompilerImage> {
     Ok(CompilerImage {
         bytes,
         digest: *hash.finalize().as_bytes(),
+        implementation_digest: *hash.finalize().as_bytes(),
     })
 }
 
@@ -571,6 +582,10 @@ mod tests {
         assert_ne!(mapped as usize, usize::MAX, "executable mmap failed");
         let added = CompilerImage::current().unwrap();
         assert_ne!(before.digest(), added.digest());
+        assert_ne!(
+            before.implementation_digest(),
+            added.implementation_digest()
+        );
         assert!(!before.matches_current());
         assert!(added.matches_current());
         // The same file, inode, mapping range and permissions can hide private
@@ -583,6 +598,10 @@ mod tests {
         assert!(!added.matches_current());
         let private_code = CompilerImage::current().unwrap();
         assert_ne!(added.digest(), private_code.digest());
+        assert_ne!(
+            added.implementation_digest(),
+            private_code.implementation_digest()
+        );
         assert!(private_code.matches_current());
         assert_eq!(unsafe { mprotect(mapped, 4096, 1 | 2) }, 0);
         unsafe { mapped.cast::<u8>().write_volatile(0) };
@@ -592,6 +611,10 @@ mod tests {
         assert!(!added.matches_current());
         let changed = CompilerImage::current().unwrap();
         assert_ne!(added.digest(), changed.digest());
+        assert_ne!(
+            added.implementation_digest(),
+            changed.implementation_digest()
+        );
         std::fs::remove_file(&path).unwrap();
         assert!(CompilerImage::current().is_err());
         // Replacing the pathname cannot legitimize the still-mapped old inode.
@@ -623,6 +646,7 @@ mod tests {
         }
         let image = CompilerImage::current().unwrap();
         println!("PROCESS_DIGEST:{:?}", image.digest());
+        println!("IMPLEMENTATION_DIGEST:{:?}", image.implementation_digest());
         assert!(image.matches_current());
     }
 
@@ -648,17 +672,25 @@ mod tests {
                 "{}",
                 String::from_utf8_lossy(&output.stderr)
             );
-            String::from_utf8(output.stdout)
-                .unwrap()
+            let text = String::from_utf8(output.stdout).unwrap();
+            let process = text
                 .lines()
                 .find(|line| line.starts_with("PROCESS_DIGEST:"))
                 .expect("child did not emit identity")
-                .to_owned()
+                .to_owned();
+            let implementation = text
+                .lines()
+                .find(|line| line.starts_with("IMPLEMENTATION_DIGEST:"))
+                .expect("child did not emit implementation identity")
+                .to_owned();
+            (process, implementation)
         };
         let first = run(&root, "first");
         assert_eq!(first, run(&root, "first"));
-        assert_ne!(first, run(&root, "changed"));
-        assert_ne!(first, run(&other, "first"));
+        for changed in [run(&root, "changed"), run(&other, "first")] {
+            assert_ne!(first.0, changed.0);
+            assert_eq!(first.1, changed.1);
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

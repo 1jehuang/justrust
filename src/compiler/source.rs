@@ -45,6 +45,9 @@ const MAX_ORIGINS: usize = 1024 * 1024;
 /// Native x86_64 Linux configuration plus bounded user predicates.
 /// The default pins abort and enables debug assertions, not complete Rust panic semantics.
 pub struct SourceOptions {
+    /// Opt-in trusted local cache. This is storage configuration, not semantic
+    /// input or authorization to share private artifacts with another tenant.
+    pub local_cache: Option<crate::persistent_cache::LocalCache>,
     /// Bounded identity of the running compiler image, supplied by source compilation.
     pub compiler_image: Option<Arc<super::procfs::CompilerImage>>,
     /// Frozen native project-discovery inputs, when invoked by the project driver.
@@ -108,6 +111,7 @@ impl TestFilter {
 impl Default for SourceOptions {
     fn default() -> Self {
         Self {
+            local_cache: None,
             compiler_image: None,
             project_inputs: None,
             source_snapshot: None,
