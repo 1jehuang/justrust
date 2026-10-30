@@ -9175,3 +9175,35 @@ whole-graph work while code generation is below 1ms. An attempted opt-in native
 trace did not produce a trace at all; absence is not zero cost. Native phase
 telemetry and safe graph reuse are the next experiments. No candidate has yet
 proved an independent improvement over Blaze, and shipping defaults stay intact.
+
+## 2026-10-30: prospective resident graph reuse and actual native traces
+
+The experimental Blaze-derived resident engine now retains module and nested-body
+declaration traversals as native Salsa queries (`c4a20a5f6`). The exact original
+traversal remains the eight-revision correctness oracle, including nested items,
+macro-definition edits, provided methods, statics, removal and restoration.
+The v4 graph, listed-root and telemetry unit filters pass (1, 1 and 3 tests).
+Earlier v3 unit compilation failed in two test fixtures; those failures are
+preserved rather than counted as acceptance. Accepted v4 build/unit run IDs are
+`20261030-075042765-3560838`, `20261030-075141261-3564825`,
+`20261030-075224254-3567695`, and `20261030-075224561-3567744`.
+
+The prospective `bench/suite.py resident` before/after pair, `rsb01` to `rsa01`,
+passes all actual runtime/error/recovery gates with five matching executed edits
+per stack and unseeded private stores. The candidate median is 0.119944310s before
+and 0.109617051s after. The unchanged source-built reference also improves from
+0.124489961s to 0.110923157s. Thus the descriptive 8.61% candidate reduction does
+not establish attributable savings or a robust win over Blaze. Noise is unknown,
+the candidate combines graph and telemetry changes, and this scoped diagnostic
+is not a comprehensive workload or shipping-default promotion gate.
+
+Actual native telemetry now produces nonempty phase traces for successful tests,
+an executed body edit, E0308, an assertion failure and both recoveries. A separate
+identical-source off/on/alias/off sequence preserves executable hashes, device
+and inode identities. One instrumented body edit reports total 117.588ms with
+roots 27.732ms, apply 23.548ms, check 12.490ms and client planning 18.541ms. These
+are elapsed phase observations, not additive CPU costs or time saved. Existing
+hard metadata exits remain a trace-finalization limitation. Full benchmark
+Python discovery passes 700 tests. Shipping defaults are unchanged, and the
+next hypothesis is avoiding unconditional all-body prewarming before tracked
+declaration-query validation.
