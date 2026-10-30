@@ -62,6 +62,37 @@ fn differential(name: &str, source: &str, valid: bool) {
 }
 
 #[test]
+fn indexed_constant_inputs_select_exact_conversion_without_reexecution() {
+    differential(
+        "indexed-constant-conversion",
+        r#"const BYTES:&[u8]=b"abc";
+fn offset(calls:&mut usize)->usize{*calls+=1usize;1usize}
+fn main(){let mut calls=0usize;let ch=char::from(BYTES[offset(&mut calls)]);assert_eq!(ch,'b');assert_eq!(calls,1usize);assert_eq!(char::from(BYTES[0]),'a');let data=[255u8,65u8];let slice:&[u8]=&data;let index=1usize;assert_eq!(char::from(slice[index]),'A');let wide=u16::from(slice[index]);assert_eq!(wide,65u16);println!("indexed conversion ok");}"#,
+        true,
+    );
+    differential(
+        "indexed-input-requires-valid-index",
+        "const BYTES:&[u8]=b\"abc\";fn unused(){let c=char::from(BYTES[true]);}fn main(){}",
+        false,
+    );
+    differential(
+        "typed-block-hint-still-checks-initializer",
+        "fn main(){let c=char::from(({let bytes:&[u8]=true;bytes})[0]);}",
+        false,
+    );
+    differential(
+        "typed-block-hint-keeps-tail-binding-identity",
+        "fn main(){let outside:&[u32]=&[65u32];let c=char::from(({let bytes:&[u8]=b\"a\";outside})[0]);}",
+        false,
+    );
+    differential(
+        "indexed-input-keeps-missing-conversion",
+        "const VALUES:&[u32]=&[65u32];fn unused(index:usize){let c=char::from(VALUES[index]);}fn main(){}",
+        false,
+    );
+}
+
+#[test]
 fn reflexive_from_preserves_generic_and_noncopy_values() {
     differential(
         "reflexive-values",

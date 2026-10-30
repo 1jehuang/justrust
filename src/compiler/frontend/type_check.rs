@@ -1439,9 +1439,19 @@ impl<'s> Checker<'s> {
                 match self.inference_evidence(base, depth + 1)?.as_ref() {
                     InferKind::Array(element, len) if index < len => element.clone(),
                     InferKind::Array(_, _) => return Err("array index out of bounds".into()),
-                    _ => self.infer_node(InferKind::Unknown(false))?,
+                    _ => match self.scalar_hint(expr)? {
+                        Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
+                        None => self.infer_node(InferKind::Unknown(false))?,
+                    },
                 }
             }
+            // Indexing supplies type evidence only. The ordinary expression
+            // checker still validates the index, loan and move permissions,
+            // and evaluates both operands exactly once after selection.
+            Expr::DynamicIndex { .. } => match self.scalar_hint(expr)? {
+                Some(ty) => self.infer_type_term(&ty, None, depth + 1)?,
+                None => self.infer_node(InferKind::Unknown(false))?,
+            },
             Expr::If {
                 then_block,
                 else_block,
@@ -5228,6 +5238,27 @@ impl<'a> Checker<'a> {
                     }
                     _ => None,
                 }
+            }
+            // A single explicitly typed binding returned from its own block
+            // carries that annotation, never an outer binding with the same
+            // spelling. Byte-slice constant uses have this source shape.
+            Expr::Block(block)
+                if let (
+                    [
+                        Stmt::Let {
+                            name: BindingName::Named(bound),
+                            ty,
+                            ..
+                        },
+                    ],
+                    Some(Expr::Var(path)),
+                ) = (block.statements.as_slice(), block.tail.as_deref())
+                    && !matches!(ty, Type::Infer)
+                    && matches!(path.anchor(), PathAnchor::Relative)
+                    && path.segments().len() == 1
+                    && path.checked_key(self.names()?)? == bound.checked_key(self.names()?)? =>
+            {
+                Some(checked_local_ty(ty, self.signatures)?)
             }
             // A literal or explicit cast carries its own type even behind
             // statements that diverge. Do not look up a general tail in the

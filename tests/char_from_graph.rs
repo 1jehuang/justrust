@@ -8,7 +8,7 @@ mod native_prelude;
 fn check_uses_embedded_source_without_demanding_native_codegen() {
     for workers in [1, 8] {
         let compilation = compiler::compile_observed(
-            "fn same<T>(value:T)->T{T::from(value)} fn main(){assert_eq!(char::from(255u8),'ÿ');assert_eq!(same(7i32),7i32);}".into(),
+            "const BYTES:&[u8]=b\"a\";fn same<T>(value:T)->T{T::from(value)} fn main(){let index=0usize;assert_eq!(char::from(BYTES[index]),'a');assert_eq!(char::from(255u8),'ÿ');assert_eq!(same(7i32),7i32);}".into(),
             workers,
             true,
         )
