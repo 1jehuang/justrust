@@ -1,5 +1,26 @@
 # Findings: where agent build time goes
 
+## 2026-10-30: parallelism configuration audit
+
+Hosted crate scheduling and test parallelism are already active. The missing
+layer is the clean-room compiler's frontend: recent hosted check
+`20261029-175257566-943851` averaged one of 96 CPUs, whereas the full library
+test run `20261029-175106375-937110` averaged 29.2 and peaked at 73.1 CPUs.
+
+Pinned hosted nightly frontend diagnostics (three samples per side) observed
+full nonincremental library recheck medians of 13.33s at one thread and 6.11s
+at eight. Warm incremental filtered test edits stayed flat (7.73s vs 7.76s).
+The suite comparison labels these uncontrolled because some samples are noisy,
+not a proven general speedup or a reason to disable incremental compilation.
+Exact result files and limitations: `docs/parallelism-audit-20261030.md`.
+
+Fixed hosted transport dropping explicit Cargo/frontend/libtest/pool limits and
+opt-outs. Thread telemetry now recognizes native and split flag spellings.
+Hosted validation: check `20261029-181020029-1085452`, four shim tests
+`20261029-181117478-1095482`, hosted-control regression
+`20261029-181138802-1100882`, full test `20261029-181156594-1106065`
+(829 passed). No blanket compiler default promotion follows from this audit.
+
 ## 2026-10-26: Next optimization targets from recent real work
 
 Read-only triage of the 90-minute window ending 2026-10-27 00:58:01 UTC
