@@ -21,6 +21,7 @@ pub(super) fn setup_error(error: &io::Error) -> String {
         10 => "transfer filesystem mediation listener",
         11 => "bind linker lifetime to compiler",
         12 => "drop linker capabilities",
+        13 => "establish parent exec tracer",
         _ => "unknown boundary setup step",
     };
     format!(
@@ -234,6 +235,10 @@ pub(super) fn confine(
             // Includes Command's error pipe: CLOEXEC keeps it available to
             // report setup failure but no inherited descriptor survives exec.
             checked(syscall(436, 3u32, u32::MAX, 4u32), 8)?;
+            // TRACEME belongs to the thread calling Command::spawn. Do not
+            // stop here: spawn must first observe the exec error pipe closing.
+            // The successful exec generates SIGTRAP before image instructions.
+            checked(syscall(101, 0usize, 0usize, 0usize, 0usize), 13)?;
             let program = Program {
                 length: filter.len() as u16,
                 filter: filter.as_ptr(),

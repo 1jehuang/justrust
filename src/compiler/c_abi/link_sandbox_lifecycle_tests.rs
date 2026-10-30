@@ -148,6 +148,134 @@ void _start(void){{
 }
 
 #[test]
+fn controlled_link_exec_stop_precedes_first_image_write_and_reaps_setup_errors() {
+    use super::super::{
+        link_sandbox,
+        link_sandbox_exec::Guard,
+        link_sandbox_io::{Broker, bootstrap_exec, receive},
+    };
+    let root = std::env::temp_dir().join(format!(
+        "jr-link-exec-stop-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let scratch = Scratch(root);
+    fs::create_dir(scratch.0.join("out")).unwrap();
+    // First instruction sequence writes to inherited stdout, without any
+    // brokered syscall that could itself hide an early execution race.
+    let source = scratch.0.join("probe.S");
+    fs::write(&source, ".global _start\n.text\n_start:\nmov $1,%eax\nmov $1,%edi\nlea message(%rip),%rsi\nmov $5,%edx\nsyscall\nmov $60,%eax\nxor %edi,%edi\nsyscall\nmessage: .ascii \"ready\"\n").unwrap();
+    let compiled = Command::new("cc")
+        .args(["-nostdlib", "-static", "-no-pie"])
+        .arg(&source)
+        .arg("-o")
+        .arg(scratch.0.join("probe"))
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    fs::set_permissions(scratch.0.join("probe"), fs::Permissions::from_mode(0o555)).unwrap();
+    for failure in [0, 1, 2] {
+        let mut broker = Broker::new(&scratch.0).unwrap();
+        let mut command = Command::new(scratch.0.join("probe"));
+        command
+            .env_clear()
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let socket = link_sandbox::confine(&mut command, &scratch.0).unwrap();
+        socket
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let (mut child, listener, process) = std::thread::scope(|scope| {
+            let receiver = scope.spawn(move || {
+                let listener = receive(&socket).unwrap();
+                let (pid, process) = bootstrap_exec(&listener).unwrap();
+                (listener, pid, process)
+            });
+            let child = Guard::new(command.spawn().unwrap());
+            let (listener, pid, process) = receiver.join().unwrap();
+            assert_eq!(pid, child.child.id());
+            (child, listener, process)
+        });
+        if failure == 2 {
+            // Receiver completed but no wait consumed the exec-stop yet.
+            // Cleanup must not mistake that pending stop for task death.
+            let pid = child.child.id();
+            let mut stdout = child.child.stdout.take().unwrap();
+            drop(child);
+            assert!(!PathBuf::from(format!("/proc/{pid}")).exists());
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.is_empty());
+            continue;
+        }
+        child.await_exec().unwrap();
+        let mut stdout = child.child.stdout.take().unwrap();
+        let stderr = child.child.stderr.take().unwrap();
+        let mut event = PollFd {
+            fd: stdout.as_raw_fd(),
+            events: 1,
+            revents: 0,
+        };
+        assert_eq!(
+            unsafe { poll(&mut event, 1, 100) },
+            0,
+            "untrusted image wrote before parent setup"
+        );
+        broker.bind_process(process).unwrap();
+        if failure == 1 {
+            // Deliberately fail stdio admission with a regular file while the
+            // image is stopped. Drop must kill and truly reap, not cache stop.
+            assert!(
+                broker
+                    .set_stdio(&fs::File::open(&source).unwrap(), &stderr)
+                    .is_err()
+            );
+            let pid = child.child.id();
+            drop(child);
+            assert!(
+                !PathBuf::from(format!("/proc/{pid}")).exists(),
+                "stopped task was not reaped"
+            );
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).unwrap();
+            assert!(bytes.is_empty(), "failed parent setup allowed image write");
+        } else {
+            broker.set_stdio(&stdout, &stderr).unwrap();
+            assert_eq!(
+                unsafe { poll(&mut event, 1, 100) },
+                0,
+                "image ran while still traced"
+            );
+            child.detach().unwrap();
+            assert_eq!(
+                unsafe { poll(&mut event, 1, 3000) },
+                1,
+                "ready image never wrote"
+            );
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            stdout.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"ready");
+            assert!(child.child.wait().unwrap().success());
+        }
+        drop(listener);
+    }
+    // Failed exec never produces an exec stop. It must still leave neither a
+    // hanging spawn nor a traced orphan behind.
+    let start = Instant::now();
+    let mut command = Command::new(scratch.0.join("missing"));
+    assert!(super::output(&mut command, &scratch.0).is_err());
+    assert!(start.elapsed() < Duration::from_secs(10));
+}
+
+#[test]
 fn controlled_linker_dies_with_its_compiler() {
     const CHILD: &str = "JR_LINK_PARENT_DEATH_FIXTURE_ROOT";
     if let Some(root) = std::env::var_os(CHILD) {

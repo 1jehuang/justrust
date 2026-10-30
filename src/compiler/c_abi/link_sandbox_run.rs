@@ -30,7 +30,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
     use super::link_sandbox_io::{Broker, bootstrap_exec, receive};
     use std::{
         os::fd::AsRawFd,
-        process::{Child, Stdio},
+        process::Stdio,
         time::{Duration, Instant},
     };
     #[repr(C)]
@@ -42,15 +42,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
     unsafe extern "C" {
         fn poll(fds: *mut PollFd, count: usize, timeout: i32) -> i32;
     }
-    struct Guard(Child);
-    impl Drop for Guard {
-        fn drop(&mut self) {
-            if !matches!(self.0.try_wait(), Ok(Some(_))) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-    }
+    use super::link_sandbox_exec::Guard;
     let mut broker = Broker::new(root)?;
     let socket = super::link_sandbox::confine(command, root)?;
     socket.set_read_timeout(Some(Duration::from_secs(5)))?;
@@ -67,31 +59,33 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
             let (pid, process) = bootstrap_exec(&listener)?;
             Ok::<_, io::Error>((listener, pid, process))
         });
-        let child = command.spawn().map(Guard);
+        let child = command.spawn().map(Guard::new);
         let transfer = transfer
             .join()
             .map_err(|_| io::Error::other("linker bootstrap receiver panicked"))?;
         let child = child?;
         let (listener, pid, process) = transfer?;
-        if pid != child.0.id() {
+        if pid != child.child.id() {
             return Err(io::Error::other(
                 "linker bootstrap process identity mismatch",
             ));
         }
         Ok::<_, io::Error>((child, listener, process))
     })?;
+    child.await_exec()?;
     let stdout = child
-        .0
+        .child
         .stdout
         .take()
         .ok_or_else(|| io::Error::other("missing linker stdout pipe"))?;
     let stderr = child
-        .0
+        .child
         .stderr
         .take()
         .ok_or_else(|| io::Error::other("missing linker stderr pipe"))?;
     broker.bind_process(process)?;
     broker.set_stdio(&stdout, &stderr)?;
+    child.detach()?;
     std::thread::scope(move |scope| {
         let mut child = child;
         let mut readers = [
@@ -118,7 +112,7 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
                         }
                     }
                 }
-                if let Some(status) = child.0.try_wait()? {
+                if let Some(status) = child.child.try_wait()? {
                     return Ok(status);
                 }
                 if Instant::now() >= deadline {
@@ -152,13 +146,12 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
                             "controlled linker exceeded 100000 filesystem requests",
                         ));
                     }
-                    broker.serve_once(&listener, child.0.id())?;
+                    broker.serve_once(&listener, child.child.id())?;
                 }
             }
         })();
         if result.is_err() {
-            let _ = child.0.kill();
-            let _ = child.0.wait();
+            child.terminate();
         }
         for (index, reader) in readers.into_iter().enumerate() {
             if let Some(reader) = reader {

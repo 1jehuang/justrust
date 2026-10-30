@@ -16,13 +16,80 @@ use std::{
         },
     },
     path::{Component, Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 unsafe extern "C" {
     fn syscall(number: c_long, ...) -> c_long;
     fn ioctl(fd: c_int, operation: c_ulong, ...) -> c_int;
     fn recvmsg(fd: c_int, message: *mut Message, flags: c_int) -> isize;
+    fn poll(fds: *mut PollFd, count: usize, timeout: c_int) -> c_int;
 }
+#[repr(C)]
+struct PollFd {
+    fd: c_int,
+    events: i16,
+    revents: i16,
+}
+
+fn wait_bootstrap(listener: &OwnedFd, deadline: Instant) -> io::Result<()> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "sandbox bootstrap notification timed out",
+            ));
+        }
+        let mut descriptor = PollFd {
+            fd: listener.as_raw_fd(),
+            events: 1,
+            revents: 0,
+        };
+        let timeout = remaining
+            .as_millis()
+            .saturating_add(1)
+            .min(i32::MAX as u128) as i32;
+        let result = unsafe { poll(&mut descriptor, 1, timeout) };
+        if result == -1 {
+            let error = io::Error::last_os_error();
+            if error.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error);
+        }
+        if result == 0 {
+            continue;
+        }
+        if descriptor.revents & (8 | 16 | 32) != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "sandbox bootstrap listener disconnected",
+            ));
+        }
+        if descriptor.revents & 1 != 0 {
+            return Ok(());
+        }
+        return Err(io::Error::other("unexpected sandbox bootstrap poll event"));
+    }
+}
+
+#[test]
+fn controlled_link_bootstrap_wait_is_bounded() {
+    let (receiver, _sender) = UnixDatagram::pair().unwrap();
+    let listener: OwnedFd = receiver.into();
+    let start = Instant::now();
+    let error = wait_bootstrap(&listener, start + Duration::from_millis(20)).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    assert_eq!(
+        wait_bootstrap(&listener, Instant::now())
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::TimedOut
+    );
+}
+
 #[repr(C)]
 struct Iovec {
     base: *mut c_void,
@@ -152,8 +219,12 @@ fn controlled_link_notification_abi_rejects_growth_or_truncation() {
 /// Every subsequent exec is denied by serve_once, without CONTINUE.
 pub(super) fn bootstrap_exec(listener: &OwnedFd) -> io::Result<(u32, File)> {
     check_sizes()?;
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut request = Notification::default();
     loop {
+        // This listener has exactly one receiver. Readiness makes RECV
+        // nonblocking even if the pending syscall is canceled before receipt.
+        wait_bootstrap(listener, deadline)?;
         if unsafe {
             ioctl(
                 listener.as_raw_fd(),
@@ -165,7 +236,7 @@ pub(super) fn bootstrap_exec(listener: &OwnedFd) -> io::Result<(u32, File)> {
             break;
         }
         let error = io::Error::last_os_error();
-        if error.raw_os_error() != Some(4) {
+        if !matches!(error.raw_os_error(), Some(2 | 4)) {
             return Err(error);
         }
         request = Notification::default();
