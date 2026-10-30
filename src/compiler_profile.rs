@@ -182,7 +182,7 @@ fn write_graph(out: &mut impl Write, report: &Report) -> io::Result<()> {
     let max_rows = 128;
     write!(
         out,
-        "{{\"elapsed_ns\":{},\"summed_poll_execution_ns\":{},\"queue_ns\":{},\"wait_ns\":{},\"nodes\":{},\"edges\":{},\"polls\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"unmatched_intervals\":{},\"interval_measurement\":\"summed task wall intervals, not CPU time; includes transition bookkeeping\",\"phase_intervals\":[",
+        "{{\"locality_workers\":{locality_workers},\"locality_cpus\":{locality_cpus:?},\"elapsed_ns\":{},\"summed_poll_execution_ns\":{},\"queue_ns\":{},\"wait_ns\":{},\"nodes\":{},\"edges\":{},\"polls\":{},\"failures\":{},\"events_dropped\":{},\"capture_complete\":{},\"unmatched_intervals\":{},\"interval_measurement\":\"summed task wall intervals, not CPU time; includes transition bookkeeping\",\"phase_intervals\":[",
         report.elapsed_ns,
         report.execution_ns,
         report.queue_ns,
@@ -193,7 +193,9 @@ fn write_graph(out: &mut impl Write, report: &Report) -> io::Result<()> {
         report.failures,
         report.events_dropped,
         report.capture_complete,
-        unmatched
+        unmatched,
+        locality_workers = report.locality_workers,
+        locality_cpus = report.locality_cpus
     )?;
     for (i, (kind, ns)) in phases.iter().enumerate() {
         if i != 0 {

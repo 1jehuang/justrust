@@ -7,6 +7,19 @@ import native_cache
 
 
 class CacheComparisonTests(unittest.TestCase):
+    def test_locality_is_explicit_and_part_of_strict_contract(self):
+        inherit = native_cache.measurement_environment('inherit')
+        local = native_cache.measurement_environment('llc')
+        self.assertNotIn('JR_GRAPH_LOCALITY', inherit)
+        self.assertEqual(local, dict(inherit, JR_GRAPH_LOCALITY='llc'))
+        with self.assertRaises(ValueError):
+            native_cache.measurement_environment('arbitrary')
+        before, after = self.result(), self.result()
+        before['contract']['environment'] = inherit
+        after['contract']['environment'] = local
+        with self.assertRaises(ValueError):
+            native_cache.compare(before, after, allow_binary_change=True)
+
     def result(self, state='off'):
         sample = {'ok': True, 'wall_ns': 1000}
         return {'native_cache': 1, 'state': state, 'complete': True,
@@ -54,6 +67,21 @@ class CacheComparisonTests(unittest.TestCase):
             proc.stdout = json.dumps(dict(summary, **{key: value})).encode()
             with self.assertRaises(ValueError):
                 native_cache.checked_summary(proc, 8)
+
+    def test_locality_requires_reported_effective_placement(self):
+        summary = {'mode': 'build', 'workers': 8, 'failures': 0,
+                   'capture_complete': True, 'events_dropped': 0,
+                   'locality_workers': 8, 'locality_cpus': list(range(8))}
+        proc = Mock(returncode=0, stdout=json.dumps(summary).encode(), stderr=b'')
+        self.assertEqual(native_cache.checked_summary(proc, 8, 'llc'), summary)
+        for fields in ({'locality_workers': 0}, {'locality_workers': 7},
+                       {'locality_cpus': None}, {'locality_cpus': list(range(7))},
+                       {'locality_cpus': [0] * 8}, {'locality_cpus': ['0'] * 8},
+                       {'locality_cpus': list(range(7, -1, -1))}):
+            with self.subTest(fields=fields):
+                proc.stdout = json.dumps(dict(summary, **fields)).encode()
+                with self.assertRaises(ValueError):
+                    native_cache.checked_summary(proc, 8, 'llc')
 
     def test_binary_only_change_requires_explicit_api_opt_in(self):
         before, after = self.result(), self.result()
