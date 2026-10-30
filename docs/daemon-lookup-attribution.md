@@ -21,5 +21,22 @@ The controlled local `JUSTRUST_BUILDD=0` experiment is a diagnostic only.
 It still invokes native Cargo input validation and does not authorize cached
 command-result replay. One attempted root comparison rebuilt `src/record.rs`
 under severe concurrent compiler contention and is excluded from performance
-claims. Installation and new per-phase observations follow after the client
-recording implementation is frozen.
+claims.
+
+## Installed observations
+
+The combined recording and daemon changes were installed with
+`cargo install --path . --locked`. Installed hosted strict Clippy passed
+(`20261029-221012298-3290569`). A first local invocation rebuilt the recording
+source and is excluded from warm measurements. Two subsequent unchanged local
+invocations each validated 62 fresh units:
+
+| Run | Full process wall | Daemon source validation | Prebuild coordination |
+| --- | ---: | ---: | ---: |
+| `20261029-221029310-3292520` | 1.213 s | 951.4 ms | 0.0 ms |
+| `20261029-221030605-3292774` | 1.276 s | 1044.1 ms | 0.0 ms |
+
+These observations establish a local recursive-validation bottleneck, not a
+prebuild-wait bottleneck. They are not a matched before/after speedup comparison.
+The diagnostic uses `JUSTRUST_REMOTE=off` to isolate local execution, without
+changing the hosted default. All file traversal and Cargo validation remain.
