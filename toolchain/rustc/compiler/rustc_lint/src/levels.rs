@@ -154,8 +154,18 @@ fn skippable_lints(tcx: TyCtxt<'_>, (): ()) -> UnordSet<LintId> {
 
 #[instrument(level = "trace", skip(tcx), ret)]
 fn shallow_lint_levels_on(tcx: TyCtxt<'_>, owner: hir::OwnerId) -> ShallowLintLevelMap {
-    let store = unerased_lint_store(tcx.sess);
     let attrs = tcx.hir_attr_map(owner);
+    if tcx.sess.opts.unstable_opts.jr_empty_lint_level_fast_path
+        && owner != hir::CRATE_OWNER_ID
+        && attrs.map.is_empty()
+    {
+        // This is a shallow map, not the effective inherited lint levels. Parent
+        // and command-line levels are still resolved by probe_for_lint_level_spec.
+        // Read hir_attr_map first so incremental invalidation observes attributes
+        // added to (or removed from) any node belonging to this owner.
+        return ShallowLintLevelMap::default();
+    }
+    let store = unerased_lint_store(tcx.sess);
 
     let mut levels = LintLevelsBuilder {
         sess: tcx.sess,
