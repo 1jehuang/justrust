@@ -10,6 +10,36 @@ SPEC.loader.exec_module(M)
 
 
 class MacroInputTests(unittest.TestCase):
+    def test_cached_families_have_real_entrypoints(self):
+        for family, marker in [('derive', '#[proc_macro_derive(Input)]'), ('attribute', '#[proc_macro_attribute]')]:
+            source = M.macro_source('env', family=family)
+            self.assertIn(marker, source)
+            self.assertIn('fn macro_value()', source)
+            self.assertNotIn('fixture::input!()', M.consumer(0, family))
+            self.assertNotEqual(M.consumer(0, family), M.consumer(1, family))
+
+    def test_missing_hit_is_incomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            h = M.Harness('/nonexistent/rustc', Path(directory))
+            with patch.object(h, 'build_macro', return_value={'status': 0}), \
+                 patch.object(h, 'compile_consumer', side_effect=lambda *args: {
+                     'compile': {'status': 0, 'stdout': '', 'stderr': ''},
+                     'runtime': {'status': 0, 'stdout': M.expected_output('constant', next(
+                         s for s in M.states('constant') if M.consumer(s['body'], 'derive') ==
+                         (h.root / 'consumer.rs').read_text())), 'stderr': ''}}), \
+                 patch.object(h, 'cache_evidence', return_value={'hit': False}):
+                case = h.scenario('constant', 'derive')
+            self.assertEqual(case['status'], 'incomplete')
+            self.assertEqual(case['coverage'], 'cached-family')
+
+    def test_disk_load_evidence_is_query_specific(self):
+        row = {'label': 'derive_macro_expansion', 'number_of_cache_hits': 5,
+               'incremental_load_time': {'secs': 0, 'nanos': 0}}
+        self.assertFalse(M.loaded_query({'query_data': [row]}, 'derive_macro_expansion'))
+        row['incremental_load_time']['nanos'] = 1
+        self.assertTrue(M.loaded_query({'query_data': [row]}, 'derive_macro_expansion'))
+        self.assertFalse(M.loaded_query({'query_data': [row]}, 'attr_macro_expansion'))
+
     def test_actual_body_edits_and_revision(self):
         for kind in ('constant', 'env', 'file', 'tracked_env', 'tracked_path'):
             states = M.states(kind)
