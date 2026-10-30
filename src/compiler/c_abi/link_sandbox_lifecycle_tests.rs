@@ -34,6 +34,120 @@ unsafe extern "C" {
 }
 
 #[test]
+fn controlled_link_diagnostic_capture_is_bounded_and_preserves_failures() {
+    use std::io::{self, Read};
+    for name in ["stdout", "stderr"] {
+        for size in [
+            0,
+            super::MAX_DIAGNOSTIC_BYTES,
+            super::MAX_DIAGNOSTIC_BYTES + 1,
+        ] {
+            let (bytes, error) = super::drain(io::repeat(b'x').take(size as u64), name);
+            assert_eq!(bytes.len(), size.min(super::MAX_DIAGNOSTIC_BYTES));
+            assert_eq!(error.is_some(), size > super::MAX_DIAGNOSTIC_BYTES);
+            if let Some(error) = error {
+                assert!(error.to_string().contains(name));
+                assert!(error.to_string().contains("diagnostics truncated"));
+            }
+        }
+    }
+    struct Broken(bool);
+    impl Read for Broken {
+        fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+            if self.0 {
+                return Err(io::Error::other("diagnostic read failed"));
+            }
+            self.0 = true;
+            out[..3].copy_from_slice(b"bad");
+            Ok(3)
+        }
+    }
+    let (bytes, error) = super::drain(Broken(false), "stderr");
+    assert_eq!(bytes, b"bad");
+    assert!(
+        error
+            .unwrap()
+            .to_string()
+            .contains("diagnostic read failed")
+    );
+}
+
+#[test]
+fn controlled_link_floods_never_publish_success_or_wait_for_wall_limit() {
+    let root = std::env::temp_dir().join(format!(
+        "jr-link-flood-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::DirBuilder::new().mode(0o700).create(&root).unwrap();
+    let scratch = Scratch(root);
+    fs::create_dir(scratch.0.join("out")).unwrap();
+    let limit = super::MAX_DIAGNOSTIC_BYTES;
+    for (fd, size, linger) in [
+        (1, limit, false),
+        (2, limit, false),
+        (1, limit + 1, false),
+        (2, limit + 1, false),
+        (1, limit + 1, true),
+        (2, limit + 1, true),
+    ] {
+        let source = scratch.0.join("probe.c");
+        fs::write(&source, format!(r#"
+static long call(long n,long a,long b,long c){{long r;__asm__ volatile("syscall":"=a"(r):"a"(n),"D"(a),"S"(b),"d"(c):"rcx","r11","memory");return r;}}
+void _start(void){{
+ char bytes[4096];for(long i=0;i<4096;i++)bytes[i]='x';
+ long left={size};while(left>0){{long n=left>4096?4096:left;long written=call(1,{fd},(long)bytes,n);if(written<=0)break;left-=written;}}
+ long delay[2]={{0,100000000}};if({linger})for(;;)call(35,(long)delay,0,0);
+ call(60,0,0,0);__builtin_unreachable();
+}}
+"#, linger=u8::from(linger))).unwrap();
+        let compiled = Command::new("cc")
+            .args([
+                "-nostdlib",
+                "-static",
+                "-fno-stack-protector",
+                "-no-pie",
+                "-O2",
+            ])
+            .arg(&source)
+            .arg("-o")
+            .arg(scratch.0.join("probe"))
+            .output()
+            .unwrap();
+        assert!(compiled.status.success(), "{compiled:?}");
+        fs::set_permissions(scratch.0.join("probe"), fs::Permissions::from_mode(0o555)).unwrap();
+        let mut command = Command::new(scratch.0.join("probe"));
+        command.env_clear();
+        let start = Instant::now();
+        let result = super::output(&mut command, &scratch.0);
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "diagnostic cancellation stalled"
+        );
+        if size == limit {
+            let output = result.unwrap();
+            assert!(output.status.success());
+            assert_eq!(
+                if fd == 1 {
+                    &output.stdout
+                } else {
+                    &output.stderr
+                },
+                &vec![b'x'; limit]
+            );
+        } else {
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains(if fd == 1 { "stdout" } else { "stderr" }));
+            assert!(error.contains("diagnostic limit (diagnostics truncated)"));
+            assert!(error.len() <= limit + 512);
+        }
+    }
+}
+
+#[test]
 fn controlled_linker_dies_with_its_compiler() {
     const CHILD: &str = "JR_LINK_PARENT_DEATH_FIXTURE_ROOT";
     if let Some(root) = std::env::var_os(CHILD) {

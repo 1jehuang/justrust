@@ -6,10 +6,29 @@ use std::{
 };
 
 #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+const MAX_DIAGNOSTIC_BYTES: usize = 1024 * 1024;
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+fn drain(pipe: impl std::io::Read, name: &str) -> (Vec<u8>, Option<io::Error>) {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    let mut error = pipe
+        .take(MAX_DIAGNOSTIC_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)
+        .err();
+    if bytes.len() > MAX_DIAGNOSTIC_BYTES {
+        bytes.truncate(MAX_DIAGNOSTIC_BYTES);
+        error = Some(io::Error::other(format!(
+            "controlled linker {name} exceeded {MAX_DIAGNOSTIC_BYTES} byte diagnostic limit (diagnostics truncated)"
+        )));
+    }
+    (bytes, error)
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
     use super::link_sandbox_io::{Broker, bootstrap_exec, receive};
     use std::{
-        io::Read,
         os::fd::AsRawFd,
         process::{Child, Stdio},
         time::{Duration, Instant},
@@ -75,17 +94,30 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
     broker.set_stdio(&stdout, &stderr)?;
     std::thread::scope(move |scope| {
         let mut child = child;
-        fn drain(mut pipe: impl Read) -> io::Result<Vec<u8>> {
-            let mut bytes = Vec::new();
-            pipe.read_to_end(&mut bytes)?;
-            Ok(bytes)
-        }
-        let out = scope.spawn(move || drain(stdout));
-        let err = scope.spawn(move || drain(stderr));
+        let mut readers = [
+            Some(scope.spawn(move || drain(stdout, "stdout"))),
+            Some(scope.spawn(move || drain(stderr, "stderr"))),
+        ];
+        let mut captured = [None, None];
         let deadline = Instant::now() + Duration::from_secs(60);
         let result = (|| {
             let mut requests = 0usize;
             loop {
+                for (index, reader) in readers.iter_mut().enumerate() {
+                    if reader.as_ref().is_some_and(|reader| reader.is_finished()) {
+                        let result =
+                            reader.take().unwrap().join().map_err(|_| {
+                                io::Error::other("linker diagnostic reader panicked")
+                            })?;
+                        let failed = result.1.is_some();
+                        captured[index] = Some(result);
+                        if failed {
+                            return Err(io::Error::other(
+                                "controlled linker diagnostic capture failed",
+                            ));
+                        }
+                    }
+                }
                 if let Some(status) = child.0.try_wait()? {
                     return Ok(status);
                 }
@@ -128,12 +160,28 @@ pub(super) fn output(command: &mut Command, root: &Path) -> io::Result<Output> {
             let _ = child.0.kill();
             let _ = child.0.wait();
         }
-        let stdout = out
-            .join()
-            .map_err(|_| io::Error::other("linker stdout reader panicked"))??;
-        let stderr = err
-            .join()
-            .map_err(|_| io::Error::other("linker stderr reader panicked"))??;
+        for (index, reader) in readers.into_iter().enumerate() {
+            if let Some(reader) = reader {
+                captured[index] = Some(
+                    reader
+                        .join()
+                        .map_err(|_| io::Error::other("linker diagnostic reader panicked"))?,
+                );
+            }
+        }
+        let (stdout, stdout_error) = captured[0]
+            .take()
+            .ok_or_else(|| io::Error::other("missing linker stdout capture"))?;
+        let (stderr, stderr_error) = captured[1]
+            .take()
+            .ok_or_else(|| io::Error::other("missing linker stderr capture"))?;
+        // Also check after joining: a short-lived tool can exit before the
+        // supervisor observes reader completion. Never publish a
+        // successful artifact whose diagnostic capture exceeded the limit.
+        let result = match stdout_error.or(stderr_error) {
+            Some(error) => Err(error),
+            None => result,
+        };
         match result {
             Ok(status) => Ok(Output {
                 status,
