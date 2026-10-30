@@ -44,6 +44,21 @@ impl LocalCache {
         self.read_entry(key, max_bytes.min(MAX_ENTRY_BYTES)).ok()
     }
 
+    /// An upper bound for a subsequent bounded read, so a graph node can admit
+    /// its byte storage before decoding. This is not a validated cache hit.
+    /// If a writer replaces the entry after this observation, load_bounded
+    /// still enforces the admitted bound and validates the complete record.
+    pub fn payload_size(&self, key: &[u8; 32], max_bytes: usize) -> Option<usize> {
+        let metadata = std::fs::metadata(self.entry_path(key)).ok()?;
+        if !metadata.is_file() {
+            return None;
+        }
+        let bytes = usize::try_from(metadata.len())
+            .ok()?
+            .checked_sub(HEADER_SIZE)?;
+        (bytes <= max_bytes.min(MAX_ENTRY_BYTES)).then_some(bytes)
+    }
+
     fn read_entry(&self, key: &[u8; 32], max_bytes: usize) -> io::Result<Vec<u8>> {
         let mut file = File::open(self.entry_path(key))?;
         let size = file.metadata()?.len();

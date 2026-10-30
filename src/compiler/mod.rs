@@ -3,6 +3,7 @@ mod associated_constant_graph;
 pub mod backend;
 mod borrow;
 pub mod c_abi;
+pub mod cache;
 #[cfg(test)]
 mod canonical_instance_tests;
 pub mod cfg;
@@ -29,7 +30,9 @@ pub mod macro_rules;
 mod macro_transcribe;
 mod memory_layout;
 pub mod module_identity;
+mod native_cache_key;
 mod nominal_realization;
+mod object_codec;
 #[cfg(test)]
 mod opaque_authority_tests;
 mod opaque_dispatch;
@@ -438,6 +441,7 @@ impl ClosedSourceProof {
 /// `Arc` when the fact owns a body. A fact that re-publishes a shared body
 /// pays only its envelope. No mutable budget is reachable from the fact.
 struct SsaFact {
+    cache: link_cache::Outcome,
     lowered: Option<Arc<ssa::lower::Lowered>>,
     unsupported: Option<&'static str>,
     inlined: usize,
@@ -464,6 +468,7 @@ impl SsaFact {
             .map_err(Error::new)?;
         let (lowered, receipt) = owned.seal(meter).map_err(Error::new)?;
         Ok(Self {
+            cache: link_cache::Outcome::Disabled,
             lowered: Some(Arc::new(lowered)),
             unsupported: None,
             inlined,
@@ -483,6 +488,7 @@ impl SsaFact {
         meter: &ssa::meter::Meter<'_>,
     ) -> Result<Self, Error> {
         Ok(Self {
+            cache: link_cache::Outcome::Disabled,
             lowered: Some(lowered),
             unsupported: None,
             inlined: 0,
@@ -492,6 +498,7 @@ impl SsaFact {
 
     fn unsupported(reason: &'static str, meter: &ssa::meter::Meter<'_>) -> Result<Self, Error> {
         Ok(Self {
+            cache: link_cache::Outcome::Disabled,
             lowered: None,
             unsupported: Some(reason),
             inlined: 0,
@@ -1026,7 +1033,7 @@ impl Provider for CompilerProvider {
             TEMPLATE_BODY => 3,
             SOURCE_ADMISSION => 4,
             ADMIT => 2,
-            BUILD => 2,
+            BUILD | OBJECT => 2,
             RESOLVE => 4,
             SIGNATURES => 2,
             _ => 1,
@@ -2446,6 +2453,13 @@ impl Provider for CompilerProvider {
                 }
                 OBJECT => {
                     if let Some(object) = opaque_object::produce(&this, &cx, &key).await? {
+                        cx.publish_fact(
+                            1,
+                            cache::ObjectUse {
+                                stage: cache::ObjectStage::Native,
+                                outcome: link_cache::Outcome::Ineligible,
+                            },
+                        )?;
                         return cx.publish_fact(0, object);
                     }
                     // Only this instance's own proof is required. Executable
@@ -2494,6 +2508,13 @@ impl Provider for CompilerProvider {
                         let symbol = types.c_abi_symbol(target.declaration).map_err(Error::new)?;
                         let object = c_abi::import(signature, &symbol, &this.0.budget)
                             .map_err(Error::new)?;
+                        cx.publish_fact(
+                            1,
+                            cache::ObjectUse {
+                                stage: cache::ObjectStage::Native,
+                                outcome: link_cache::Outcome::Ineligible,
+                            },
+                        )?;
                         return cx.publish_fact(0, object);
                     }
                     // panic=unwind reserves r15 as the panic flag, which the
@@ -2508,22 +2529,30 @@ impl Provider for CompilerProvider {
                             let types = lowered
                                 .verify(&meter)
                                 .map_err(|error| Error::new(error.to_string()))?;
-                            let (object, _stats) =
-                                ssa::machine::emit(lowered, &types, &meter).map_err(Error::new)?;
+                            let (object, outcome) =
+                                cache::ssa_object(lowered, &types, &meter, &this.0.source_options)
+                                    .map_err(Error::new)?;
                             drop(types);
                             // `object_bytes` already covers the Object value,
                             // its Arc, and the Arc<Receipt>; all of it was
                             // admitted before the receipt Arc is allocated.
                             let (mut object, receipt) = object.seal(&meter).map_err(Error::new)?;
                             object.receipt = Some(Arc::new(receipt));
+                            cx.publish_fact(
+                                1,
+                                cache::ObjectUse {
+                                    stage: cache::ObjectStage::Ssa,
+                                    outcome,
+                                },
+                            )?;
                             return cx.publish_fact(0, object);
                         }
                     }
-                    let mut object = backend::emit_cfg_function_with_profile(
+                    let (mut object, outcome) = cache::native_object(
                         &proof.concrete,
                         &|target| instances::symbol_of(target, &types, &this.0.budget),
-                        this.0.source_options.overflow_checks,
-                        this.0.source_options.panic_unwind,
+                        &this.0.source_options,
+                        &ssa::meter::Meter::new(&this.0.budget),
                     )
                     .map_err(Error::new)?;
                     if let Some((target, false, true, signature)) = c_boundary {
@@ -2534,6 +2563,13 @@ impl Provider for CompilerProvider {
                             .map_err(Error::new)?;
                         c_abi::attach_export(&mut object, wrapper, symbol).map_err(Error::new)?;
                     }
+                    cx.publish_fact(
+                        1,
+                        cache::ObjectUse {
+                            stage: cache::ObjectStage::Native,
+                            outcome,
+                        },
+                    )?;
                     cx.publish_fact(0, object)
                 }
                 SSA => {
@@ -2558,14 +2594,14 @@ impl Provider for CompilerProvider {
                         );
                     }
                     let function = proof.concrete.function();
-                    let fact = match ssa::lower::lower_with_overflow(
+                    let (lowering, outcome) = ssa::lowering_cache::lower(
                         function,
                         &|target| instances::symbol_of(target, &types, &this.0.budget),
                         &meter,
-                        this.0.source_options.overflow_checks,
+                        &this.0.source_options,
                     )
-                    .map_err(Error::new)?
-                    {
+                    .map_err(Error::new)?;
+                    let mut fact = match lowering {
                         ssa::lower::Lowering::Lowered(lowered) => {
                             SsaFact::publish(*lowered, 0, &meter)?
                         }
@@ -2573,13 +2609,21 @@ impl Provider for CompilerProvider {
                             SsaFact::unsupported(reason, &meter)?
                         }
                     };
+                    fact.cache = outcome;
                     cx.publish_fact(0, fact)
                 }
                 LOCAL_OPT => {
                     let input: Arc<SsaFact> = facts.get(sibling(SSA)?).await?;
                     let meter = ssa::meter::Meter::new(&this.0.budget);
                     let fact = match &input.lowered {
-                        Some(lowered) => SsaFact::publish(local_opt(lowered, &meter)?, 0, &meter)?,
+                        Some(lowered) => {
+                            let (optimized, outcome) =
+                                cache::local_opt(lowered, &meter, &this.0.source_options)
+                                    .map_err(Error::new)?;
+                            let mut fact = SsaFact::publish(optimized, 0, &meter)?;
+                            fact.cache = outcome;
+                            fact
+                        }
                         None => {
                             SsaFact::unsupported(input.unsupported.unwrap_or("unknown"), &meter)?
                         }
@@ -2675,9 +2719,13 @@ impl Provider for CompilerProvider {
                     let merged =
                         ssa::inline::inline(&lowered, &pairs, &meter).map_err(Error::new)?;
                     drop(pairs);
-                    let optimized = local_opt(&merged.value, &meter)?;
+                    let (optimized, outcome) =
+                        cache::local_opt(&merged.value, &meter, &this.0.source_options)
+                            .map_err(Error::new)?;
                     drop(merged);
-                    cx.publish_fact(0, SsaFact::publish(optimized, inlined, &meter)?)
+                    let mut fact = SsaFact::publish(optimized, inlined, &meter)?;
+                    fact.cache = outcome;
+                    cx.publish_fact(0, fact)
                 }
                 SOURCE_ADMISSION => {
                     let index = item_index(&key, "missing source admission declaration")?;
@@ -3093,25 +3141,6 @@ impl Provider for CompilerProvider {
         })
     }
 }
-/// Run the metered local pipeline. The result's callee table is a paid
-/// copy; the returned value owns a lease covering both.
-fn local_opt(
-    lowered: &ssa::lower::Lowered,
-    meter: &ssa::meter::Meter<'_>,
-) -> Result<ssa::store::Owned<ssa::lower::Lowered>, Error> {
-    let (function, _stats) = ssa::opt::local_metered(
-        &lowered.function,
-        &|callee| lowered.signature(callee),
-        meter,
-    )
-    .map_err(|error| Error::new(error.to_string()))?;
-    let callees = ssa::store::copy_callees(meter, &lowered.callees).map_err(Error::new)?;
-    ssa::store::Owned::combine(function, callees, meter, |function, callees| {
-        ssa::lower::Lowered { function, callees }
-    })
-    .map_err(Error::new)
-}
-
 fn has_drop(function: &cfg::Function) -> bool {
     function
         .blocks
@@ -3188,6 +3217,9 @@ fn item_index(key: &Key, missing: &str) -> Result<usize, Error> {
 
 /// One snapshot may serve check and build roots together without redoing checks.
 pub struct Compilation {
+    /// Persistent intermediate reuse. Counts describe work actually skipped,
+    /// not merely repeated graph reads of an already-computed output.
+    pub cache: cache::Report,
     /// Outcome for the native linked-byte output only. CHECK never looks up
     /// executable results, and all required checks still run before a hit.
     pub link_cache: link_cache::Outcome,
@@ -3631,7 +3663,36 @@ fn compile_input_configured(
             optimizer.inlined += fact.inlined;
         }
     }
+    // Reporting only, after graph completion. Admission never reads this fold.
+    let mut cache_report = cache::Report::default();
+    for (key, _) in &report.node_evaluations {
+        match key.kind {
+            OBJECT => {
+                if let Some(used) = engine.fact_of::<cache::ObjectUse>(key, 1) {
+                    match used.stage {
+                        cache::ObjectStage::Native => {
+                            cache_report.native_objects.record(used.outcome)
+                        }
+                        cache::ObjectStage::Ssa => cache_report.ssa_objects.record(used.outcome),
+                    }
+                }
+            }
+            SSA | LOCAL_OPT | IPO_OPT => {
+                if let Some(fact) = engine.fact_of::<SsaFact>(key, 0) {
+                    if key.kind == SSA {
+                        cache_report.ssa_lowering.record(fact.cache);
+                    } else if key.kind == LOCAL_OPT {
+                        cache_report.local_optimization.record(fact.cache);
+                    } else {
+                        cache_report.post_inline_optimization.record(fact.cache);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(Compilation {
+        cache: cache_report,
         link_cache: engine
             .fact_of::<link_cache::Outcome>(&keys::BuildRoot.key(), 1)
             .map_or(link_cache::Outcome::Disabled, |outcome| *outcome),

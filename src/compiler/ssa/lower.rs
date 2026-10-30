@@ -774,7 +774,7 @@ fn push<'t>(
 /// constant and no recursion. Depth rises by one per type node; a tuple's
 /// element list does not add a level of its own. Nominal and object types
 /// compare by identity, exactly as their `PartialEq` does.
-fn call_target_eq(
+pub(super) fn call_target_eq(
     a: &ir::CallTarget,
     b: &ir::CallTarget,
     meter: &Meter<'_>,
@@ -875,6 +875,30 @@ fn call_target_eq(
         }
     }
     Ok(true)
+}
+
+/// A persistent body must not turn an unsupported current CFG into supported
+/// SSA. Reuse the real lowering validator without constructing its output.
+pub(super) fn cache_eligible(function: &cfg::Function, meter: &Meter<'_>) -> Result<bool, String> {
+    let Some(ret) = scalar(&function.result) else {
+        return Ok(false);
+    };
+    let mut types = meter.table(function.locals.len(), SsaTy::Unit)?;
+    for (slot, local) in types.iter_mut().zip(&function.locals) {
+        meter.work(1)?;
+        let Some(ty) = scalar(&local.ty) else {
+            return Ok(false);
+        };
+        *slot = ty;
+    }
+    if types.get(function.return_local.0) != Some(&ret)
+        || function.entry.0 >= function.blocks.len()
+        || function.params.iter().any(|local| local.0 >= types.len())
+    {
+        return Ok(false);
+    }
+    let mut per_block = meter.table(function.blocks.len(), 0usize)?;
+    Ok(shape(function, &types, &mut per_block, meter)?.is_ok())
 }
 
 #[cfg(test)]

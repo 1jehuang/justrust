@@ -77,6 +77,8 @@ fn repeated_builds_edits_and_corruption_match_clean_and_stock() {
             assert_eq!(miss.link_cache, Outcome::MissStored);
             let hit = compile(&source, workers, &cache);
             assert_eq!(hit.link_cache, Outcome::Hit);
+            assert!(hit.cache.native_objects.hits > 0, "{:?}", hit.cache);
+            assert_eq!(hit.cache.native_objects.misses, 0, "{:?}", hit.cache);
             assert_eq!(hit.executable, clean.executable);
             assert_eq!(miss.executable, clean.executable);
             assert_eq!(hit.report.nodes, clean.report.nodes);
@@ -149,6 +151,174 @@ fn repeated_builds_edits_and_corruption_match_clean_and_stock() {
         assert_eq!(checked.link_cache, Outcome::Disabled);
         assert!(!checked.report.published_kind(105), "CHECK demanded BUILD");
         assert!(!checked.report.published_kind(103), "CHECK demanded OBJECT");
+    }
+}
+
+#[test]
+fn optimized_facts_and_machine_code_reuse_across_body_and_signature_edits() {
+    use compiler::ssa::OptMode;
+    let scratch = Scratch::new();
+    let original = "fn stable(x:i32)->i32 { let mut y=x; let mut i=0; while i<20 { y=(y*3+1)%97; i+=1; } y }\nfn changing(x:i32)->i32 { x+7 }\nfn main() { println!(\"{}\", stable(4)+changing(2)); }";
+    for workers in [1, 8] {
+        let path = scratch.0.join(format!("optimized-{workers}"));
+        let build = |source: &str, cached: bool| {
+            let mut config = options(&path);
+            config.opt = OptMode::Final;
+            if !cached {
+                config.local_cache = None;
+            }
+            compiler::compile_observed_with_options(source.into(), workers, false, config)
+                .unwrap_or_else(|error| panic!("{error}"))
+        };
+        let cold = build(original, true);
+        assert!(cold.cache.ssa_lowering.stored > 0, "{:?}", cold.cache);
+        assert!(cold.cache.local_optimization.stored > 0, "{:?}", cold.cache);
+        assert!(cold.cache.ssa_objects.stored > 0, "{:?}", cold.cache);
+        let warm = build(original, true);
+        assert!(warm.cache.ssa_lowering.hits > 0, "{:?}", warm.cache);
+        assert_eq!(warm.cache.ssa_lowering.misses, 0, "{:?}", warm.cache);
+        assert!(warm.cache.local_optimization.hits > 0, "{:?}", warm.cache);
+        assert!(warm.cache.ssa_objects.hits > 0, "{:?}", warm.cache);
+        assert_eq!(warm.cache.local_optimization.misses, 0, "{:?}", warm.cache);
+        assert_eq!(warm.cache.ssa_objects.misses, 0, "{:?}", warm.cache);
+        assert_eq!(warm.executable, cold.executable);
+        for (revision, source) in [
+            original.to_owned(),
+            original.replace("x+7", "x+8"),
+            original
+                .replace("changing(x:i32)", "changing(x:i32,y:i32)")
+                .replace("x+7", "x+y")
+                .replace("changing(2)", "changing(2,7)"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let cached = build(&source, true);
+            let clean = build(&source, false);
+            assert_eq!(cached.executable, clean.executable);
+            assert_eq!(cached.report.nodes, clean.report.nodes);
+            assert_eq!(cached.report.edges, clean.report.edges);
+            assert!(
+                cached.cache.local_optimization.hits > 0,
+                "unrelated body lost reuse: {:?}",
+                cached.cache
+            );
+            assert!(cached.cache.ssa_lowering.hits > 0, "{:?}", cached.cache);
+            if revision > 0 {
+                assert!(cached.cache.ssa_lowering.misses > 0, "{:?}", cached.cache);
+                assert!(
+                    cached.cache.local_optimization.misses > 0,
+                    "changed body was reused: {:?}",
+                    cached.cache
+                );
+            }
+            let native = execute(
+                &scratch
+                    .0
+                    .join(format!("optimized-native-{workers}-{revision}")),
+                cached.executable.as_ref().unwrap(),
+            );
+            let input = scratch.0.join("optimized.rs");
+            let stock_path = scratch.0.join("optimized-stock");
+            fs::write(&input, &source).unwrap();
+            let stock = Command::new("rustc")
+                .arg(&input)
+                .args(["--edition=2024", "-Cpanic=abort", "-Copt-level=2", "-o"])
+                .arg(&stock_path)
+                .output()
+                .unwrap();
+            assert!(
+                stock.status.success(),
+                "{}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
+            let stock = Command::new(&stock_path).output().unwrap();
+            assert_eq!(native.status.code(), stock.status.code());
+            assert_eq!(native.stdout, stock.stdout);
+            assert_eq!(native.stderr, stock.stderr);
+        }
+        for entry in fs::read_dir(&path).unwrap() {
+            fs::write(entry.unwrap().path(), b"corrupt").unwrap();
+        }
+        let repaired = build(original, true);
+        assert_eq!(repaired.executable, cold.executable);
+        assert!(repaired.cache.local_optimization.misses > 0);
+        let invalid = format!("{original}\nfn unused()->i32 {{ true }}");
+        let mut config = options(&path);
+        config.opt = OptMode::Final;
+        assert!(
+            compiler::compile_observed_with_options(invalid, workers, false, config.clone())
+                .is_err()
+        );
+        let checked =
+            compiler::compile_observed_with_options(original.into(), workers, true, config)
+                .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(checked.cache, compiler::cache::Report::default());
+        assert!(!checked.report.published_kind(103));
+    }
+}
+#[test]
+fn structural_native_outputs_and_overflow_profiles_match_stock() {
+    let scratch = Scratch::new();
+    let fixtures = [
+        "fn value(x:i32)->i32 { let a=[x,7,11]; let pair=(a[1],a[2]); let r=&a[0]; *r+pair.0+pair.1 } fn main(){ println!(\"{}\",value(3)); }",
+        "fn value(x:f64)->f64 { (x*2.0+1.0)/3.0 } fn main(){ if value(4.0)==3.0 { println!(\"float\"); } }",
+        "fn value(x:u8)->u8 { x+1 } fn main(){ println!(\"{}\",value(254)); }",
+    ];
+    for (fixture, source) in fixtures.into_iter().enumerate() {
+        let input = scratch.0.join("structural.rs");
+        fs::write(&input, source).unwrap();
+        for checked in [false, true] {
+            let stock_path = scratch.0.join("structural-stock");
+            let stock = Command::new("rustc")
+                .arg(&input)
+                .args(["--edition=2024", "-Cpanic=abort", "-C"])
+                .arg(format!("overflow-checks={checked}"))
+                .arg("-o")
+                .arg(&stock_path)
+                .output()
+                .unwrap();
+            assert!(
+                stock.status.success(),
+                "{}",
+                String::from_utf8_lossy(&stock.stderr)
+            );
+            let expected = Command::new(&stock_path).output().unwrap();
+            let cache = scratch.0.join(format!("structural-{fixture}"));
+            for workers in [1, 8] {
+                let mut config = options(&cache);
+                config.overflow_checks = checked;
+                let cold = compiler::compile_observed_with_options(
+                    source.into(),
+                    workers,
+                    false,
+                    config.clone(),
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+                let warm = compiler::compile_observed_with_options(
+                    source.into(),
+                    workers,
+                    false,
+                    config.clone(),
+                )
+                .unwrap_or_else(|e| panic!("{e}"));
+                assert!(warm.cache.native_objects.hits > 0, "{:?}", warm.cache);
+                assert_eq!(warm.cache.native_objects.misses, 0, "{:?}", warm.cache);
+                config.local_cache = None;
+                let clean =
+                    compiler::compile_observed_with_options(source.into(), workers, false, config)
+                        .unwrap_or_else(|e| panic!("{e}"));
+                assert_eq!(warm.executable, clean.executable);
+                assert_eq!(cold.executable, clean.executable);
+                let actual = execute(
+                    &scratch.0.join("structural-native"),
+                    warm.executable.as_ref().unwrap(),
+                );
+                assert_eq!(actual.status.code(), expected.status.code());
+                assert_eq!(actual.stdout, expected.stdout);
+                assert_eq!(actual.stderr, expected.stderr);
+            }
+        }
     }
 }
 #[test]

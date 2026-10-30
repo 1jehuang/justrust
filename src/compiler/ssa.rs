@@ -17,11 +17,13 @@
 //! have any integer type. The interpreter (`interp`) and constant folding
 //! (`opt`) share one evaluator (`eval`), so folding cannot disagree with it.
 
+pub(crate) mod cache_codec;
 pub mod eval;
 pub mod hash;
 pub mod inline;
 pub mod interp;
 pub mod lower;
+pub(crate) mod lowering_cache;
 pub mod machine;
 pub mod meter;
 pub mod opt;
