@@ -1,0 +1,819 @@
+{
+  "schema": 1,
+  "scope": "retrospective-reexecuted-value-classification-only",
+  "verify_ich": true,
+  "self_profile_events": "generic-activity,function-args",
+  "verdict": "passed",
+  "observations": [
+    {
+      "name": "initial",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 7 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "9\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2aa7092974eb9e40f0d5593ffcc0304baca6e2e105564e76eae3ddc13acba4d1",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/initial",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "c018ffe6d92159b6a42b57b5052d44ceedff71213d4b4d2d55e2f536d28d5f6d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/initial/reexecuted_fixture-3524797.mm_profdata",
+            "sha256": "73ae31b9077c02071219795851f90706918d16a02cef0cb87a64eecca4d5c898",
+            "bytes": 199899,
+            "markers": {
+              "jr_incremental_reexecuted_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_reexecuted_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_eval_always_same_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_eval_always_no_hash": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "unchanged",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 7 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "9\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2aa7092974eb9e40f0d5593ffcc0304baca6e2e105564e76eae3ddc13acba4d1",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/unchanged",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "c018ffe6d92159b6a42b57b5052d44ceedff71213d4b4d2d55e2f536d28d5f6d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/unchanged/reexecuted_fixture-3524864.mm_profdata",
+            "sha256": "e9bc56b0b2e95aed8bfaff09c09281969cd4655cb024695a027ecf83ccc6fbb6",
+            "bytes": 191191,
+            "markers": {
+              "jr_incremental_reexecuted_same_value": {
+                "evidence": "observed",
+                "interval_records": 20,
+                "query_name_interval_records": {
+                  "crate_name": 1,
+                  "def_kind": 6,
+                  "early_lint_checks": 1,
+                  "features_query": 1,
+                  "output_filenames": 1,
+                  "registered_attr_tools": 1,
+                  "registered_lint_tools": 1,
+                  "resolutions": 1,
+                  "resolve_type_relative_delegations": 1,
+                  "visibility": 6
+                }
+              },
+              "jr_incremental_reexecuted_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_reexecuted_no_hash": {
+                "evidence": "observed",
+                "interval_records": 1,
+                "query_name_interval_records": {
+                  "crate_for_resolver": 1
+                }
+              },
+              "jr_incremental_eval_always_same_value": {
+                "evidence": "observed",
+                "interval_records": 113,
+                "query_name_interval_records": {
+                  "all_canonical_symbols": 1,
+                  "all_diagnostic_items": 1,
+                  "all_rust_target_features": 1,
+                  "alloc_error_handler_kind": 1,
+                  "allocator_kind": 1,
+                  "analysis": 1,
+                  "check_expectations": 1,
+                  "collect_and_partition_mono_items": 1,
+                  "crate_dep_kind": 19,
+                  "crate_hash": 20,
+                  "crates": 1,
+                  "debugger_visualizers": 1,
+                  "effective_visibilities": 1,
+                  "extern_crate": 12,
+                  "get_lang_items": 1,
+                  "hir_crate_items": 1,
+                  "is_private_dep": 19,
+                  "lower_to_hir": 6,
+                  "postorder_cnums": 1,
+                  "skippable_lints": 1,
+                  "source_span": 2,
+                  "used_crate_source": 19,
+                  "used_crates": 1
+                }
+              },
+              "jr_incremental_eval_always_different_value": {
+                "evidence": "unknown-marker-absent",
+                "interval_records": null,
+                "query_name_interval_records": {}
+              },
+              "jr_incremental_eval_always_no_hash": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "index_ast": 1,
+                  "resolver_for_lowering_raw": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "body-edit",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 8 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "10\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "01bc0c808a60d9c7bcb561118442b12bbb915988647d9059e8935a22669c454b",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "10\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/body-edit",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "251a720fd4a1f6e67151a348691645797a57a053510a0cf4496db9640f53ce11",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "10\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/body-edit/reexecuted_fixture-3524938.mm_profdata",
+            "sha256": "58848437baddb0c5b81a3611945a80067913e9131ec241f8f4e09ee69718ea78",
+            "bytes": 238993,
+            "markers": {
+              "jr_incremental_reexecuted_same_value": {
+                "evidence": "observed",
+                "interval_records": 55,
+                "query_name_interval_records": {
+                  "CompileCodegenUnit": 1,
+                  "assumed_wf_types": 1,
+                  "check_liveness": 1,
+                  "check_match": 1,
+                  "check_mod_attrs": 1,
+                  "check_mod_privacy": 1,
+                  "check_mod_unstable_api_usage": 1,
+                  "check_mono_item": 1,
+                  "check_tail_calls": 1,
+                  "check_unsafety": 1,
+                  "check_well_formed": 1,
+                  "codegen_fn_attrs": 1,
+                  "constness": 1,
+                  "coroutine_kind": 1,
+                  "crate_name": 1,
+                  "cross_crate_inlinable": 1,
+                  "def_kind": 6,
+                  "def_span": 1,
+                  "early_lint_checks": 1,
+                  "explicit_clauses_of": 1,
+                  "features_query": 1,
+                  "fn_sig": 1,
+                  "generics_of": 1,
+                  "has_ffi_unwind_calls": 1,
+                  "hir_attr_map": 1,
+                  "hir_module_items": 1,
+                  "items_of_instance": 1,
+                  "lint_mod": 1,
+                  "live_symbols_and_ignored_derived_traits": 1,
+                  "lookup_deprecation_entry": 1,
+                  "mir_borrowck": 1,
+                  "nested_bodies_within": 1,
+                  "opaque_types_defined_by": 1,
+                  "output_filenames": 1,
+                  "region_scope_tree": 1,
+                  "registered_attr_tools": 1,
+                  "registered_lint_tools": 1,
+                  "resolutions": 1,
+                  "resolve_bound_vars": 1,
+                  "resolve_type_relative_delegations": 1,
+                  "sanitizer_settings_for": 1,
+                  "size_estimate": 1,
+                  "type_of": 1,
+                  "typeck_root": 1,
+                  "visibility": 6
+                }
+              },
+              "jr_incremental_reexecuted_different_value": {
+                "evidence": "observed",
+                "interval_records": 3,
+                "query_name_interval_records": {
+                  "hir_owner": 1,
+                  "mir_built": 1,
+                  "optimized_mir": 1
+                }
+              },
+              "jr_incremental_reexecuted_no_hash": {
+                "evidence": "observed",
+                "interval_records": 4,
+                "query_name_interval_records": {
+                  "crate_for_resolver": 1,
+                  "mir_drops_elaborated_and_const_checked": 1,
+                  "mir_promoted": 1,
+                  "thir_body": 1
+                }
+              },
+              "jr_incremental_eval_always_same_value": {
+                "evidence": "observed",
+                "interval_records": 111,
+                "query_name_interval_records": {
+                  "all_canonical_symbols": 1,
+                  "all_diagnostic_items": 1,
+                  "all_rust_target_features": 1,
+                  "alloc_error_handler_kind": 1,
+                  "allocator_kind": 1,
+                  "analysis": 1,
+                  "check_expectations": 1,
+                  "collect_and_partition_mono_items": 1,
+                  "crate_dep_kind": 19,
+                  "crate_hash": 19,
+                  "crates": 1,
+                  "debugger_visualizers": 1,
+                  "effective_visibilities": 1,
+                  "extern_crate": 12,
+                  "get_lang_items": 1,
+                  "hir_crate_items": 1,
+                  "is_private_dep": 19,
+                  "lower_to_hir": 5,
+                  "postorder_cnums": 1,
+                  "skippable_lints": 1,
+                  "source_span": 2,
+                  "used_crate_source": 19,
+                  "used_crates": 1
+                }
+              },
+              "jr_incremental_eval_always_different_value": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "crate_hash": 1,
+                  "lower_to_hir": 1
+                }
+              },
+              "jr_incremental_eval_always_no_hash": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "index_ast": 1,
+                  "resolver_for_lowering_raw": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "type-error",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { \"wrong\" }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": null,
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture.rs:2:21\n  |\n2 | fn value() -> u32 { \"wrong\" }\n  |               ---   ^^^^^^^ expected `u32`, found `&str`\n  |               |\n  |               expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/type-error",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 1,
+            "stdout": "",
+            "stderr": "error[E0308]: mismatched types\n --> /home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture.rs:2:21\n  |\n2 | fn value() -> u32 { \"wrong\" }\n  |               ---   ^^^^^^^ expected `u32`, found `&str`\n  |               |\n  |               expected `u32` because of return type\n\nerror: aborting due to 1 previous error\n\nFor more information about this error, try `rustc --explain E0308`.\n"
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/type-error/reexecuted_fixture-3524987.mm_profdata",
+            "sha256": "08dbcc5948c2b785ea002abeea8800e054c7b3127d7163d9479c81de9197eebb",
+            "bytes": 568489,
+            "markers": {
+              "jr_incremental_reexecuted_same_value": {
+                "evidence": "observed",
+                "interval_records": 48,
+                "query_name_interval_records": {
+                  "assumed_wf_types": 1,
+                  "check_coroutine_obligations": 1,
+                  "check_liveness": 1,
+                  "check_mod_attrs": 1,
+                  "check_mod_unstable_api_usage": 1,
+                  "check_unsafety": 1,
+                  "check_well_formed": 1,
+                  "codegen_fn_attrs": 1,
+                  "constness": 1,
+                  "coroutine_kind": 1,
+                  "crate_name": 1,
+                  "def_kind": 6,
+                  "def_span": 1,
+                  "early_lint_checks": 1,
+                  "explicit_clauses_of": 1,
+                  "features_query": 1,
+                  "fn_sig": 1,
+                  "generics_of": 1,
+                  "has_ffi_unwind_calls": 1,
+                  "hir_attr_map": 2,
+                  "hir_module_items": 1,
+                  "hir_owner_parent_q": 1,
+                  "lookup_deprecation_entry": 2,
+                  "nested_bodies_within": 1,
+                  "opaque_types_defined_by": 1,
+                  "output_filenames": 1,
+                  "registered_attr_tools": 1,
+                  "registered_lint_tools": 1,
+                  "resolutions": 1,
+                  "resolve_bound_vars": 1,
+                  "resolve_type_relative_delegations": 1,
+                  "sanitizer_settings_for": 2,
+                  "type_of": 1,
+                  "used_trait_imports": 1,
+                  "visibility": 6
+                }
+              },
+              "jr_incremental_reexecuted_different_value": {
+                "evidence": "observed",
+                "interval_records": 7,
+                "query_name_interval_records": {
+                  "check_match": 1,
+                  "check_transmutes": 1,
+                  "hir_owner": 2,
+                  "mir_borrowck": 1,
+                  "mir_built": 1,
+                  "typeck_root": 1
+                }
+              },
+              "jr_incremental_reexecuted_no_hash": {
+                "evidence": "observed",
+                "interval_records": 4,
+                "query_name_interval_records": {
+                  "crate_for_resolver": 1,
+                  "mir_drops_elaborated_and_const_checked": 1,
+                  "mir_promoted": 1,
+                  "thir_body": 1
+                }
+              },
+              "jr_incremental_eval_always_same_value": {
+                "evidence": "observed",
+                "interval_records": 62,
+                "query_name_interval_records": {
+                  "all_diagnostic_items": 1,
+                  "all_rust_target_features": 1,
+                  "crate_hash": 19,
+                  "crates": 1,
+                  "debugger_visualizers": 1,
+                  "extern_crate": 12,
+                  "get_lang_items": 1,
+                  "hir_crate_items": 1,
+                  "is_private_dep": 19,
+                  "lower_to_hir": 4,
+                  "source_span": 1,
+                  "used_crates": 1
+                }
+              },
+              "jr_incremental_eval_always_different_value": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "lower_to_hir": 2
+                }
+              },
+              "jr_incremental_eval_always_no_hash": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "index_ast": 1,
+                  "resolver_for_lowering_raw": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "recovery",
+      "source": "#![allow(dead_code)]\nfn value() -> u32 { 7 }\nfn untouched() -> u32 { 2 }\nfn main() { println!(\"{}\", value() + untouched()); }\n",
+      "expected_stdout": "9\n",
+      "modes": {
+        "off": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "2aa7092974eb9e40f0d5593ffcc0304baca6e2e105564e76eae3ddc13acba4d1",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/off/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          }
+        },
+        "on": {
+          "compile": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture.rs",
+              "--crate-name=reexecuted_fixture",
+              "--edition=2024",
+              "-Zincremental-verify-ich",
+              "-Cdebuginfo=0",
+              "-C",
+              "incremental=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/incremental",
+              "-o",
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture",
+              "-Zself-profile=/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/recovery",
+              "-Zself-profile-events=generic-activity,function-args"
+            ],
+            "status": 0,
+            "stdout": "",
+            "stderr": ""
+          },
+          "artifact_sha256": "c018ffe6d92159b6a42b57b5052d44ceedff71213d4b4d2d55e2f536d28d5f6d",
+          "runtime": {
+            "command": [
+              "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/fixture"
+            ],
+            "status": 0,
+            "stdout": "9\n",
+            "stderr": ""
+          },
+          "profile": {
+            "path": "/home/jeremy/.jcode/scratch/reexecuted-native-accept-20261030/on/recovery/reexecuted_fixture-3525023.mm_profdata",
+            "sha256": "b2b59dc67fb1fa800da950f0197e9642bdc700a513fb24fc94836d3365e69a1e",
+            "bytes": 237976,
+            "markers": {
+              "jr_incremental_reexecuted_same_value": {
+                "evidence": "observed",
+                "interval_records": 55,
+                "query_name_interval_records": {
+                  "CompileCodegenUnit": 1,
+                  "assumed_wf_types": 1,
+                  "check_liveness": 1,
+                  "check_match": 1,
+                  "check_mod_attrs": 1,
+                  "check_mod_privacy": 1,
+                  "check_mod_unstable_api_usage": 1,
+                  "check_mono_item": 1,
+                  "check_tail_calls": 1,
+                  "check_unsafety": 1,
+                  "check_well_formed": 1,
+                  "codegen_fn_attrs": 1,
+                  "constness": 1,
+                  "coroutine_kind": 1,
+                  "crate_name": 1,
+                  "cross_crate_inlinable": 1,
+                  "def_kind": 6,
+                  "def_span": 1,
+                  "early_lint_checks": 1,
+                  "explicit_clauses_of": 1,
+                  "features_query": 1,
+                  "fn_sig": 1,
+                  "generics_of": 1,
+                  "has_ffi_unwind_calls": 1,
+                  "hir_attr_map": 1,
+                  "hir_module_items": 1,
+                  "items_of_instance": 1,
+                  "lint_mod": 1,
+                  "live_symbols_and_ignored_derived_traits": 1,
+                  "lookup_deprecation_entry": 1,
+                  "mir_borrowck": 1,
+                  "nested_bodies_within": 1,
+                  "opaque_types_defined_by": 1,
+                  "output_filenames": 1,
+                  "region_scope_tree": 1,
+                  "registered_attr_tools": 1,
+                  "registered_lint_tools": 1,
+                  "resolutions": 1,
+                  "resolve_bound_vars": 1,
+                  "resolve_type_relative_delegations": 1,
+                  "sanitizer_settings_for": 1,
+                  "size_estimate": 1,
+                  "type_of": 1,
+                  "typeck_root": 1,
+                  "visibility": 6
+                }
+              },
+              "jr_incremental_reexecuted_different_value": {
+                "evidence": "observed",
+                "interval_records": 3,
+                "query_name_interval_records": {
+                  "hir_owner": 1,
+                  "mir_built": 1,
+                  "optimized_mir": 1
+                }
+              },
+              "jr_incremental_reexecuted_no_hash": {
+                "evidence": "observed",
+                "interval_records": 4,
+                "query_name_interval_records": {
+                  "crate_for_resolver": 1,
+                  "mir_drops_elaborated_and_const_checked": 1,
+                  "mir_promoted": 1,
+                  "thir_body": 1
+                }
+              },
+              "jr_incremental_eval_always_same_value": {
+                "evidence": "observed",
+                "interval_records": 111,
+                "query_name_interval_records": {
+                  "all_canonical_symbols": 1,
+                  "all_diagnostic_items": 1,
+                  "all_rust_target_features": 1,
+                  "alloc_error_handler_kind": 1,
+                  "allocator_kind": 1,
+                  "analysis": 1,
+                  "check_expectations": 1,
+                  "collect_and_partition_mono_items": 1,
+                  "crate_dep_kind": 19,
+                  "crate_hash": 19,
+                  "crates": 1,
+                  "debugger_visualizers": 1,
+                  "effective_visibilities": 1,
+                  "extern_crate": 12,
+                  "get_lang_items": 1,
+                  "hir_crate_items": 1,
+                  "is_private_dep": 19,
+                  "lower_to_hir": 5,
+                  "postorder_cnums": 1,
+                  "skippable_lints": 1,
+                  "source_span": 2,
+                  "used_crate_source": 19,
+                  "used_crates": 1
+                }
+              },
+              "jr_incremental_eval_always_different_value": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "crate_hash": 1,
+                  "lower_to_hir": 1
+                }
+              },
+              "jr_incremental_eval_always_no_hash": {
+                "evidence": "observed",
+                "interval_records": 2,
+                "query_name_interval_records": {
+                  "index_ast": 1,
+                  "resolver_for_lowering_raw": 1
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "provider_elapsed_ns": null,
+  "time_saved_ns": null,
+  "inputs_changed": null,
+  "provider_avoidable": null,
+  "capture_complete": null,
+  "compiler": {
+    "path": "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+    "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "version": {
+      "command": [
+        "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+        "-vV"
+      ],
+      "status": 0,
+      "stdout": "rustc 1.101.0-nightly (0c2b726d1 2026-10-14)\njr-query-admission-binding: reserved-fd-v2,query-schema=4\nbinary: rustc\ncommit-hash: 0c2b726d11f459e247117a7554f9fe9c8034c474\ncommit-date: 2026-10-14\nhost: x86_64-unknown-linux-gnu\nrelease: 1.101.0-nightly\nLLVM version: 23.1.3\n",
+      "stderr": ""
+    }
+  },
+  "sysroot_query": {
+    "command": [
+      "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/bin/rustc",
+      "--print",
+      "sysroot"
+    ],
+    "status": 0,
+    "stdout": "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot\n",
+    "stderr": ""
+  },
+  "drivers": [
+    {
+      "path": "/home/jeremy/.jcode/scratch/reexecuted-profile-20261030/sysroot/lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "47caa85292e729553328c669d88631e0b90550a173609941aebcd14c0a3cf10c"
+    }
+  ],
+  "observed_marker_totals": {
+    "jr_incremental_reexecuted_same_value": 178,
+    "jr_incremental_reexecuted_no_hash": 13,
+    "jr_incremental_eval_always_same_value": 397,
+    "jr_incremental_eval_always_no_hash": 8,
+    "jr_incremental_reexecuted_different_value": 13,
+    "jr_incremental_eval_always_different_value": 6
+  }
+}

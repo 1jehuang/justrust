@@ -227,3 +227,47 @@ interval unions on multiple threads, no argument resolution, and a real binary
 CLI fixture without arguments. No native workloads were run for this change.
 The complete Python regression command `python3 -m unittest discover -s bench
 -p 'test_*.py'` also passed: `Ran 493 tests in 16.918s`, `OK`.
+
+## Retrospective re-execution result inventory
+
+`native_reexecution_results` is an independent optional inventory for six native
+classification markers. Each has one query-kind name argument when function
+arguments are enabled:
+
+* `jr_incremental_reexecuted_same_value`
+* `jr_incremental_reexecuted_different_value`
+* `jr_incremental_reexecuted_no_hash`
+* `jr_incremental_eval_always_same_value`
+* `jr_incremental_eval_always_different_value`
+* `jr_incremental_eval_always_no_hash`
+
+These describe a provider that already executed and a stable query key found in
+the previous graph. Ordinary and eval-always categories remain separate. Equality
+compares its current result fingerprint with the previous result fingerprint.
+`no_hash` means equality is unknown, not different. New keys are outside this
+inventory. A same-result observation does **not** establish that inputs changed,
+that the provider could have been skipped prospectively, or that narrower
+dependencies would be sound. It is distinct from acquiring a proven-green value.
+
+The decoder reports observed interval-record counts, safe query-name counts and
+unknown argument counts per marker. Absent marker counts remain null/unknown.
+Arguments outside a single identifier are not exposed as query names. Marker
+shape validation rejects non-interval/non-generic activity, invalid thread IDs
+or invalid interval endpoints. Durations are deliberately not reported: these
+markers cover post-provider classification, **not provider execution**.
+Changed-input counts, avoidable calls, provider elapsed time, CPU work and time
+saved remain null. No IDs are joined across invocations and no global reuse
+percentage or ceiling is inferred.
+
+Five additional focused regressions pass, bringing this module to 25 tests.
+They cover absent/unknown fields, separate families/outcomes, malformed argument
+and interval shapes, preservation of earlier inventories, and a real binary CLI
+fixture. Native acceptance and actual capture evidence are tracked separately in
+`reexecuted-value-evidence.md`; synthetic decoder tests alone are not native proof.
+
+The five strict real-capture reports and native positive/negative receipts are
+retained in `bench/results/reexecuted-value-20261030/`. A separate same-source-path
+profile-off/on native gate also passed all five cases, including binary artifact
+equality for successful compilations. Full benchmark Python discovery passed
+508 tests in 9.617 seconds. These are correctness and observation checks, not a
+performance comparison or an established maximum reuse fraction.

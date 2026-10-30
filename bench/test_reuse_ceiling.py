@@ -116,6 +116,78 @@ class ReuseTests(unittest.TestCase):
             self.assertEqual(result['native_green_reuse']['markers'][marker]
                              ['records_without_query_name'], 1)
 
+    def test_reexecution_absence_retains_unknowns(self):
+        report = rc.summarize_records([])['native_reexecution_results']
+        self.assertEqual(len(report['markers']), 6)
+        for marker in report['markers'].values():
+            self.assertEqual(marker['evidence'], 'unknown-marker-absent')
+            self.assertIsNone(marker['interval_records'])
+            self.assertEqual(marker['query_name_interval_records'], {})
+            self.assertIsNone(marker['records_without_query_name'])
+        for key in ('changed_input_queries', 'avoidable_provider_calls',
+                    'provider_elapsed_ns', 'cpu_work_ns', 'time_saved_ns',
+                    'capture_complete', 'marker_filter_enabled'):
+            self.assertIsNone(report[key])
+
+    def test_reexecution_families_and_outcomes_remain_separate(self):
+        rows = []
+        arguments = {}
+        for i, label in enumerate(rc.REEXECUTION_MARKERS):
+            row = self.marker(thread=i, label=label)
+            row['event_id'] += i
+            rows.append(row)
+            arguments[row['event_id']] = label + '\x1etype_of'
+        rows.append(dict(rows[0]))
+        report = rc.summarize_records(rows, arguments.__getitem__)
+        classified = report['native_reexecution_results']['markers']
+        self.assertEqual(classified[rc.REEXECUTION_MARKERS[0]]['interval_records'], 2)
+        for label in rc.REEXECUTION_MARKERS[1:]:
+            self.assertEqual(classified[label]['interval_records'], 1)
+            self.assertEqual(classified[label]['query_name_interval_records'], {'type_of': 1})
+            self.assertEqual(classified[label]['records_without_query_name'], 0)
+        baseline = rc.summarize_records([])
+        for key in ('native_green_reuse', 'optional_branch_inventory'):
+            self.assertEqual(baseline[key], report[key])
+        self.assertEqual(report['observed_provider_interval_records'], 0)
+
+    def test_reexecution_names_missing_or_unsafe_are_unknown(self):
+        label = rc.REEXECUTION_MARKERS[0]
+        for text in (label, label + '\x1eprivate/path', label + '\x1ea\x1eb',
+                     label + '\x1e', 'wrong\x1etype_of'):
+            with self.subTest(text=text):
+                report = rc.summarize_records([self.marker(label=label)], lambda _: text)
+                marker = report['native_reexecution_results']['markers'][label]
+                self.assertEqual(marker['records_without_query_name'], 1)
+                self.assertEqual(marker['query_name_interval_records'], {})
+
+    def test_reexecution_invalid_shapes_fail_closed(self):
+        for label in rc.REEXECUTION_MARKERS:
+            for change in ({'kind': 'Query'}, {'record_type': 'instant'},
+                           {'thread': True}, {'thread': -1}, {'thread': None},
+                           {'start_ns': -1}, {'start_ns': True}, {'end_ns': None},
+                           {'end_ns': '100'}, {'start_ns': 101}):
+                with self.subTest(label=label, change=change):
+                    row = self.marker(label=label)
+                    row.update(change)
+                    with self.assertRaises(ValueError):
+                        rc.summarize_records([row])
+
+    def test_reexecution_binary_cli_preserves_name_not_duration(self):
+        marker = rc.REEXECUTION_MARKERS[0]
+        strings = ('GenericActivity\xff' + marker + '\x1etype_of\xff').encode('latin1')
+        data = fixture(strings=strings, index=b'', events=raw(BASE + 8, BASE + 24, 7, 3, 9))
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'profile'
+            path.write_bytes(data)
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                rc.main(['--profile', str(path)])
+            result = json.loads(output.getvalue())['profile']['native_reexecution_results']
+            self.assertEqual(result['markers'][marker]['query_name_interval_records'], {'type_of': 1})
+            self.assertNotIn('per_thread', result['markers'][marker])
+            self.assertIsNone(result['provider_elapsed_ns'])
+            self.assertIsNone(result['time_saved_ns'])
+
     def test_native_invalid_shapes_rejected(self):
         for change in ({'record_type': 'instant'}, {'kind': 'Query'},
                        {'thread': True}, {'start_ns': -1}, {'end_ns': -1},

@@ -27,6 +27,11 @@ LIMITATIONS = [
 
 NATIVE_MARKERS = ('jr_incremental_green_query', 'jr_incremental_green_recompute')
 OPTIONAL_BRANCH_MARKERS = ('jr_empty_lint_level_fast_path',)
+REEXECUTION_MARKERS = tuple(
+    f'jr_incremental_{family}_{outcome}'
+    for family in ('reexecuted', 'eval_always')
+    for outcome in ('same_value', 'different_value', 'no_hash')
+)
 
 
 def interval_union_ns(intervals):
@@ -88,6 +93,32 @@ def optional_branch_summary(markers):
                 scope='Optional native branch inventory only. Counts are branch entries, not query keys or avoided work. Per-thread elapsed unions are not summed across threads or markers and imply no CPU work, saved time, or critical path.')
 
 
+def reexecution_summary(markers):
+    result = {}
+    for marker in REEXECUTION_MARKERS:
+        values = markers[marker]
+        names = Counter()
+        unknown_names = 0
+        for event, name in values:
+            # Check the event shape without assigning meaning to classification
+            # duration. This marker is emitted after provider execution.
+            interval_union_ns([(event.get('start_ns'), event.get('end_ns'))])
+            if name is None:
+                unknown_names += 1
+            else:
+                names[name] += 1
+        result[marker] = dict(
+            evidence='observed' if values else 'unknown-marker-absent',
+            interval_records=len(values) if values else None,
+            query_name_interval_records=dict(sorted(names.items())),
+            records_without_query_name=unknown_names if values else None,
+        )
+    return dict(markers=result, capture_complete=None, marker_filter_enabled=None,
+                changed_input_queries=None, avoidable_provider_calls=None,
+                provider_elapsed_ns=None, cpu_work_ns=None, time_saved_ns=None,
+                scope='Retrospective result-hash classifications for re-executed existing keys only. Eval-always is separate. New keys are excluded; no_hash is unknown value equality. Same value does not prove changed inputs, avoidable execution, or prospective reuse. Marker durations are not provider durations.')
+
+
 def summarize_records(records, resolve_event=None):
     kinds = Counter()
     providers = Counter()
@@ -97,11 +128,12 @@ def summarize_records(records, resolve_event=None):
     loads = 0
     markers = defaultdict(list)
     optional_markers = defaultdict(list)
+    reexecution_markers = defaultdict(list)
     for event in records:
         kind, typ = event['kind'], event['record_type']
         kinds[kind] += 1
         unresolved += not event['label_resolved']
-        if event.get('label') in NATIVE_MARKERS + OPTIONAL_BRANCH_MARKERS:
+        if event.get('label') in NATIVE_MARKERS + OPTIONAL_BRANCH_MARKERS + REEXECUTION_MARKERS:
             if kind != 'GenericActivity' or typ != 'interval':
                 raise ValueError('invalid native marker event type')
             if type(event.get('thread')) is not int or event['thread'] < 0:
@@ -114,7 +146,8 @@ def summarize_records(records, resolve_event=None):
             parts = resolve_event(event['event_id']).split('\x1e') if resolve_event else []
             name = (parts[1] if len(parts) == 2 and parts[0] == event['label']
                     and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*', parts[1]) else None)
-            markers[event['label']].append((event, name))
+            destination = reexecution_markers if event['label'] in REEXECUTION_MARKERS else markers
+            destination[event['label']].append((event, name))
         expected = {'Query': 'interval', 'QueryCacheHit': 'instant',
                     'QueryCacheHitCount': 'integer', 'IncrementalLoadResult': 'interval'}
         if kind in expected and typ != expected[kind]:
@@ -157,6 +190,7 @@ def summarize_records(records, resolve_event=None):
         theoretical_maximum_reuse=None,
         native_green_reuse=native_summary(markers),
         optional_branch_inventory=optional_branch_summary(optional_markers),
+        native_reexecution_results=reexecution_summary(reexecution_markers),
     )
 
 
