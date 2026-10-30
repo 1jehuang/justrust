@@ -6064,6 +6064,7 @@ impl ValidatedTraitWorld {
             facts,
         )
     }
+    #[allow(clippy::too_many_arguments)]
     fn expand_carrier_sources(
         &self,
         destination: &ir::CarrierChannel,

@@ -1662,7 +1662,8 @@ fn cast_completion_and_once_only_operands_do_not_create_values_or_origins() {
     ] {
         parse(source).and_then(|p| check(&p)).unwrap();
     }
-    for source in ["fn main(){let x=1i32;let r=&x;let n=r as usize;}"] {
+    {
+        let source = "fn main(){let x=1i32;let r=&x;let n=r as usize;}";
         assert!(
             parse(source)
                 .and_then(|p| check(&p))

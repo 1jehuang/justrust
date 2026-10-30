@@ -2447,6 +2447,17 @@ impl ValidatedTraitWorld {
     }
 }
 
+/// A nominal application `Self`, or a reference to one (`&'a Vec<K>` in
+/// `IntoIterator for &'a Vec<T>`), selects its implementation from its head
+/// constructor under the caller environment. Producer and validator share it.
+pub(super) fn nominal_application_self(ty: &Ty) -> bool {
+    match ty {
+        Ty::Struct(_) | Ty::Enum(_) => true,
+        Ty::Ref { referent, .. } => matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)),
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3591,16 +3602,5 @@ mod tests {
             // change the independent Copy decision above.
             facts.carrier_contract(SignatureSubject::Body).unwrap();
         }
-    }
-}
-
-/// A nominal application `Self`, or a reference to one (`&'a Vec<K>` in
-/// `IntoIterator for &'a Vec<T>`), selects its implementation from its head
-/// constructor under the caller environment. Producer and validator share it.
-pub(super) fn nominal_application_self(ty: &Ty) -> bool {
-    match ty {
-        Ty::Struct(_) | Ty::Enum(_) => true,
-        Ty::Ref { referent, .. } => matches!(referent.as_ref(), Ty::Struct(_) | Ty::Enum(_)),
-        _ => false,
     }
 }

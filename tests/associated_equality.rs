@@ -28,6 +28,8 @@ use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
+// Retain the frozen corpus outcome vocabulary, including currently unused cases.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Outcome {
     Runtime,
@@ -35,6 +37,8 @@ enum Outcome {
     Unsupported,
     InvalidUnsupported,
 }
+// Retain the frozen corpus phase vocabulary for historical diagnostic matching.
+#[allow(dead_code)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     None,

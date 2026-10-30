@@ -698,6 +698,7 @@ fn native_probe_runs_under_immutable_namespace_without_unproven_warning() {
             scratch.write("pinned/libraries/probes/identity/convert.rs", PROVIDER);
             let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
             command
+                .arg("--verbose")
                 .current_dir(&scratch.0)
                 .env_remove("RUSTC_BOOTSTRAP")
                 .env("RUSTC", scratch.path("no-rustc"))
