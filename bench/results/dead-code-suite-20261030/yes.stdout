@@ -1,0 +1,4 @@
+scenario                      median     min     max   n   quiet 1st err  start compile  tests  front codegen   incr   link units
+justrust-body-test              2.60    2.42    2.64   3    2.51       -   0.03    1.45   1.06   1.36    0.25   0.46   0.26     5
+
+saved /home/jeremy/justrust/bench/results/dead-code-suite-20261030/yes.json

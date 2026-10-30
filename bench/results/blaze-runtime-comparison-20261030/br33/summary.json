@@ -1,0 +1,16 @@
+{
+  "medians_seconds": {
+    "owned-off": 1.1749908749989117,
+    "all3on": 1.2217171900047106,
+    "blaze": 0.13692118600010872,
+    "all4on": 1.3054800829995656
+  },
+  "excluded": [
+    "all4hotpatch"
+  ],
+  "store_scope": "warm-store seeded",
+  "edit_hotpatch_outcomes": {
+    "all4hotpatch": []
+  },
+  "policy": "Failed, stale, incomplete or identity-changed stacks excluded. Gates untimed. Descriptive scoped diagnostic only."
+}

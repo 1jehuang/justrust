@@ -1,0 +1,5 @@
+A /home/jeremy/justrust/bench/results/dead-code-suite-20261030/no.json (justrust 4f77148d32fa)
+B /home/jeremy/justrust/bench/results/dead-code-suite-20261030/yes.json (justrust 4f77148d32fa)
+scenario                       A med   B med   delta      %  verdict
+justrust-body-test              2.57    2.60   +0.03    +1%  uncontrolled (noisy or unknown samples)
+exit overhead (med/max)      0.027/0.027s -> 0.026/0.030s

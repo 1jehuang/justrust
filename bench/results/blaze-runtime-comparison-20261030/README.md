@@ -1,5 +1,15 @@
 # Compiled-test comparison observations, 2026-10-30
 
+## Final accepted warm workflow
+
+`br34` now contains a complete accepted five-stack seeded warm-store comparison.
+Run `validate-complete.py` for its raw-log, matched-edit and export audit.
+See `docs/blaze-runtime-results-20261030.md` for interpretation and limits.
+`br33` preserves the failed hotpatch-routing setup preceding that final run.
+The historical audit below and `validate.py` apply only to `br30` through `br32`.
+
+## Historical first three attempts
+
 These are retained observations, **not a complete accepted Blaze versus owned
 runtime speed comparison**. Do not combine accepted stacks from different
 attempts into a headline ratio. Source pin is `f97fcc2`; the exact four-test

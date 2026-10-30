@@ -1,0 +1,71 @@
+{
+  "scope": "named-justrust-body-test-hotpatch-only-not-comprehensive",
+  "artifacts_before": {
+    "rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+    "rustdoc": "b43c1aaab4edd0242eecbbe74539cbef6fe3bef16cf31041368b867768cc75d7",
+    "clippy-driver": "67a43db01c18adf1a26bcc8da935b57db9c1ba4c2183b8849417ebe1da092a33",
+    "cargo-clippy": "1575b57d08e4ae338ada74bbf910c96b10f7112fb36ddecc8b775912584921ee",
+    "driver": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e",
+    "wild": "5b2baebf62de0f8c185711b808c3f553da3b7166b1c289420df5276b027f5597"
+  },
+  "client_sha256": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9",
+  "policy": "Same pinned source/scenario/profiles/toolchain/runtime isolation and identical pinned wild. All four compiler experiments enabled equally. Private depcache enabled equally to preserve pinned build-script fixture contract. Only hotpatch enable changes.",
+  "status": "completed",
+  "calls": [
+    {
+      "mode": "no",
+      "command": [
+        "python3",
+        "bench/suite.py",
+        "run",
+        "justrust-body-test",
+        "-n",
+        "3",
+        "--warmup",
+        "1",
+        "--quiet-wait",
+        "0",
+        "--toolchain",
+        "jr-b7b7efc9982d",
+        "-o",
+        "/home/jeremy/justrust/bench/results/hotpatch-suite-20261030/no.json"
+      ],
+      "status": 0,
+      "flags": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes",
+      "hotpatch": "0"
+    },
+    {
+      "mode": "yes",
+      "command": [
+        "python3",
+        "bench/suite.py",
+        "run",
+        "justrust-body-test",
+        "-n",
+        "3",
+        "--warmup",
+        "1",
+        "--quiet-wait",
+        "0",
+        "--toolchain",
+        "jr-b7b7efc9982d",
+        "-o",
+        "/home/jeremy/justrust/bench/results/hotpatch-suite-20261030/yes.json"
+      ],
+      "status": 0,
+      "flags": "-Zjr-empty-lint-level-fast-path=yes -Zjr-cache-small-query-values=yes -Zjr-cache-associated-items=yes -Zjr-cache-dead-code-items=yes",
+      "hotpatch": "1"
+    }
+  ],
+  "artifacts_after": {
+    "rustc": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+    "cargo": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b",
+    "rustdoc": "b43c1aaab4edd0242eecbbe74539cbef6fe3bef16cf31041368b867768cc75d7",
+    "clippy-driver": "67a43db01c18adf1a26bcc8da935b57db9c1ba4c2183b8849417ebe1da092a33",
+    "cargo-clippy": "1575b57d08e4ae338ada74bbf910c96b10f7112fb36ddecc8b775912584921ee",
+    "driver": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e",
+    "wild": "5b2baebf62de0f8c185711b808c3f553da3b7166b1c289420df5276b027f5597"
+  },
+  "client_sha256_after": "1dd6ee7da925924eaa0c25f9cbefafaabe1441c7b8f95a87b6cddfbaf20510a9"
+}

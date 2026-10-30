@@ -1,0 +1,5 @@
+bench: justrust-body-test (1/1)
+  justrust-body-test 1/4: 2.73s compile 1.53s units 5 id 20261030-025808490-1141148965 (warmup)
+  justrust-body-test 2/4: 2.60s compile 1.38s units 5 id 20261030-025811254-1141148633 noisy
+  justrust-body-test 3/4: 2.73s compile 1.61s units 5 id 20261030-025813885-1141148463 noisy
+  justrust-body-test 4/4: 2.82s compile 1.57s units 5 id 20261030-025816650-1141148347 noisy

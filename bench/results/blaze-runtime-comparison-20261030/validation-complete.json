@@ -1,0 +1,11 @@
+{
+  "verdict": "passed",
+  "scope": "final seeded warm workflow only, not cold support or significance",
+  "accepted_stacks": 5,
+  "matched_edits": 25,
+  "correctness_gate_stacks": 5,
+  "exported_runtime_calls": 40,
+  "exported_suite_calls": 16,
+  "patched_timed_edits": 5,
+  "defaults_promoted": false
+}

@@ -1,0 +1,4 @@
+scenario                      median     min     max   n   quiet 1st err  start compile  tests  front codegen   incr   link units
+justrust-body-test              2.73    2.60    2.82   3       -       -   0.03    1.57   1.16   1.54    0.26   0.39   0.19     5
+
+saved /home/jeremy/justrust/bench/results/hotpatch-suite-20261030/yes.json

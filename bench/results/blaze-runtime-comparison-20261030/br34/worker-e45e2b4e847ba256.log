@@ -1,0 +1,95 @@
+symbols: 0 in 456.9µs
+load workspace: 3.6s
+resolve: 69 crates in 1.7s
+frozen, of 68 crates: def maps of 68, impls of 68, lang items of 68 from the store, 0 written in 93.5µs
+standard library: from the store, 17 crates
+manifest: none used, the store has none of this build (21.7ms)
+store: 27 functions found, 0 compiled and added
+entries: 44562 found, 0 added, 0 as stored, 0 not as stored, 0 instances and 0 requests without a stable name
+cold: compiled 3988 of 3988 fns (+9 instances) in 3.1s (+1.8µs emit)
+check: 31 files in 1.2s
+stats: 1 of 44563 functions compiled, 44562 reused
+phases: compile 5.0ms, resolve 777.2µs, define 568.0ms, fallback 38.9µs, object 150.0ms, 1 rounds
+link: 165.8ms (exit status: 0; not spliced: no executable to add to)
+manifest: kept, 2 files, 38964064 bytes (129.9ms)
+watching 49 files
+tier: off (RA_JIT_TIER=off, blaze built without `--features llvm`, or not macOS on AArch64)
+request: sync at_us=1793354110677005
+change: 0 files
+request: sync at_us=1793354110696141
+request: sync at_us=1793354110733895
+change: 1 files
+edit (apply 18.8ms): not built: no patch, and the source does not compile; the next edit is a patch of the last build
+stats: 0 of 44563 functions compiled, 44563 reused
+no patch: a root of the base no longer compiles
+phases: compile 0.0ns, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 0.0ns, 0 rounds
+refused: error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_RUNTIME_TYPE_ERROR";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^
+edit-to-binary: 1.3s
+request: sync at_us=1793354112096413
+change: 1 files
+edit (apply 36.4ms): compiled 3988 of 3988 fns (+0 instances) in 173.7ms (+906.0ns emit)
+stats: 11004 of 44563 functions compiled, 33559 reused
+patch: 0 functions
+phases: compile 308.6µs, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 231.1µs, 1 rounds
+link: 1.1ms (spliced: 0 functions redirected, 2097160 bytes, 0 copied)
+edit-to-binary: 372.3ms
+request: sync at_us=1793354112525838
+change: 1 files
+edit (apply 25.9ms): compiled 3988 of 3988 fns (+0 instances) in 88.5ms (+891.0ns emit)
+stats: 3 of 44563 functions compiled, 44560 reused
+patch: 7 functions
+phases: compile 873.1µs, resolve 1.6ms, define 12.8µs, fallback 0.0ns, object 446.5µs, 1 rounds
+link: 1.5ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 138.4ms
+request: sync at_us=1793354112706073
+change: 1 files
+edit (apply 28.6ms): compiled 3988 of 3988 fns (+0 instances) in 86.4ms (+1.1µs emit)
+stats: 2 of 44563 functions compiled, 44561 reused
+patch: 0 functions
+phases: compile 158.9µs, resolve 0.0ns, define 0.0ns, fallback 0.0ns, object 214.7µs, 1 rounds
+link: 731.9µs (spliced: 0 functions redirected, 2097160 bytes, 0 copied)
+edit-to-binary: 160.2ms
+request: sync at_us=1793354161335229
+change: 1 files
+edit (apply 23.7ms): compiled 3988 of 3988 fns (+0 instances) in 84.3ms (+895.0ns emit)
+stats: 2 of 44563 functions compiled, 44561 reused
+patch: 7 functions
+phases: compile 484.4µs, resolve 2.0ms, define 12.8µs, fallback 0.0ns, object 410.3µs, 1 rounds
+link: 1.6ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 126.4ms
+request: sync at_us=1793354165116845
+change: 1 files
+edit (apply 9.0ms): compiled 3988 of 3988 fns (+0 instances) in 81.4ms (+986.0ns emit)
+stats: 1 of 44563 functions compiled, 44562 reused
+patch: 7 functions
+phases: compile 522.0µs, resolve 1.5ms, define 15.2µs, fallback 0.0ns, object 522.7µs, 1 rounds
+link: 1.1ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 94.5ms
+request: sync at_us=1793354168880181
+change: 1 files
+edit (apply 10.0ms): compiled 3988 of 3988 fns (+0 instances) in 65.5ms (+1.0µs emit)
+stats: 1 of 44563 functions compiled, 44562 reused
+patch: 7 functions
+phases: compile 417.2µs, resolve 1.1ms, define 11.7µs, fallback 0.0ns, object 428.8µs, 1 rounds
+link: 1.6ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 184.6ms
+request: sync at_us=1793354178542216
+change: 1 files
+edit (apply 10.9ms): compiled 3988 of 3988 fns (+0 instances) in 63.5ms (+872.0ns emit)
+stats: 1 of 44563 functions compiled, 44562 reused
+patch: 7 functions
+phases: compile 527.6µs, resolve 1.4ms, define 14.6µs, fallback 0.0ns, object 570.8µs, 1 rounds
+link: 1.1ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 112.3ms
+request: sync at_us=1793354182374813
+change: 1 files
+edit (apply 9.5ms): compiled 3988 of 3988 fns (+0 instances) in 65.9ms (+833.0ns emit)
+stats: 1 of 44563 functions compiled, 44562 reused
+patch: 7 functions
+phases: compile 582.1µs, resolve 1.3ms, define 14.9µs, fallback 0.0ns, object 528.7µs, 1 rounds
+link: 1.5ms (spliced: 6 functions redirected, 2146512 bytes, 0 copied)
+edit-to-binary: 86.4ms

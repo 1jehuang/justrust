@@ -1,0 +1,6 @@
+bench: extracting /home/jeremy/justrust@f97fcc2 -> /home/jeremy/.jcode/scratch/dead-item-cache-20261030/suite-work/justrust/justrust@f97fcc2/justrust
+bench: justrust-body-test (1/1)
+  justrust-body-test 1/4: 20.42s compile 19.15s units 61 id 20261030-025203719-1068258597 noisy (warmup)
+  justrust-body-test 2/4: 2.45s compile 1.29s units 5 id 20261030-025224159-1068258936
+  justrust-body-test 3/4: 2.57s compile 1.47s units 5 id 20261030-025226633-1068258516 noisy
+  justrust-body-test 4/4: 2.58s compile 1.47s units 5 id 20261030-025229236-1068258190

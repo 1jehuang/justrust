@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "toolchain": "jr-b7b7efc9982d",
+  "artifacts": {
+    "rustc": {
+      "relative_path": "bin/rustc",
+      "sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144"
+    },
+    "cargo": {
+      "relative_path": "bin/cargo",
+      "sha256": "994419eb0d12f1a4152a23d9030dc4d05c9bfd7a5c7af923f24bb3738afad95b"
+    },
+    "rustdoc": {
+      "relative_path": "bin/rustdoc",
+      "sha256": "b43c1aaab4edd0242eecbbe74539cbef6fe3bef16cf31041368b867768cc75d7"
+    },
+    "clippy-driver": {
+      "relative_path": "bin/clippy-driver",
+      "sha256": "67a43db01c18adf1a26bcc8da935b57db9c1ba4c2183b8849417ebe1da092a33"
+    },
+    "cargo-clippy": {
+      "relative_path": "bin/cargo-clippy",
+      "sha256": "1575b57d08e4ae338ada74bbf910c96b10f7112fb36ddecc8b775912584921ee"
+    },
+    "driver": {
+      "relative_path": "lib/librustc_driver-e2bd696299265a4a.so",
+      "sha256": "3527393f3db7e09eeef270a83f51c5aeedb787c77f845ab76a76618f76ae137e"
+    }
+  },
+  "sysroot_target": "x86_64-unknown-linux-gnu"
+}

@@ -1,0 +1,5 @@
+A /home/jeremy/justrust/bench/results/hotpatch-suite-20261030/no.json (justrust d0f4b661e335)
+B /home/jeremy/justrust/bench/results/hotpatch-suite-20261030/yes.json (justrust d0f4b661e335)
+scenario                       A med   B med   delta      %  verdict
+justrust-body-test              2.78    2.73   -0.05    -2%  uncontrolled (noisy or unknown samples)
+exit overhead (med/max)      0.025/0.033s -> 0.025/0.026s

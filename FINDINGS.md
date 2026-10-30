@@ -9002,3 +9002,26 @@ with 62 fresh units, no compilation and zero source-validation time
 observations under contention, not a comprehensive matched speedup or default
 promotion. See `docs/daemon-native-no-candidate-installed.md` and retained raw
 acceptance fixtures/logs for the exact contract, rebuild exclusions and hashes.
+
+## 2026-10-30: matched Blaze warm-runtime comparison and item retention
+
+Final `br34` passes all five stack contracts and 25 identical executed edits.
+Seeded warm-store medians: owned off 1.318050s, earlier three experiments
+1.263141s, Blaze Cranelift 0.143916s, all four experiments 1.284972s,
+all four plus existing hotpatch 1.073436s. All five timed hotpatch edits
+actually patched and executed fresh markers. Different frontends/backends,
+unknown machine noise, and repeated fresh Blaze store failures remain explicit
+limits. No general speed claim or default promotion.
+
+Native default-off per-item dead-code query retention passes 224 differential
+compiler invocations. Real body edits show 3211 ordinary plus 180 allow/expect
+named disk loads and five ordinary same-value provider executions. Reuse is
+proven, saved time is not. Supported `bench/suite.py compare` full-test gate:
+retention 2.57 -> 2.60s, +1%, uncontrolled; hotpatch-only 2.78 -> 2.73s, -2%,
+uncontrolled. Each measured sample passes 157 tests. Example runs:
+`20261030-025226633-1068258516`, `20261030-025255895-1077024379`,
+`20261030-025802164-1135394810`, `20261030-025813885-1141148463`.
+All calls exported. Full methodology, failed attempts, artifact identities and
+portable acceptance audits: `docs/blaze-runtime-results-20261030.md`.
+All 570 benchmark Python tests pass. Comprehensive session-weighted gate and
+the maximum reusable fraction remain unresolved. Experimental defaults stay off.

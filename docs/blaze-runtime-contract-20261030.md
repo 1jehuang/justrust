@@ -1,5 +1,10 @@
 # Matched compiled-test Blaze experiment, 2026-10-30
 
+Final outcome: `br34` passed all five warm-store stacks and 25 executed edits.
+See `docs/blaze-runtime-results-20261030.md` for results, supported benchmark
+pairs, preserved failed attempts, and cold-store/backend/noise limitations.
+The prospective contract below is retained, not retroactively substituted.
+
 The earlier `check --lib` result compared different checking engines. This follow-up
 requires compilation, linking and execution of the same four existing tests in
 pinned justrust `f97fcc2`, with exact matching discovered names, pass/fail/ignored
