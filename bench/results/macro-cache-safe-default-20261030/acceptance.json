@@ -1,0 +1,265 @@
+{
+  "verdict": "passed",
+  "scope": "local recorder compatibility, not performance",
+  "client_sha256": "d967f1aa30552682c807f3002bdc416017ba5890a38478b2cc9cf03c577c0c37",
+  "rows": [
+    {
+      "phase": "recorded",
+      "status": 0,
+      "rmeta": {
+        "debug/build/jr_recording_safety_fixture/a9d7e6a06d5270d8/out/libjr_recording_safety_fixture-a9d7e6a06d5270d8.rmeta": "ecc1491e8684a09a389aa9715c29a55a7b9e2881caf76fbeb261af9117873713",
+        "debug/incremental/jr_recording_safety_fixture-2xkinemimseox/s-hnoy2wrlrf-0wvli25-bnp7llhrsnvb395hgtlpa30cy/metadata.rmeta": "ecc1491e8684a09a389aa9715c29a55a7b9e2881caf76fbeb261af9117873713"
+      }
+    },
+    {
+      "phase": "unrecorded",
+      "status": 0,
+      "rmeta": {
+        "debug/build/jr_recording_safety_fixture/a9d7e6a06d5270d8/out/libjr_recording_safety_fixture-a9d7e6a06d5270d8.rmeta": "ecc1491e8684a09a389aa9715c29a55a7b9e2881caf76fbeb261af9117873713",
+        "debug/incremental/jr_recording_safety_fixture-2xkinemimseox/s-hnoy2wrlrf-0wvli25-bnp7llhrsnvb395hgtlpa30cy/metadata.rmeta": "ecc1491e8684a09a389aa9715c29a55a7b9e2881caf76fbeb261af9117873713"
+      }
+    },
+    {
+      "phase": "recorded-repeat",
+      "status": 0,
+      "rmeta": {
+        "debug/build/jr_recording_safety_fixture/a9d7e6a06d5270d8/out/libjr_recording_safety_fixture-a9d7e6a06d5270d8.rmeta": "ecc1491e8684a09a389aa9715c29a55a7b9e2881caf76fbeb261af9117873713",
+        "debug/incremental/jr_recording_safety_fixture-2xkinemimseox/s-hnoy2wrlrf-0wvli25-bnp7llhrsnvb395hgtlpa30cy/metadata.rmeta": "ecc1491e8684a09a389aa9715c29a55a7b9e2881caf76fbeb261af9117873713"
+      }
+    }
+  ],
+  "recorded_runs": [
+    {
+      "id": "20261030-042837633-1891779",
+      "summary": {
+        "id": "20261030-042837633-1891779",
+        "args": [
+          "check",
+          "-vv"
+        ],
+        "subcommand": "check",
+        "cwd": "/home/jeremy/.jcode/scratch/macro-cache-safety-sharing-20261030",
+        "git": {
+          "root": null,
+          "head": null,
+          "dirty_files": null
+        },
+        "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+        "start": 1793359717.6620975,
+        "wall": 0.08746790885925293,
+        "exit": 0,
+        "cpu_secs": 0.093999,
+        "savings": {
+          "dependency_hits": 0,
+          "local_hits": 0,
+          "build_script_hits": 0,
+          "original_task_secs": 0.0,
+          "measured_hit_overhead_secs": 0.0,
+          "estimated_task_secs_avoided": 0.0,
+          "hits_without_full_overhead": 0,
+          "hits_without_valid_timing": 0,
+          "malformed_records": 0
+        },
+        "measurement_coverage": {
+          "samples": 2,
+          "processes": 1,
+          "sample_span_secs": 0.08689665794372559,
+          "max_sample_gap_secs": 0.08689665794372559
+        },
+        "ncpu": 16,
+        "phases": {
+          "startup": 0.06792378425598145,
+          "lock_wait": 0.0,
+          "compile": 0.017543315887451172,
+          "build_gaps": 0.000823974609375,
+          "test_run": 0.0,
+          "tail": 0.0011768341064453125
+        },
+        "units": {
+          "compiled": 1,
+          "local": 1,
+          "dependencies": 0,
+          "build_scripts": 0,
+          "fresh": 0,
+          "rustc_cpu_secs": 0.02,
+          "rustc_wall_sum": 0.017543315887451172,
+          "with_pass_timings": 0,
+          "depcache_hits": 0,
+          "depcache_misses": 0,
+          "depcache_saved_secs": -0.0,
+          "depcache_miss_secs": -0.0,
+          "depcache_remote_hits": 0,
+          "depcache_peer_hits": 0,
+          "depcache_prebuilt_hits": 0,
+          "localcache_hits": 0,
+          "localcache_misses": 0,
+          "localcache_saved_secs": -0.0
+        },
+        "top_units": [
+          {
+            "name": "jr_recording_safety_fixture",
+            "kind": "check",
+            "local": true,
+            "start": 0.06792378425598145,
+            "wall": 0.017543315887451172,
+            "wall_share": 0.017543315887451172,
+            "cpu": 0.017679,
+            "max_rss_mb": 79.07421875,
+            "frontend_threads": null,
+            "rmeta_secs": 0.014380455017089844,
+            "split": null,
+            "top_passes": [],
+            "source_lines": null
+          }
+        ],
+        "link": {
+          "linker_processes": 0,
+          "linker_cpu_secs": -0.0,
+          "link_pass_secs": 0.0
+        },
+        "tests": {
+          "binaries": [],
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 0,
+          "libtest_secs": 0.0,
+          "timed_secs": 0.0,
+          "timed": 0
+        },
+        "resources": {
+          "avg_build_cores": 1.0746684266941426,
+          "peak_build_cores": 0.0,
+          "peak_build_rss_mb": 0.0,
+          "peak_unit_rss_mb": 79.07421875,
+          "min_mem_available_mb": 40224,
+          "avg_other_cores": 6.215827338129497,
+          "max_foreign_rustc": 0,
+          "psi_cpu_secs": 0.001063,
+          "psi_mem_secs": 0.0,
+          "psi_io_secs": 0.0
+        },
+        "diagnostics": {
+          "compile_errors": 0,
+          "warnings": 0,
+          "first_error": null,
+          "compile_failed": false
+        },
+        "rebuild_reasons": [],
+        "all_units": 1,
+        "slot": null,
+        "locks_waited": [],
+        "sched": {
+          "unit": "justrust-20261030-042837633-1891779.scope",
+          "final_weight": 1000,
+          "setup_secs": 0.028228343,
+          "yielded_secs": 0.0
+        },
+        "route": "JUSTRUST_REMOTE=off"
+      }
+    },
+    {
+      "id": "20261030-042837808-1891834",
+      "summary": {
+        "id": "20261030-042837808-1891834",
+        "args": [
+          "check",
+          "-vv"
+        ],
+        "subcommand": "check",
+        "cwd": "/home/jeremy/.jcode/scratch/macro-cache-safety-sharing-20261030",
+        "git": {
+          "root": null,
+          "head": null,
+          "dirty_files": null
+        },
+        "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+        "start": 1793359717.8263254,
+        "wall": 0.04148244857788086,
+        "exit": 0,
+        "cpu_secs": 0.046724,
+        "measurement_coverage": {
+          "samples": 2,
+          "processes": 1,
+          "sample_span_secs": 0.04088592529296875,
+          "max_sample_gap_secs": 0.04088592529296875
+        },
+        "ncpu": 16,
+        "phases": {
+          "startup": 0.04046630859375,
+          "lock_wait": 0.0,
+          "compile": 0.0,
+          "build_gaps": 0.0,
+          "test_run": 0.0,
+          "tail": 0.0010161399841308594
+        },
+        "units": {
+          "compiled": 0,
+          "local": 0,
+          "dependencies": 0,
+          "build_scripts": 0,
+          "fresh": 1,
+          "rustc_cpu_secs": -0.0,
+          "rustc_wall_sum": -0.0,
+          "with_pass_timings": 0,
+          "depcache_hits": 0,
+          "depcache_misses": 0,
+          "depcache_saved_secs": -0.0,
+          "depcache_miss_secs": -0.0,
+          "depcache_remote_hits": 0,
+          "depcache_peer_hits": 0,
+          "depcache_prebuilt_hits": 0,
+          "localcache_hits": 0,
+          "localcache_misses": 0,
+          "localcache_saved_secs": -0.0
+        },
+        "top_units": [],
+        "link": {
+          "linker_processes": 0,
+          "linker_cpu_secs": -0.0,
+          "link_pass_secs": 0.0
+        },
+        "tests": {
+          "binaries": [],
+          "passed": 0,
+          "failed": 0,
+          "ignored": 0,
+          "filtered_out": 0,
+          "libtest_secs": 0.0,
+          "timed_secs": 0.0,
+          "timed": 0
+        },
+        "resources": {
+          "avg_build_cores": 1.12635588307374,
+          "peak_build_cores": 0.0,
+          "peak_build_rss_mb": 0.0,
+          "peak_unit_rss_mb": 0.0,
+          "min_mem_available_mb": 40183,
+          "avg_other_cores": 5.253731343283582,
+          "max_foreign_rustc": 0,
+          "psi_cpu_secs": 0.00023300000000000003,
+          "psi_mem_secs": 0.0,
+          "psi_io_secs": 0.0
+        },
+        "diagnostics": {
+          "compile_errors": 0,
+          "warnings": 0,
+          "first_error": null,
+          "compile_failed": false
+        },
+        "rebuild_reasons": [],
+        "all_units": 0,
+        "slot": null,
+        "locks_waited": [],
+        "sched": {
+          "unit": "justrust-20261030-042837808-1891834.scope",
+          "final_weight": 1000,
+          "setup_secs": 0.017401419,
+          "yielded_secs": 0.0
+        },
+        "route": "JUSTRUST_REMOTE=off"
+      }
+    }
+  ],
+  "reason_local": "unreleased hosted maintenance hold; direct unrecorded Cargo is required to check recorder artifact compatibility"
+}

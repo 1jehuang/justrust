@@ -9049,3 +9049,16 @@ All six runs exported and exact phase/raw evidence retained in
 target, not startup or the few milliseconds of test execution. Cached-family
 external-input correctness and deterministic declarative macro reuse are
 separate pending gates. No default promotion or Blaze-beating claim.
+
+Follow-up actual-family gate reproduces stale derive and attribute expansion
+outputs after std environment/file and tracked environment/path changes.
+The original function-like-only passing fixture was an uncached control, not
+a safety gate for these families. Automatic proc-macro caching is now disabled
+in the shipping shim, requiring explicit expert opt-in. The explicit on-mode
+phase diagnostic above is not an eligible correctness-preserving optimization.
+Local safety validation: check, four shim tests, warning-free clippy, full
+847 passed / 12 ignored, reinstall, and recorded/unrecorded/recorded rmeta
+identity sharing. Full test run `20261030-042612239-1866782`; compatibility runs
+`20261030-042837633-1891779` and `20261030-042837808-1891834`. Hosted validation
+was paused under the earlier maintenance coordination. Details and exact
+acceptance logs: `docs/macro-cache-safe-default-20261030.md`. No speed claim.

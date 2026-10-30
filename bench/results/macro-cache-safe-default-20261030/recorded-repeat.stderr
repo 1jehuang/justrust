@@ -1,0 +1,8 @@
+
+justrust: ok: check succeeded, tests not run in 0.0s
+  time    startup 0.04s | compile 0.00s
+  units   0 compiled (0 local, 0 deps, 0 build scripts), 1 fresh
+  cpu     0.0s total, avg 1.1/peak 0.0 of 16 cores; others used 5.3 cores
+  memory  peak 0 MB build, 0 MB largest rustc, 39.2 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261030-042837808-1891834` full output, `justrust show 20261030-042837808-1891834` full profile

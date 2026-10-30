@@ -103,13 +103,12 @@ fn exec(real: &PathBuf, args: &[OsString]) -> ! {
     std::process::exit(127);
 }
 
-/// `-Zcache-proc-macros` for local incremental units when the build runs
-/// justrust's own compiler (`JUSTRUST_TOOLCHAIN_JR`): jr-rustc then reuses
-/// derive and attribute proc-macro output between edits (FINDINGS 29,
-/// reference loop -23%). Same answer for every unit of a crate in every
-/// run, because the flag is part of rustc's incremental key: it depends only
-/// on the environment and the unit's own arguments.
-/// `JUSTRUST_CACHE_PROC_MACROS=0` turns it off.
+/// Experimental `-Zcache-proc-macros` for incremental units on our compiler.
+/// Disabled by default: derive/attribute cache hits can reuse stale expansion
+/// output after environment or file changes, including tracked inputs. Keep
+/// this behind explicit expert opt-in until native dependency tracking is safe.
+/// `JUSTRUST_CACHE_PROC_MACROS=1/on/true/yes` enables the experiment. The flag
+/// remains part of rustc's incremental key, independent of recording.
 fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<OsString> {
     // The variable is inherited by nested cargo invocations (build scripts,
     // xtasks) that may run another rustc: also require that the compiler
@@ -121,9 +120,9 @@ fn cache_proc_macro_args(real: &std::path::Path, args: &[OsString]) -> Option<Os
         .is_some_and(|n| n.to_string_lossy().starts_with("jr-"));
     if !is_jr
         || std::env::var_os("JUSTRUST_TOOLCHAIN_JR").is_none()
-        || matches!(
+        || !matches!(
             std::env::var("JUSTRUST_CACHE_PROC_MACROS").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
+            Ok("1") | Ok("on") | Ok("true") | Ok("yes")
         )
     {
         return None;
@@ -629,9 +628,26 @@ mod tests {
         assert_eq!(cache_proc_macro_args(jr, &incr), None, "not jr: never");
         unsafe { std::env::set_var("JUSTRUST_TOOLCHAIN_JR", "1") };
         assert_eq!(
-            cache_proc_macro_args(jr, &incr).as_deref(),
-            Some("-Zcache-proc-macros".as_ref())
+            cache_proc_macro_args(jr, &incr),
+            None,
+            "unsafe cache stays off by default"
         );
+        for value in ["", "0", "off", "false", "no", "unexpected"] {
+            unsafe { std::env::set_var("JUSTRUST_CACHE_PROC_MACROS", value) };
+            assert_eq!(
+                cache_proc_macro_args(jr, &incr),
+                None,
+                "not explicit opt-in: {value}"
+            );
+        }
+        for value in ["1", "on", "true", "yes"] {
+            unsafe { std::env::set_var("JUSTRUST_CACHE_PROC_MACROS", value) };
+            assert_eq!(
+                cache_proc_macro_args(jr, &incr).as_deref(),
+                Some("-Zcache-proc-macros".as_ref()),
+                "explicit experiment: {value}",
+            );
+        }
         assert_eq!(
             cache_proc_macro_args(other, &incr),
             None,

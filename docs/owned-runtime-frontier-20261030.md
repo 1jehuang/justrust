@@ -6,6 +6,8 @@ Artifacts: `bench/results/owned-runtime-frontier-20261030/`, including runner sn
 
 Both modes enable the four existing default-off owned query/lint experiments. They differ only in explicit `-Zcache-proc-macros=no/yes`. `JUSTRUST_PASSES=on` instruments native compiler phases. Each mode runs prepare, executed edit, restoration. These runs do not establish general proc-macro cache correctness, which requires a separate external-input differential gate.
 
+Follow-up actual-family testing found stale derive and attribute expansions after environment/file changes, including tracked APIs. Therefore the macro-cache-on diagnostic is **not an eligible correctness-preserving optimization**. The shipping shim must not enable that cache automatically. Function-like procedural macros were only an uncached control in the original input fixture and their passing results did not cover these cached families.
+
 | Executed edit diagnostic | Macro cache off | Macro cache on |
 | --- | ---: | ---: |
 | Harness wall seconds | 1.332673 | 1.351485 |
