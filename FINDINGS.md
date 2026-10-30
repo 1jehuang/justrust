@@ -1,5 +1,20 @@
 # Findings: where agent build time goes
 
+## 2026-10-30: smaller account host is live, not a measured speedup
+
+Resized the owner's existing AWS host from 96 to 32 physical cores and 384
+to 128 GiB provisioned RAM, preserving its instance, root volume and caches.
+Live guest/API checks confirm the target. Hosted check
+`20261029-213409377-3008036` kept 62 units fresh but spent 50.167s syncing
+on the first connection after reboot, versus 1.30s host work. Subsequent
+full tests `20261029-213502310-3012481` passed 837 with 10 ignored and
+strict all-target Clippy `20261029-213518592-3013767` passed. Desktop smoke
+`20261029-213523554-3008035` failed on four missing `effective_budget`
+fields in current project test fixtures, not a host admission failure.
+The comprehensive hosted baseline was blocked by unrelated benchmark snapshot
+locks. No cross-size speedup, equal-performance claim or global fleet promotion.
+See `docs/hosted-sizing-20261030.md` and its selected run exports.
+
 ## 2026-10-30: deeper cache reuse is real, but remote no-op latency remains
 
 Inventory: `docs/caching-levels.md`, with 18 reuse levels and their input
