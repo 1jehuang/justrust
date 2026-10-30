@@ -1,0 +1,17 @@
+{
+  "verdict": "passed",
+  "semantic_modes": 357,
+  "negative_semantic_modes": 357,
+  "native_profiles_reparsed": 10,
+  "compiler_sha256": "570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144",
+  "driver_sha256": "ac116b9398e1f5c677e73952b8719be9d9e47190fe61fbaeba9b7cf270739595",
+  "literal_provider_avoided": {
+    "warm-yes": 1,
+    "body-edit-yes": 1
+  },
+  "tt_provider_avoided": {
+    "warm-yes": 1,
+    "body-edit-yes": 1
+  },
+  "archive_sha256": "4cfd17c4a85e4405e41dbd48eddae5f35a5c8a01841fa7eb142dfa297549803a"
+}

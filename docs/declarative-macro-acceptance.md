@@ -7,7 +7,9 @@ expansion. It is not a speed benchmark or evidence of a cache hit.
 
 ## Execution boundary
 
-Only mocked Python unit tests have been run during harness implementation.
+Only mocked Python unit tests were run during harness implementation. Root
+subsequently released and executed the frozen compiler on October 30, 2026,
+with retained results described below.
 Do not run this harness, build rustc, or execute native fixtures until the root
 coordinator releases the frozen new compiler. The root owns that build, native
 acceptance execution, and the larger performance measurement. Never substitute
@@ -228,3 +230,47 @@ and resolved driver library paths and SHA-256 values. Any compiler or driver
 change during the run invalidates the result. Preserve this report with native
 acceptance evidence. A passed mock suite validates the harness contract only,
 not the forthcoming compiler feature or its performance.
+
+## Retained native TT evidence, October 30, 2026
+
+`bench/results/declarative-tt-cache-20261030/native-evidence.tar.gz` retains
+the complete positive `acceptance-tt/acceptance.json`, all ten native profiles
+(five literal and five TT), the complete old-literal-only negative report and
+log, positive CLI log, compiler build/version logs, before SHA-256 identities,
+after identity verification log, and root's full Python test log (610 passed).
+It intentionally excludes compiler binaries, executable fixtures, and build
+caches. Original absolute paths remain in the raw evidence, not rewritten.
+
+The candidate passed all **51 revisions times seven modes = 357 main compile
+observations**, plus five literal and five TT proof processes. Dependency
+compiles within the matrix are additional, not included in 357. Both native-hit
+verdicts passed. Each proof calibrated one cold provider execution and showed
+one inferred provider avoided in each unchanged and body-edit warm process.
+Explicit off controls had zero markers. Frozen compiler executable SHA-256:
+`570faeb27338cea8625c4a4a7eaeef71fc75470508657ff489c3da96ce5f9144`.
+Driver SHA-256:
+`ac116b9398e1f5c677e73952b8719be9d9e47190fe61fbaeba9b7cf270739595`.
+Before and after identities matched.
+
+The old literal-only compiler independently passed all 357 semantic modes and
+the literal proof, then failed the TT proof with exactly
+`Cold tt fixture did not positively exercise native eligible/provider/success paths`.
+Its cold TT counters showed positive ineligible events and zero eligible,
+lookup, provider, and success events. This establishes the native negative
+control, not just a mocked absence test.
+
+Replay the portable audit without invoking rustc or fixture binaries:
+
+```sh
+python3 bench/results/declarative-tt-cache-20261030/audit.py
+```
+
+The audit repeats every exact status/stdout/stderr comparison and independent
+runtime/error expectation for both 357-mode matrices, checks sources, mode
+flags and shared-cache paths, verifies unchanged identities, validates the two
+positive proofs and exact negative failure, and reparses all ten retained raw
+profiles to verify hashes, sizes, metadata, resolved marker counts, and unknown
+record counts. `audit.json` records the successful replay and archive hash.
+The audit does not require any original scratch paths to exist. These results
+prove narrow TT reuse and correctness for the covered cases, not a speedup,
+general TT transcriber eligibility, or default promotion.
