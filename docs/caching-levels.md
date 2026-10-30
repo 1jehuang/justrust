@@ -153,6 +153,13 @@ experiments remain default-off. Focused acceptance cannot substitute for the
 session-weighted benchmark needed to promote defaults.
 
 None of these changes implements authoritative whole-command result replay.
+The reinstalled shipping client passed 20 transport tests
+(`20261029-205606640-2479618`) and all-target Clippy with warnings denied
+(`20261029-205609282-2475935`). That no-op lint still took 2.58 s on the
+client despite 0.05 s on hosted Cargo and 62 fresh units, with 1.94 s reported
+in synchronization. This is a different run under concurrent toolchain work,
+not a matched regression comparison, but it confirms that artifact freshness
+alone does not make the entire command subsecond.
 A truly local unchanged-result hit is the way to avoid both remote admission
 and transport. That still requires complete positive/negative input receipts,
 not a source-only timestamp or a cached terminal transcript.
