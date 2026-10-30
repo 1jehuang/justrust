@@ -38,6 +38,7 @@ pub enum IntrinsicOp {
     Abs,
     Signum,
     Pow,
+    RemEuclid,
     Min,
     Max,
     WrappingAdd,
@@ -116,6 +117,7 @@ const TABLE: &[(&str, IntrinsicOp)] = {
         ("abs", FloatAbs),
         ("signum", Signum),
         ("pow", Pow),
+        ("rem_euclid", RemEuclid),
         ("min", Min),
         ("min", FloatMin),
         ("max", Max),
@@ -197,7 +199,8 @@ impl Intrinsic {
             (IsPowerOfTwo, ScalarTy::Int(t)) if !t.is_signed() => (vec![], Ty::Bool),
             (Pow, ScalarTy::Int(_)) => (vec![Ty::Int(IntTy::U32)], this),
             (
-                Min | Max | WrappingAdd | WrappingSub | WrappingMul | SaturatingAdd | SaturatingSub,
+                Min | Max | RemEuclid | WrappingAdd | WrappingSub | WrappingMul | SaturatingAdd
+                | SaturatingSub,
                 ScalarTy::Int(_),
             ) => (vec![this.clone()], this),
             (CountOnes | CountZeros | TrailingZeros, ScalarTy::Int(_)) => {

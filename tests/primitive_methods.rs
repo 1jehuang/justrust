@@ -19,6 +19,170 @@ fn parse_oracle(tag: &str, cases: &[closure_oracle::Case]) {
 }
 
 #[test]
+fn integer_rem_euclid_const_and_runtime_match_stock() {
+    use closure_oracle::{Case, Expect};
+    parse_oracle(
+        "integer-rem-euclid",
+        &[
+            Case {
+                name: "const_qualification_and_signed_edges",
+                source: r#"
+            const fn r8(a:i8,b:i8)->i8{a.rem_euclid(b)}
+            const fn r16(a:i16,b:i16)->i16{a.rem_euclid(b)}
+            const fn r32(a:i32,b:i32)->i32{a.rem_euclid(b)}
+            const fn r64(a:i64,b:i64)->i64{a.rem_euclid(b)}
+            const fn r128(a:i128,b:i128)->i128{a.rem_euclid(b)}
+            const fn rs(a:isize,b:isize)->isize{a.rem_euclid(b)}
+            pub const fn weeks_in_year(year:i32)->u8 {
+                match year.rem_euclid(400) {4=>53,_=>52}
+            }
+            fn main(){
+                assert_eq!(weeks_in_year(-396),53);
+                assert_eq!(weeks_in_year(-400),52);
+                assert_eq!(r8(-7,4),1); assert_eq!(r8(-7,-4),1);
+                assert_eq!(r8(7,-4),3); assert_eq!(r8(0,-4),0);
+                assert_eq!(r8(-1,i8::MIN),i8::MAX);
+                assert_eq!(r16(-1,i16::MIN),i16::MAX);
+                assert_eq!(r32(-1,i32::MIN),i32::MAX);
+                assert_eq!(r64(-1,i64::MIN),i64::MAX);
+                assert_eq!(r128(-1,i128::MIN),i128::MAX);
+                assert_eq!(rs(-1,isize::MIN),isize::MAX);
+                assert_eq!(r8(i8::MIN,i8::MIN),0);
+                assert_eq!(r128(i128::MIN,i128::MIN),0);
+                assert_eq!(r128(i128::MIN,3),1);
+                assert_eq!(r128(i128::MIN,-3),1);
+                assert_eq!(r128(-1,i128::MAX),i128::MAX-1);
+            }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "unsigned_const_and_autoderef",
+                source: r#"
+            const fn r8(a:u8,b:u8)->u8{a.rem_euclid(b)}
+            const fn r16(a:u16,b:u16)->u16{a.rem_euclid(b)}
+            const fn r32(a:u32,b:u32)->u32{a.rem_euclid(b)}
+            const fn r64(a:u64,b:u64)->u64{a.rem_euclid(b)}
+            const fn r128(a:u128,b:u128)->u128{a.rem_euclid(b)}
+            const fn rs(a:usize,b:usize)->usize{a.rem_euclid(b)}
+            fn main(){
+                assert_eq!(r8(u8::MAX,4),3);assert_eq!(r16(u16::MAX,4),3);
+                assert_eq!(r32(u32::MAX,4),3);assert_eq!(r64(u64::MAX,4),3);
+                assert_eq!(r128(u128::MAX,4),3);assert_eq!(rs(usize::MAX,4),3);
+                let n=-7i32;let reference=&n;let nested=&reference;
+                assert_eq!(nested.rem_euclid(-4),1);
+            }"#,
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "single_evaluation_order",
+                source: r#"
+            fn operand(n:i32)->i32{println!("{}",n);n}
+            fn main(){assert_eq!(operand(-7).rem_euclid(operand(-4)),1);}
+            "#,
+                expect: Expect::Run("-7\n-4\n"),
+            },
+            Case {
+                name: "wrong_argument",
+                source: "const fn bad(a:i32)->i32{a.rem_euclid(2u32)}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "wrong_result",
+                source: "const fn bad(a:i32)->u32{a.rem_euclid(2)}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "wrong_arity",
+                source: "const fn bad(a:i32)->i32{a.rem_euclid()}fn main(){}",
+                expect: Expect::Invalid("E0061"),
+            },
+            Case {
+                name: "same_name_runtime_inherent_is_not_const",
+                source: r#"
+            struct Number;
+            impl Number{fn rem_euclid(self,n:i32)->i32{n}}
+            const fn bad(n:Number)->i32{n.rem_euclid(4)}
+            fn main(){}"#,
+                expect: Expect::Invalid("E0015"),
+            },
+            Case {
+                name: "same_name_trait_is_not_const",
+                source: r#"
+            trait R{fn rem_euclid(self,n:i32)->i32;}
+            struct Number;
+            impl R for Number{fn rem_euclid(self,n:i32)->i32{n}}
+            const fn bad(n:Number)->i32{n.rem_euclid(4)}
+            fn main(){}"#,
+                expect: Expect::Invalid("E0015"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn integer_rem_euclid_zero_and_signed_overflow_trap() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Command;
+    let root = std::env::var_os("JCODE_SCRATCH_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(format!("jr-rem-trap-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    for (index, (ty, left, right)) in [
+        ("i32", "7", "0"),
+        ("u32", "7", "0"),
+        ("i128", "7", "0"),
+        ("u128", "7", "0"),
+        ("i32", "i32::MIN", "-1"),
+        ("i128", "i128::MIN", "-1"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let source = format!(
+            "const fn rem(a:{ty},b:{ty})->{ty}{{a.rem_euclid(b)}}fn main(){{let _=rem({left},{right});}}"
+        );
+        let path = root.join(format!("case-{index}.rs"));
+        std::fs::write(&path, &source).unwrap();
+        for workers in [0, 1, 8] {
+            let image = root.join(format!("image-{index}-{workers}"));
+            if workers == 0 {
+                let built = Command::new(stock_rustc::stock_rustc())
+                    .args(["--edition=2024", "-Cpanic=abort", "--crate-name=rem"])
+                    .arg(&path)
+                    .arg("-o")
+                    .arg(&image)
+                    .output()
+                    .unwrap();
+                assert!(
+                    built.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&built.stderr)
+                );
+            } else {
+                let checked =
+                    justrust_engine::compiler::compile(source.clone(), workers, true).unwrap();
+                assert!(checked.executable.is_none());
+                let built =
+                    justrust_engine::compiler::compile(source.clone(), workers, false).unwrap();
+                std::fs::write(&image, built.executable.unwrap()).unwrap();
+                std::fs::set_permissions(&image, std::fs::Permissions::from_mode(0o700)).unwrap();
+            }
+            let ran = Command::new("sh")
+                .args(["-c", "ulimit -c 0; exec \"$1\"", "rem-trap"])
+                .arg(&image)
+                .output()
+                .unwrap();
+            assert!(
+                !ran.status.success(),
+                "remainder trap returned successfully: {ty} {left} {right}, workers={workers}"
+            );
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn integer_radix_parsing_matches_stock() {
     use closure_oracle::{Case, Expect};
     parse_oracle(

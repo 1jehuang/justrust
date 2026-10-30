@@ -21462,6 +21462,11 @@ fn validate_const_forwarding(
                         "E0015: in const function {owner}: cannot call non-const operation in constant context"
                     ));
                 }
+                // A candidate is not const authority. Exact receiver identity,
+                // operation and callable constness are checked after typing,
+                // and the ordinary source-call replay seals correspondence.
+                DepthNode::Expr(expr @ Expr::MethodCall { .. })
+                    if intrinsic_candidate(expr, names)? => {}
                 DepthNode::Expr(
                     Expr::MethodCall { .. }
                     | Expr::AssociatedCall { .. }
@@ -21478,6 +21483,74 @@ fn validate_const_forwarding(
         }),
     )
 }
+#[cfg(test)]
+mod const_rem_euclid_tests {
+    use super::*;
+
+    #[test]
+    fn exact_const_primitive_replay_rejects_transplants() {
+        let program =
+            parse("pub const fn f(a:i32,b:i32)->i32{a.rem_euclid(b)} fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let PublishedCallableBody::Source(body) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected source publication")
+        };
+        let original = body.original().source_for_test();
+        let row = original.builtin_intrinsic_mapping[0];
+        body.validate_source(body.source(), body.facts(), &budget)
+            .unwrap();
+        for mutation in 0..6 {
+            let mut payload = body.source().as_ref().clone();
+            let ir::ExprKind::Intrinsic { intrinsic, args } = &mut payload.exprs[row.expr.0].kind
+            else {
+                panic!("expected exact primitive")
+            };
+            match mutation {
+                0 => intrinsic.op = ir::IntrinsicOp::Min,
+                1 => intrinsic.receiver = ir::ScalarTy::Int(ir::IntTy::U32),
+                2 => args.swap(0, 1),
+                3 => {
+                    args.pop();
+                }
+                4 => payload.exprs[row.expr.0].ty = ir::Ty::Bool,
+                _ => payload.exprs.push(payload.exprs[row.expr.0].clone()),
+            }
+            let error = match body.validate_source(&Arc::new(payload), body.facts(), &budget) {
+                Err(error) => error,
+                Ok(_) => panic!("forged constant primitive accepted: {mutation}"),
+            };
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+        for mutation in 0..3 {
+            let mut forged = original.clone();
+            match mutation {
+                0 => forged.builtin_intrinsic_mapping.clear(),
+                1 => forged.builtin_intrinsic_mapping[0].source_index = usize::MAX,
+                _ => forged.builtin_intrinsic_mapping[0].receiver = ir::ExprId(usize::MAX),
+            }
+            let error = match replay_source_body(&forged, body.source(), body.facts(), &budget) {
+                Err(error) => error,
+                Ok(_) => panic!("forged primitive occurrence accepted: {mutation}"),
+            };
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+        let mut payload = body.source().as_ref().clone();
+        let ir::ExprKind::Intrinsic { intrinsic, .. } = &mut payload.exprs[row.expr.0].kind else {
+            panic!("expected primitive")
+        };
+        intrinsic.op = ir::IntrinsicOp::Min;
+        assert!(
+            validate_const_typed_calls(&plan.registry, &program.functions[0], &payload, &budget)
+                .unwrap_err()
+                .starts_with("unsupported:")
+        );
+    }
+}
+
 fn validate_const_typed_calls(
     registry: &DeclRegistry,
     function: &Function,
@@ -21489,6 +21562,13 @@ fn validate_const_typed_calls(
     }
     for expression in &checked.exprs {
         budget.charge_work(1)?;
+        if let ir::ExprKind::Intrinsic { intrinsic, .. } = &expression.kind
+            && (intrinsic.op != ir::IntrinsicOp::RemEuclid
+                || !matches!(intrinsic.receiver, ir::ScalarTy::Int(_))
+                || intrinsic.signature().is_none())
+        {
+            return Err("unsupported: primitive operation in typed constant body".into());
+        }
         if let ir::ExprKind::Call { target, .. } = &expression.kind {
             match target {
                 ir::Callee::Direct(target) => {

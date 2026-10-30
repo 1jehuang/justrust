@@ -81,6 +81,40 @@ impl Lowerer<'_> {
     ) -> Result<(), String> {
         use IntrinsicOp::*;
         match (intrinsic.op, intrinsic.receiver) {
+            (RemEuclid, ScalarTy::Int(ty)) => {
+                let y = y.ok_or("rem_euclid arity")?;
+                // The checked remainder preserves division-by-zero and MIN/-1
+                // traps. Never take abs(y): the signed minimum has no positive
+                // representation, although its Euclidean remainder is valid.
+                let rem = self.arith(ty, BinaryOp::Rem, x, y.clone(), origin);
+                if !ty.is_signed() {
+                    self.assign(destination.clone(), Rvalue::Use(rem), origin);
+                } else {
+                    let negative = self.compare(BinaryOp::Lt, rem.clone(), int(ty, 0), origin);
+                    let adjust = self.block();
+                    let keep = self.block();
+                    let join = self.block();
+                    self.branch(negative, adjust, keep, origin)?;
+                    self.current = keep;
+                    self.assign(destination.clone(), Rvalue::Use(rem.clone()), origin);
+                    self.terminate(Terminator::Goto(join), origin)?;
+                    self.current = adjust;
+                    let divisor_negative =
+                        self.compare(BinaryOp::Lt, y.clone(), int(ty, 0), origin);
+                    let subtract = self.block();
+                    let add = self.block();
+                    self.branch(divisor_negative, subtract, add, origin)?;
+                    self.current = subtract;
+                    let adjusted = self.arith(ty, BinaryOp::Sub, rem.clone(), y.clone(), origin);
+                    self.assign(destination.clone(), Rvalue::Use(adjusted), origin);
+                    self.terminate(Terminator::Goto(join), origin)?;
+                    self.current = add;
+                    let adjusted = self.arith(ty, BinaryOp::Add, rem, y, origin);
+                    self.assign(destination.clone(), Rvalue::Use(adjusted), origin);
+                    self.terminate(Terminator::Goto(join), origin)?;
+                    self.current = join;
+                }
+            }
             (Min | Max | FloatMin | FloatMax, ScalarTy::Int(_)) => {
                 let y = y.ok_or("min/max arity")?;
                 let op = if matches!(intrinsic.op, Min) {
