@@ -8948,3 +8948,14 @@ This does not establish a causal slowdown or improvement. No default promotion.
 Exact reports and limitations are in `docs/query-retention-benchmark-20261030.md`;
 62 private experiment runs were exported to the separate
 `data/runs/xps14-query-retention-20261030/` directory.
+
+### Local daemon lookup is source validation, not prebuild waiting
+
+Installed timing correction `bbf63226e` separates recursive source validation
+from prebuild coordination. Unchanged runs `20261029-221029310-3292520` and
+`20261029-221030605-3292774` each kept 62 units fresh, but full process walls
+were 1.213/1.276s. Source validation accounted for 951.4/1044.1ms and prebuild
+coordination for 0.0ms. The old log incorrectly included scanning in its
+"waiting for a compile-only prebuild" label. This proves the next local
+bottleneck, not a before/after speedup. Hosted strict lint passed after install
+(`20261029-221012298-3290569`). See `docs/daemon-lookup-attribution.md`.
