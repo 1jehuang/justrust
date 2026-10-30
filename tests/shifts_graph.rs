@@ -1,6 +1,26 @@
 use justrust_engine::{Key, compiler};
 
 #[test]
+fn checked_shift_methods_are_source_checked_without_codegen() {
+    for workers in [1, 8] {
+        let compilation = compiler::compile_observed(
+            "fn main(){match 255u8.checked_shl(1){Some(value)=>assert_eq!(value,254u8),None=>panic!()}assert!(1u128.checked_shr(128).is_none());}".into(),
+            workers,
+            true,
+        ).unwrap();
+        assert!(compilation.report.capture_complete);
+        assert!(compilation.executable.is_none());
+        assert!(
+            compilation
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130..=133))
+        );
+    }
+}
+
+#[test]
 fn heterogeneous_shifts_reuse_checked_facts_and_check_has_no_objects() {
     let source = "fn left(x:i8,n:u64)->i8{x<<n}fn right(x:u64,n:i16)->u64{x>>n}fn main(){if left(1i8,7u64)==-128i8&&right(9223372036854775808u64,63i16)==1u64{println!(\"ok\");}}";
     for workers in [1, 8] {
@@ -47,13 +67,15 @@ fn unused_shift_bodies_require_integer_endpoints_and_valid_known_counts() {
         "fn bad()->u8{1u8<<(4u8+4u8)}fn main(){}",
         "fn bad()->u8{1u8<<true}fn main(){}",
         "fn bad()->bool{true>>1u8}fn main(){}",
-        "fn bad(p:&u8){let x=p<<1u8;}fn main(){}",
+        "fn bad(p:&bool){let x=p<<1u8;}fn main(){}",
     ] {
         for workers in [1, 8] {
             for check in [true, false] {
                 let failure = compiler::compile_observed(source.to_owned(), workers, check)
                     .err()
-                    .unwrap();
+                    .unwrap_or_else(|| {
+                        panic!("unexpected acceptance workers={workers} check={check}: {source}")
+                    });
                 assert!(failure.report.unwrap().capture_complete);
             }
         }

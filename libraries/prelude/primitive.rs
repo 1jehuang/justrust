@@ -762,6 +762,122 @@ impl IntMethods for usize {
     }
 }
 
+// Checked shift counts are u32 for every primitive, independently of value width.
+// These source methods guard before evaluating a shift, so invalid counts return
+// None without reaching either the static count rejection or runtime trap.
+pub trait CheckedShiftMethods: Sized {
+    fn checked_shl(self, rhs: u32) -> Option<Self>;
+    fn checked_shr(self, rhs: u32) -> Option<Self>;
+}
+
+impl CheckedShiftMethods for i8 {
+    fn checked_shl(self, rhs: u32) -> Option<i8> {
+        if rhs < 8u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<i8> {
+        if rhs < 8u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for i16 {
+    fn checked_shl(self, rhs: u32) -> Option<i16> {
+        if rhs < 16u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<i16> {
+        if rhs < 16u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for i32 {
+    fn checked_shl(self, rhs: u32) -> Option<i32> {
+        if rhs < 32u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<i32> {
+        if rhs < 32u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for i64 {
+    fn checked_shl(self, rhs: u32) -> Option<i64> {
+        if rhs < 64u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<i64> {
+        if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for i128 {
+    fn checked_shl(self, rhs: u32) -> Option<i128> {
+        if rhs < 128u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<i128> {
+        if rhs < 128u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for isize {
+    fn checked_shl(self, rhs: u32) -> Option<isize> {
+        if rhs < 64u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<isize> {
+        if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for u8 {
+    fn checked_shl(self, rhs: u32) -> Option<u8> {
+        if rhs < 8u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<u8> {
+        if rhs < 8u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for u16 {
+    fn checked_shl(self, rhs: u32) -> Option<u16> {
+        if rhs < 16u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<u16> {
+        if rhs < 16u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for u32 {
+    fn checked_shl(self, rhs: u32) -> Option<u32> {
+        if rhs < 32u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<u32> {
+        if rhs < 32u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for u64 {
+    fn checked_shl(self, rhs: u32) -> Option<u64> {
+        if rhs < 64u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<u64> {
+        if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for u128 {
+    fn checked_shl(self, rhs: u32) -> Option<u128> {
+        if rhs < 128u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<u128> {
+        if rhs < 128u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
+impl CheckedShiftMethods for usize {
+    fn checked_shl(self, rhs: u32) -> Option<usize> {
+        if rhs < 64u32 { Option::Some(self << rhs) } else { Option::None }
+    }
+    fn checked_shr(self, rhs: u32) -> Option<usize> {
+        if rhs < 64u32 { Option::Some(self >> rhs) } else { Option::None }
+    }
+}
+
 // ---- parsing (str::parse) ----
 
 pub trait FromStr: Sized {

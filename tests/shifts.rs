@@ -473,3 +473,151 @@ fn main(){if run()==7{println!("shift oracle ok");}}"#,
         "shift oracle ok\n",
     );
 }
+
+#[path = "support/closure_oracle.rs"]
+mod checked_shift_oracle;
+
+#[test]
+fn checked_shift_methods_match_stock_for_all_integer_widths() {
+    use checked_shift_oracle::{Case, Expect};
+    checked_shift_oracle::check(
+        "checked-shift-methods",
+        &[
+            Case {
+                name: "all_integer_widths",
+                source: r#"fn main() {
+    assert!((1i8).checked_shl(0u32).unwrap() == 1i8);
+    assert!((1i8).checked_shl(7u32).unwrap() == (1i8 << 7u32));
+    assert!(i8::MAX.checked_shl(1u32).unwrap() == (i8::MAX << 1u32));
+    assert!(i8::MAX.checked_shr(7u32).unwrap() == (i8::MAX >> 7u32));
+    assert!(i8::MAX.checked_shl(8u32).is_none());
+    assert!(i8::MAX.checked_shr(8u32).is_none());
+    assert!(i8::MAX.checked_shl(u32::MAX).is_none());
+    assert!(i8::MAX.checked_shr(u32::MAX).is_none());
+    assert!((-1i8).checked_shr(7u32).unwrap() == -1i8);
+    assert!((1i16).checked_shl(0u32).unwrap() == 1i16);
+    assert!((1i16).checked_shl(15u32).unwrap() == (1i16 << 15u32));
+    assert!(i16::MAX.checked_shl(1u32).unwrap() == (i16::MAX << 1u32));
+    assert!(i16::MAX.checked_shr(15u32).unwrap() == (i16::MAX >> 15u32));
+    assert!(i16::MAX.checked_shl(16u32).is_none());
+    assert!(i16::MAX.checked_shr(16u32).is_none());
+    assert!(i16::MAX.checked_shl(u32::MAX).is_none());
+    assert!(i16::MAX.checked_shr(u32::MAX).is_none());
+    assert!((-1i16).checked_shr(15u32).unwrap() == -1i16);
+    assert!((1i32).checked_shl(0u32).unwrap() == 1i32);
+    assert!((1i32).checked_shl(31u32).unwrap() == (1i32 << 31u32));
+    assert!(i32::MAX.checked_shl(1u32).unwrap() == (i32::MAX << 1u32));
+    assert!(i32::MAX.checked_shr(31u32).unwrap() == (i32::MAX >> 31u32));
+    assert!(i32::MAX.checked_shl(32u32).is_none());
+    assert!(i32::MAX.checked_shr(32u32).is_none());
+    assert!(i32::MAX.checked_shl(u32::MAX).is_none());
+    assert!(i32::MAX.checked_shr(u32::MAX).is_none());
+    assert!((-1i32).checked_shr(31u32).unwrap() == -1i32);
+    assert!((1i64).checked_shl(0u32).unwrap() == 1i64);
+    assert!((1i64).checked_shl(63u32).unwrap() == (1i64 << 63u32));
+    assert!(i64::MAX.checked_shl(1u32).unwrap() == (i64::MAX << 1u32));
+    assert!(i64::MAX.checked_shr(63u32).unwrap() == (i64::MAX >> 63u32));
+    assert!(i64::MAX.checked_shl(64u32).is_none());
+    assert!(i64::MAX.checked_shr(64u32).is_none());
+    assert!(i64::MAX.checked_shl(u32::MAX).is_none());
+    assert!(i64::MAX.checked_shr(u32::MAX).is_none());
+    assert!((-1i64).checked_shr(63u32).unwrap() == -1i64);
+    assert!((1i128).checked_shl(0u32).unwrap() == 1i128);
+    assert!((1i128).checked_shl(127u32).unwrap() == (1i128 << 127u32));
+    assert!(i128::MAX.checked_shl(1u32).unwrap() == (i128::MAX << 1u32));
+    assert!(i128::MAX.checked_shr(127u32).unwrap() == (i128::MAX >> 127u32));
+    assert!(i128::MAX.checked_shl(128u32).is_none());
+    assert!(i128::MAX.checked_shr(128u32).is_none());
+    assert!(i128::MAX.checked_shl(u32::MAX).is_none());
+    assert!(i128::MAX.checked_shr(u32::MAX).is_none());
+    assert!((-1i128).checked_shr(127u32).unwrap() == -1i128);
+    assert!((1isize).checked_shl(0u32).unwrap() == 1isize);
+    assert!((1isize).checked_shl(63u32).unwrap() == (1isize << 63u32));
+    assert!(isize::MAX.checked_shl(1u32).unwrap() == (isize::MAX << 1u32));
+    assert!(isize::MAX.checked_shr(63u32).unwrap() == (isize::MAX >> 63u32));
+    assert!(isize::MAX.checked_shl(64u32).is_none());
+    assert!(isize::MAX.checked_shr(64u32).is_none());
+    assert!(isize::MAX.checked_shl(u32::MAX).is_none());
+    assert!(isize::MAX.checked_shr(u32::MAX).is_none());
+    assert!((-1isize).checked_shr(63u32).unwrap() == -1isize);
+    assert!((1u8).checked_shl(0u32).unwrap() == 1u8);
+    assert!((1u8).checked_shl(7u32).unwrap() == (1u8 << 7u32));
+    assert!(u8::MAX.checked_shl(1u32).unwrap() == (u8::MAX << 1u32));
+    assert!(u8::MAX.checked_shr(7u32).unwrap() == (u8::MAX >> 7u32));
+    assert!(u8::MAX.checked_shl(8u32).is_none());
+    assert!(u8::MAX.checked_shr(8u32).is_none());
+    assert!(u8::MAX.checked_shl(u32::MAX).is_none());
+    assert!(u8::MAX.checked_shr(u32::MAX).is_none());
+    assert!((1u16).checked_shl(0u32).unwrap() == 1u16);
+    assert!((1u16).checked_shl(15u32).unwrap() == (1u16 << 15u32));
+    assert!(u16::MAX.checked_shl(1u32).unwrap() == (u16::MAX << 1u32));
+    assert!(u16::MAX.checked_shr(15u32).unwrap() == (u16::MAX >> 15u32));
+    assert!(u16::MAX.checked_shl(16u32).is_none());
+    assert!(u16::MAX.checked_shr(16u32).is_none());
+    assert!(u16::MAX.checked_shl(u32::MAX).is_none());
+    assert!(u16::MAX.checked_shr(u32::MAX).is_none());
+    assert!((1u32).checked_shl(0u32).unwrap() == 1u32);
+    assert!((1u32).checked_shl(31u32).unwrap() == (1u32 << 31u32));
+    assert!(u32::MAX.checked_shl(1u32).unwrap() == (u32::MAX << 1u32));
+    assert!(u32::MAX.checked_shr(31u32).unwrap() == (u32::MAX >> 31u32));
+    assert!(u32::MAX.checked_shl(32u32).is_none());
+    assert!(u32::MAX.checked_shr(32u32).is_none());
+    assert!(u32::MAX.checked_shl(u32::MAX).is_none());
+    assert!(u32::MAX.checked_shr(u32::MAX).is_none());
+    assert!((1u64).checked_shl(0u32).unwrap() == 1u64);
+    assert!((1u64).checked_shl(63u32).unwrap() == (1u64 << 63u32));
+    assert!(u64::MAX.checked_shl(1u32).unwrap() == (u64::MAX << 1u32));
+    assert!(u64::MAX.checked_shr(63u32).unwrap() == (u64::MAX >> 63u32));
+    assert!(u64::MAX.checked_shl(64u32).is_none());
+    assert!(u64::MAX.checked_shr(64u32).is_none());
+    assert!(u64::MAX.checked_shl(u32::MAX).is_none());
+    assert!(u64::MAX.checked_shr(u32::MAX).is_none());
+    assert!((1u128).checked_shl(0u32).unwrap() == 1u128);
+    assert!((1u128).checked_shl(127u32).unwrap() == (1u128 << 127u32));
+    assert!(u128::MAX.checked_shl(1u32).unwrap() == (u128::MAX << 1u32));
+    assert!(u128::MAX.checked_shr(127u32).unwrap() == (u128::MAX >> 127u32));
+    assert!(u128::MAX.checked_shl(128u32).is_none());
+    assert!(u128::MAX.checked_shr(128u32).is_none());
+    assert!(u128::MAX.checked_shl(u32::MAX).is_none());
+    assert!(u128::MAX.checked_shr(u32::MAX).is_none());
+    assert!((1usize).checked_shl(0u32).unwrap() == 1usize);
+    assert!((1usize).checked_shl(63u32).unwrap() == (1usize << 63u32));
+    assert!(usize::MAX.checked_shl(1u32).unwrap() == (usize::MAX << 1u32));
+    assert!(usize::MAX.checked_shr(63u32).unwrap() == (usize::MAX >> 63u32));
+    assert!(usize::MAX.checked_shl(64u32).is_none());
+    assert!(usize::MAX.checked_shr(64u32).is_none());
+    assert!(usize::MAX.checked_shl(u32::MAX).is_none());
+    assert!(usize::MAX.checked_shr(u32::MAX).is_none());
+    println!("checked shifts ok");
+}
+"#,
+                expect: Expect::Run("checked shifts ok\n"),
+            },
+            Case {
+                name: "shared_integer_shift_is_valid",
+                source: "fn shifted(p:&u8)->u8{p<<1u8}fn main(){let value=3u8;assert_eq!(shifted(&value),6u8);println!(\"reference shift ok\");}",
+                expect: Expect::Run("reference shift ok\n"),
+            },
+            Case {
+                name: "shared_noninteger_shift_is_invalid",
+                source: "fn unused(p:&bool){let x=p<<1u8;}fn main(){}",
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "count_must_be_u32",
+                source: "fn unused() { let _ = 1u8.checked_shl(2u8); } fn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "bool_is_not_a_count",
+                source: "fn unused() { let _ = 1i128.checked_shr(true); } fn main() {}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "negative_count_rejects",
+                source: "fn unused() { let _ = 1u128.checked_shl(-1); } fn main() {}",
+                expect: Expect::Invalid("E0600"),
+            },
+        ],
+    );
+}
