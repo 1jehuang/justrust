@@ -1,0 +1,40 @@
+
+INSTALLED_SHARED_SAMPLE=1
+[stderr]
+[stderr] justrust: ok: lint succeeded, tests not run in 5.5s
+[stderr]   time    startup 0.23s | compile 5.12s | gaps 0.15s
+[stderr]   target  slot 1 (sticky) /home/jeremy/justrust/target/justrust-slots/1
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   1 compiled (1 local, 0 deps, 0 build scripts), 61 fresh. Rebuilt because: edited src/buildd.rs (justrust)
+[stderr]           justrust                           5.12s  cpu   5.0s    712 MB
+
+INSTALLED_SHARED_SAMPLE=2
+[stderr]   memory  peak 841 MB build, 712 MB largest rustc, 21.3 GB free; stalls cpu 0.43s mem 0.04s io 0.01s
+[stderr]   waste   2 issues (estimated cost each; they can overlap):
+[stderr]           ~  3.9s  5.1s went to recompiling oversized crates: justrust (85k lines, 5.1s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+[stderr]   more    `justrust log 20261029-231724693-3888009` full output, `justrust show 20261029-231724693-3888009` full profile
+[stderr] FULL_PROCESS_SECONDS=5.648
+[stderr]
+[stderr] justrust: ok: lint succeeded, tests not run in 0.1s
+[stderr]   time    startup 0.10s | compile 0.00s
+[stderr]   target  slot 1 (sticky) /home/jeremy/justrust/target/justrust-slots/1
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 21.8 GB free; stalls cpu 0.02s mem 0.00s io 0.01s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261029-231730330-3890942` full output, `justrust show 20261029-231730330-3890942` full profile
+[stderr] FULL_PROCESS_SECONDS=0.281
+
+INSTALLED_SHARED_SAMPLE=3
+[stderr]
+[stderr] justrust: ok: lint succeeded, tests not run in 0.1s
+[stderr]   time    startup 0.06s | compile 0.00s | after 0.02s
+[stderr]   target  slot 1 (sticky) /home/jeremy/justrust/target/justrust-slots/1
+[stderr]   rustc   pinned toolchain jr-ac20de5e7921
+[stderr]   units   0 compiled (0 local, 0 deps, 0 build scripts), 62 fresh
+[stderr]   memory  peak 0 MB build, 0 MB largest rustc, 21.9 GB free; stalls cpu 0.02s mem 0.00s io 0.01s
+[stderr]   waste   none detected
+[stderr]   more    `justrust log 20261029-231730605-3891080` full output, `justrust show 20261029-231730605-3891080` full profile
+[stderr] FULL_PROCESS_SECONDS=0.258
+
+--- Command finished with exit code: 0 ---

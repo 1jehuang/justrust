@@ -8980,3 +8980,25 @@ validation, so this is not a universal fast path. It remains default off, not a
 whole-command result cache or comprehensive speedup claim. Exact installed
 identity, remote-backoff/reconnection limits and cleanup are recorded in
 `docs/daemon-native-empty-installed.md`.
+
+### Native freshness can skip unrelated coordination entries
+
+`8705f9420` adds separate default-off
+`JUSTRUST_BUILDD_NATIVE_NO_CANDIDATE=1`. Under the reservation lock it rejects
+same-key active/finished entries and the exact shared same-session wrong-guess
+predicate. It does not claim disjoint source roots, which the regression in
+`3e1631580` proved insufficient. Native Cargo still runs and its unstamped output
+cannot be attached to or replayed.
+
+The installed binary passed actual concurrent Cargo socket acceptance: an
+independent sleeping build script survived another session's native check and
+was stopped only when its own requesting socket disconnected. An actual edited
+compile failure (`20261029-231844899-3903294`) returned 101; byte-restored source
+compiled successfully (`20261029-231845124-3903387`). Final hosted tests passed
+847 cases with 12 ignored (`20261029-231720182-3886462`), plus strict all-target
+Clippy. Two real shared-daemon warm local lint observations were 281/258 ms
+with 62 fresh units, no compilation and zero source-validation time
+(`20261029-231730330-3890942`, `20261029-231730605-3891080`). These are installed
+observations under contention, not a comprehensive matched speedup or default
+promotion. See `docs/daemon-native-no-candidate-installed.md` and retained raw
+acceptance fixtures/logs for the exact contract, rebuild exclusions and hashes.

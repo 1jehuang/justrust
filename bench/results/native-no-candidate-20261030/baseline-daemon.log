@@ -1,0 +1,6 @@
+[2026-10-29 23:15:11.759] [3868029] build daemon up, build 15370808-1793340903
+[2026-10-29 23:15:11.771] [3868029] start check --lib in /home/jeremy/.jcode/scratch/native-candidate-accept/blocker (1.3 ms lookup, 0.7 ms source validation, 0.0 ms prebuild coordination, stamp b18daa24)
+[2026-10-29 23:15:12.533] [3868029] start check --lib in /home/jeremy/.jcode/scratch/native-candidate-accept/probe (3.1 ms lookup, 2.2 ms source validation, 0.0 ms prebuild coordination, stamp 9ad317be)
+[2026-10-29 23:15:12.737] [3868029] pid 3868476 exit Some(0) after 0.20s, shared by 1
+[2026-10-29 23:15:12.771] [3868029] no clients left, stopping pid 3868038
+[2026-10-29 23:15:12.771] [3868029] client: client went away

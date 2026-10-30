@@ -1,0 +1,36 @@
+{
+  "home": "/home/jeremy/.jcode/scratch/native-candidate-accept/home-1793340911743591629",
+  "binary": "/home/jeremy/.jcode/scratch/native-candidate-accept/justrust-before",
+  "status_before": {
+    "build": "15370808-1793340903",
+    "pid": 3868029,
+    "running": 1,
+    "served": 1,
+    "coalesced": 0,
+    "attached": false
+  },
+  "status_after": {
+    "build": "15370808-1793340903",
+    "pid": 3868029,
+    "running": 1,
+    "served": 2,
+    "coalesced": 0,
+    "attached": false
+  },
+  "probe_exit": {
+    "code": 0,
+    "attached": false,
+    "joined_after": 0.0,
+    "sharers": 1,
+    "lookup_ms": 3.105415,
+    "run_id": null,
+    "replayed": false,
+    "early": false,
+    "after_early": false
+  },
+  "probe_wall_ms": 208.57793199684238,
+  "blocker_cancelled": true,
+  "output": [
+    "\njustrust: ok: check succeeded, tests not run in 0.1s\n  time    startup 0.12s | compile 0.02s\n  rustc   pinned toolchain nightly-2026-10-08\n  units   1 compiled (1 local, 0 deps, 0 build scripts), 0 fresh, localcache 0 hit/1 miss\n  cpu     0.2s total, avg 1.2/peak 0.0 of 16 cores; others used 12.1 cores (2 other rustc), priority weight 1000 -> 1000\n  memory  peak 0 MB build, 63 MB largest rustc, 24.8 GB free; stalls cpu 0.01s mem 0.00s io 0.00s\n  waste   none detected\n  more    `justrust log 20261029-231512534-3868476` full output, `justrust show 20261029-231512534-3868476` full profile\n"
+  ]
+}

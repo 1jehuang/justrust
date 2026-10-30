@@ -1,0 +1,36 @@
+{
+  "home": "/home/jeremy/.jcode/scratch/native-candidate-accept/home-1793341020119938669",
+  "binary": "/home/jeremy/.cargo/bin/justrust",
+  "status_before": {
+    "build": "15375232-1793341010",
+    "pid": 3884145,
+    "running": 1,
+    "served": 1,
+    "coalesced": 0,
+    "attached": false
+  },
+  "status_after": {
+    "build": "15375232-1793341010",
+    "pid": 3884145,
+    "running": 1,
+    "served": 2,
+    "coalesced": 0,
+    "attached": false
+  },
+  "probe_exit": {
+    "code": 0,
+    "attached": false,
+    "joined_after": 0.0,
+    "sharers": 1,
+    "lookup_ms": 0.77179,
+    "run_id": null,
+    "replayed": false,
+    "early": false,
+    "after_early": false
+  },
+  "probe_wall_ms": 65.58272099937312,
+  "blocker_cancelled": true,
+  "output": [
+    "\njustrust: ok: check succeeded, tests not run in 0.0s\n  time    startup 0.03s | compile 0.00s\n  rustc   pinned toolchain nightly-2026-10-08\n  units   0 compiled (0 local, 0 deps, 0 build scripts), 1 fresh\n  cpu     0.0s total, avg 1.5/peak 0.0 of 16 cores; others used 8.2 cores\n  memory  peak 0 MB build, 0 MB largest rustc, 23.5 GB free; stalls cpu 0.00s mem 0.00s io 0.00s\n  waste   none detected\n  more    `justrust log 20261029-231700235-3884192` full output, `justrust show 20261029-231700235-3884192` full profile\n"
+  ]
+}
