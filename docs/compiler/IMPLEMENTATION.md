@@ -2064,8 +2064,9 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       transitive shared libraries, startup objects and selected c/m libraries into
       owned bytes. Its versioned execution policy invokes the captured interpreter
       directly with a captured-only library path and disabled loader cache, never
-      the host PT_INTERP target. All object, library and output paths point into
-      the private staging tree. Linux x86-64 enforcement uses unprivileged
+      the host PT_INTERP target. Child argv uses stable captured-relative paths,
+      with a private staging working directory that cannot be queried through
+      getcwd. Linux x86-64 enforcement uses unprivileged
       Landlock ABI >=5 plus seccomp, rather than relying on user namespaces that
       the hosted AppArmor policy does not permit. Inputs are read/execute-only,
       writes are confined to the output directory, inherited descriptors are
@@ -2094,17 +2095,27 @@ PlanCtx/interner/source-context debt and wide adapter activation remain held.
       checked before native buffers are used. Link supervision bounds elapsed
       time and request count and kills/reaps on failure. Pre-exec capability
       sets are cleared, memory advice is allowlisted, and compiler death kills
-      the linker. The hosted controlled-link suite passes all 17 tests, including
-      canonical metadata across roots/mtimes/pipes, protected-memory faults and
-      the real parent-death lifecycle (`20261029-163644980-666112`). Unsupported
+      the linker. A parent-owned native exec stop holds the image before its
+      first instruction while pinned process handles and stdio identities are
+      bound. Bounded initial-stack normalization replaces AT_RANDOM bytes,
+      clears the stack AT_SYSINFO_EHDR value and replaces the AT_EXECFN string,
+      including erasing its old private-path suffix. Trusted injected munmap
+      operations remove actual vDSO/vvar mappings; exact instruction/register
+      restoration and pinned-map readback precede image execution. Failed setup
+      kills/reaps the stopped child, never detaches a partially normalized image.
+      Initial notification waits and captured diagnostics are bounded as well.
+      Hosted acceptance includes real captured GNU ld, stock/native ABI parity
+      at workers 1/8, canonical metadata, first-instruction ordering, kernel-map
+      removal, legacy vsyscall probes, floods and parent-death cleanup. CPU
+      instructions, address-layout observations and arbitrary mutable runtime
+      state are not sealed by these checks. Unsupported
       kernels or tools fail closed, without changing host policy or retrying unconstrained.
       Parent output acquisition rejects symlinks and special files, preventing a
       tool-created symlink from escaping confinement when its result is read.
       `justrust test --lib controlled_link` exercises adversarial file-content,
       metadata, mutation, symlink, inherited-descriptor, process and network
-      boundaries. The previously blocked frozen libc-link regression now passes
-      hosted at workers 1/8 (`20261029-155843739-577071`). This closes that hosted
-      execution blocker, not arbitrary process-state sealing, build-script or
+      boundaries. Frozen libc linking also runs hosted at workers 1/8. These
+      bounded contracts do not establish arbitrary process-state sealing, build-script or
       proc-macro support, durable graph persistence, or trusted sharing authority.
       Global artifact sharing remains disabled.
 - [ ] Add bounded asynchronous persistence, atomic manifests, durable checkpoint
