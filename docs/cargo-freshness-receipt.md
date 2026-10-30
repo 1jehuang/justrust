@@ -151,6 +151,9 @@ Hosted validation of the final producer and public executable:
 
 - Library check: `20261029-223459011-3499713`.
 - Six actual native CLI tests: `20261029-223502373-3499705`.
+- Direct collector rejection test: `20261029-223703501-3515493`, validating
+  SHA-256 acceptance, wrong-length denial, and equal-length changed-content
+  denial. This unit test supplements, not replaces, the six actual CLI tests.
 - Library Clippy: `20261029-223521567-3502818`, passing with the same ten
   inherited warnings, not a warning-free whole-tree claim.
 

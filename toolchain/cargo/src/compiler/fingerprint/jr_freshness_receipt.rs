@@ -336,3 +336,30 @@ fn file_observation_checked(
         json!({ "path": path_text, "role": role, "length": before.len(), "mtime_seconds": mtime.unix_seconds(), "mtime_nanoseconds": mtime.nanoseconds(), "sha256": hash.to_string(), "native_dep_info_checksum": expected.map(|(_, checksum)| checksum.to_string()), "native_dep_info_length": expected.map(|(length, _)| length) }),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_checksum_observation_rejects_wrong_length_and_digest() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("input.rs");
+        fs::write(&path, b"pub const VALUE: u8 = 1;\n").unwrap();
+        let length = fs::metadata(&path).unwrap().len();
+        let checksum = Checksum::compute(ChecksumAlgo::Sha256, File::open(&path).unwrap()).unwrap();
+        let observed =
+            file_observation_checked(&path, "test-input", Some((length, checksum))).unwrap();
+        assert_eq!(observed["native_dep_info_checksum"], checksum.to_string());
+        assert!(
+            file_observation_checked(&path, "test-input", Some((length + 1, checksum))).is_err()
+        );
+        fs::write(&path, b"pub const VALUE: u8 = 2;\n").unwrap();
+        let error =
+            file_observation_checked(&path, "test-input", Some((length, checksum))).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "native-input-checksum-changed-during-observation"
+        );
+    }
+}
