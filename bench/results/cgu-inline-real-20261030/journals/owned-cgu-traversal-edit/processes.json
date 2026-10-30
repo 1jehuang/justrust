@@ -1,0 +1,32 @@
+[
+  {
+    "pid": 3001108,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367042.3165905,
+    "last_seen": 1793367043.5755248,
+    "cpu_secs": 0.02,
+    "max_rss_mb": 33.5859375
+  },
+  {
+    "pid": 3001115,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-cgu-traversal/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-dbde4cebc4b37d71 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-cgu-traversal/target/debug/build/justrust/dbde4cebc4b37d71/out -C incremental=/home/jeremy/.jcode/scratch/dp47/owned-cgu-trave",
+    "kind": "rustc",
+    "first_seen": 1793367042.5269222,
+    "last_seen": 1793367043.5755248,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.8828125
+  },
+  {
+    "pid": 3001116,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-dbde4cebc4b37d71 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-cgu-traversal/target/debug/build/justrust/dbde4cebc4b37d71/out -C incremental=/home/jeremy/.jcode/scratch/dp47/owned-cgu-traversal/target/debug/incrementa",
+    "kind": "rustc",
+    "first_seen": 1793367042.5269222,
+    "last_seen": 1793367043.5755248,
+    "cpu_secs": 1.26,
+    "max_rss_mb": 439.578125
+  }
+]

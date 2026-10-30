@@ -1,0 +1,42 @@
+[
+  {
+    "pid": 2997527,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793367013.931723,
+    "last_seen": 1793367014.985471,
+    "cpu_secs": 0.01,
+    "max_rss_mb": 33.34375
+  },
+  {
+    "pid": 2997537,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-43de0979d23c343f --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out -C incremental=/home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/incremental -C strip=debuginfo",
+    "kind": "rustc",
+    "first_seen": 1793367014.1425302,
+    "last_seen": 1793367014.985471,
+    "cpu_secs": 1.05,
+    "max_rss_mb": 417.51171875
+  },
+  {
+    "pid": 2997536,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-43de0979d23c343f --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out -C incremental=/home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/incremental ",
+    "kind": "rustc",
+    "first_seen": 1793367014.1425302,
+    "last_seen": 1793367014.985471,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.7578125
+  },
+  {
+    "pid": 2997914,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out/rustcvftqff/symbols.o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out/justrust-43de0979d23c343f.04ugs9yp27bnxfqc35r8zetco.10csszs.rcgu.o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out/justrust-43de0979d23c343f.0agnmxmf9r9r5hnnqdq3n8ror.10csszs.rcgu.o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out/justrust-43de0979d23c343f.0bp5455mk7tb3m2688gptayz1.10csszs.rcgu.o /",
+    "kind": "linker",
+    "first_seen": 1793367014.985471,
+    "last_seen": 1793367014.985471,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.953125
+  }
+]

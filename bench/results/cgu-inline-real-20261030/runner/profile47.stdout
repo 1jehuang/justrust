@@ -1,0 +1,257 @@
+{
+  "status": "completed",
+  "intervals": [
+    {
+      "stack": "owned-off",
+      "phase": "prepare",
+      "intervals": [
+        {
+          "label": "cgu_partitioning",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 52412749
+        },
+        {
+          "label": "cgu_partitioning_place_items",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 46173164
+        },
+        {
+          "label": "codegen_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 2182096632
+        },
+        {
+          "label": "macro_expand_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 298496966
+        },
+        {
+          "label": "partition_and_assert_distinct_symbols",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 156968561
+        }
+      ]
+    },
+    {
+      "stack": "owned-off",
+      "phase": "edit",
+      "intervals": [
+        {
+          "label": "cgu_partitioning",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 37495881
+        },
+        {
+          "label": "cgu_partitioning_place_items",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 34061566
+        },
+        {
+          "label": "codegen_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 157201322
+        },
+        {
+          "label": "macro_expand_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 269521988
+        },
+        {
+          "label": "partition_and_assert_distinct_symbols",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 51734937
+        }
+      ]
+    },
+    {
+      "stack": "owned-off",
+      "phase": "restore",
+      "intervals": [
+        {
+          "label": "cgu_partitioning",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 40006527
+        },
+        {
+          "label": "cgu_partitioning_place_items",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 36571440
+        },
+        {
+          "label": "codegen_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 168897307
+        },
+        {
+          "label": "macro_expand_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 243497515
+        },
+        {
+          "label": "partition_and_assert_distinct_symbols",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 53946331
+        }
+      ]
+    },
+    {
+      "stack": "owned-cgu-traversal",
+      "phase": "prepare",
+      "intervals": [
+        {
+          "label": "cgu_partitioning",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 59608087
+        },
+        {
+          "label": "cgu_partitioning_place_items",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 52499267
+        },
+        {
+          "label": "codegen_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 2626160951
+        },
+        {
+          "label": "jr_cgu_inline_shared_revisit",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 26
+        },
+        {
+          "label": "jr_cgu_inline_shared_traversal",
+          "thread": 3,
+          "records": 14040,
+          "union_elapsed_ns": 10194104
+        },
+        {
+          "label": "macro_expand_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 289201881
+        },
+        {
+          "label": "partition_and_assert_distinct_symbols",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 171814022
+        }
+      ]
+    },
+    {
+      "stack": "owned-cgu-traversal",
+      "phase": "edit",
+      "intervals": [
+        {
+          "label": "cgu_partitioning",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 57311642
+        },
+        {
+          "label": "cgu_partitioning_place_items",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 51518598
+        },
+        {
+          "label": "codegen_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 212754435
+        },
+        {
+          "label": "jr_cgu_inline_shared_revisit",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 26
+        },
+        {
+          "label": "jr_cgu_inline_shared_traversal",
+          "thread": 3,
+          "records": 14041,
+          "union_elapsed_ns": 10822125
+        },
+        {
+          "label": "macro_expand_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 305486114
+        },
+        {
+          "label": "partition_and_assert_distinct_symbols",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 76279915
+        }
+      ]
+    },
+    {
+      "stack": "owned-cgu-traversal",
+      "phase": "restore",
+      "intervals": [
+        {
+          "label": "cgu_partitioning",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 72478263
+        },
+        {
+          "label": "cgu_partitioning_place_items",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 65932588
+        },
+        {
+          "label": "codegen_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 262958957
+        },
+        {
+          "label": "jr_cgu_inline_shared_revisit",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 27
+        },
+        {
+          "label": "jr_cgu_inline_shared_traversal",
+          "thread": 3,
+          "records": 14040,
+          "union_elapsed_ns": 13894190
+        },
+        {
+          "label": "macro_expand_crate",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 303496917
+        },
+        {
+          "label": "partition_and_assert_distinct_symbols",
+          "thread": 3,
+          "records": 1,
+          "union_elapsed_ns": 95232799
+        }
+      ]
+    }
+  ]
+}

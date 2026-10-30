@@ -1,0 +1,902 @@
+[
+  {
+    "pid": 2994345,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.jcode/scratch/lint-profile-20261030/home/toolchains/nightly-2026-10-08/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.jcode/scratch/query-retention-bench-20261030/justrust-client\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --lib -- summary::tests:: --test-threads=1 --nocapture",
+    "kind": "cargo",
+    "first_seen": 1793366988.1605985,
+    "last_seen": 1793367004.791391,
+    "cpu_secs": 0.13,
+    "max_rss_mb": 33.8125
+  },
+  {
+    "pid": 2994364,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/proc-macro2-1.0.107/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"nightly\", \"proc-macro\", \"span-locations\")) -C metadata=0d63b9f600776e45 --out-dir /hom",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.7265625
+  },
+  {
+    "pid": 2994386,
+    "comm": "rustc",
+    "cmdline": "",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.12,
+    "max_rss_mb": 0.0
+  },
+  {
+    "pid": 2994531,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name heck --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/heck-0.5.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=cd5848a255c80db5 -C extra-filename=-7d21bf27fe3234c1 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.671875
+  },
+  {
+    "pid": 2994485,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name anstyle_parse --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anstyle-parse-1.0.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"utf8\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"core\", \"default\", \"utf8\")) -C metadata=6b9d1020612b6733 -C extra-filename=-7",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.2578125
+  },
+  {
+    "pid": 2994412,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name memchr --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.8.3/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"core\", \"default\", \"libc\", \"logging\", \"rustc-dep-of-std\", \"std\", \"use_std\")) -C metadata=c679f24a4d78eb",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.8051434,
+    "cpu_secs": 0.54,
+    "max_rss_mb": 201.03125
+  },
+  {
+    "pid": 2994561,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name toml_writer --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_writer-1.1.2+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"std\")) -C metadata=3b76c2980575ceab -C extra-f",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.05,
+    "max_rss_mb": 146.85546875
+  },
+  {
+    "pid": 2994472,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anyhow-1.0.104/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"backtrace\", \"default\", \"std\")) -C metadata=ca83ad820609d8f4 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/b",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.09,
+    "max_rss_mb": 129.3671875
+  },
+  {
+    "pid": 2994638,
+    "comm": "collect2",
+    "cmdline": "/usr/lib/gcc/x86_64-pc-linux-gnu/16/collect2 -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccuvCHNv.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -fuse-ld=lld -o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/proc-macro2/ca76886f6251cc13/out/build_script_build /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/crti.o /usr/lib/gcc/",
+    "kind": "linker",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.28125
+  },
+  {
+    "pid": 2994371,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/proc-macro2-1.0.107/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"nightly\", \"proc-macro\", \"span-locations\")) -C metadata=0d63b9f600776e45 --out-dir /home/jeremy/.jcode/sc",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.12,
+    "max_rss_mb": 130.05078125
+  },
+  {
+    "pid": 2994631,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name clap_lex --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_lex-1.1.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=e3231cc3d00e9aab -C extra-filename=-71b8e2b35415cbdc --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debu",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.546875
+  },
+  {
+    "pid": 2994616,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"serde_derive\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"derive\", \"rc\", \"serde_derive\", \"std\", ",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.53125
+  },
+  {
+    "pid": 2994633,
+    "comm": "cc",
+    "cmdline": "cc -m64 /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/proc-macro2/ca76886f6251cc13/out/rustcR7Zp4X/symbols.o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/proc-macro2/ca76886f6251cc13/out/build_script_build.build_script_build.11b09e7e9e4c9599-cgu.0.rcgu.o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/proc-macro2/ca76886f6251cc13/out/build_script_build.cylaga2lab8enet1vspmbza61.rcgu.o -Wl,--as-needed -Wl,-Bstatic /home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/lib/libstd-fdfb42d0feb061d9.rlib /hom",
+    "kind": "linker",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 2.97265625
+  },
+  {
+    "pid": 2994560,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name toml_writer --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_writer-1.1.2+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"std\")) -C metadata=3b76c2980",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.375
+  },
+  {
+    "pid": 2994535,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name heck --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/heck-0.5.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=cd5848a255c80db5 -C extra-filename=-7d21bf27fe3234c1 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/heck/7d21bf27fe323",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.05,
+    "max_rss_mb": 144.97265625
+  },
+  {
+    "pid": 2994433,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name regex_syntax --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-syntax-0.8.11/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --cfg feature=\"unicode\" --cfg feature=\"unicode-age\" --cfg feature=\"unicode-bool\" --cfg feature=\"unicode-case\" --cfg feature=\"unicode-gencat\"",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366990.518201,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.59765625
+  },
+  {
+    "pid": 2994378,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name autocfg --edition=2015 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.5.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=f9d6505fc6c42140 -C extra-filename=-dd54dd63e80dc8e7 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/autocfg/dd54",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.13,
+    "max_rss_mb": 190.20703125
+  },
+  {
+    "pid": 2994410,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name hashbrown --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashbrown-0.17.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"allocator-api2\", \"core\", \"default\", \"default-hasher\", \"equivalent\", \"inline-more\", \"nightly\", \"raw-entry\", \"rayon\", \"ru",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366989.0169399,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.66015625
+  },
+  {
+    "pid": 2994617,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"serde_derive\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"derive\", \"rc\", \"serde_derive\", \"std\", \"unstable\")) -C me",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.02,
+    "max_rss_mb": 154.57421875
+  },
+  {
+    "pid": 2994639,
+    "comm": "rust-lld",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld -flavor gnu -plugin /usr/lib/gcc/x86_64-pc-linux-gnu/16/liblto_plugin.so -plugin-opt=/usr/lib/gcc/x86_64-pc-linux-gnu/16/lto-wrapper -plugin-opt=-fresolution=/home/jeremy/.jcode/scratch/ccuvCHNv.res --build-id --eh-frame-hdr --hash-style=gnu -m elf_x86_64 -dynamic-linker /lib64/ld-linux-x86-64.so.2 -pie -o /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/proc-macro2/ca76886f6251cc13/out/build_script_build /usr/lib/gcc/x86_64-pc-linux-gnu/16/../../../../lib/Scrt1.o /usr/l",
+    "kind": "other",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 66.15625
+  },
+  {
+    "pid": 2994473,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name strsim --edition=2015 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/strsim-0.11.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=d7d585cac8626cda -C extra-filename=-5004980b6a3c2f51 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/strsim/500498",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.09,
+    "max_rss_mb": 178.796875
+  },
+  {
+    "pid": 2994442,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name regex_syntax --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-syntax-0.8.11/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --cfg feature=\"unicode\" --cfg feature=\"unicode-age\" --cfg feature=\"unicode-bool\" --cfg feature=\"unicode-case\" --cfg feature=\"unicode-gencat\" --cfg feature=\"un",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366990.518201,
+    "cpu_secs": 2.25,
+    "max_rss_mb": 332.98046875
+  },
+  {
+    "pid": 2994627,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name serde_core --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"result\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"rc\", \"result\", \"std\", \"unstable\")) -C me",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366992.0192676,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.65234375
+  },
+  {
+    "pid": 2994402,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name memchr --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.8.3/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"core\", \"default\", \"libc\", \"logging\", \"rustc-dep-of-std\", \"std\", \"use_std\")) -C metad",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.8051434,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.66796875
+  },
+  {
+    "pid": 2994635,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name clap_lex --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_lex-1.1.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=e3231cc3d00e9aab -C extra-filename=-71b8e2b35415cbdc --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/clap_lex/7",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 46.90234375
+  },
+  {
+    "pid": 2994632,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name serde_core --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_core-1.0.229/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"result\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"rc\", \"result\", \"std\", \"unstable\")) -C metadata=18d3dc880da",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366992.0192676,
+    "cpu_secs": 3.61,
+    "max_rss_mb": 309.64453125
+  },
+  {
+    "pid": 2994384,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name anstyle --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anstyle-1.0.14/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"std\")) -C metadata=9f697eb623cb3dff -C extra-filename=-19c9b841a10ed04f --out",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.71875
+  },
+  {
+    "pid": 2994377,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.190/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"align\", \"const-extern-fn\", \"default\", \"extra_traits\", \"rustc-dep-of-std\", \"rustc-std-workspace-core\", \"std\", \"u",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.40625
+  },
+  {
+    "pid": 2994490,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name anstyle_parse --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anstyle-parse-1.0.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"utf8\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"core\", \"default\", \"utf8\")) -C metadata=6b9d1020612b6733 -C extra-filename=-7bdf6edf96cb4c49 --",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.08,
+    "max_rss_mb": 154.7734375
+  },
+  {
+    "pid": 2994372,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name autocfg --edition=2015 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/autocfg-1.5.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=f9d6505fc6c42140 -C extra-filename=-dd54dd63e80dc8e7 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.25
+  },
+  {
+    "pid": 2994469,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name strsim --edition=2015 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/strsim-0.11.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=d7d585cac8626cda -C extra-filename=-5004980b6a3c2f51 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/b",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.6640625
+  },
+  {
+    "pid": 2994383,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.190/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"align\", \"const-extern-fn\", \"default\", \"extra_traits\", \"rustc-dep-of-std\", \"rustc-std-workspace-core\", \"std\", \"use_std\")) -C metad",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.13,
+    "max_rss_mb": 184.26171875
+  },
+  {
+    "pid": 2994466,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name build_script_build --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anyhow-1.0.104/build.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"backtrace\", \"default\", \"std\")) -C metadata=ca83ad820609d8f4 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366988.3719838,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.2421875
+  },
+  {
+    "pid": 2994423,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name winnow --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winnow-1.0.4/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"ascii\" --cfg feature=\"binary\" --cfg feature=\"default\" --cfg feature=\"parser\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"ascii\", \"b",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366990.3030698,
+    "cpu_secs": 2.02,
+    "max_rss_mb": 247.11328125
+  },
+  {
+    "pid": 2994413,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name winnow --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/winnow-1.0.4/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"ascii\" --cfg feature=\"binary\" --cfg feature=\"default\" --cfg feature=\"parser\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"a",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366990.3030698,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.23046875
+  },
+  {
+    "pid": 2994417,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name hashbrown --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/hashbrown-0.17.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"allocator-api2\", \"core\", \"default\", \"default-hasher\", \"equivalent\", \"inline-more\", \"nightly\", \"raw-entry\", \"rayon\", \"rustc-dep-of-std\", \"",
+    "kind": "rustc",
+    "first_seen": 1793366988.3719838,
+    "last_seen": 1793366989.0169399,
+    "cpu_secs": 0.76,
+    "max_rss_mb": 190.30078125
+  },
+  {
+    "pid": 2994719,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name anstream --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anstream-1.0.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"auto\" --cfg feature=\"default\" --cfg feature=\"wincon\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"auto\", \"default\", \"test\", \"wincon\")) -C metadata=983f2fa532ed5d7d -C extra-filena",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.15,
+    "max_rss_mb": 174.23046875
+  },
+  {
+    "pid": 2994769,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name iana_time_zone --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.65/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"fallback\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"fallback\")) -C metadata=816157adaa57d7b5 -C extra-filename=-2790e5a2efe45250 --out-dir /home/jeremy/.jcode/scra",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.12,
+    "max_rss_mb": 133.3359375
+  },
+  {
+    "pid": 2994799,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name itoa --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.18/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"no-panic\")) -C metadata=a1e455be0714f7f2 -C extra-filename=-59e9ab8bf197dec3 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/d",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.51953125
+  },
+  {
+    "pid": 2994877,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name num_traits --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"i128\", \"libm\", \"std\")) -C metadata=d5c5bfae3b6243a1 -C extra-filename=-020ff8d70197a73a --out-dir /home/jeremy/.jcode/scratch/dp47/ow",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366989.4437568,
+    "cpu_secs": 0.84,
+    "max_rss_mb": 190.16796875
+  },
+  {
+    "pid": 2994807,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name anyhow --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anyhow-1.0.104/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"backtrace\", \"default\", \"std\")) -C metadata=15da8c9716d2f922 -C extra-filename=-8469e5ac019e4430 --out-dir /",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.09,
+    "max_rss_mb": 170.90234375
+  },
+  {
+    "pid": 2994707,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name zmij --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"no-panic\")) -C metadata=0b7359ee06194352 -C extra-filename=-e36ab40638e9b8c1 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/zmij/e3",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.17,
+    "max_rss_mb": 151.59765625
+  },
+  {
+    "pid": 2994715,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name proc_macro2 --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/proc-macro2-1.0.107/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"nightly\", \"proc-macro\", \"span-locations\")) -C metadata=df0d01",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.8051434,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.25390625
+  },
+  {
+    "pid": 2994847,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name libc --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.190/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"align\", \"const-extern-fn\", \"default\", \"extra_traits\", \"rustc-dep-of-std\", \"rustc-std-workspac",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366990.0869477,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.3671875
+  },
+  {
+    "pid": 2994767,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name iana_time_zone --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/iana-time-zone-0.1.65/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"fallback\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"fallback\")) -C metadata=816157adaa57d7b5 -C extra-filename=-2790e5a2efe45250 --out-dir /home/",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.60546875
+  },
+  {
+    "pid": 2994805,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name anyhow --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anyhow-1.0.104/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"backtrace\", \"default\", \"std\")) -C metadata=15da8c9716d2f922 -C extra-filename=-8469e5ac01",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.40234375
+  },
+  {
+    "pid": 2994800,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name itoa --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/itoa-1.0.18/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"no-panic\")) -C metadata=a1e455be0714f7f2 -C extra-filename=-59e9ab8bf197dec3 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/itoa/59",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.09,
+    "max_rss_mb": 149.54296875
+  },
+  {
+    "pid": 2994703,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name zmij --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zmij-1.0.23/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"no-panic\")) -C metadata=0b7359ee06194352 -C extra-filename=-e36ab40638e9b8c1 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/d",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.609375
+  },
+  {
+    "pid": 2994875,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name num_traits --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"i128\", \"libm\", \"std\")) -C metadata=d5c5bfae3b6243a1 -C extra-filename=-020ff8d70197a73a --out-dir /home/jeremy/.jco",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366989.4437568,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.234375
+  },
+  {
+    "pid": 2994848,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name libc --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/libc-0.2.190/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"align\", \"const-extern-fn\", \"default\", \"extra_traits\", \"rustc-dep-of-std\", \"rustc-std-workspace-core\", \"std\", \"u",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366989.8716657,
+    "cpu_secs": 1.33,
+    "max_rss_mb": 235.45703125
+  },
+  {
+    "pid": 2994718,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name proc_macro2 --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/proc-macro2-1.0.107/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"nightly\", \"proc-macro\", \"span-locations\")) -C metadata=df0d0151143bb3a6 -C extr",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.8051434,
+    "cpu_secs": 0.37,
+    "max_rss_mb": 201.05859375
+  },
+  {
+    "pid": 2994717,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name anstream --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anstream-1.0.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"auto\" --cfg feature=\"default\" --cfg feature=\"wincon\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"auto\", \"default\", \"test\", \"wincon\")) -C metadata=983f2fa532ed5d",
+    "kind": "rustc",
+    "first_seen": 1793366988.592973,
+    "last_seen": 1793366988.592973,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.671875
+  },
+  {
+    "pid": 2994924,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name clap_builder --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.7/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"color\" --cfg feature=\"error-context\" --cfg feature=\"help\" --cfg feature=\"std\" --cfg feature=\"suggestions\" --cfg feature=\"usage\" --check-cfg cfg(docsrs,test) --check-cfg c",
+    "kind": "rustc",
+    "first_seen": 1793366988.8051434,
+    "last_seen": 1793366992.4436598,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.23046875
+  },
+  {
+    "pid": 2994934,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name clap_builder --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_builder-4.6.7/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"color\" --cfg feature=\"error-context\" --cfg feature=\"help\" --cfg feature=\"std\" --cfg feature=\"suggestions\" --cfg feature=\"usage\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values",
+    "kind": "rustc",
+    "first_seen": 1793366988.8051434,
+    "last_seen": 1793366992.4436598,
+    "cpu_secs": 4.3,
+    "max_rss_mb": 352.10546875
+  },
+  {
+    "pid": 2994957,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name aho_corasick --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aho-corasick-1.1.5/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"perf-literal\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"logging\", \"perf-literal\", \"std\")) -C metadata=c9eb05f9bd062b75 ",
+    "kind": "rustc",
+    "first_seen": 1793366989.0169399,
+    "last_seen": 1793366990.518201,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.52734375
+  },
+  {
+    "pid": 2994969,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name quote --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quote-1.0.47/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"proc-macro\")) -C metadata=cbfe4ad2bdf43b02 -C extra-filename=-c14f7b2574b20d5b --out-dir /ho",
+    "kind": "rustc",
+    "first_seen": 1793366989.0169399,
+    "last_seen": 1793366989.0169399,
+    "cpu_secs": 0.12,
+    "max_rss_mb": 165.4375
+  },
+  {
+    "pid": 2994968,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name quote --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quote-1.0.47/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"proc-macro\")) -C metadata=cbfe4ad2bdf43b02 -C extra-filename=-c14f7b2574b2",
+    "kind": "rustc",
+    "first_seen": 1793366989.0169399,
+    "last_seen": 1793366989.0169399,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.66796875
+  },
+  {
+    "pid": 2994958,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name aho_corasick --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/aho-corasick-1.1.5/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"perf-literal\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"logging\", \"perf-literal\", \"std\")) -C metadata=c9eb05f9bd062b75 -C extra-filename=",
+    "kind": "rustc",
+    "first_seen": 1793366989.0169399,
+    "last_seen": 1793366990.518201,
+    "cpu_secs": 1.88,
+    "max_rss_mb": 298.3359375
+  },
+  {
+    "pid": 2995020,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name syn --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/syn-3.0.6/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"clone-impls\" --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"full\" --cfg feature=\"parsing\" --cfg feature=\"printing\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feat",
+    "kind": "rustc",
+    "first_seen": 1793366989.229985,
+    "last_seen": 1793366993.2942312,
+    "cpu_secs": 4.87,
+    "max_rss_mb": 359.88671875
+  },
+  {
+    "pid": 2995010,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name indexmap --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/indexmap-2.14.2/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"arbitrary\", \"borsh\", \"default\", \"quickcheck\", \"rayon\", \"serde\", \"std\", \"sval\", \"test_d",
+    "kind": "rustc",
+    "first_seen": 1793366989.229985,
+    "last_seen": 1793366990.3030698,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.22265625
+  },
+  {
+    "pid": 2995011,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name indexmap --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/indexmap-2.14.2/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"arbitrary\", \"borsh\", \"default\", \"quickcheck\", \"rayon\", \"serde\", \"std\", \"sval\", \"test_debug\")) -C metadat",
+    "kind": "rustc",
+    "first_seen": 1793366989.229985,
+    "last_seen": 1793366990.3030698,
+    "cpu_secs": 1.15,
+    "max_rss_mb": 210.6953125
+  },
+  {
+    "pid": 2995019,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name syn --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/syn-3.0.6/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"clone-impls\" --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"full\" --cfg feature=\"parsing\" --cfg feature=\"printing\" --cfg feature=\"proc-macro\" --check-cfg cfg(docsrs,test) --",
+    "kind": "rustc",
+    "first_seen": 1793366989.229985,
+    "last_seen": 1793366993.2942312,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.4140625
+  },
+  {
+    "pid": 2995029,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name chrono --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/chrono-0.4.45/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"clock\" --cfg feature=\"iana-time-zone\" --cfg feature=\"now\" --cfg feature=\"std\" --cfg feature=\"winapi\" --cfg feature=\"windows-link\" --check-cfg cfg(docsrs,test) --check-cfg cfg(fe",
+    "kind": "rustc",
+    "first_seen": 1793366989.657791,
+    "last_seen": 1793366991.3798661,
+    "cpu_secs": 1.8,
+    "max_rss_mb": 259.73828125
+  },
+  {
+    "pid": 2995028,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name chrono --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/chrono-0.4.45/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"clock\" --cfg feature=\"iana-time-zone\" --cfg feature=\"now\" --cfg feature=\"std\" --cfg feature=\"winapi\" --cfg feature=\"windows-link\" --check-cfg cfg(docsrs,test) ",
+    "kind": "rustc",
+    "first_seen": 1793366989.657791,
+    "last_seen": 1793366991.3798661,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.5859375
+  },
+  {
+    "pid": 2995135,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name dirs_sys --edition=2015 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dirs-sys-0.5.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=1d8364430cee8721 -C extra-filename=-35afc33b65eb01e8 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/dirs-sys/3",
+    "kind": "rustc",
+    "first_seen": 1793366990.0869477,
+    "last_seen": 1793366990.0869477,
+    "cpu_secs": 0.01,
+    "max_rss_mb": 99.453125
+  },
+  {
+    "pid": 2995133,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name dirs_sys --edition=2015 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/dirs-sys-0.5.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=1d8364430cee8721 -C extra-filename=-35afc33b65eb01e8 --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debu",
+    "kind": "rustc",
+    "first_seen": 1793366990.0869477,
+    "last_seen": 1793366990.0869477,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.44140625
+  },
+  {
+    "pid": 2995181,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name toml_parser --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_parser-1.1.3+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"debug\", \"default\", \"simd\", \"std\", \"unsafe\")) -C metadata=",
+    "kind": "rustc",
+    "first_seen": 1793366990.518201,
+    "last_seen": 1793366990.9509547,
+    "cpu_secs": 0.54,
+    "max_rss_mb": 188.03125
+  },
+  {
+    "pid": 2995180,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name toml_parser --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_parser-1.1.3+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"debug\", \"default\", \"simd\", \"std\", \"unsa",
+    "kind": "rustc",
+    "first_seen": 1793366990.518201,
+    "last_seen": 1793366990.9509547,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.65625
+  },
+  {
+    "pid": 2995210,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name regex_automata --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"dfa-onepass\" --cfg feature=\"hybrid\" --cfg feature=\"meta\" --cfg feature=\"nfa-backtrack\" --cfg feature=\"nfa-pikevm\" --cfg feature=\"nfa-thompson\" --cfg feature=\"per",
+    "kind": "rustc",
+    "first_seen": 1793366990.7335405,
+    "last_seen": 1793366993.932948,
+    "cpu_secs": 4.01,
+    "max_rss_mb": 354.40625
+  },
+  {
+    "pid": 2995209,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name regex_automata --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-automata-0.4.18/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"dfa-onepass\" --cfg feature=\"hybrid\" --cfg feature=\"meta\" --cfg feature=\"nfa-backtrack\" --cfg feature=\"nfa-pikevm\" --cfg feature=\"nfa-thompson\" ",
+    "kind": "rustc",
+    "first_seen": 1793366990.7335405,
+    "last_seen": 1793366993.932948,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.65234375
+  },
+  {
+    "pid": 2995315,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name toml_datetime --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_datetime-1.1.1+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"default\" --cfg feature=\"serde\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"se",
+    "kind": "rustc",
+    "first_seen": 1793366992.2312694,
+    "last_seen": 1793366992.2312694,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.2734375
+  },
+  {
+    "pid": 2995320,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name toml_datetime --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_datetime-1.1.1+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"alloc\" --cfg feature=\"default\" --cfg feature=\"serde\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"serde\", \"std\")) -C m",
+    "kind": "rustc",
+    "first_seen": 1793366992.2312694,
+    "last_seen": 1793366992.2312694,
+    "cpu_secs": 0.12,
+    "max_rss_mb": 177.73046875
+  },
+  {
+    "pid": 2995314,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name serde_json --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"arbitrary_precision\", \"default\", \"float_roundtrip\", \"indexmap\", \"preserv",
+    "kind": "rustc",
+    "first_seen": 1793366992.2312694,
+    "last_seen": 1793366993.2942312,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.37109375
+  },
+  {
+    "pid": 2995317,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name serde_json --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_json-1.0.151/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"arbitrary_precision\", \"default\", \"float_roundtrip\", \"indexmap\", \"preserve_order\", \"raw_val",
+    "kind": "rustc",
+    "first_seen": 1793366992.2312694,
+    "last_seen": 1793366993.2942312,
+    "cpu_secs": 1.27,
+    "max_rss_mb": 263.12109375
+  },
+  {
+    "pid": 2995345,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name toml_edit --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_edit-0.25.15+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"display\" --cfg feature=\"parse\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"debug\", \"default\", \"display\", \"parse\", \"serde\"",
+    "kind": "rustc",
+    "first_seen": 1793366992.4436598,
+    "last_seen": 1793366993.0836277,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.53125
+  },
+  {
+    "pid": 2995348,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name toml_edit --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml_edit-0.25.15+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"display\" --cfg feature=\"parse\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"debug\", \"default\", \"display\", \"parse\", \"serde\", \"unbounded\")) -C",
+    "kind": "rustc",
+    "first_seen": 1793366992.4436598,
+    "last_seen": 1793366993.0836277,
+    "cpu_secs": 0.77,
+    "max_rss_mb": 229.66796875
+  },
+  {
+    "pid": 2995350,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name toml --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml-1.1.6+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"display\" --cfg feature=\"parse\" --cfg feature=\"serde\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"debug\", \"default\", \"display\", \"fas",
+    "kind": "rustc",
+    "first_seen": 1793366992.4436598,
+    "last_seen": 1793366993.7199864,
+    "cpu_secs": 1.46,
+    "max_rss_mb": 264.19921875
+  },
+  {
+    "pid": 2995346,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name toml --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/toml-1.1.6+spec-1.1.0/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"display\" --cfg feature=\"parse\" --cfg feature=\"serde\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"debug\", \"default",
+    "kind": "rustc",
+    "first_seen": 1793366992.4436598,
+    "last_seen": 1793366993.7199864,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.25390625
+  },
+  {
+    "pid": 2995467,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name clap_derive --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_derive-4.6.7/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type proc-macro --emit=dep-info,link -C prefer-dynamic -C embed-bitcode=no --cfg feature=\"default\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"debug\", \"default\", \"deprecated\", \"raw-deprecated\", \"unstable-markdown\", \"unstable-v5\")) -C metadata=37716e852abbd09a -C extr",
+    "kind": "rustc",
+    "first_seen": 1793366993.506978,
+    "last_seen": 1793366994.357975,
+    "cpu_secs": 1.0,
+    "max_rss_mb": 251.1953125
+  },
+  {
+    "pid": 2995464,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name clap_derive --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap_derive-4.6.7/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type proc-macro --emit=dep-info,link -C prefer-dynamic -C embed-bitcode=no --cfg feature=\"default\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"debug\", \"default\", \"deprecated\", \"raw-deprecated\", \"unstable-markdown\", \"unstable-v5\")) -C metadata=37716e",
+    "kind": "rustc",
+    "first_seen": 1793366993.506978,
+    "last_seen": 1793366994.357975,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.2578125
+  },
+  {
+    "pid": 2995465,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name serde_derive --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_derive-1.0.229/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type proc-macro --emit=dep-info,link -C prefer-dynamic -C embed-bitcode=no --cfg feature=\"default\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"deserialize_in_place\")) -C metadata=d2d69cc6f3058d07 -C extra-filename=-bceda5fdb3368aff --out-dir /home/jere",
+    "kind": "rustc",
+    "first_seen": 1793366993.506978,
+    "last_seen": 1793366995.4099708,
+    "cpu_secs": 2.13,
+    "max_rss_mb": 330.68359375
+  },
+  {
+    "pid": 2995463,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name serde_derive --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde_derive-1.0.229/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type proc-macro --emit=dep-info,link -C prefer-dynamic -C embed-bitcode=no --cfg feature=\"default\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"default\", \"deserialize_in_place\")) -C metadata=d2d69cc6f3058d07 -C extra-filename=-bceda5fdb3368aff --",
+    "kind": "rustc",
+    "first_seen": 1793366993.506978,
+    "last_seen": 1793366995.4099708,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.2578125
+  },
+  {
+    "pid": 2995498,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name regex --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-1.13.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"perf\" --cfg feature=\"perf-backtrack\" --cfg feature=\"perf-cache\" --cfg feature=\"perf-dfa\" --cfg feature=\"perf-inline\" --cfg feature=\"perf-literal\" --cfg feature=\"perf-onepass\" --",
+    "kind": "rustc",
+    "first_seen": 1793366993.7199864,
+    "last_seen": 1793366994.146045,
+    "cpu_secs": 0.47,
+    "max_rss_mb": 186.85546875
+  },
+  {
+    "pid": 2995496,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name regex --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/regex-1.13.1/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"perf\" --cfg feature=\"perf-backtrack\" --cfg feature=\"perf-cache\" --cfg feature=\"perf-dfa\" --cfg feature=\"perf-inline\" --cfg feature=\"perf-literal\" --cfg feature",
+    "kind": "rustc",
+    "first_seen": 1793366993.7199864,
+    "last_seen": 1793366994.146045,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.6953125
+  },
+  {
+    "pid": 2995613,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name clap --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.6.7/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"color\" --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"error-context\" --cfg feature=\"help\" --cfg feature=\"std\" --cfg feature=\"suggestions\" --cfg feature=\"usage\" --check-cfg cfg(docsrs,test) ",
+    "kind": "rustc",
+    "first_seen": 1793366994.569001,
+    "last_seen": 1793366994.569001,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 65.6015625
+  },
+  {
+    "pid": 2995612,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name clap --edition=2024 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/clap-4.6.7/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"color\" --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"error-context\" --cfg feature=\"help\" --cfg feature=\"std\" --cfg feature=\"suggestions\" --cfg feature=\"usage\" --check-cfg",
+    "kind": "rustc",
+    "first_seen": 1793366994.569001,
+    "last_seen": 1793366994.569001,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.48046875
+  },
+  {
+    "pid": 2995827,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name serde --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"serde_derive\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"derive\", \"rc\", \"serde_derive\", \"std\",",
+    "kind": "rustc",
+    "first_seen": 1793366995.6200607,
+    "last_seen": 1793366996.2494023,
+    "cpu_secs": 0.62,
+    "max_rss_mb": 206.37890625
+  },
+  {
+    "pid": 2995826,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name serde --edition=2021 /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.229/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C embed-bitcode=no --cfg feature=\"default\" --cfg feature=\"derive\" --cfg feature=\"serde_derive\" --cfg feature=\"std\" --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values(\"alloc\", \"default\", \"derive\", \"rc\", \"ser",
+    "kind": "rustc",
+    "first_seen": 1793366995.6200607,
+    "last_seen": 1793366996.2494023,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.453125
+  },
+  {
+    "pid": 2995846,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/cgu-inline-cache-20261030/sysroot/bin/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-43de0979d23c343f --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out -C incremental=/home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/incremental -C strip=debuginfo",
+    "kind": "rustc",
+    "first_seen": 1793366996.4583178,
+    "last_seen": 1793367004.791391,
+    "cpu_secs": 10.09,
+    "max_rss_mb": 656.2734375
+  },
+  {
+    "pid": 2995845,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/dp47/owned-off/home/.justrust/bin/shim/2b20db36a10e86a0/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg cfg(docsrs,test) --check-cfg cfg(feature, values()) -C metadata=ca7c44864225c396 -C extra-filename=-43de0979d23c343f --out-dir /home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/build/justrust/43de0979d23c343f/out -C incremental=/home/jeremy/.jcode/scratch/dp47/owned-off/target/debug/incremental ",
+    "kind": "rustc",
+    "first_seen": 1793366996.4583178,
+    "last_seen": 1793367004.791391,
+    "cpu_secs": 0.0,
+    "max_rss_mb": 4.73046875
+  }
+]

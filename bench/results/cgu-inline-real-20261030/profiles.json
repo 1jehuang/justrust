@@ -1,0 +1,50 @@
+[
+  {
+    "key": "owned-off-prepare",
+    "path": "profiles/owned-off-prepare.mm_profdata.gz",
+    "raw_sha256": "dc099882a8dee3b8c03a08d69e37a204bf56660373b7f689274258ad43f699fa",
+    "raw_bytes": 44418862,
+    "gzip_sha256": "a887ab37c24d99e4acd157d5c5afb0ac3530cb174a6064bcb1ec787f10c23fc9",
+    "gzip_bytes": 9840367
+  },
+  {
+    "key": "owned-off-edit",
+    "path": "profiles/owned-off-edit.mm_profdata.gz",
+    "raw_sha256": "5fc5ac1a1b42d21ff6667bebaf5ffd510cc317812c39c291484e24736bb401d9",
+    "raw_bytes": 34042776,
+    "gzip_sha256": "b0a86bd063454ca033a0298044a36d1d34f4ff49aed90c3282929b6090b70fa0",
+    "gzip_bytes": 6212495
+  },
+  {
+    "key": "owned-off-restore",
+    "path": "profiles/owned-off-restore.mm_profdata.gz",
+    "raw_sha256": "f05c834f997f32bc5aecc8f72d58132cdc57178ae77c66f457557fd5a6fed79e",
+    "raw_bytes": 34026160,
+    "gzip_sha256": "5a64d6d96646210a9e9031eac2833640d90847c35c54ad4806c213b992c4f45d",
+    "gzip_bytes": 6193449
+  },
+  {
+    "key": "owned-cgu-traversal-prepare",
+    "path": "profiles/owned-cgu-traversal-prepare.mm_profdata.gz",
+    "raw_sha256": "fae3fc8e2ea0408b56e239cf6eaf443d0f47212717a1205b1851a2db22d5c15d",
+    "raw_bytes": 44868826,
+    "gzip_sha256": "72f3ad749f320b71c0c023f625ae5743b692ab5901c1d228c55d1deb928d1c4b",
+    "gzip_bytes": 10042927
+  },
+  {
+    "key": "owned-cgu-traversal-edit",
+    "path": "profiles/owned-cgu-traversal-edit.mm_profdata.gz",
+    "raw_sha256": "784fa5ed6f844d4271dd6dabdfe75ba1cc10c2d6c5dba7b257597cee8e5e6315",
+    "raw_bytes": 34492772,
+    "gzip_sha256": "e8a46dfbacdaa7caeaeb46748eafc00ae7e993aeb69e39709adca38d4627d944",
+    "gzip_bytes": 6413488
+  },
+  {
+    "key": "owned-cgu-traversal-restore",
+    "path": "profiles/owned-cgu-traversal-restore.mm_profdata.gz",
+    "raw_sha256": "e461efc1031077cbee0dcd112afbfc1dbff0dcd2b4a5ad93c419cadc010b45fd",
+    "raw_bytes": 34476124,
+    "gzip_sha256": "87c06f29cf1fe902417a124f4ebb3aee6ad8325877eb011e2e080f0c4f9a8cbf",
+    "gzip_bytes": 6448650
+  }
+]

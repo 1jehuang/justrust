@@ -1,0 +1,33 @@
+test_baseline (__main__.EvidenceMutations.test_baseline) ... ok
+test_cache_enabled (__main__.EvidenceMutations.test_cache_enabled) ... ok
+test_disabled_flag_changed (__main__.EvidenceMutations.test_disabled_flag_changed) ... ok
+test_driver_drift (__main__.EvidenceMutations.test_driver_drift) ... ok
+test_duplicate_revisit (__main__.EvidenceMutations.test_duplicate_revisit) ... ok
+test_edit_bytes_corrupted (__main__.EvidenceMutations.test_edit_bytes_corrupted) ... ok
+test_export_duplicate (__main__.EvidenceMutations.test_export_duplicate) ... ok
+test_export_missing (__main__.EvidenceMutations.test_export_missing) ... ok
+test_failed_test_hidden_in_parsed_summary (__main__.EvidenceMutations.test_failed_test_hidden_in_parsed_summary) ... ok
+test_forged_driver_both_sides (__main__.EvidenceMutations.test_forged_driver_both_sides) ... ok
+test_gzip_corruption (__main__.EvidenceMutations.test_gzip_corruption) ... ok
+test_interval_union_counts_overlap_once (__main__.EvidenceMutations.test_interval_union_counts_overlap_once) ... ok
+test_inventory_hash_corruption (__main__.EvidenceMutations.test_inventory_hash_corruption) ... ok
+test_missing_revisit (__main__.EvidenceMutations.test_missing_revisit) ... ok
+test_missing_row (__main__.EvidenceMutations.test_missing_row) ... ok
+test_original_source_corrupted (__main__.EvidenceMutations.test_original_source_corrupted) ... ok
+test_profile_command_flag_missing (__main__.EvidenceMutations.test_profile_command_flag_missing) ... ok
+test_profile_header_corruption (__main__.EvidenceMutations.test_profile_header_corruption) ... ok
+test_reordered_rows (__main__.EvidenceMutations.test_reordered_rows) ... ok
+test_revisit_on_wrong_thread (__main__.EvidenceMutations.test_revisit_on_wrong_thread) ... ok
+test_revisit_outside_place_same_elapsed (__main__.EvidenceMutations.test_revisit_outside_place_same_elapsed) ... ok
+test_runner_failure (__main__.EvidenceMutations.test_runner_failure) ... ok
+test_runtime_hash_mismatch (__main__.EvidenceMutations.test_runtime_hash_mismatch) ... ok
+test_runtime_marker_removed_with_consistent_receipt (__main__.EvidenceMutations.test_runtime_marker_removed_with_consistent_receipt) ... ok
+test_source_not_restored (__main__.EvidenceMutations.test_source_not_restored) ... ok
+test_unresolved_labels_cannot_prove_zero (__main__.EvidenceMutations.test_unresolved_labels_cannot_prove_zero) ... ok
+test_wrong_edit_source_hash (__main__.EvidenceMutations.test_wrong_edit_source_hash) ... ok
+test_wrong_traversal_count (__main__.EvidenceMutations.test_wrong_traversal_count) ... ok
+
+----------------------------------------------------------------------
+Ran 28 tests in 0.681s
+
+OK
