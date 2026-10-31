@@ -1,6 +1,27 @@
 use super::stock_rustc;
 use super::*;
 
+#[test]
+fn closed_opaque_public_projection_metadata_matches_stock() {
+    native_matches_stock_with_dispatch(
+        r#"
+        trait Has { type Out; }
+        struct S; struct R;
+        impl Has for S { type Out = i32; }
+        impl Has for R { type Out = bool; }
+        trait Inspect<X> { fn value(&self) -> i32; }
+        struct V;
+        impl<X> Inspect<X> for V { fn value(&self) -> i32 { 42 } }
+        fn make<T: Has>() -> impl Inspect<T::Out> { V }
+        fn main() {
+            assert!(make::<S>().value() == 42);
+            assert!(make::<R>().value() == 42);
+        }
+        "#,
+        true,
+    );
+}
+
 fn source_check(source: &str, workers: usize) -> Result<(), String> {
     let snapshot = Arc::new(Snapshot {
         input: Input::Text(source.into()),
@@ -59,6 +80,77 @@ fn opaque_source_check_validates_unused_associated_constants_without_physical_de
                 "opaque source admission omitted unused associated constant: {invalid}"
             );
         }
+    }
+}
+
+#[test]
+fn opaque_mixed_closed_projection_and_rigid_capture_check_characterization() {
+    use std::process::Command;
+    let source = r#"
+        trait Has { type Out; }
+        struct S;
+        impl Has for S { type Out = i32; }
+        fn make<A: Has, B: Copy>(b: B) -> impl Fn(A::Out) -> A::Out {
+            move |x: A::Out| { let _captured = b; x }
+        }
+        fn forward<B: Copy>(b: B) -> impl Fn(i32) -> i32 {
+            make::<S, B>(b)
+        }
+        fn main() {}
+    "#;
+    let directory = std::env::temp_dir().join(format!(
+        "opaque-mixed-capture-check-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let input = directory.join("main.rs");
+    std::fs::write(&input, source).unwrap();
+    let compiler = stock_rustc::stock_rustc();
+    let version = Command::new(&compiler)
+        .env_remove("RUSTC_BOOTSTRAP")
+        .arg("-vV")
+        .output()
+        .unwrap();
+    assert!(version.status.success());
+    eprintln!(
+        "mixed opaque stock oracle {:?}: {}",
+        compiler,
+        String::from_utf8_lossy(&version.stdout)
+    );
+    let stock = Command::new(&compiler)
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args([
+            "--edition=2024",
+            "--crate-name=opaque_mixed_capture",
+            "--emit=metadata",
+        ])
+        .arg(&input)
+        .arg("-o")
+        .arg(directory.join("stock.rmeta"))
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "stock rejected authentic mixed capture: {}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    let mut results = Vec::new();
+    for workers in [1, 8] {
+        let result = source_check(source, workers);
+        eprintln!("mixed opaque native CHECK workers={workers}: {result:?}");
+        results.push(result);
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+    assert_eq!(results[0], results[1], "worker-dependent CHECK diagnostic");
+    if let Err(diagnostic) = &results[0] {
+        assert!(
+            diagnostic.contains("unsupported:"),
+            "valid mixed capture must not be rejected as forged metadata: {diagnostic}"
+        );
     }
 }
 

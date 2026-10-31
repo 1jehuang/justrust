@@ -114,6 +114,70 @@ impl DeclRegistry {
         }
         Ok(owner)
     }
+
+    pub(in crate::compiler::frontend) fn retained_stored_closure_projection(
+        &self,
+        owner: ir::DeclId,
+        body: &Block,
+        projection: &SourceProjection,
+        budget: &ir::PlanBudget,
+        depth: usize,
+    ) -> Result<bool, String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        let names = self.names.as_ref();
+        let mut found = false;
+        let mut inspect = |node: &DepthNode<'_>, node_depth: usize| -> Result<(), String> {
+            budget.check_depth(depth.saturating_add(node_depth))?;
+            budget.charge_work(1)?;
+            let DepthNode::Expr(Expr::Var(path)) = node else {
+                return Ok(());
+            };
+            let key = name_scope::path_key(names, path, Namespace::Type)?;
+            let Some(source) = self.program.closure_sources.get(&key) else {
+                return Ok(());
+            };
+            let Some(syntax) = &source.stored else {
+                return Ok(());
+            };
+            // Pointer-original source, exact canonical owner and the authored
+            // constructor occurrence must all replay before inspecting syntax.
+            if self.closure_source_owner(source)? != owner {
+                return Err("stored projection source changed canonical closure owner".into());
+            }
+            for (_, ty) in &syntax.params {
+                found |= retained_type_projection(names, ty, projection, budget)?;
+            }
+            found |= retained_type_projection(names, &syntax.result, projection, budget)?;
+            found |= retained_node_projection(
+                names,
+                DepthNode::Block(&syntax.body),
+                projection,
+                budget,
+            )?;
+            let callable_key = name_scope::path_key(names, &source.name, Namespace::Value)?;
+            let callable = self
+                .functions
+                .get(&callable_key)
+                .copied()
+                .ok_or("stored projection source has no callable declaration")?;
+            found |= self.retained_stored_closure_projection(
+                callable,
+                &syntax.body,
+                projection,
+                budget,
+                depth + 1,
+            )?;
+            Ok(())
+        };
+        walk_depth_inspecting(
+            DepthNode::Block(body),
+            None,
+            Some(names),
+            Some(&mut inspect),
+        )?;
+        Ok(found)
+    }
 }
 
 #[cfg(test)]

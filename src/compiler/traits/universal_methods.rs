@@ -158,6 +158,44 @@ impl ValidatedTraitWorld {
             Ty::Closure(closure) => Ty::Closure(Arc::new(closure.try_map(|child| {
                 self.map_universal_projection_type(child, env, depth + 1, reduce)
             })?)),
+            Ty::Opaque(opaque) => {
+                retain::<ir::OpaqueTy>(&self.budget, 1)?;
+                retain::<Ty>(&self.budget, opaque.owner_args().len())?;
+                retain::<ir::OpaqueBound>(&self.budget, opaque.bounds().len())?;
+                for bound in opaque.bounds() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
+                    retain::<ir::OpaqueBoundArg>(&self.budget, bound.args().len())?;
+                    retain::<(DeclId, Ty)>(&self.budget, bound.equalities().len())?;
+                }
+                let mapped = opaque.try_map(|child| {
+                    // Declaration correspondence below can replay closed
+                    // assignments independently of caller assumptions. An open
+                    // family remains its full source equation until a genuine
+                    // conditional source certificate is available.
+                    if self.raw_associated_ty_is_closed(child, depth + 1)? {
+                        self.map_universal_projection_type(child, env, depth + 1, reduce)
+                    } else {
+                        Ok(child.clone())
+                    }
+                })?;
+                self.validate_opaque_metadata(&mapped, env)?;
+                Ty::Opaque(Arc::new(mapped))
+            }
+            Ty::FnItem(target) => {
+                retain::<CallTarget>(&self.budget, 1)?;
+                let mut actuals = Vec::new();
+                for actual in target.type_args.iter() {
+                    push(
+                        &self.budget,
+                        &mut actuals,
+                        self.map_universal_projection_type(actual, env, depth + 1, reduce)?,
+                    )?;
+                }
+                Ty::FnItem(Arc::new(CallTarget {
+                    declaration: target.declaration,
+                    type_args: actuals.into(),
+                }))
+            }
             Ty::Dyn(object) => {
                 let mut args = Vec::new();
                 for argument in object.args.iter() {
@@ -927,6 +965,160 @@ mod tests {
             .0
             .signature
             .result
+    }
+
+    #[test]
+    fn closed_substitution_normalizes_full_opaque_descriptor_without_erasing_identity() {
+        let program = frontend::parse("trait Has{type Out;}struct S;struct R;impl Has for S{type Out=i32;}impl Has for R{type Out=bool;}trait Inspect<X,Y>{type First;type Second;}struct V;impl<X,Y> Inspect<X,Y> for V{type First=X;type Second=Y;}fn make<A:Has,B:Has>()->impl Inspect<A::Out,B::Out,First=A::Out,Second=B::Out>{V}fn witness(a:S,b:R){}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let mut context = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = context.trait_world().unwrap();
+        let owner = context.function_decl(0).unwrap();
+        let witness = context.function_decl(1).unwrap();
+        let template = context.callable_facts(owner).unwrap();
+        let original = context.sema_schema(owner).unwrap().signature.result.clone();
+        let actuals = context
+            .sema_schema(witness)
+            .unwrap()
+            .signature
+            .params
+            .clone();
+        assert!(ir::contains_associated_types(&original, &budget).unwrap());
+        let closed = context
+            .instance_facts(&CallTarget {
+                declaration: witness,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let normal = ir::substitute_ty(
+            &original,
+            template.env(),
+            &actuals,
+            ir::FactsCtx::from_validated(&closed),
+            &mut context,
+            &budget,
+        )
+        .unwrap();
+        assert!(!ir::contains_associated_types(&normal, &budget).unwrap());
+        let (Ty::Opaque(original), Ty::Opaque(normal)) = (&original, &normal) else {
+            panic!("lost opaque descriptor");
+        };
+        world
+            .validate_opaque_metadata(normal, closed.env())
+            .unwrap();
+        let forged = normal
+            .try_map(|ty| {
+                Ok::<_, FactsError>(if *ty == Ty::Int(ir::IntTy::I32) {
+                    Ty::Bool
+                } else {
+                    ty.clone()
+                })
+            })
+            .unwrap();
+        assert!(
+            world
+                .validate_opaque_metadata(&forged, closed.env())
+                .is_err()
+        );
+        let unproved = original
+            .try_map(|ty| {
+                Ok::<_, FactsError>(if matches!(ty, Ty::AssociatedType(_)) {
+                    Ty::Bool
+                } else {
+                    ty.clone()
+                })
+            })
+            .unwrap();
+        assert!(
+            world
+                .validate_opaque_metadata(&unproved, template.env())
+                .is_err()
+        );
+        assert_eq!(normal.owner(), original.owner());
+        assert_eq!(normal.site(), original.site());
+        assert_eq!(normal.captured_regions(), original.captured_regions());
+        assert_eq!(normal.owner_args(), actuals.as_slice());
+        assert_eq!(normal.bounds().len(), original.bounds().len());
+        assert_eq!(
+            normal.bounds()[0].declaration(),
+            original.bounds()[0].declaration()
+        );
+        assert_eq!(
+            normal.bounds()[0].args(),
+            &[
+                ir::OpaqueBoundArg::Type(Ty::Int(ir::IntTy::I32)),
+                ir::OpaqueBoundArg::Type(Ty::Bool)
+            ]
+        );
+        let equalities = normal.bounds()[0].equalities();
+        assert_eq!(equalities.len(), 2);
+        for ((item, _), (original_item, _)) in
+            equalities.iter().zip(original.bounds()[0].equalities())
+        {
+            assert_eq!(item, original_item);
+            let source = world
+                .headers
+                .associated_types
+                .iter()
+                .find(|header| header.declaration == *item)
+                .unwrap();
+            assert_eq!(source.trait_decl, normal.bounds()[0].declaration());
+        }
+        assert_eq!(equalities[0].1, Ty::Int(ir::IntTy::I32));
+        assert_eq!(equalities[1].1, Ty::Bool);
+    }
+
+    #[test]
+    fn closed_callable_actual_projections_normalize_and_reject_foreign_members() {
+        let program = frontend::parse("trait Has{type Out;}struct S;struct R;impl Has for S{type Out=i32;}impl Has for R{type Out=bool;}fn generic<A,B>(){}fn witness(a:S,b:R){}fn owner<T:Has>(x:T::Out){}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let context = PlanCtx::from_program(&program, &budget).unwrap();
+        let generic = context.function_decl(0).unwrap();
+        let witness = context.function_decl(1).unwrap();
+        let owner = context.function_decl(2).unwrap();
+        let Ty::AssociatedType(projection) =
+            &context.sema_schema(owner).unwrap().signature.params[0]
+        else {
+            panic!("missing original projection");
+        };
+        let actuals = &context.sema_schema(witness).unwrap().signature.params;
+        let projected = |actual: &Ty| {
+            let mut value = projection.as_ref().clone();
+            value.trait_ref.self_ty = actual.clone();
+            Ty::AssociatedType(Arc::new(value))
+        };
+        let raw = Ty::FnItem(Arc::new(CallTarget {
+            declaration: generic,
+            type_args: actuals.iter().map(projected).collect::<Vec<_>>().into(),
+        }));
+        let facts = context
+            .instance_facts(&CallTarget {
+                declaration: witness,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let normal = facts
+            .normalize_substituted_projection_type(&raw, &budget)
+            .unwrap();
+        assert_eq!(
+            normal,
+            Ty::FnItem(Arc::new(CallTarget {
+                declaration: generic,
+                type_args: Arc::from([Ty::Int(ir::IntTy::I32), Ty::Bool])
+            }))
+        );
+        let mut wrong = projection.as_ref().clone();
+        wrong.trait_ref.self_ty = actuals[0].clone();
+        wrong.item = generic;
+        let forged = Ty::FnItem(Arc::new(CallTarget {
+            declaration: generic,
+            type_args: Arc::from([Ty::AssociatedType(Arc::new(wrong)), Ty::Bool]),
+        }));
+        assert!(
+            facts
+                .normalize_substituted_projection_type(&forged, &budget)
+                .is_err()
+        );
     }
 
     #[test]

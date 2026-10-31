@@ -2166,6 +2166,26 @@ impl Function {
         let got = self.operand_ty_with_facts(value, facts, scratch)?;
         if coerces(&got, want) {
             Ok(())
+        } else if let Some(authority) = facts.validated() {
+            // Graph-produced signatures may reconstruct nominal applications
+            // independently of source locals. Authenticate both types before
+            // comparing declaration identities and complete ordered metadata.
+            let budget = authority.budget();
+            authority
+                .validate_ty_metadata_with_budget(&got, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            authority
+                .validate_ty_metadata_with_budget(want, budget)
+                .map_err(|error| error.into_legacy_diagnostic(budget))?;
+            if authority
+                .world()
+                .types_equal(std::slice::from_ref(&got), std::slice::from_ref(want))
+                .map_err(|error| error.into_legacy_diagnostic(budget))?
+            {
+                Ok(())
+            } else {
+                Err("CFG operand type mismatch".into())
+            }
         } else {
             Err("CFG operand type mismatch".into())
         }

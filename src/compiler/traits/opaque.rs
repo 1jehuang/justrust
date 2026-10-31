@@ -3,6 +3,70 @@
 use super::*;
 
 impl ValidatedTraitWorld {
+    /// A normalized opaque descriptor remains tied to its original source
+    /// equation. This bounded replay uses no caller assumptions: only exact
+    /// source substitution followed by independently proven closed reductions
+    /// may differ from structural correspondence. In particular generic
+    /// membership is never substituted for a projection assignment.
+    fn validate_opaque_payload_substitution(
+        &self,
+        raw: &Ty,
+        actual: &Ty,
+        source_env: &GenericEnv,
+        arguments: &[Ty],
+        ambient_env: &GenericEnv,
+    ) -> Result<()> {
+        let structural = self.validate_rhs_substitution(raw, actual, source_env, arguments, 0);
+        let error = match structural {
+            Ok(()) => return Ok(()),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata => error,
+            Err(error) => return Err(error),
+        };
+        if !self.type_contains_projection(raw, 0)? {
+            return Err(error);
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        retain::<GenericEnv>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: Arc::new(source_env.clone()),
+            signature: Signature {
+                params: Vec::new(),
+                result: raw.clone(),
+                ref_contract: Arc::new(ir::RefContract::default()),
+            },
+            predicates: Arc::from([]),
+        };
+        let substituted =
+            self.schema
+                .instantiate_schema(&schema, arguments, ambient_env, &self.budget)?;
+        self.validate_rhs_substitution(
+            raw,
+            &substituted.signature.result,
+            source_env,
+            arguments,
+            0,
+        )?;
+        let proof = ProofContext {
+            original: None,
+            predicates: &self.empty,
+            phase: FactsPhase::Schema,
+        };
+        let (normal, dependencies) =
+            self.normalize_closed_projected_type(&substituted.signature.result, proof, false)?;
+        // The closed replay is not allowed to bless an unchanged residual
+        // family, even when its ordinary membership happened to be admissible.
+        if dependencies.is_empty() || self.type_contains_projection(&normal, 0)? {
+            return Err(error);
+        }
+        for dependency in &dependencies {
+            self.validate_projected_dependency(dependency, proof)?;
+        }
+        if !self.eq_ty(&normal, actual, 0)? {
+            return Err(error);
+        }
+        Ok(())
+    }
+
     /// Public associated assignments are authenticated declaration metadata,
     /// never a query for the defining body's hidden representation.
     pub(super) fn opaque_associated_binding(
@@ -71,6 +135,7 @@ impl ValidatedTraitWorld {
             .substitute_projected_schema(&schema, args, facts.env())?
             .signature
             .result;
+        let actual = facts.normalize_substituted_projection_type(&actual, &self.budget)?;
         let Ty::Opaque(opaque) = &actual else {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -158,7 +223,13 @@ impl ValidatedTraitWorld {
                 )
             })?;
         if !original.try_eq(opaque, |raw, actual| {
-            self.validate_rhs_substitution(raw, actual, &owner.env, opaque.owner_args(), 0)?;
+            self.validate_opaque_payload_substitution(
+                raw,
+                actual,
+                &owner.env,
+                opaque.owner_args(),
+                env,
+            )?;
             Ok::<_, FactsError>(true)
         })? {
             return Err(FactsError::invalid(
@@ -201,6 +272,10 @@ impl ValidatedTraitWorld {
                     "opaque capture occurrence is absent from its declaration",
                 )
             })?;
+        // Capture eligibility authenticates only exact structural substitution.
+        // It has no ambient caller environment to authorize normalized payloads.
+        // Closed normalization remains a separate validate_opaque_metadata check
+        // under its genuine ambient environment, not the defining owner here.
         if !original.try_eq(opaque, |raw, actual| {
             self.validate_rhs_substitution(raw, actual, &owner.env, opaque.owner_args(), 0)?;
             Ok::<_, FactsError>(true)

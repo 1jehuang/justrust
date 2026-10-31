@@ -205,7 +205,7 @@ impl CarrierContractView {
         let mut found = false;
         for location in locations.iter() {
             charged(facts.budget(), facts.budget().charge_work(1))?;
-            found |= location == result_location;
+            found |= world.same_location(location, result_location)?;
         }
         if !found {
             return Err(FactsError::invalid(

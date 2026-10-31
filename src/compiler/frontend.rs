@@ -20986,7 +20986,15 @@ impl DeclRegistry {
                 if function.module != context.module {
                     return Err("projection callable retained module changed".into());
                 }
-                retained_function_projection(names, function, projection, budget)?
+                let retained = retained_function_projection(names, function, projection, budget)?;
+                retained
+                    || self.retained_stored_closure_projection(
+                        info.id,
+                        &function.body,
+                        projection,
+                        budget,
+                        0,
+                    )?
             }
             _ => false,
         };
@@ -25616,6 +25624,14 @@ fn raw_type_has_projection(
     }
     match ty {
         ir::Ty::AssociatedType(_) => Ok(true),
+        ir::Ty::Opaque(opaque) => {
+            for child in opaque.types() {
+                if raw_type_has_projection(child, budget, depth + 1)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
         ir::Ty::Tuple(fields) => {
             for field in fields.iter() {
                 if raw_type_has_projection(field, budget, depth + 1)? {

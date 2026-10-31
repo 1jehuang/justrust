@@ -446,7 +446,7 @@ pub(super) fn normalize(
                             "opaque owner substitution changed its type kind",
                         ));
                     };
-                    let record = representations.get(&opaque)?;
+                    let record = representations.get(&opaque, budget)?;
                     for source in proof.captured_sources() {
                         let source_family = match &source.channel {
                             ir::CarrierChannel::ParamTail {

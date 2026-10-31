@@ -6601,7 +6601,37 @@ impl ValidatedTraitWorld {
                     .saturating_add(1),
             ),
         )?;
-        Ok(a == b)
+        if a.path != b.path {
+            return Ok(false);
+        }
+        match (&a.channel, &b.channel) {
+            (
+                ir::CarrierChannel::OpaqueTail {
+                    opaque: a,
+                    prefix: ap,
+                },
+                ir::CarrierChannel::OpaqueTail {
+                    opaque: b,
+                    prefix: bp,
+                },
+            ) => Ok(ap == bp && self.eq_ty(&Ty::Opaque(a.clone()), &Ty::Opaque(b.clone()), 0)?),
+            (
+                ir::CarrierChannel::ProjectionTail {
+                    projection: a,
+                    prefix: ap,
+                },
+                ir::CarrierChannel::ProjectionTail {
+                    projection: b,
+                    prefix: bp,
+                },
+            ) => Ok(ap == bp
+                && self.eq_ty(
+                    &Ty::AssociatedType(a.clone()),
+                    &Ty::AssociatedType(b.clone()),
+                    0,
+                )?),
+            _ => Ok(a.channel == b.channel),
+        }
     }
     /// A mutable native owner fixes its element type invariantly. Every value
     /// argument using that same original family must remain valid for the

@@ -58,3 +58,57 @@ fn trait_method_bound_projection_replays_exact_member_occurrence() {
             .is_err()
     );
 }
+
+#[test]
+fn stored_closure_projection_replays_exact_parent_and_nested_source_occurrences() {
+    let program = parse("trait Has{type Out;}fn first<A:Has>(){let _f=|x:A::Out|x;}fn second<A:Has>(){let _f=|x:A::Out|x;}fn nested<A:Has>(){let _f=||{let _g=|x:A::Out|x;};}fn main(){}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    fn annotation(plan: &PlanCtx, owner: ir::DeclId) -> &SourceProjection {
+        plan.program
+            .closure_sources
+            .values()
+            .find_map(|source| {
+                let parent = plan.registry.closure_source_owner(source).unwrap();
+                if plan
+                    .closure_publication_owner(parent, &plan.budget)
+                    .unwrap()
+                    != owner
+                {
+                    return None;
+                }
+                source.stored.as_ref()?.params.iter().find_map(|(_, ty)| {
+                    if let Type::Projection(projection) = ty {
+                        Some(projection.as_ref())
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("genuine retained closure projection annotation")
+    }
+    let first = plan.function_decl(0).unwrap();
+    let second = plan.function_decl(1).unwrap();
+    let nested = plan.function_decl(2).unwrap();
+    let original = annotation(&plan, first);
+    let foreign = annotation(&plan, second);
+    let nested_original = annotation(&plan, nested);
+    for (owner, projection) in [(first, original), (nested, nested_original)] {
+        let context = plan.registry.source_type_context(owner).unwrap();
+        plan.registry
+            .validate_source_projection(context, projection, &budget)
+            .unwrap();
+        assert!(
+            plan.registry
+                .validate_source_projection(context, foreign, &budget)
+                .is_err(),
+            "same-spelled foreign closure occurrence must not gain owner authority"
+        );
+    }
+    let second_context = plan.registry.source_type_context(second).unwrap();
+    assert!(
+        plan.registry
+            .validate_source_projection(second_context, original, &budget)
+            .is_err()
+    );
+}

@@ -203,6 +203,40 @@ pub(in crate::compiler) struct Header {
     opaque_calls: Arc<[OpaqueCall]>,
     packs: Arc<[Pack]>,
 }
+fn canonical_contract_type(
+    ty: &ir::Ty,
+    facts: &traits::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<ir::Ty, String> {
+    // Authenticate the original descriptor before any closed reduction. A
+    // projection-free counterfeit must not bypass metadata replay either.
+    facts
+        .validate_ty_metadata_with_budget(ty, budget)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    let normal = facts
+        .normalize_substituted_projection_type(ty, budget)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    facts
+        .validate_ty_with_budget(&normal, budget)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    Ok(normal)
+}
+
+fn contract_types_equal(
+    left: &ir::Ty,
+    right: &ir::Ty,
+    facts: &traits::ValidatedFacts,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    // Independent graph producers can reconstruct the same nominal application
+    // with different allocation IDs. Canonical equality retains declarations,
+    // ordered actuals and every opaque bound/capture, never allocation identity.
+    facts
+        .world()
+        .types_equal(std::slice::from_ref(left), std::slice::from_ref(right))
+        .map_err(|error| error.into_legacy_diagnostic(budget))
+}
+
 impl Header {
     pub(in crate::compiler) fn no_continuation(
         target: ir::CallTarget,
@@ -320,10 +354,20 @@ impl Header {
         let ir::Ty::Opaque(opaque) = &invocation.call.trait_ref.self_ty else {
             return Err("opaque invocation lost public type identity".into());
         };
+        if facts.phase() != traits::FactsPhase::Closed {
+            return Err("opaque resolution requires exact closed source facts".into());
+        }
+        let canonical_opaque =
+            canonical_contract_type(&ir::Ty::Opaque(opaque.clone()), facts, budget)?;
         let mut selected = None;
         for pack in self.packs.iter() {
             budget.charge_work(1)?;
-            if pack.opaque != *opaque {
+            if !contract_types_equal(
+                &canonical_contract_type(&ir::Ty::Opaque(pack.opaque.clone()), facts, budget)?,
+                &canonical_opaque,
+                facts,
+                budget,
+            )? {
                 continue;
             }
             for bound in pack.methods.iter() {
@@ -332,7 +376,30 @@ impl Header {
                     Bound::Concrete { public, method } => (public, method.item),
                     Bound::Forwarded { public, item, .. } => (public, *item),
                 };
-                if public != &invocation.call.trait_ref || item != invocation.call.item {
+                let invoked = &invocation.call.trait_ref;
+                if public.declaration != invoked.declaration
+                    || public.args.len() != invoked.args.len()
+                    || item != invocation.call.item
+                    || !contract_types_equal(
+                        &canonical_contract_type(&public.self_ty, facts, budget)?,
+                        &canonical_opaque,
+                        facts,
+                        budget,
+                    )?
+                {
+                    continue;
+                }
+                let mut same_arguments = true;
+                for (source, actual) in public.args.iter().zip(invoked.args.iter()) {
+                    budget.charge_work(1)?;
+                    same_arguments &= contract_types_equal(
+                        &canonical_contract_type(source, facts, budget)?,
+                        &canonical_contract_type(actual, facts, budget)?,
+                        facts,
+                        budget,
+                    )?;
+                }
+                if !same_arguments {
                     continue;
                 }
                 if selected.is_some() {
@@ -501,6 +568,113 @@ mod tests {
         assert!(
             wrong_owner
                 .resolve(&invocation, &wrong_facts, &budget)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn alignment_domain_projected_opaque_contract_replays_closed_metadata() {
+        use crate::compiler::{
+            instances::graph_key, keys::closed_domain::ClosedDomain,
+            memory_layout::domain::compact::tests::closed_engine_fixture,
+        };
+        use crate::engine::ItemKey;
+        let (engine, budget, plan, root) = closed_engine_fixture(
+            "trait Has{type Out;}struct S;impl Has for S{type Out=i32;}struct V;trait Inspect<X>{fn width(&self)->usize;}impl<X> Inspect<X> for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}fn make<T:Has,U>()->impl Inspect<T::Out>{V}fn main(){let _n=make::<S,u8>().width();}",
+            "main",
+            Arc::from([]),
+        );
+        let caller = engine
+            .fact_of::<Header>(&ClosedDomain::header(&root, &budget).unwrap().key(), 0)
+            .unwrap();
+        let invocation = caller.opaque_calls().first().unwrap().clone();
+        let target = invocation.owner_target().unwrap();
+        let words = graph_key::encode(&target, &budget).unwrap();
+        let producer = engine
+            .fact_of::<Header>(&ClosedDomain::Header(words.clone()).key(), 0)
+            .unwrap();
+        assert_eq!(
+            graph_key::encode(producer.target(), &budget).unwrap(),
+            words
+        );
+        let facts = plan.instance_facts(&target).unwrap();
+        let ir::Ty::Opaque(opaque) = &invocation.call.trait_ref.self_ty else {
+            panic!("missing genuine public opaque receiver");
+        };
+        assert_eq!(producer.packs.len(), 1);
+        assert_eq!(producer.packs[0].methods.len(), 1);
+        assert_ne!(
+            producer.packs[0].opaque, *opaque,
+            "genuine graph fixture must cross decoded nominal allocation identities"
+        );
+        assert!(
+            facts
+                .world()
+                .types_equal(
+                    &[ir::Ty::Opaque(producer.packs[0].opaque.clone())],
+                    std::slice::from_ref(&invocation.call.trait_ref.self_ty),
+                )
+                .unwrap(),
+            "different graph allocations must retain the complete canonical descriptor"
+        );
+        assert!(producer.resolve(&invocation, &facts, &budget).is_ok());
+        for forged in [
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site().checked_add(1).unwrap(),
+                opaque.bounds().into(),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site(),
+                Arc::from([]),
+                opaque.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                opaque.owner(),
+                opaque.owner_args().into(),
+                opaque.site(),
+                opaque.bounds().into(),
+                Arc::from([ir::SourceRegionId {
+                    declaration: opaque.owner(),
+                    index: 0,
+                }]),
+            ),
+            opaque
+                .try_map(|ty| {
+                    Ok::<_, String>(if *ty == ir::Ty::Int(ir::IntTy::I32) {
+                        ir::Ty::Bool
+                    } else {
+                        ty.clone()
+                    })
+                })
+                .unwrap(),
+        ] {
+            let mut changed = invocation.clone();
+            changed.call.trait_ref.self_ty = ir::Ty::Opaque(Arc::new(forged));
+            assert!(producer.resolve(&changed, &facts, &budget).is_err());
+        }
+        let mut wrong_argument = invocation.clone();
+        wrong_argument.call.trait_ref.args = Arc::from([ir::Ty::Bool]);
+        assert!(producer.resolve(&wrong_argument, &facts, &budget).is_err());
+        let mut reordered = opaque.owner_args().to_vec();
+        reordered.swap(0, 1);
+        let mut wrong_order = invocation.clone();
+        wrong_order.call.trait_ref.self_ty = ir::Ty::Opaque(Arc::new(ir::OpaqueTy::new(
+            opaque.owner(),
+            reordered.into(),
+            opaque.site(),
+            opaque.bounds().into(),
+            opaque.captured_regions().into(),
+        )));
+        assert!(producer.resolve(&wrong_order, &facts, &budget).is_err());
+        let foreign_facts = plan.instance_facts(&root).unwrap();
+        assert!(
+            producer
+                .resolve(&invocation, &foreign_facts, &budget)
                 .is_err()
         );
     }

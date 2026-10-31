@@ -83,7 +83,7 @@ impl Representations {
         budget.charge_work(1).map_err(Error::new)?;
         Ok(match ty {
             ir::Ty::Opaque(opaque) => {
-                self.normalize_at(self.get(opaque)?.hidden(), budget, depth + 1)?
+                self.normalize_at(self.get(opaque, budget)?.hidden(), budget, depth + 1)?
             }
             ir::Ty::Ref { kind, referent } => ir::Ty::Ref {
                 kind: *kind,
@@ -197,7 +197,7 @@ impl Representations {
         budget.charge_work(1).map_err(Error::new)?;
         match ty {
             ir::Ty::Opaque(opaque) => {
-                let hidden = self.get(opaque)?.hidden().clone();
+                let hidden = self.get(opaque, budget)?.hidden().clone();
                 self.prepare_type(&hidden, budget, depth + 1)?;
             }
             ir::Ty::Closure(closure) => self.prepare_closure(closure, budget, depth + 1)?,
@@ -297,16 +297,22 @@ impl Representations {
         Ok(())
     }
 
-    pub(super) fn get(&self, opaque: &Arc<ir::OpaqueTy>) -> Result<&ir::OpaqueHiddenType, Error> {
-        self.records
-            .iter()
-            .find(|record| record.record.opaque() == opaque)
-            .map(|record| &record.record)
-            .ok_or_else(|| {
-                Error::new(
-                    "opaque representation was not read through this instance's graph handles",
-                )
-            })
+    pub(super) fn get(
+        &self,
+        opaque: &Arc<ir::OpaqueTy>,
+        budget: &ir::PlanBudget,
+    ) -> Result<&ir::OpaqueHiddenType, Error> {
+        let requested = instances::graph_key::encode_opaque(opaque, budget).map_err(Error::new)?;
+        for record in self.records.iter() {
+            let produced = instances::graph_key::encode_opaque(record.record.opaque(), budget)
+                .map_err(Error::new)?;
+            if produced == requested {
+                return Ok(&record.record);
+            }
+        }
+        Err(Error::new(
+            "opaque representation was not read through this instance's graph handles",
+        ))
     }
 }
 
@@ -427,7 +433,10 @@ pub(super) async fn read(
                     "opaque representation changed its defining body witness",
                 ));
             }
-            if record.record.opaque() != &opaque {
+            if instances::graph_key::encode_opaque(record.record.opaque(), budget)
+                .map_err(Error::new)?
+                != instances::graph_key::encode_opaque(&opaque, budget).map_err(Error::new)?
+            {
                 return Err(Error::new(
                     "opaque representation producer changed its requested identity",
                 ));

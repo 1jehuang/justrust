@@ -339,6 +339,17 @@ impl PlanCtx {
             }
             return Ok(applications);
         }
+        // Declaration-owned public bounds contribute candidates, not selection
+        // evidence. The ordinary selector still proves each exact application.
+        for predicate in
+            self.opaque_callable_bound_candidates(owner, ir::FactsCtx::Validated(facts))?
+        {
+            if let ir::Predicate::Implements(application) = predicate
+                && application.declaration == trait_id
+            {
+                self.push_trait_application(&mut applications, application, budget)?;
+            }
+        }
         if self.param_env(trait_id)?.arity() == 1 {
             self.push_trait_application(
                 &mut applications,
