@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd <PRIVATE_HOME>/justrust
+ROOT=<EXPERIMENT>
+TC=<PRIVATE_HOME>/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu
+(cd "$ROOT/manifest-retouch-harness-v74" && sha256sum -c SHA256SUMS)
+cmp bench/resident_suite.py "$ROOT/manifest-retouch-harness-v74/resident_suite.candidate.py"
+cmp bench/test_resident_manifest_retouch.py "$ROOT/manifest-retouch-harness-v74/test_resident_manifest_retouch.candidate.py"
+cmp toolchain/resident/crates/ra-jit/src/cargo/whole.rs "$ROOT/manifest-content-generation-v74/whole.candidate.rs"
+python3 bench/suite.py resident --mode manifest-retouch \
+ --reference-engine "$ROOT/reference-bin/ra-jit" \
+ --engine "$ROOT/candidate-v74-bin/jr-engine" \
+ --source <PRIVATE_HOME>/.jcode/scratch/resident-matrix-native-20261030/source63 \
+ --toolchain "$TC" --output <PINNED_RUN> --samples 5 --timeout 360
+python3 bench/suite.py compare <PINNED_RUN>/off.json <PINNED_RUN>/on.json

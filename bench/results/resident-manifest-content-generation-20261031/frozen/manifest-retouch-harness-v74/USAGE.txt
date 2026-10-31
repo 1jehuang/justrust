@@ -1,0 +1,89 @@
+Root-only execution after strict native gates finish
+===================================================
+
+Implementation owns ONLY bench/resident_suite.py and the NEW
+bench/test_resident_manifest_retouch.py. No Rust source or repository docs changed
+in this harness lane. Legacy mode remains native_resident/v1, default mode edit.
+
+New explicit invocation (placeholders must be replaced by frozen real paths):
+
+  python3 bench/suite.py resident --mode manifest-retouch \
+    --reference-engine /ABS/FROZEN/ra-jit --engine /ABS/FROZEN/jr-engine \
+    --source /ABS/PRISTINE/f97fcc2-source63 \
+    --output /dev/shm/mr74a \
+    --toolchain /ABS/nightly-2026-10-27-x86_64-unknown-linux-gnu \
+    --proc-macro-server /ABS/FROZEN/proc-macro-server --samples 5
+
+Then:
+
+  python3 bench/suite.py compare /dev/shm/mr74a/off.json /dev/shm/mr74a/on.json
+
+--proc-macro-server may be omitted only for the explicit common compatibility
+control (both native server variables 0), as in the existing runner. Source must
+be a pristine, fully extracted f97fcc2 snapshot containing exactly the original
+63 files. Output must be fresh, absolute, disjoint from source and no more than
+30 native path bytes, because native worker Unix socket suffixes are long. The
+private output and source are not interchangeable. Do not use a production home
+or shared state. The fixed toolchain must already exist, no install or download
+helper is provided. Do not use shells or executable wrappers as the engine.
+
+The mode performs original unchanged semantic gates first: reference version,
+prepare, real unused E0308, recovery, real failing assertion, recovery. It then
+performs the same six original-source semantic gates for each of four independent
+candidate private states, with exact flag values OFF/ON/ON/OFF = 0/1/1/0.
+Each segment gets one fixed-overlay warmup followed by five measured combined
+manifest+lock retouches. Only the direct filtered libtest invocation is timed.
+Status calls, SHA verification, byte rewrites, mtime manipulation and /proc
+inspection are outside timing. All native states are stopped separately.
+
+The runtime fixture is a fixed, replay-verified overlay inside the existing
+shares_overlapping_time test. It uses std::env::var at RUNTIME, asserts nonce
+length and prints JR_MANIFEST_RETOUCH_<nonce>. It retains the original assertions
+and four-test libtest contract. The source overlay is NOT changed per sample.
+Each warmup/sample gets a unique UUID nonce via its runtime environment. The
+original pinned63 tree and original timestamps of the three touched source/input
+files are restored afterward, including error cleanup. Actual execution of the
+fixture is a root acceptance requirement, not established by Python mocks.
+
+Both original root Cargo.toml and root Cargo.lock are rewritten with their exact
+original bytes before each measured call, with a verified increased mtime. The
+retouch receipts include filename, SHA256, size and before/after mtime_ns. Full
+source63 plus fixed-overlay hashes are checked before and after every command.
+All source/toolchain/tool identities are checked before/after the overall run,
+and selected executable hashes are also checked around each direct test call.
+The new flag is explicitly injected AFTER inherited RA_JIT_* filtering and is
+recorded per private state and per call, never silently inherited.
+
+Worker proof combines actual native status raw output and /proc stat start ticks,
+executable path+SHA and raw NUL argv hex. Replay requires one worker whose socket
+argv is under that segment's private native workers namespace. ON must preserve
+PID+starttime from warmup through all five touches. OFF must change it for each
+touch. Entry markers are a separate check: OFF0, ON exactly1 at measured/warmup
+client entry, NOT evidence of reuse by themselves.
+
+Output schema native_resident_manifest_retouch/v1 is distinct from legacy. Both
+arm JSONs point to the same raw ABBA evidence and contain all raw receipts. Replay
+recomputes gates, reachable nonce matches, file/source identities, retouch states,
+PID behavior and ten measured times per arm, never trusting parsed/accepted
+booleans or summary medians. Compare rejects old/new schema mixing, reversed
+arm order, different candidate bytes/private runs, changed receipts or missing
+phases. It prints descriptive aggregate median changes only. Noise remains
+unknown. No statistical significance, general speedup, independent manifest vs
+lock attribution, full ABI safety or default promotion is claimed.
+
+Python-only validation performed here:
+  PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=bench python3 -m unittest -v \
+    test_resident_manifest_retouch test_resident_suite test_resident_engine_compare
+  Result: 52 tests PASS (13 new, 12 legacy suite, 27 existing engine harness).
+  Native launches and PID reads are mocked in new orchestration tests, with an
+  explicit subprocess.Popen forbidden guard. The PID helper test mocks /proc reads, including a start-tick race.
+  Socket path length is mocked only for deep temporary test fixture directories
+  and separately unit-tested for the explicit real <=30 byte budget.
+  AST/static checks: 14 PASS, including all nine legacy functions unchanged
+  after removing only the explicit new-mode dispatch / CLI mode addition.
+  Scoped git diff --check: PASS.
+
+No native commands, compiler builds, actual measurements, build locks, installs,
+commits or repository doc edits were performed. Root owns native measurement and
+acceptance after freeze. A successful Python mock result is not native runtime
+acceptance or an ABI proof.

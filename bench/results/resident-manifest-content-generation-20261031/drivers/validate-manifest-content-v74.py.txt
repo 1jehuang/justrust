@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""Replay actual v74 same-byte observations. Scoped diagnostics, not a general performance gate."""
+import json,re,sys
+from pathlib import Path
+sys.path.insert(0,'<PRIVATE_HOME>/justrust/bench')
+import resident_state_matrix as matrix
+root=Path('<EXPERIMENT>')
+phases=['cold','noop','manifest-same-bytes','lock-same-bytes','both-same-bytes','noop-final']
+cases={}
+for name in ['original-off','candidate-off','candidate-on','candidate-on-repeat','candidate-off-repeat']:
+    directory=root/('manifest-content-v74-'+name)
+    state=json.loads((directory/'state.json').read_text())
+    assert state['status']=='passed' and state['unchanged']
+    assert state['tool_before']==state['tool_after'] and state['toolchain_before']==state['toolchain_after']
+    assert [r['phase'] for r in state['rows']]==phases
+    enabled='-on' in name
+    assert state['startup_controls']['RA_JIT_MANIFEST_CONTENT_GENERATION']==str(int(enabled))
+    pids=[];markers=[]
+    for i,row in enumerate(state['rows']):
+        prefix=directory/f'{i:02}-{row["phase"]}'
+        raw,text,error=matrix.captured(prefix)
+        assert error is None and row['raw']==raw and row['raw_error'] is None
+        assert row['accepted'] and row['input_unchanged'] and row['status']==0 and not row.get('timed_out')
+        assert re.findall(r'CONTENT_GENERATION_[^\s]+',text)==['CONTENT_GENERATION_'+row['nonce']]
+        expected={'manifest-same-bytes':['Cargo.toml'],'lock-same-bytes':['Cargo.lock'],'both-same-bytes':['Cargo.toml','Cargo.lock']}.get(row['phase'],[])
+        assert [t['file'] for t in row['touches']]==expected
+        assert all(t['bytes_unchanged'] and t['mtime_before']!=t['mtime_after'] for t in row['touches'])
+        _,status_text,status_error=matrix.captured(directory/f'{i:02}-{row["phase"]}-status')
+        actual=[int(v) for v in re.findall(r'worker: pid (\d+)',status_text)]
+        assert status_error is None and actual==row['worker_pids'] and len(actual)==1
+        pids.append(actual[0])
+        count=text.count('ra-jit: manifest-content-generation-v1 entered')
+        assert count==int(enabled), (name,i,count)
+        markers.append(count)
+    if enabled:
+        assert len(set(pids))==1
+    else:
+        assert pids[0]==pids[1] and pids[4]==pids[5]
+        assert len(set([pids[1],pids[2],pids[3],pids[4]]))==4
+    assert state['stop']['status']==0 and not state['stop'].get('timed_out')
+    cases[name]={'pids':pids,'entry_markers':markers,'seconds':[r['elapsed_seconds'] for r in state['rows']]}
+pairs=[]
+for off,on in [('candidate-off','candidate-on'),('candidate-off-repeat','candidate-on-repeat')]:
+    pairs.append({'off':off,'on':on,'phases':[{'phase':phase,'off_seconds':a,'on_seconds':b,'on_minus_off_percent':100*(b/a-1)} for phase,a,b in zip(phases,cases[off]['seconds'],cases[on]['seconds'])]})
+print(json.dumps({'status':'passed','scope':__doc__,'rows':30,'same_byte_on_pid_retained':True,'changed_byte_safety_is_separate':True,'default_promotion':False,'general_speed_claim':False,'cases':cases,'pairs':pairs},indent=2))

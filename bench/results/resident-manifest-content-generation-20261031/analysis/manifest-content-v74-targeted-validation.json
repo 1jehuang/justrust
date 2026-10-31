@@ -1,0 +1,227 @@
+{
+  "status": "passed",
+  "scope": "Replay actual v74 same-byte observations. Scoped diagnostics, not a general performance gate.",
+  "rows": 30,
+  "same_byte_on_pid_retained": true,
+  "changed_byte_safety_is_separate": true,
+  "default_promotion": false,
+  "general_speed_claim": false,
+  "cases": {
+    "original-off": {
+      "pids": [
+        1660731,
+        1660731,
+        1663082,
+        1664792,
+        1666540,
+        1666540
+      ],
+      "entry_markers": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "seconds": [
+        4.565762040001573,
+        0.019265775015810505,
+        3.1639853109954856,
+        2.9653490720083937,
+        3.2246188019926194,
+        0.01663117200951092
+      ]
+    },
+    "candidate-off": {
+      "pids": [
+        1714308,
+        1714308,
+        1716690,
+        1718432,
+        1720140,
+        1720140
+      ],
+      "entry_markers": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "seconds": [
+        4.724508817016613,
+        0.019774504005908966,
+        3.0191705680044834,
+        3.0441837360267527,
+        3.495593764993828,
+        0.019165231002261862
+      ]
+    },
+    "candidate-on": {
+      "pids": [
+        1722059,
+        1722059,
+        1722059,
+        1722059,
+        1722059,
+        1722059
+      ],
+      "entry_markers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "seconds": [
+        4.54201789299259,
+        0.020113062986638397,
+        0.6229784209863283,
+        0.5453330169839319,
+        0.565182038990315,
+        0.018519432022003457
+      ]
+    },
+    "candidate-on-repeat": {
+      "pids": [
+        1727770,
+        1727770,
+        1727770,
+        1727770,
+        1727770,
+        1727770
+      ],
+      "entry_markers": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "seconds": [
+        4.602913784998236,
+        0.02385878999484703,
+        0.7234993070014752,
+        0.674150205013575,
+        0.54807302201516,
+        0.020080693007912487
+      ]
+    },
+    "candidate-off-repeat": {
+      "pids": [
+        1733477,
+        1733477,
+        1735769,
+        1737453,
+        1739337,
+        1739337
+      ],
+      "entry_markers": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "seconds": [
+        4.667890234995866,
+        0.021576497005298734,
+        3.006575993989827,
+        3.3966894000186585,
+        3.06007895199582,
+        0.0195539929845836
+      ]
+    }
+  },
+  "pairs": [
+    {
+      "off": "candidate-off",
+      "on": "candidate-on",
+      "phases": [
+        {
+          "phase": "cold",
+          "off_seconds": 4.724508817016613,
+          "on_seconds": 4.54201789299259,
+          "on_minus_off_percent": -3.8626433157819884
+        },
+        {
+          "phase": "noop",
+          "off_seconds": 0.019774504005908966,
+          "on_seconds": 0.020113062986638397,
+          "on_minus_off_percent": 1.7120984709819487
+        },
+        {
+          "phase": "manifest-same-bytes",
+          "off_seconds": 3.0191705680044834,
+          "on_seconds": 0.6229784209863283,
+          "on_minus_off_percent": -79.36590838595498
+        },
+        {
+          "phase": "lock-same-bytes",
+          "off_seconds": 3.0441837360267527,
+          "on_seconds": 0.5453330169839319,
+          "on_minus_off_percent": -82.08606758750716
+        },
+        {
+          "phase": "both-same-bytes",
+          "off_seconds": 3.495593764993828,
+          "on_seconds": 0.565182038990315,
+          "on_minus_off_percent": -83.83158693523664
+        },
+        {
+          "phase": "noop-final",
+          "off_seconds": 0.019165231002261862,
+          "on_seconds": 0.018519432022003457,
+          "on_minus_off_percent": -3.369638384124818
+        }
+      ]
+    },
+    {
+      "off": "candidate-off-repeat",
+      "on": "candidate-on-repeat",
+      "phases": [
+        {
+          "phase": "cold",
+          "off_seconds": 4.667890234995866,
+          "on_seconds": 4.602913784998236,
+          "on_minus_off_percent": -1.391987530265637
+        },
+        {
+          "phase": "noop",
+          "off_seconds": 0.021576497005298734,
+          "on_seconds": 0.02385878999484703,
+          "on_minus_off_percent": 10.577680839423632
+        },
+        {
+          "phase": "manifest-same-bytes",
+          "off_seconds": 3.006575993989827,
+          "on_seconds": 0.7234993070014752,
+          "on_minus_off_percent": -75.93610444413324
+        },
+        {
+          "phase": "lock-same-bytes",
+          "off_seconds": 3.3966894000186585,
+          "on_seconds": 0.674150205013575,
+          "on_minus_off_percent": -80.15272738773608
+        },
+        {
+          "phase": "both-same-bytes",
+          "off_seconds": 3.06007895199582,
+          "on_seconds": 0.54807302201516,
+          "on_minus_off_percent": -82.08957903985777
+        },
+        {
+          "phase": "noop-final",
+          "off_seconds": 0.0195539929845836,
+          "on_seconds": 0.020080693007912487,
+          "on_minus_off_percent": 2.693567619381554
+        }
+      ]
+    }
+  ]
+}

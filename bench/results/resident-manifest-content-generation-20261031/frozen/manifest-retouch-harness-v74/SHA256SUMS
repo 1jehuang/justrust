@@ -1,0 +1,10 @@
+1508a424fde23d7093ae004bc476abcf95d7681e36ed61d9d5c923de9f9cb2df  <EXPERIMENT>/manifest-retouch-harness-v74/resident_suite.candidate.py
+f806926b44de645ea8420e341e42645e112a6ccd1cd7baccdbefe50ded8610f0  <EXPERIMENT>/manifest-retouch-harness-v74/resident_suite.original.py
+47a904d12d9a32f69ecc61c73e5c6b2a1610e98d13b34e283fec06fbff60a103  <EXPERIMENT>/manifest-retouch-harness-v74/sourcechecks.py
+89be7ee5ccbcd065568dc1d0a174fba02b1e72916d38e1988e9917f50108a1bd  <EXPERIMENT>/manifest-retouch-harness-v74/test_resident_manifest_retouch.candidate.py
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  <EXPERIMENT>/manifest-retouch-harness-v74/test_resident_manifest_retouch.original.py
+cdb788ef17483ae212e6c099867b4aadca2c64afe3121cf35e4243ca1bc4de05  <EXPERIMENT>/manifest-retouch-harness-v74/candidate.patch
+07527279ad3b4818b665bab691b31dd95da0655ceff6f36941a0860f4b769c8c  <EXPERIMENT>/manifest-retouch-harness-v74/sourcechecks.json
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  <EXPERIMENT>/manifest-retouch-harness-v74/diff-check.txt
+2d580a56c1989d298cdadbd3ef4afa1994aae69a911252a8947417423dcb3f84  <EXPERIMENT>/manifest-retouch-harness-v74/python-tests.txt
+a17ab3bbcc59beec358f8bcfe8289b633246fae3f06d956beeec407ad94c10ba  <EXPERIMENT>/manifest-retouch-harness-v74/USAGE.txt

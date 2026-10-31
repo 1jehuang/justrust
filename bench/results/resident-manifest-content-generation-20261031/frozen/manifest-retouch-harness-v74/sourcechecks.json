@@ -1,0 +1,21 @@
+{
+  "kind": "AST/static only, not native runtime acceptance",
+  "checks": {
+    "legacy_digest_unchanged_after_explicit_dispatch": true,
+    "legacy_require_unchanged_after_explicit_dispatch": true,
+    "legacy_pinned_hashes_unchanged_after_explicit_dispatch": true,
+    "legacy_host_identity_unchanged_after_explicit_dispatch": true,
+    "legacy_replay_unchanged_after_explicit_dispatch": true,
+    "legacy_validate_unchanged_after_explicit_dispatch": true,
+    "legacy_cmd_resident_unchanged_after_explicit_dispatch": true,
+    "legacy_compare_unchanged_after_explicit_dispatch": true,
+    "legacy_add_parser_unchanged_after_explicit_dispatch": true,
+    "legacy_schema_unchanged": true,
+    "new_distinct_schema": true,
+    "fixed_abba": true,
+    "source_test_methods": true,
+    "native_launch_guard_in_tests": true
+  },
+  "candidate_sha256": "1508a424fde23d7093ae004bc476abcf95d7681e36ed61d9d5c923de9f9cb2df",
+  "tests_sha256": "89be7ee5ccbcd065568dc1d0a174fba02b1e72916d38e1988e9917f50108a1bd"
+}

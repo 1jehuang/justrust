@@ -1,0 +1,70 @@
+EVIDENCE_SOURCE_RELEASE / STOPEDITS
+2026-10-31, historical v74 manifest content generation
+
+Owned new bundle:
+  bench/results/resident-manifest-content-generation-20261031/**
+Only existing-file change:
+  docs/resident-manifest-content-generation.md, appended evidence link only
+  SHA256 3827f1ffcfb70b0497fa03d914e7aa2f01ffb1fceaab3c64390adaec9dbb57e9
+
+Historical authority: immutable source/harness/doc commit de8533b93 and preserved
+private v74 original/candidate/finaldoc freezes. No current live Rust reads/edits,
+no current edited harness reads, no compiler/native runtime/build/install jobs.
+Protected v76 timing HOLD respected until explicit root release 15:19 UTC.
+Root released shared Git index 15:25 UTC. Original private inputs preserved.
+
+Core immutable published identities:
+observations.json
+  2f4fa2234922fded685d3c94b6b5e0d56417dcdce722dc75838e6af641489474
+validate.py
+  61221b1bcb00d83aed7cf143fc6a63746898ec654deb7fb74e838f58b5ae0dd4
+test_offline.py
+  98582651d543eb8fb8e925d72d3243c0678d1ef404439cccf44977739bc1066e
+export_private.py
+  cdae1d13cf8b21e33e6fe7bc7688b3c92b2ab8a927d0af397878c2c986ab7db0
+README.md
+  d47d0208e3c74aa43041e3571c8438b8ef1a437cff0f75e7bd3ff46af3b8eebf
+checks/offline-tests.txt
+  57461cb8f6c9d7bdb11dcbb5c9aa674b55326d2def0bdfd93689e244e5cd5f9c
+checks/replay.json
+  b64e3285ddf3c19c425ae99578bcc573c28a450a7ae72968414d752a81ccc5f6
+
+Validation:
+39 offline Python tests PASS in7.697s, task550640w0xh.
+Standalone original tuple-valued semantic replay PASS. No parser list weakening.
+Native53/369 journals, all5 real manifest helper fixtures, full native-source3757
+and matching after-checks, exact compiler lock, pinned toolchain4020, all63 pinned
+source blobs, original/candidate/initialdoc/finaldoc/harness exact patch replay.
+Strict28 original oracle + independently reconstructed source recipes, targeted30,
+changedmanifest9 unusedE0308/recovery, native environmentABA11/22/11 and native
+fileABA11/33/11 independently derived from actual C sources. Full746 historical
+regression journal original SHA/size + completed summary retained, not rerun.
+All54 pinned calls, all20 measured samples, all24 fresh runtime nonce challenges,
+PID/starttick/executable/private socket roles, five successful native stops.
+Coherent resealed raw+parsed, runtime nonce, PID, native journal/result, timing
+and promotion tamper rejected. Trusted validator historical commitment required.
+EmptyHOME/PATH relocated actual validator replay PASS with audit denying external
+reads/directories, writes, native subprocesses, ctypes and network. Explicit
+negative payloads independently demonstrate each denial before the operation.
+Private-derived export scan PASS, no original private home path published in
+observations/inventories/frozen/drivers/analysis. Ambient env and raw procargv
+excluded by explicit fixed fields/line grammars/known command roles. Original
+SHA/size receipts retained. Scoped existing doc diff whitespace check PASS.
+
+Measured historical scope, never expanded:
+OFF median9.45986455900129s, ON median2.4758396840043133s, -73.82795843891346%.
+First ON retouches11.96186254301574s and12.040021672000876s retained, each SLOWER
+THAN EVERY OFF sample. First-touch cause not established, noise unknown.
+Accepted only DEFAULT-OFF combined same-byte manifest+lock retouch option.
+No general/default/causal/independent manifest-lock attribution claim. Original
+IO timestamp fallback includes repeated-unknown limitations, not stronger
+freshness. Content identity is not full ABI safety proof. Original native
+ABI/config/script/worker/fallback guards remain contract. Licensed Blaze-derived
+Apache-2.0/MIT lineage/licenses preserved, no clean-room claim or rejected-v64
+retention reactivation.
+
+SHA256.json seals every published file except itself and __pycache__. Historical
+SHA files identify original private artifacts, not normalized text derivatives.
+No further evidence source/doc edits after this release. Sealed bundle is handed
+to root before authorized scope-only bundle+doc commit/push. No unrelated index,
+FINDINGS, run-export, Rust or live-harness changes belong to this evidence commit.

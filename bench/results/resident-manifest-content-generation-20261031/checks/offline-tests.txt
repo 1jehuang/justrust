@@ -1,0 +1,44 @@
+test_audit_rejects_external_read_network_native_and_write (__main__.EvidenceTests.test_audit_rejects_external_read_network_native_and_write) ... ok
+test_bad_native_gate_exit (__main__.EvidenceTests.test_bad_native_gate_exit) ... ok
+test_changed_manifest_error_cannot_be_successful (__main__.EvidenceTests.test_changed_manifest_error_cannot_be_successful) ... ok
+test_coherent_all_segment_pid_reseal_not_authenticity (__main__.EvidenceTests.test_coherent_all_segment_pid_reseal_not_authenticity) ... ok
+test_coherent_all_timing_reseal_not_authenticity (__main__.EvidenceTests.test_coherent_all_timing_reseal_not_authenticity) ... ok
+test_coherent_raw_parsed_wrong_name_rejected_by_original_oracle (__main__.EvidenceTests.test_coherent_raw_parsed_wrong_name_rejected_by_original_oracle) ... ok
+test_coherent_strict_wrong_filtered_count_rejected (__main__.EvidenceTests.test_coherent_strict_wrong_filtered_count_rejected) ... ok
+test_coherently_new_runtime_nonce_reseal_not_authenticity (__main__.EvidenceTests.test_coherently_new_runtime_nonce_reseal_not_authenticity) ... ok
+test_default_promotion_rejected (__main__.EvidenceTests.test_default_promotion_rejected) ... ok
+test_empty_home_path_relocation_audit (__main__.EvidenceTests.test_empty_home_path_relocation_audit) ... ok
+test_file_aba_source_hash_must_match_C (__main__.EvidenceTests.test_file_aba_source_hash_must_match_C) ... ok
+test_first_on_cost_cannot_be_dropped (__main__.EvidenceTests.test_first_on_cost_cannot_be_dropped) ... ok
+test_frozen_candidate_source_tamper (__main__.EvidenceTests.test_frozen_candidate_source_tamper) ... ok
+test_general_or_independent_attribution_rejected (__main__.EvidenceTests.test_general_or_independent_attribution_rejected) ... ok
+test_incomplete_regression_receipt (__main__.EvidenceTests.test_incomplete_regression_receipt) ... ok
+test_manifest_path_traversal (__main__.EvidenceTests.test_manifest_path_traversal) ... ok
+test_measurements_median_recomputed (__main__.EvidenceTests.test_measurements_median_recomputed) ... ok
+test_native_named_journal_and_resealed_manifest_tamper (__main__.EvidenceTests.test_native_named_journal_and_resealed_manifest_tamper) ... ok
+test_native_runtime_and_expected_coherent_tamper (__main__.EvidenceTests.test_native_runtime_and_expected_coherent_tamper) ... ok
+test_noise_unknown_cannot_be_promoted (__main__.EvidenceTests.test_noise_unknown_cannot_be_promoted) ... ok
+test_original_oracle_tamper_not_executed (__main__.EvidenceTests.test_original_oracle_tamper_not_executed) ... ok
+test_original_tuple_oracle_not_list_weakened (__main__.EvidenceTests.test_original_tuple_oracle_not_list_weakened) ... ok
+test_overlay_cannot_use_compile_time_env (__main__.EvidenceTests.test_overlay_cannot_use_compile_time_env) ... ok
+test_pinned_missing_runtime_witness (__main__.EvidenceTests.test_pinned_missing_runtime_witness) ... ok
+test_pinned_nonce_duplicate (__main__.EvidenceTests.test_pinned_nonce_duplicate) ... ok
+test_pinned_raw_names_not_parser_bypass (__main__.EvidenceTests.test_pinned_raw_names_not_parser_bypass) ... ok
+test_pinned_source_original_changed (__main__.EvidenceTests.test_pinned_source_original_changed) ... ok
+test_private_path_or_ambient_env_cannot_be_added (__main__.EvidenceTests.test_private_path_or_ambient_env_cannot_be_added) ... ok
+test_real_bundle_all_semantic_gates (__main__.EvidenceTests.test_real_bundle_all_semantic_gates) ... ok
+test_retouch_bytes_changed_even_equal_before_after_hashes (__main__.EvidenceTests.test_retouch_bytes_changed_even_equal_before_after_hashes) ... ok
+test_retouch_requires_actual_mtime_change (__main__.EvidenceTests.test_retouch_requires_actual_mtime_change) ... ok
+test_retouch_set_cannot_narrow_to_manifest (__main__.EvidenceTests.test_retouch_set_cannot_narrow_to_manifest) ... ok
+test_same_pid_with_changed_starttick_not_reuse (__main__.EvidenceTests.test_same_pid_with_changed_starttick_not_reuse) ... ok
+test_status_pid_cannot_disagree_with_proc (__main__.EvidenceTests.test_status_pid_cannot_disagree_with_proc) ... ok
+test_strict_input_recipe_cannot_be_replaced_by_equal_pair (__main__.EvidenceTests.test_strict_input_recipe_cannot_be_replaced_by_equal_pair) ... ok
+test_strict_nonce_is_fresh_runtime_challenge (__main__.EvidenceTests.test_strict_nonce_is_fresh_runtime_challenge) ... ok
+test_strict_type_error_must_not_run (__main__.EvidenceTests.test_strict_type_error_must_not_run) ... ok
+test_worker_executable_hash (__main__.EvidenceTests.test_worker_executable_hash) ... ok
+test_worker_socket_cannot_cross_private_groups (__main__.EvidenceTests.test_worker_socket_cannot_cross_private_groups) ... ok
+
+----------------------------------------------------------------------
+Ran 39 tests in 7.697s
+
+OK

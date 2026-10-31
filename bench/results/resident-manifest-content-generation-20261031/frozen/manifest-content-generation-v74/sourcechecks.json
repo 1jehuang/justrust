@@ -1,0 +1,24 @@
+{
+  "kind": "static source inspection only, not Rust execution",
+  "checks": {
+    "production_unchanged_except_generation_call_and_helpers": true,
+    "exact_one_content_opt_in_env_read": true,
+    "opt_in_process_first_use": true,
+    "exact_value_one": true,
+    "marker_single_literal_site": true,
+    "marker_once": true,
+    "kept_false_retained": true,
+    "original_sources_retained": true,
+    "original_off_timestamp_chain": true,
+    "fallback_original_timestamp_chain": true,
+    "hash_domain_version": true,
+    "content_bit127_domain": true,
+    "full_file_reads_no_metadata_cache": true,
+    "five_real_file_test_sources": true,
+    "tempfile_fixture": true,
+    "same_metadata_platform_api": true,
+    "lossless_native_path_framing": true,
+    "no_lossy_helper_paths": true
+  },
+  "candidate_sha256": "1c0e4612fdc8f926f44c5237b8551a2f0207d4a3dc06840ee774c4e2613cbd75"
+}

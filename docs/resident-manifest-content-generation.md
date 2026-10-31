@@ -268,3 +268,13 @@ RELEASE under `manifest-content-generation-v74-final-doc/`. It does not replace
 or rewrite the prior source or harness freeze. Evidence packaging and the root's
 full Python regression/atomic source-harness-doc commit are separate subsequent
 steps, not claimed complete here. No commit was performed by this worker.
+
+### Portable historical evidence
+
+The allowlisted historical evidence from source commit `de8533b93` is retained in
+[`bench/results/resident-manifest-content-generation-20261031/`](../bench/results/resident-manifest-content-generation-20261031/README.md).
+It includes standalone original-oracle replay, native53/369 and correctness
+receipts, all54 pinned calls/all20 measured samples, slower first ON costs,
+full746 regression receipt, frozen sources/patches/licenses and offline tamper/
+relocation checks. This later evidence-only package preserves the original
+freezes and default-OFF scoped acceptance, with noise still unknown.

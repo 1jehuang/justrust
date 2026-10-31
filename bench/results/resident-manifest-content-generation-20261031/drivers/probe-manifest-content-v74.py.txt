@@ -1,0 +1,63 @@
+#!/usr/bin/env python3
+"""Actual same-byte manifest/lock rewrite diagnostic, not a general performance gate."""
+import argparse,json,re,sys,uuid
+from pathlib import Path
+sys.path.insert(0,'<PRIVATE_HOME>/justrust/bench')
+import resident_engine_compare as h
+import resident_state_matrix as m
+p=argparse.ArgumentParser()
+p.add_argument('--engine',type=Path,required=True)
+p.add_argument('--output',type=Path,required=True)
+p.add_argument('--private',type=Path,required=True)
+p.add_argument('--content-generation',choices=('0','1'),required=True)
+a=p.parse_args()
+a.output.mkdir(mode=0o700,exist_ok=False)
+source=a.output/'source';(source/'src').mkdir(parents=True)
+a.private.mkdir(mode=0o700,exist_ok=False)
+m.durable(source/'Cargo.toml',b'[package]\nname="manifest-content-probe"\nversion="0.0.0"\nedition="2021"\n[workspace]\n',exclusive=True)
+m.durable(source/'src/main.rs',b'fn main(){println!("CONTENT_GENERATION_{}",std::env::var("CONTENT_NONCE").unwrap());}\n',exclusive=True)
+tc=Path('<PRIVATE_HOME>/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu')
+env=h.environment(a.private,'engine',tc)
+env.update(RA_JIT_DEMAND_STD='1',RA_JIT_STATS='1',RA_JIT_MANIFEST_CONTENT_GENERATION=a.content_generation)
+s=dict(scope=__doc__,status='incomplete',rows=[],startup_controls={k:env[k] for k in ('RA_JIT_DEMAND_STD','RA_JIT_STATS','RA_JIT_MANIFEST_CONTENT_GENERATION')},tool_before=h.runtime.base.digest(a.engine),toolchain_before=h.toolchain_identity(tc),private=str(a.private),source_before=h.source_hashes(source))
+def save():m.durable(a.output/'state.json',(json.dumps(s,indent=2)+'\n').encode())
+save()
+try:
+    stable=None
+    for index,phase in enumerate(('cold','noop','manifest-same-bytes','lock-same-bytes','both-same-bytes','noop-final')):
+        names=({'manifest-same-bytes':['Cargo.toml'],'lock-same-bytes':['Cargo.lock'],'both-same-bytes':['Cargo.toml','Cargo.lock']}).get(phase,[])
+        touches=[]
+        for name in names:
+            path=source/name;data=path.read_bytes();before=path.stat().st_mtime_ns
+            m.durable(path,data)
+            after=path.stat().st_mtime_ns
+            assert before!=after and path.read_bytes()==data
+            touches.append(dict(file=name,mtime_before=before,mtime_after=after,bytes_unchanged=True))
+        before=h.source_hashes(source)
+        if stable is not None:assert before==stable
+        nonce=uuid.uuid4().hex;prefix=a.output/f'{index:02}-{phase}'
+        row=dict(phase=phase,nonce=nonce,touches=touches,accepted=False,inputs=before)
+        s['rows'].append(row);save()
+        row.update(h.runtime.run_process(h.command(a.engine,'engine',operation='run',arguments=[]),source,dict(env,CONTENT_NONCE=nonce),prefix,180))
+        raw,text,error=m.captured(prefix)
+        row.update(raw=raw,raw_error=error)
+        row['accepted']=row.get('status')==0 and not row.get('timed_out') and not error and re.findall(r'CONTENT_GENERATION_[^\s]+',text)==['CONTENT_GENERATION_'+nonce]
+        after=h.source_hashes(source)
+        row['input_unchanged']=after==before or (index==0 and all(after.get(k)==v for k,v in before.items()) and set(after)-set(before)<={'Cargo.lock'})
+        if stable is None:stable=after
+        assert after==stable
+        row['status_receipt']=h.runtime.run_process([str(a.engine),'status'],source,env,a.output/f'{index:02}-{phase}-status',30)
+        _,status_text,status_error=m.captured(a.output/f'{index:02}-{phase}-status')
+        row['worker_pids']=[int(v) for v in re.findall(r'worker: pid (\d+)',status_text)]
+        assert not status_error and len(row['worker_pids'])==1
+        for j,log in enumerate(Path(env['BLAZE_HOME']).glob('workers/*/log')):(a.output/f'{index:02}-{phase}-worker-{j}.log').write_bytes(log.read_bytes())
+        save()
+        assert row['accepted'] and row['input_unchanged']
+    s['status']='passed'
+finally:
+    s.update(source_after=h.source_hashes(source),tool_after=h.runtime.base.digest(a.engine),toolchain_after=h.toolchain_identity(tc))
+    s['unchanged']=all(s['source_after'].get(k)==v for k,v in s['source_before'].items()) and set(s['source_after'])-set(s['source_before'])<={'Cargo.lock'} and s['tool_before']==s['tool_after'] and s['toolchain_before']==s['toolchain_after']
+    s['stop']=h.runtime.run_process([str(a.engine),'stop'],source,env,a.output/'stop',30)
+    save()
+assert s['unchanged']
+print(json.dumps(dict(status=s['status'],rows=len(s['rows']),pids=[r['worker_pids'] for r in s['rows']],elapsed_seconds=[r['elapsed_seconds'] for r in s['rows']])))

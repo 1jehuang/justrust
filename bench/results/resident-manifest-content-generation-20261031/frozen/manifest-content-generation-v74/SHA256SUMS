@@ -1,0 +1,8 @@
+34b391dd07b92e735b7f640641c8298897c4ec9d3c239493682985c43a473b81  <EXPERIMENT>/manifest-content-generation-v74/whole.original.rs
+1c0e4612fdc8f926f44c5237b8551a2f0207d4a3dc06840ee774c4e2613cbd75  <EXPERIMENT>/manifest-content-generation-v74/whole.candidate.rs
+2e90297acbb2a4d494f932d829468c01f8bfbcee6f073fb01c9977402d4435a2  <EXPERIMENT>/manifest-content-generation-v74/resident-manifest-content-generation.md
+412973235ceb275497bb2ac88d6126d9ab578b2e2d455bcff34af19cf0416663  <EXPERIMENT>/manifest-content-generation-v74/candidate.patch
+bb01963ff3be2f9a7744e7d4dbc4a1ac09ef618b3315f343ba76b61848fc0fd8  <EXPERIMENT>/manifest-content-generation-v74/sourcechecks.py
+2f97ce1988e03b4c31a160ad7d9a9cfe031b3cedb4273a58b4b11c3ef79862d7  <EXPERIMENT>/manifest-content-generation-v74/sourcechecks.json
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  <EXPERIMENT>/manifest-content-generation-v74/rustfmt-check.txt
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  <EXPERIMENT>/manifest-content-generation-v74/diff-check.txt

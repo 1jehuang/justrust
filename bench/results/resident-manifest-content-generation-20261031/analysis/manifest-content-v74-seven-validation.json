@@ -1,0 +1,147 @@
+{
+  "status": "passed",
+  "decision": "VALIDATED SCOPED CORRECTNESS: pinned suite retouch measurement pending",
+  "promotion": false,
+  "speed_claim": false,
+  "noise": "unknown",
+  "strict_rows": 28,
+  "native_codegen": 53,
+  "native_resident": 369,
+  "markers": {
+    "off": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "on": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "on-repeat": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "off-repeat": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "marker_scope": "Client process opt-in helper entry only, not successful hashing or worker reuse",
+  "comparisons": [
+    {
+      "off": "off",
+      "on": "on",
+      "rows": [
+        {
+          "phase": "cold-prepare",
+          "off_seconds": 27.510675939993234,
+          "on_seconds": 28.598924305988476,
+          "percent_on_vs_off": 3.955731107330651
+        },
+        {
+          "phase": "repeated-noop-1",
+          "off_seconds": 0.05540304898750037,
+          "on_seconds": 0.04956649098312482,
+          "percent_on_vs_off": -10.534723469266737
+        },
+        {
+          "phase": "manifest-feature-add",
+          "off_seconds": 13.595200594019843,
+          "on_seconds": 13.703661221981747,
+          "percent_on_vs_off": 0.7977861541050846
+        },
+        {
+          "phase": "type-error",
+          "off_seconds": 13.337338637997163,
+          "on_seconds": 14.181823186023394,
+          "percent_on_vs_off": 6.33173207149702
+        },
+        {
+          "phase": "type-recovery",
+          "off_seconds": 12.38250126800267,
+          "on_seconds": 13.543415004998678,
+          "percent_on_vs_off": 9.375438062711105
+        },
+        {
+          "phase": "assert-failure",
+          "off_seconds": 2.9177981590037234,
+          "on_seconds": 2.876292406988796,
+          "percent_on_vs_off": -1.4225025088472787
+        },
+        {
+          "phase": "assert-recovery",
+          "off_seconds": 0.6943008389789611,
+          "on_seconds": 0.6469247770146467,
+          "percent_on_vs_off": -6.823563980418879
+        }
+      ]
+    },
+    {
+      "off": "off-repeat",
+      "on": "on-repeat",
+      "rows": [
+        {
+          "phase": "cold-prepare",
+          "off_seconds": 28.625413273024606,
+          "on_seconds": 31.48494754699641,
+          "percent_on_vs_off": 9.989495161862028
+        },
+        {
+          "phase": "repeated-noop-1",
+          "off_seconds": 0.06735025902162306,
+          "on_seconds": 0.05997300997842103,
+          "percent_on_vs_off": -10.953557046949935
+        },
+        {
+          "phase": "manifest-feature-add",
+          "off_seconds": 13.92622544200276,
+          "on_seconds": 14.81417291300022,
+          "percent_on_vs_off": 6.376081406231804
+        },
+        {
+          "phase": "type-error",
+          "off_seconds": 14.188206711987732,
+          "on_seconds": 14.321948107011849,
+          "percent_on_vs_off": 0.9426236714687786
+        },
+        {
+          "phase": "type-recovery",
+          "off_seconds": 12.925470270012738,
+          "on_seconds": 12.855009202001384,
+          "percent_on_vs_off": -0.5451334964177268
+        },
+        {
+          "phase": "assert-failure",
+          "off_seconds": 2.8320975249807816,
+          "on_seconds": 2.9543186129885726,
+          "percent_on_vs_off": 4.315567770167816
+        },
+        {
+          "phase": "assert-recovery",
+          "off_seconds": 0.6251414050057065,
+          "on_seconds": 0.6426367330132052,
+          "percent_on_vs_off": 2.7986192991550585
+        }
+      ]
+    }
+  ]
+}

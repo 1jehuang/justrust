@@ -1,0 +1,410 @@
+--- a/toolchain/resident/crates/ra-jit/src/cargo/whole.rs
++++ b/toolchain/resident/crates/ra-jit/src/cargo/whole.rs
+@@ -582,7 +582,7 @@
+     let lock = root.join("Cargo.lock");
+     // A worker that loaded other manifests loads them again; one with the same is asked to
+     // build again what was edited since.
+-    let generation = manifests.clone().chain([lock]).filter_map(|it| written_at(&it)).max();
++    let generation = checkout_generation(root, manifests.clone(), lock);
+     let sources = members.iter().flat_map(|it| sources_in(&super::state::package_dir(it)));
+     let key = match (asked.subcommand, unit_tests) {
+         (Subcommand::Test, false) => "whole-test",
+@@ -591,7 +591,7 @@
+     };
+     Checkout {
+         key: format!("{}-{key}", asked.key(cwd)),
+-        generation: generation.unwrap_or(0),
++        generation,
+         kept: false,
+         built_at: 0,
+         config,
+@@ -603,12 +603,247 @@
+     }
+ }
+ 
++/// Keep the original timestamp path exactly when disabled. Content identity only replaces
++/// the generation discriminator, never the worker configuration or program input reload.
++fn checkout_generation(
++    root: &Path,
++    manifests: impl Iterator<Item = PathBuf>,
++    lock: PathBuf,
++) -> u128 {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    let enabled = *ENABLED.get_or_init(|| {
++        std::env::var_os("RA_JIT_MANIFEST_CONTENT_GENERATION").is_some_and(|it| it == "1")
++    });
++    if !enabled {
++        return manifests.chain([lock]).filter_map(|it| written_at(&it)).max().unwrap_or(0);
++    }
++    static ENTERED: std::sync::Once = std::sync::Once::new();
++    ENTERED.call_once(|| {
++        use std::io::Write as _;
++        // Entry, not proof of successful hashing, retained workers, or reuse.
++        _ = writeln!(std::io::stderr().lock(), "ra-jit: manifest-content-generation-v1 entered");
++    });
++    let manifests: Vec<_> = manifests.collect();
++    manifest_content_generation(root, &manifests, &lock).unwrap_or_else(|_| {
++        // Unknown never receives a content tag. Preserve the original fallback, including
++        // its timestamp limitations, rather than treating failed reads as missing bytes.
++        manifests.into_iter().chain([lock]).filter_map(|it| written_at(&it)).max().unwrap_or(0)
++    })
++}
++
++/// Hash only the original member manifests and workspace lock. Read bytes every time:
++/// size/mtime caches miss same-size, same-timestamp writes. Paths use the host's native
++/// lossless encoding, framed independently of file contents and explicit missing state.
++fn manifest_content_generation(
++    root: &Path,
++    manifests: &[PathBuf],
++    lock: &Path,
++) -> std::io::Result<u128> {
++    use sha2::{Digest, Sha256};
++    fn frame(hash: &mut Sha256, bytes: &[u8]) {
++        hash.update((bytes.len() as u128).to_le_bytes());
++        hash.update(bytes);
++    }
++    let root = root.canonicalize()?;
++    let mut hash = Sha256::new();
++    frame(&mut hash, b"ra-jit/whole/manifest-content-generation/v1");
++    frame(&mut hash, std::env::consts::OS.as_bytes());
++    frame(&mut hash, std::env::consts::ARCH.as_bytes());
++    frame(&mut hash, root.as_os_str().as_encoded_bytes());
++    // Retain the original path labels as well as canonical targets: aliasing paths must
++    // not erase a change to the watched path set. Duplicate identical labels add no input.
++    let mut files: Vec<_> = manifests.iter().map(|it| (it.as_path(), false)).collect();
++    files.push((lock, true));
++    files.sort_unstable_by(|(a, a_lock), (b, b_lock)| {
++        (a.as_os_str().as_encoded_bytes(), a_lock).cmp(&(b.as_os_str().as_encoded_bytes(), b_lock))
++    });
++    files.dedup_by(|(a, a_lock), (b, b_lock)| {
++        a.as_os_str().as_encoded_bytes() == b.as_os_str().as_encoded_bytes() && a_lock == b_lock
++    });
++    frame(&mut hash, &(files.len() as u128).to_le_bytes());
++    for (file, is_lock) in files {
++        frame(&mut hash, file.as_os_str().as_encoded_bytes());
++        frame(&mut hash, &[u8::from(is_lock)]);
++        match std::fs::symlink_metadata(file) {
++            Err(why) if is_lock && why.kind() == std::io::ErrorKind::NotFound => {
++                // The canonical root exists, so only an absent root Cargo.lock qualifies.
++                // A dangling symlink is not absence and fails canonicalize below.
++                if file != root.join("Cargo.lock") {
++                    return Err(std::io::Error::other("lock is not at canonical checkout root"));
++                }
++                frame(&mut hash, b"missing-lock");
++            }
++            Err(why) => return Err(why),
++            Ok(_) => {
++                let canonical = file.canonicalize()?;
++                if !std::fs::metadata(&canonical)?.is_file() {
++                    return Err(std::io::Error::other("manifest input is not a regular file"));
++                }
++                let bytes = std::fs::read(file)?;
++                // Reject observed races, without pretending this is an atomic filesystem
++                // snapshot. Concurrent edit consistency is still the original contract.
++                if canonical != file.canonicalize()? || bytes != std::fs::read(file)? {
++                    return Err(std::io::Error::other("manifest input changed while reading"));
++                }
++                frame(&mut hash, b"present");
++                frame(&mut hash, canonical.as_os_str().as_encoded_bytes());
++                frame(&mut hash, &bytes);
++            }
++        }
++    }
++    let digest = hash.finalize();
++    let mut tag = [0; 16];
++    tag.copy_from_slice(&digest[..16]);
++    // Original stamps are Duration::as_nanos(): u64 seconds plus subsecond nanos,
++    // strictly below 2^94. Bit 127 therefore separates content from ALL original tags,
++    // not just today's timestamps. The remaining 127 bits are a truncated SHA-256.
++    Ok(u128::from_le_bytes(tag) | (1 << 127))
++}
++
+ /// When `file` was last written, as a stamp.
+ fn written_at(file: &Path) -> Option<u128> {
+     let written = std::fs::metadata(file).and_then(|it| it.modified()).ok()?;
+     Some(written.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos())
+ }
+ 
++#[cfg(test)]
++mod manifest_generation_tests {
++    use super::manifest_content_generation;
++    use std::{
++        fs,
++        path::PathBuf,
++        time::{Duration, UNIX_EPOCH},
++    };
++
++    struct Fixture {
++        _temp: tempfile::TempDir,
++        root: PathBuf,
++        manifest: PathBuf,
++        lock: PathBuf,
++    }
++
++    impl Fixture {
++        fn new() -> Self {
++            let temp = tempfile::tempdir().unwrap();
++            let root = temp.path().canonicalize().unwrap();
++            let manifest = root.join("Cargo.toml");
++            let lock = root.join("Cargo.lock");
++            fs::write(&manifest, b"[package]\nname='a'\nversion='0.1.0'\n").unwrap();
++            fs::write(&lock, b"version = 4\n").unwrap();
++            Self { _temp: temp, root, manifest, lock }
++        }
++
++        fn tag(&self) -> u128 {
++            manifest_content_generation(&self.root, &[self.manifest.clone()], &self.lock).unwrap()
++        }
++    }
++
++    #[test]
++    fn same_bytes_touch_and_rewrite_keep_content_tag() {
++        let f = Fixture::new();
++        let tag = f.tag();
++        for file in [&f.manifest, &f.lock] {
++            let bytes = fs::read(file).unwrap();
++            fs::write(file, &bytes).unwrap();
++            let touched = UNIX_EPOCH + Duration::from_secs(1_234_567);
++            fs::File::options().write(true).open(file).unwrap().set_modified(touched).unwrap();
++            assert_eq!(fs::metadata(file).unwrap().modified().unwrap(), touched);
++            assert_eq!(f.tag(), tag);
++        }
++        assert_ne!(tag & (1 << 127), 0);
++        assert_eq!(super::written_at(&f.manifest).unwrap() & (1 << 127), 0);
++    }
++
++    #[test]
++    fn changed_then_restored_and_same_metadata_mutation() {
++        let f = Fixture::new();
++        let original = f.tag();
++        for file in [&f.manifest, &f.lock] {
++            let bytes = fs::read(file).unwrap();
++            let metadata = fs::metadata(file).unwrap();
++            let times = fs::FileTimes::new()
++                .set_accessed(metadata.accessed().unwrap())
++                .set_modified(metadata.modified().unwrap());
++            let mut changed = bytes.clone();
++            changed[0] ^= 1;
++            fs::write(file, &changed).unwrap();
++            fs::File::options().write(true).open(file).unwrap().set_times(times).unwrap();
++            let after = fs::metadata(file).unwrap();
++            assert_eq!(metadata.len(), after.len());
++            assert_eq!(metadata.modified().unwrap(), after.modified().unwrap());
++            assert_ne!(f.tag(), original);
++            fs::write(file, bytes).unwrap();
++            assert_eq!(f.tag(), original);
++        }
++    }
++
++    #[test]
++    fn sorted_sets_are_framed_and_checkout_specific() {
++        let f = Fixture::new();
++        let second = f.root.join("member/Cargo.toml");
++        fs::create_dir(second.parent().unwrap()).unwrap();
++        fs::copy(&f.manifest, &second).unwrap();
++        let tag = |paths: &[PathBuf]| manifest_content_generation(&f.root, paths, &f.lock).unwrap();
++        assert_eq!(
++            tag(&[f.manifest.clone(), second.clone()]),
++            tag(&[second.clone(), f.manifest.clone(), second.clone()])
++        );
++        assert_ne!(tag(&[f.manifest.clone(), second.clone()]), f.tag());
++        assert_ne!(tag(&[second]), f.tag());
++        let dotted = f.root.join("./Cargo.toml");
++        assert_ne!(tag(&[dotted.clone()]), f.tag());
++        assert_eq!(tag(&[dotted.clone(), f.manifest.clone()]), tag(&[f.manifest.clone(), dotted]));
++        let other = Fixture::new();
++        assert_ne!(other.tag(), f.tag());
++        // A byte delimiter in a file is not a path/frame delimiter.
++        fs::write(&f.manifest, b"present\0Cargo.lock\0missing-lock").unwrap();
++        let framed = f.tag();
++        fs::write(&f.manifest, b"present\0Cargo.lock").unwrap();
++        fs::write(&f.lock, b"\0missing-lock").unwrap();
++        assert_ne!(f.tag(), framed);
++    }
++
++    #[test]
++    fn missing_lock_is_not_empty_or_unknown() {
++        let f = Fixture::new();
++        let present = f.tag();
++        fs::remove_file(&f.lock).unwrap();
++        let missing = f.tag();
++        assert_ne!(present, missing);
++        fs::write(&f.lock, b"").unwrap();
++        assert_ne!(f.tag(), missing);
++        fs::remove_file(&f.manifest).unwrap();
++        assert!(manifest_content_generation(&f.root, &[f.manifest.clone()], &f.lock).is_err());
++        fs::create_dir(&f.manifest).unwrap();
++        assert!(manifest_content_generation(&f.root, &[f.manifest.clone()], &f.lock).is_err());
++        assert!(manifest_content_generation(&f.root.join("absent"), &[], &f.lock).is_err());
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn native_paths_and_symlink_aliases_are_not_lossily_equated() {
++        use std::{
++            ffi::OsString,
++            os::unix::{ffi::OsStringExt, fs::symlink},
++        };
++        let f = Fixture::new();
++        let alias = f.root.join("alias.toml");
++        symlink(&f.manifest, &alias).unwrap();
++        let tag = |path: PathBuf| manifest_content_generation(&f.root, &[path], &f.lock).unwrap();
++        assert_ne!(tag(alias.clone()), f.tag());
++        let raw = f.root.join(OsString::from_vec(b"manifest-\xff.toml".to_vec()));
++        let replacement = f.root.join("manifest-\u{fffd}.toml");
++        fs::copy(&f.manifest, &raw).unwrap();
++        fs::copy(&f.manifest, &replacement).unwrap();
++        assert_ne!(tag(raw), tag(replacement));
++        fs::remove_file(&f.manifest).unwrap();
++        assert!(manifest_content_generation(&f.root, &[alias], &f.lock).is_err());
++        fs::remove_file(&f.lock).unwrap();
++        symlink(f.root.join("absent"), &f.lock).unwrap();
++        assert!(manifest_content_generation(&f.root, &[], &f.lock).is_err());
++    }
++}
++
+ /// The Rust files of the package in `dir`, but not those of a target directory or of a
+ /// package within it.
+ fn sources_in(dir: &Path) -> Vec<PathBuf> {
+--- /dev/null
++++ b/docs/resident-manifest-content-generation.md
+@@ -0,0 +1,139 @@
++# Resident manifest content generation, v74
++
++## Status and scope
++
++Source-only, default OFF experiment dated 2026-10-31. No build, test execution,
++probe, lock acquisition, installation, or commit was performed by this worker.
++Only `toolchain/resident/crates/ra-jit/src/cargo/whole.rs` and this document are
++owned here. Root must validate the frozen candidate before any promotion.
++
++The hypothesis is narrow: `whole::checkout` originally takes the maximum
++`written_at` timestamp of workspace member manifests plus root `Cargo.lock`.
++An identical-byte rewrite can change that discriminator and cause a cold
++checkout unnecessarily. This experiment replaces only that discriminator when
++`RA_JIT_MANIFEST_CONTENT_GENERATION=1` exactly. The decision is cached at the
++first call to checkout generation in each client process. Other values, absence,
++and non-Unicode values are OFF. Runtime environment changes after first use do
++not change this decision.
++
++OFF executes the original manifest iterator chained with the lock, followed by
++`filter_map(written_at)`, `max()`, and `unwrap_or(0)`, without reading file bytes.
++The call site no longer carries an intermediate `Option`, but its resulting
++protocol `u128` is unchanged. Worker configuration, worker key, ABI/native
++configuration guards, build scripts, `kept: false`, source collection, program
++reload and fallback guards are not edited. Rejected v64 retention is not revived.
++
++## Identity and protocol domains
++
++The existing sha2 dependency hashes deterministic length-framed fields. Every
++length is a little-endian u128. Domain/version, host OS/architecture, canonical
++checkout root identity, file count, original native path label, file role,
++presence state, canonical target path and full file bytes are framed separately.
++There is no lossy path conversion. Native `OsStr::as_encoded_bytes` is scoped to
++this host/toolchain, not a portable cross-platform cache format.
++
++The file set is exactly the original workspace member manifests and root lock,
++not dependencies or unrelated manifests. Entries are sorted by native path bytes
++and role, with identical labels/roles deduplicated. Sorting deliberately does
++not use `Path::Ord`, whose normalized components can alias distinct raw labels.
++Canonical target paths do not replace original watched path labels: symlink or
++`./` aliases remain distinct labels. A checkout-root change changes identity.
++
++A known absent root lock is framed as `missing-lock`, distinct from a present
++empty lock. Missing manifests, dangling symlinks, non-regular files,
++canonicalization/read failures and observed read races return errors. The root
++must canonicalize successfully. Conservative fallback is also used if the
++missing lock's spelling is not the canonical root lock spelling.
++
++Each file is read afresh twice with a canonical-path recheck, rather than trusting
++mtime, size or a metadata memo. Same-path, same-size, same-mtime sequential
++rewrites therefore change identity when bytes change. This is not an atomic
++multi-file snapshot, and does not claim to solve concurrent edit races that the
++original metadata/load path also lacks a transaction for.
++
++The first 128 SHA-256 bits become a u128 with bit 127 forced to one, leaving a
++127-bit probabilistic content discriminator. All original timestamps are
++`Duration::as_nanos()`, bounded by u64 seconds plus subsecond nanoseconds and
++therefore strictly below 2^94. Their bit 127 is always zero. Thus an original
++fallback timestamp cannot equal any known content tag, including unusual future
++filesystem timestamps. This is a structural domain separation, not an assumption
++about today's epoch value. SHA truncation still has the usual finite-hash
++collision risk and is not mathematical proof of byte equality.
++
++On I/O uncertainty the helper returns to the original maximum timestamp
++computation over the original file set. Unknown is never assigned a known
++content tag or encoded as empty bytes/missing manifest. Transition from a known
++content generation to fallback necessarily changes domains. Repeated unknown
++states retain the original timestamp behavior and its limitations: an unchanged
++maximum timestamp can compare equal to a previous unknown's fallback timestamp.
++There is no deterministic fresh-on-every-error guarantee in this patch. If root
++requires that stronger invariant, this candidate is blocked pending a protocol
++cold/reject signal or an explicitly approved unique-generation mechanism. Do not
++replace unknown with a constant content digest or silently claim guaranteed cold
++loads for repeated unknown states.
++
++## Marker semantics
++
++At actual opt-in helper entry, once per process, an ignored-error stderr write
++attempts exactly:
++
++```text
++ra-jit: manifest-content-generation-v1 entered
++```
++
++The marker precedes hashing and may accompany conservative fallback. It proves
++entry only, not successful identity computation, retention, cache hits, same PID,
++or ABI safety. OFF never enters this marker site.
++
++## Source tests and root acceptance gates
++
++Five helper test sources operate on real temporary manifests/locks and cover:
++
++- Identical-byte rewrite/touch with deliberately changed timestamp and stable tag.
++- Changed bytes then restored bytes for both files, including same-size mutation
++  with mtime restored through `FileTimes` and checked explicitly.
++- Set reordering and duplicate elimination, added/removed paths, root identity,
++  raw `./` path aliases and independently framed delimiter-like content.
++- Present/missing/empty lock separation and errors for missing manifest,
++  directory-as-manifest and unavailable root.
++- Unix non-UTF-8 native paths versus replacement-character names, symlink aliases,
++  dangling manifests and dangling locks.
++
++These tests are written but unexecuted in this source-only lane. No full checkout
++API fixture was available in this file. Invocation parsing is private and the
++normal metadata helper invokes the external cargo path, so constructing a
++synthetic metadata/CLI fixture here would not replace the required real workflow.
++Root should run the helper tests and existing actual resident/compiler suites.
++
++Root must then run the actual whole-checkout workflow with explicit OFF/ON arms:
++
++1. Warm a program and record worker PID, runtime output and marker count. Touch
++   each member manifest and root lock without changing bytes. ON must preserve
++   the generation and demonstrate same worker PID plus correct runtime, not
++   merely report the entry marker. Compare OFF baseline behavior and timings.
++2. Actually change a valid manifest, introduce an unused `E0308` source error,
++   and require the diagnostic to appear. Repair it and require successful runtime
++   recovery. Do not require or infer same-PID reuse across content changes.
++3. Exercise the native build-script environment and file inputs through A/B/A,
++   requiring each expected runtime value and existing configuration guard
++   behavior. Include changed bytes restored to A, not only byte-preserving touch.
++4. Exercise missing/present lock and I/O uncertainty as feasible. Check known
++   content and fallback tags never alias. Record the repeated-unknown limitation
++   rather than describing timestamp fallback as fresh-on-every-error.
++5. Check process-first-use opt-in behavior with separate processes. Ensure OFF
++   has zero entry markers and ON has at most one attempted marker per client
++   process, including an ON error fallback. No claim about stderr delivery if
++   the output stream itself fails.
++
++A content identity alone does not establish full toolchain ABI safety. Existing
++configuration/native/script/worker-key/fallback guards remain the contract.
++No speedup or runtime correctness result is claimed by this source-only patch.
++
++## Frozen handoff
++
++Private root:
++`<EXPERIMENT>/manifest-content-generation-v74`.
++The handoff contains complete original/candidate source, this document, a unified
++patch, SHA256SUMS, static source-check evidence, exact-file rustfmt parse/check
++output, diff whitespace check and RELEASE. After RELEASE is written, this worker
++stops edits. Root owns all subsequent build/test/probe and promotion decisions.

@@ -1,0 +1,57 @@
+SOURCE_RELEASE / STOPEDITS
+Manifest-retouch harness v74, 2026-10-31
+
+Private freeze root:
+<EXPERIMENT>/manifest-retouch-harness-v74
+
+Owned repository files ONLY:
+  bench/resident_suite.py
+  NEW bench/test_resident_manifest_retouch.py
+
+Frozen candidate SHA256:
+  resident_suite.candidate.py
+    1508a424fde23d7093ae004bc476abcf95d7681e36ed61d9d5c923de9f9cb2df
+  test_resident_manifest_retouch.candidate.py
+    89be7ee5ccbcd065568dc1d0a174fba02b1e72916d38e1988e9917f50108a1bd
+  candidate.patch
+    cdb788ef17483ae212e6c099867b4aadca2c64afe3121cf35e4243ca1bc4de05
+
+Full originals/candidates, patch, SHA256SUMS, AST sourcechecks.py/json,
+Python test output, diff whitespace output and private USAGE.txt are retained.
+Live cmp to both candidate copies PASS. sha256sum -c all10 artifacts PASS.
+
+Python-only tests: 52 PASS (13 new + 12 legacy suite + 27 engine harness).
+No native runtime commands or compilers were invoked in the new tests.
+Native launch/PID helper mocked, subprocess.Popen forbidden guard in new
+orchestration tests, synthetic output clearly marked not native acceptance.
+AST checks: 14 PASS including preservation of all nine legacy functions after
+removing only explicit retouch dispatch/CLI-mode additions. Scoped diffcheck PASS.
+Legacy default mode/schema remains edit + native_resident/v1.
+
+Root invocation and evidence interpretation: see USAGE.txt.
+New mode: bench/suite.py resident --mode manifest-retouch with all existing
+required frozen reference/engine/source/toolchain arguments and optional common
+native proc-macro-server. Output MUST be fresh absolute <=30 native path bytes,
+e.g. /dev/shm/mr74a, to fit native sockets. Source separate pristine pin f97fcc2.
+Fixed OFF/ON/ON/OFF segments, five measured samples each, unseeded isolated native
+state. Original reference/engine semantic gates precede measured overlay.
+Runtime nonce is read/printed from reachable test code in one fixed replayed
+source overlay, not a per-sample edit and not a synthetic parser shortcut.
+Combined original Cargo.toml+Cargo.lock same-byte rewrites, hash/size/mtime proof,
+full source hashes before/after each call, exact flag0/1, actual native status +
+/proc start ticks/exe SHA/private socket argv receipts. Raw replay enforces ON
+same-worker and OFF new-worker identities separately from marker entry counts.
+
+Result schema native_resident_manifest_retouch/v1. Emits off.json/on.json from
+one same-candidate ABBA run. bench/suite.py compare off.json on.json replays raw
+logs and receipts; rejects schema mixing and different runs. Descriptive combined
+retouch median only, noise unknown. No broad/default promotion, significance,
+individual manifest-vs-lock attribution, or full-toolchain ABI safety claim.
+
+Prior v74 whole.rs and doc frozen SHA remain unchanged:
+  whole.rs 1c0e4612fdc8f926f44c5237b8551a2f0207d4a3dc06840ee774c4e2613cbd75
+  doc      2e90297acbb2a4d494f932d829468c01f8bfbcee6f073fb01c9977402d4435a2
+
+No builds, measurements, native probes, build locks, installs, commits, or
+repository doc edits performed in this harness lane. Root owns all actual native
+execution only AFTER strict task4798661f68 ends. Source/artifact edits STOP now.

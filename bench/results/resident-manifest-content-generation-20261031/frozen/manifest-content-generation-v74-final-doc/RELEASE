@@ -1,0 +1,42 @@
+FINAL_DOC_SOURCE_RELEASE / STOPEDITS
+v74 manifest content generation acceptance document, 2026-10-31
+
+Only repository file edited for this final assignment:
+  docs/resident-manifest-content-generation.md
+
+Final live/frozen doc SHA256:
+  52f682868d4f129a2568fb9c5ec2ef0960670090081189ce2485343b136ad6da
+Prior original frozen doc SHA256, preserved byte-for-byte:
+  2e90297acbb2a4d494f932d829468c01f8bfbcee6f073fb01c9977402d4435a2
+Doc-only patch SHA256:
+  624ecf385e3cde3f906102c0388483226f1a104980f7dfab6a38e6b95b7283d0
+
+Distinct final-doc root contains doc.original.md, doc.candidate.md, doc.patch,
+diff-check.txt, SHA256SUMS and this RELEASE. Original source-only document remains
+unchanged in manifest-content-generation-v74/resident-manifest-content-generation.md.
+
+Read existing completed root evidence only. No new native commands, test runs,
+measurements, builds, installs, build locks, commits or evidence packaging.
+Scoped doc diffcheck PASS. Live cmp to final-doc snapshot PASS. Read-only existing
+evidence correspondence PASS: exact suite compare block matches root log, all20
+measured sample values appear in full table, exact medians and both slower first
+ON touches are retained. Correctness53/369 + changedmanifest9 + nativeABA6 +
+strict28 + targeted30 documented. Root full Python sweep/commit left pending.
+
+Accepted only DEFAULT-OFF scoped combined same-byte-retouch option. OFF median
+9.45986455900129s versus ON2.4758396840043133s (-73.83% descriptive), with ON first
+retouch11.96186254301574s/12.040021672000876s SLOWER THAN EVERY OFF sample retained.
+Noise unknown, no causal/general/default-promotion/independent manifest-lock claim.
+Existing repeated-unknown timestamp fallback limitation and licensed Blaze-derived
+Apache-2.0/MIT lineage explicit. Content identity is not a full ABI safety proof.
+
+Frozen native and Python sources verified byte-for-byte against prior releases:
+  whole.rs
+    1c0e4612fdc8f926f44c5237b8551a2f0207d4a3dc06840ee774c4e2613cbd75
+  bench/resident_suite.py
+    1508a424fde23d7093ae004bc476abcf95d7681e36ed61d9d5c923de9f9cb2df
+  bench/test_resident_manifest_retouch.py
+    89be7ee5ccbcd065568dc1d0a174fba02b1e72916d38e1988e9917f50108a1bd
+
+All source/artifact edits STOP after this final-doc RELEASE. Root owns the atomic
+own source/harness/doc commit and subsequent separately assigned evidence package.

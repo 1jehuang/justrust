@@ -1,0 +1,47 @@
+v74 SOURCE-ONLY FREEZE, 2026-10-31
+
+Owned repository files:
+  toolchain/resident/crates/ra-jit/src/cargo/whole.rs
+  docs/resident-manifest-content-generation.md
+
+Candidate whole.rs SHA256:
+  1c0e4612fdc8f926f44c5237b8551a2f0207d4a3dc06840ee774c4e2613cbd75
+Original whole.rs SHA256:
+  34b391dd07b92e735b7f640641c8298897c4ec9d3c239493682985c43a473b81
+Document SHA256:
+  2e90297acbb2a4d494f932d829468c01f8bfbcee6f073fb01c9977402d4435a2
+Patch SHA256:
+  412973235ceb275497bb2ac88d6126d9ab578b2e2d455bcff34af19cf0416663
+
+Static checks performed:
+  rustfmt --edition 2024 --config-path toolchain/resident/rustfmt.toml <exact owned file>
+  rustfmt --edition 2024 --config-path toolchain/resident/rustfmt.toml --check <exact owned file>
+  git diff --check -- <two owned repository paths>
+  python3 sourcechecks.py
+All exited zero. rustfmt-check.txt and diff-check.txt are empty successful logs.
+sourcechecks.json records 18 passing source-text assertions, including exact
+reconstruction of original production source after removing only the generation
+helper/test additions and restoring the two checkout expression changes.
+
+NO builds, Rust test execution, probes, build locks, installs or commits.
+Five real temporary-file helper tests are SOURCE ONLY and require root execution.
+No full checkout API test was added. Root actual-workflow gates are in the doc:
+same-byte manifest/lock touches with same PID + runtime, changed manifest with
+unused E0308/recovery, native build-script env/file A/B/A, OFF/ON marker checks.
+
+Opt-in exact RA_JIT_MANIFEST_CONTENT_GENERATION=1 is captured first use per process.
+Marker is once-at-entry only, never proof of reuse. Content bit127 is separated
+from all original u128 Duration timestamp values (<2^94). File bytes are read
+without metadata caching, with framing, canonical root identity and native paths.
+kept:false and all other original production code are unchanged.
+
+IMPORTANT LIMITATION/BLOCKER FOR STRONGER POLICY:
+Hash I/O uncertainty uses EXACT ORIGINAL maxmtime fallback, not a content tag.
+It cannot alias a known content tag. Repeated unknown states may still compare
+equal under original timestamps. Guaranteed fresh-on-every-unknown behavior is
+NOT implemented. If root requires it, promotion is blocked pending a protocol
+cold/reject signal or explicitly approved unique-generation mechanism. Do not
+silently claim this fallback guarantees a new worker on every I/O error.
+Content identity is not a full toolchain ABI safety proof.
+
+Source and artifact edits STOP after this RELEASE. Root owns further validation.
