@@ -5124,8 +5124,8 @@ impl EnumTy {
     }
 
     pub(super) fn validate(&self) -> Result<(), String> {
-        if self.def().variants.is_empty() || self.def().variants.len() > MAX_ENUM_VARIANTS {
-            return Err("enum variant count must be between 1 and 4096".into());
+        if self.def().variants.len() > MAX_ENUM_VARIANTS {
+            return Err("enum variant count must be at most 4096".into());
         }
         let mut fields = 0usize;
         for variant in self.def().variants.iter() {
@@ -10291,9 +10291,14 @@ impl CheckedFunction {
             .get(scrutinee.0)
             .ok_or("invalid match scrutinee")?
             .ty;
-        if arms.len() > MAX_MATCH_ARMS || (arms.is_empty() && *ty != Ty::Never) {
+        // Only a direct zero-variant enum is newly admitted here. A reference
+        // to it remains inhabited for exhaustiveness, and an enum containing an
+        // uninhabited payload is not itself a zero-variant declaration.
+        let empty_enum = matches!(ty, Ty::Enum(value) if value.def().variants.is_empty());
+        if arms.len() > MAX_MATCH_ARMS || (arms.is_empty() && *ty != Ty::Never && !empty_enum) {
             return Err(
-                "match arm count must be between 1 and 4096 unless scrutinee is never".into(),
+                "match arm count must be between 1 and 4096 unless scrutinee is never or an empty enum"
+                    .into(),
             );
         }
         if let Ty::Enum(ty) = ty {
@@ -16796,18 +16801,68 @@ mod tests {
             },
         });
         assert!(function.validate().unwrap_err().contains("enum variant"));
-        for count in [0, MAX_ENUM_VARIANTS + 1] {
-            let invalid = EnumTy::new(EnumDef {
-                source_decl: test_decl(),
-                type_args: Arc::from([]),
-                id,
-                name: "Invalid".into(),
-                module: modules.core_root(),
-                visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
-                variants: vec![unit_variant(""); count].into(),
-            });
-            assert!(invalid.validate().is_err());
+        let invalid = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
+            id,
+            name: "Invalid".into(),
+            module: modules.core_root(),
+            visibility: crate::compiler::ir::Visibility::Restricted(modules.core_root()),
+            variants: vec![unit_variant(""); MAX_ENUM_VARIANTS + 1].into(),
+        });
+        assert!(invalid.validate().is_err());
+    }
+
+    #[test]
+    fn empty_enum_has_no_constructor_and_only_direct_empty_matches() {
+        let modules = fixture_modules();
+        let empty = EnumTy::new(EnumDef {
+            source_decl: test_decl(),
+            type_args: Arc::from([]),
+            id: NominalAppId {
+                snapshot: SnapshotId::standalone().unwrap(),
+                index: crate::compiler::ir::NominalIndex::SourceSlot(0),
+            },
+            name: "Void".into(),
+            module: modules.core_root(),
+            visibility: Visibility::Public,
+            variants: Arc::from([]),
+        });
+        empty.validate().unwrap();
+        assert!(empty.def().variants.is_empty());
+        assert!(!empty.has_payload());
+        let mut function = fixture();
+        let parameters = function.params.iter().copied().collect();
+        function.exprs[0].ty = Ty::Enum(empty.clone());
+        function
+            .validate_match(ExprId(0), &[], &parameters)
+            .unwrap();
+        for domain in [
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Enum(empty.clone())),
+            },
+            Ty::Tuple(Arc::from([Ty::Enum(empty.clone())])),
+        ] {
+            function.exprs[0].ty = domain;
+            assert!(
+                function
+                    .validate_match(ExprId(0), &[], &parameters)
+                    .is_err()
+            );
         }
+        // An invented ordinal must still be rejected, including ordinal zero.
+        let mut function = fixture();
+        function.exprs.push(TypedExpr {
+            ty: Ty::Enum(empty.clone()),
+            completion: Completion::Returns,
+            kind: ExprKind::EnumVariant {
+                ty: empty,
+                variant: 0,
+                fields: vec![],
+            },
+        });
+        assert!(function.validate().unwrap_err().contains("enum variant"));
     }
 
     #[test]

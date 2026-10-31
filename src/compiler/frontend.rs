@@ -7,7 +7,7 @@
 //! Numeric literals support primitive integers through 128 bits.
 //! Character literals are Unicode scalars with equality/order, not integers.
 //! Explicit character casts admit char to integer and u8 to char only.
-//! Inline modules, named nonempty braced structs, nonempty unit/tuple/braced enums, ordinary visibility, and
+//! Inline modules, named nonempty braced structs, unit/tuple/braced and empty enums, ordinary visibility, and
 //! module-level named/grouped/glob imports have separate type/value namespaces. Named
 //! structs and enums are nominal and non-Copy. Checked pattern decisions retain
 //! ordered scalar/tag observations and initialize bindings only after all tests
@@ -1163,16 +1163,19 @@ mod canonical_source_replay_tests {
         let ir::Ty::Enum(result) = &signature.result else {
             unreachable!()
         };
-        for mode in 0..3 {
+        for mode in 0..4 {
             let mut definition = result.def().clone();
             match mode {
                 0 => definition.source_decl = foreign_result.def().source_decl,
                 1 => definition.type_args = Arc::from([ir::Ty::Bool]),
-                _ => {
+                2 => {
                     let mut variants = definition.variants.to_vec();
                     variants[1].fields = Arc::<[ir::FieldDef]>::from([]).into();
                     definition.variants = variants.into();
                 }
+                // The same application ID cannot turn an inhabited source
+                // declaration into an empty enum to fake exhaustiveness.
+                _ => definition.variants = Arc::from([]),
             }
             let forged = ir::Ty::Enum(ir::EnumTy::new(definition));
             for (left, right) in [(&forged, &signature.result), (&signature.result, &forged)] {
@@ -14685,9 +14688,6 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
             self.expect("}")?;
-            if variants.is_empty() {
-                return Err(self.unsupported("empty enums are unsupported"));
-            }
             if variants.iter().any(|v| v.discriminant.is_some()) {
                 if variants.iter().any(|v| v.shape != ir::VariantShape::Unit) {
                     return Err(self.error(

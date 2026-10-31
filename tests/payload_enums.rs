@@ -1,7 +1,7 @@
 //! Payload enum native acceptance for the bounded tuple/braced/unit milestone.
-//! All 44 exact fixtures were stock-classified with rustc 1.98.1, edition 2024.
-//! Stock is an external scratch oracle only and is never invoked by these tests.
-//! Guards, or-patterns, references and Drop remain boundaries.
+//! Historical fixtures were stock-classified with rustc 1.98.1, edition 2024.
+//! Supported payload transitions and empty enums also run the pinned stock oracle.
+//! Guard, or-pattern and Drop controls retain unused-body semantic rejection.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
 use std::fs::{self, OpenOptions};
@@ -10,6 +10,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+#[path = "support/stock_rustc.rs"]
+mod stock;
 
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
@@ -164,6 +167,311 @@ fn rejects(label: &str, source: &str) {
             );
             assert!(!output.exists(), "{label}: published executable");
         }
+    }
+}
+
+// These historical sources exercise already-supported guarded/or-pattern and
+// Drop producers. Require an actual pinned stock oracle and native execution,
+// paired with an unused invalid body that must fail semantically in both modes.
+fn payload_transition(source: &str, invalid: &str) {
+    let rustc = stock::stock_rustc();
+    for (text, valid) in [(source, true), (invalid, false)] {
+        for check in [true, false] {
+            let scratch = Scratch::new();
+            let input = scratch.source(text);
+            let output = scratch.path(if check { "metadata" } else { "stock" });
+            let mut command = Command::new(&rustc);
+            command.env_remove("RUSTC_BOOTSTRAP").args([
+                "--edition=2024",
+                "--crate-name=payload_transition",
+                "--color=never",
+                "-Cpanic=abort",
+            ]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            command.arg(&input).arg("-o").arg(&output);
+            let result = capture(&mut command, &scratch, 20);
+            let diagnostic = String::from_utf8_lossy(&result.stderr);
+            assert_eq!(
+                result.status.code(),
+                Some(i32::from(!valid)),
+                "stock check={check}: {diagnostic}\n{text}"
+            );
+            if !valid {
+                assert!(
+                    diagnostic.contains("error[E0308]"),
+                    "stock check={check}: {diagnostic}"
+                );
+                assert!(!output.exists(), "stock published rejected output");
+            } else if !check {
+                let result = capture(&mut Command::new(output), &scratch, 5);
+                assert!(result.status.success(), "stock runtime: {result:?}");
+                assert_eq!(result.stdout, b"payload oracle ok\n");
+                assert!(result.stderr.is_empty(), "stock runtime: {result:?}");
+            }
+        }
+    }
+    runs(source, "payload oracle ok\n");
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let scratch = Scratch::new();
+            let input = scratch.source(invalid);
+            let output = scratch.path("must-not-exist");
+            let mut command = compiler(&input, &output, workers, check);
+            command
+                .current_dir(&scratch.0)
+                .env_remove("RUSTC_BOOTSTRAP")
+                .env("RUSTC", scratch.path("no-rustc"))
+                .env("PATH", scratch.path("no-tools"));
+            let result = capture(&mut command, &scratch, 20);
+            let diagnostic = String::from_utf8_lossy(&result.stderr);
+            assert_eq!(
+                result.status.code(),
+                Some(1),
+                "workers={workers} check={check}: {diagnostic}"
+            );
+            assert!(
+                diagnostic.contains("E0308") || diagnostic.contains("expected Bool, got Int(I32)"),
+                "workers={workers} check={check}: {diagnostic}"
+            );
+            for boundary in [
+                "ResourceLimit",
+                "unsupported:",
+                "contract:",
+                "infrastructure:",
+                "panicked at",
+            ] {
+                assert!(
+                    !diagnostic.contains(boundary),
+                    "workers={workers} check={check}: {diagnostic}"
+                );
+            }
+            assert!(result.stdout.is_empty());
+            assert!(!output.exists(), "published rejected payload executable");
+        }
+    }
+}
+
+// These exact sources are shared by the pinned stock and native gates. No
+// inhabited stand-in for Void, Always, OnUnwind or OnSuccess is permitted.
+const EMPTY_ENUM_VALID: &[(&str, &str)] = &[
+    (
+        "scopeguard_strategy_type_use",
+        r#"pub trait Strategy{fn should_run()->bool;}
+pub enum Always{} pub enum OnUnwind{} pub enum OnSuccess{}
+impl Strategy for Always{fn should_run()->bool{true}}
+impl Strategy for OnUnwind{fn should_run()->bool{false}}
+impl Strategy for OnSuccess{fn should_run()->bool{true}}
+fn enabled<S:Strategy>()->bool{S::should_run()}
+fn main(){if enabled::<Always>()&&!enabled::<OnUnwind>()&&enabled::<OnSuccess>(){println!("empty enum ok");}}"#,
+    ),
+    (
+        "owned_absurd",
+        r#"enum Void{} fn absurd(value:Void)->i32{match value{}}
+fn main(){println!("empty enum ok");}"#,
+    ),
+    (
+        "shared_deref_absurd",
+        r#"enum Void{} fn absurd(value:&Void)->i32{match *value{}}
+fn main(){println!("empty enum ok");}"#,
+    ),
+    (
+        "trait_receiver_absurd",
+        r#"enum Void{} trait Absurd{fn absurd(self)->i32;}
+impl Absurd for Void{fn absurd(self)->i32{match self{}}}
+fn main(){println!("empty enum ok");}"#,
+    ),
+    (
+        "imported_identity",
+        r#"mod declaration{pub enum Void{}}use declaration::Void as Empty;
+fn absurd(value:Empty)->bool{match value{}}
+fn main(){println!("empty enum ok");}"#,
+    ),
+    (
+        "uninhabited_payload_branch",
+        r#"enum Void{} enum Choice{Impossible(Void),Value(i32)}
+fn value(choice:Choice)->i32{match choice{Choice::Impossible(v)=>match v{},Choice::Value(n)=>n}}
+fn main(){if value(Choice::Value(42))==42{println!("empty enum ok");}}"#,
+    ),
+];
+
+const EMPTY_ENUM_INVALID: &[(&str, &str, &str)] = &[
+    (
+        "record_constructor",
+        "enum Void{}fn unused()->Void{Void{}}fn main(){}",
+        "E0574",
+    ),
+    (
+        "unit_constructor",
+        "enum Void{}fn unused()->Void{Void}fn main(){}",
+        "E0423",
+    ),
+    (
+        "tuple_constructor",
+        "enum Void{}fn unused()->Void{Void()}fn main(){}",
+        "E0423",
+    ),
+    (
+        "invented_variant",
+        "enum Void{}fn unused()->Void{Void::Invented}fn main(){}",
+        "E0599",
+    ),
+    (
+        "reference_is_not_empty",
+        "enum Void{}fn unused(value:&Void)->i32{match value{}}fn main(){}",
+        "E0004",
+    ),
+    (
+        "inhabited_enum_is_not_empty",
+        "enum Void{}enum Other{Exists}fn unused(value:Other)->i32{match value{}}fn main(){}",
+        "E0004",
+    ),
+    (
+        "empty_arm_body_still_checked",
+        "enum Void{}fn unused(value:Void)->i32{match value{_=>true}}fn main(){}",
+        "E0308",
+    ),
+    (
+        "unused_type_parameter",
+        "enum Void<T>{}fn main(){}",
+        "E0392",
+    ),
+    (
+        "unused_lifetime_parameter",
+        "enum Void<'a>{}fn main(){}",
+        "E0392",
+    ),
+];
+
+#[test]
+fn empty_enum_pinned_stock_check_build_and_runtime_oracle() {
+    let rustc = stock::stock_rustc();
+    for (name, source, diagnostic) in EMPTY_ENUM_VALID
+        .iter()
+        .map(|(name, source)| (*name, *source, None))
+        .chain(
+            EMPTY_ENUM_INVALID
+                .iter()
+                .map(|(name, source, diagnostic)| (*name, *source, Some(*diagnostic))),
+        )
+    {
+        for check in [true, false] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path(if check { "metadata" } else { "stock" });
+            let mut command = Command::new(&rustc);
+            command.env_remove("RUSTC_BOOTSTRAP").args([
+                "--edition=2024",
+                "--crate-name=empty_enum_oracle",
+                "--color=never",
+                "-Cpanic=abort",
+            ]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            command.arg(&input).arg("-o").arg(&output);
+            let result = capture(&mut command, &scratch, 20);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            if let Some(diagnostic) = diagnostic {
+                assert!(!result.status.success(), "{name} check={check}: {source}");
+                assert!(
+                    stderr.contains(diagnostic),
+                    "{name} check={check}: {stderr}"
+                );
+                assert!(!output.exists(), "{name}: stock published rejected output");
+            } else {
+                assert!(result.status.success(), "{name} check={check}: {stderr}");
+                if !check {
+                    let result = capture(&mut Command::new(output), &scratch, 5);
+                    assert!(result.status.success(), "{name}: {result:?}");
+                    assert_eq!(result.stdout, b"empty enum ok\n", "{name}");
+                    assert!(result.stderr.is_empty(), "{name}: {result:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_enum_native_check_build_run_workers1_8_no_stock_fallback() {
+    for (name, source, valid) in EMPTY_ENUM_VALID
+        .iter()
+        .map(|(name, source)| (*name, *source, true))
+        .chain(
+            EMPTY_ENUM_INVALID
+                .iter()
+                .map(|(name, source, _)| (*name, *source, false)),
+        )
+    {
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let scratch = Scratch::new();
+                let input = scratch.source(source);
+                let output = scratch.path("native");
+                let mut command = compiler(&input, &output, workers, check);
+                command
+                    .current_dir(&scratch.0)
+                    .env_remove("RUSTC_BOOTSTRAP")
+                    .env("RUSTC", scratch.path("no-rustc"))
+                    .env("PATH", scratch.path("no-tools"));
+                let result = capture(&mut command, &scratch, 20);
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                assert!(result.status.code().is_some(), "{name}: {result:?}");
+                assert!(!stderr.contains("panicked at"), "{name}: {stderr}");
+                assert_eq!(
+                    result.status.success(),
+                    valid,
+                    "{name} workers={workers} check={check}: {stderr}\n{source}"
+                );
+                if !valid || check {
+                    assert!(!output.exists(), "{name}: published executable");
+                }
+                if !valid {
+                    assert!(!stderr.is_empty(), "{name}: missing diagnostic");
+                } else if !check {
+                    let bytes = fs::read(&output).unwrap();
+                    assert_eq!(&bytes[..6], b"\x7fELF\x02\x01");
+                    let result = capture(&mut Command::new(output), &scratch, 5);
+                    assert!(result.status.success(), "{name}: {result:?}");
+                    assert_eq!(result.stdout, b"empty enum ok\n", "{name}");
+                    assert!(result.stderr.is_empty(), "{name}: {result:?}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn empty_enum_source_representation_and_check_graph_remain_nominal() {
+    use justrust_engine::compiler::{self, frontend, ir};
+    let text = "enum Void{}fn absurd(value:Void)->i32{match value{}}fn main(){}";
+    let program = frontend::parse(text).unwrap();
+    assert_eq!(program.enums.len(), 1);
+    assert!(program.enums[0].variants.is_empty());
+    let signatures = frontend::signature_table(&program).unwrap();
+    let function = frontend::type_function_with_signatures(&program, 0, &signatures).unwrap();
+    function.validate().unwrap();
+    let ir::Ty::Enum(value) = &function.locals[function.params[0].0].ty else {
+        panic!("empty enum was erased or replaced by a scalar/never type")
+    };
+    assert!(value.def().variants.is_empty());
+    assert!(function.exprs.iter().any(|expression| {
+        matches!(&expression.kind, ir::ExprKind::Match { arms, .. } if arms.is_empty())
+            && expression.ty == ir::Ty::Never
+    }));
+    for workers in [1, 8] {
+        let checked = compiler::compile_observed(text.into(), workers, true).unwrap();
+        assert_eq!(checked.enums, 1);
+        assert!(checked.executable.is_none());
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| key.kind != 103),
+            "empty-enum CHECK demanded code generation"
+        );
     }
 }
 
@@ -564,24 +872,22 @@ fn main() { if run() == 3 { println!("payload oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_payload_guard() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "payload_guard",
+fn accepts_payload_guard_with_unused_invalid_condition_control() {
+    payload_transition(
         r#"enum E{A(i32),B} fn run()->i32{match E::A(7){E::A(n) if n>0=>n,_=>0}}
 fn main() { if run() == 7 { println!("payload oracle ok"); } }
 "#,
+        "enum E{A(i32),B}fn unused()->i32{match E::A(7){E::A(n) if n=>n,_=>0}}fn main(){}",
     );
 }
 
 #[test]
-fn rejects_legal_unsupported_payload_or_pattern() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "payload_or_pattern",
+fn accepts_payload_or_pattern_with_unused_invalid_result_control() {
+    payload_transition(
         r#"enum E{A(i32),B(i32)} fn run()->i32{match E::A(7){E::A(n)|E::B(n)=>n}}
 fn main() { if run() == 7 { println!("payload oracle ok"); } }
 "#,
+        "enum E{A(i32),B(i32)}fn unused()->bool{match E::A(7){E::A(n)|E::B(n)=>n}}fn main(){}",
     );
 }
 
@@ -596,13 +902,12 @@ fn main() { if run() == 7 { println!("payload oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_payload_drop() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "payload_drop",
+fn accepts_payload_drop_with_unused_invalid_body_control() {
+    payload_transition(
         r#"struct S{n:i32} impl Drop for S{fn drop(&mut self){}} enum E{A(S)} fn run()->i32{let e=E::A(S{n:7});match e{E::A(s)=>s.n}}
 fn main() { if run() == 7 { println!("payload oracle ok"); } }
 "#,
+        "struct S{n:i32}impl Drop for S{fn drop(&mut self){let invalid:u8=true;}}enum E{A(S)}fn unused()->i32{let e=E::A(S{n:7});match e{E::A(s)=>s.n}}fn main(){}",
     );
 }
 

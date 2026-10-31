@@ -1240,8 +1240,11 @@ impl PlanState {
                         NominalSchema::Enum(d) => {
                             self.schema_identity(registry, decl, &d.name, d.module, &d.visibility)?;
                             clone_visibility(&d.visibility, budget)?;
-                            if d.variants.is_empty() || d.variants.len() > 4096 {
+                            if d.variants.len() > 4096 {
                                 return Err("enum variant count exceeds supported limits".into());
+                            }
+                            if d.variants.is_empty() && !d.region_params.is_empty() {
+                                return Err("unused lifetime parameter in empty enum".into());
                             }
                             self.retain(
                                 budget,
