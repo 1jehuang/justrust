@@ -446,9 +446,26 @@ impl CallInferenceState {
     ) -> Result<(InferTerm, InferTerm), FactsError> {
         let schema = self.schema(parameter, 0)?;
         let evidence = self.type_term(input, None, 0)?;
-        self.constrain(&schema, &evidence, 0)?;
+        self.constrain_call_input(&schema, &evidence)?;
         Ok((schema, evidence))
     }
+    /// Only the outer authored call parameter is a coercion site. Keep the
+    /// recorded source evidence unchanged and constrain pointees invariantly.
+    fn constrain_call_input(
+        &mut self,
+        schema: &InferTerm,
+        evidence: &InferTerm,
+    ) -> Result<(), FactsError> {
+        self.work(0)?;
+        if let (InferKind::RawPtr(target_kind, target), InferKind::Ref(source_kind, source)) =
+            (schema.as_ref(), evidence.as_ref())
+            && (*target_kind == ir::BorrowKind::Shared || target_kind == source_kind)
+        {
+            return self.constrain(target, source, 1);
+        }
+        self.constrain(schema, evidence, 0)
+    }
+
     pub(super) fn work(&self, depth: usize) -> Result<(), FactsError> {
         self.budget
             .check_depth(depth)
@@ -1965,7 +1982,7 @@ fn infer_input_schema_trace_with_context(
     for (parameter, input) in parameters.iter().zip(inputs) {
         let schema = state.type_term(parameter, binder, 0)?;
         let actual = state.type_term(input, None, 0)?;
-        state.constrain(&schema, &actual, 0)?;
+        state.constrain_call_input(&schema, &actual)?;
         schemas.push(schema);
         evidence.push(actual);
     }
@@ -2522,6 +2539,162 @@ mod replay_type_equality_tests {
 #[cfg(test)]
 mod call_input_trace_tests {
     use super::*;
+
+    #[test]
+    fn raw_call_input_preserves_original_evidence_and_strict_nested_boundaries() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let raw = |kind, ty| ir::Ty::RawPtr {
+            kind,
+            pointee: Arc::new(ty),
+        };
+        let i32_ty = ir::Ty::Int(ir::IntTy::I32);
+        for target in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            for source in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+                let formal = raw(target, param(&own, 0));
+                let actual = reference(source, i32_ty.clone());
+                let inferred = infer(
+                    own.clone(),
+                    std::slice::from_ref(&formal),
+                    std::slice::from_ref(&actual),
+                    &budget,
+                );
+                if target == ir::BorrowKind::Mut && source == ir::BorrowKind::Shared {
+                    assert!(
+                        inferred.is_err(),
+                        "shared input must not authorize mutable raw pointer"
+                    );
+                    continue;
+                }
+                let trace = inferred.unwrap();
+                assert_eq!(trace.actuals(), std::slice::from_ref(&i32_ty));
+                assert!(
+                    matches!(trace.schemas[0].as_ref(), InferKind::RawPtr(kind, _) if *kind == target)
+                );
+                assert!(
+                    matches!(trace.evidence[0].as_ref(), InferKind::Ref(kind, _) if *kind == source)
+                );
+                assert_eq!(
+                    trace.expected(0, &budget).unwrap(),
+                    ir::CallExpectation::NoFirmReference
+                );
+                let replay = infer(
+                    own.clone(),
+                    std::slice::from_ref(&formal),
+                    std::slice::from_ref(&actual),
+                    &budget,
+                )
+                .unwrap();
+                trace.validate_replayed(&replay, &budget).unwrap();
+                let forged = infer(
+                    own.clone(),
+                    std::slice::from_ref(&formal),
+                    &[raw(target, i32_ty.clone())],
+                    &budget,
+                )
+                .unwrap();
+                assert!(
+                    trace.validate_replayed(&forged, &budget).is_err(),
+                    "cast evidence must not replace original reference evidence"
+                );
+
+                let mut state = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+                let (schema, evidence) = state.constrain_input(&formal, &actual).unwrap();
+                assert!(matches!(schema.as_ref(), InferKind::RawPtr(_, _)));
+                assert!(matches!(evidence.as_ref(), InferKind::Ref(_, _)));
+                let mut strict = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+                assert!(strict.constrain(&schema, &evidence, 0).is_err());
+                let nested = [
+                    (
+                        InferKind::Tuple(Arc::from([schema.clone()])),
+                        InferKind::Tuple(Arc::from([evidence.clone()])),
+                    ),
+                    (
+                        InferKind::Ref(ir::BorrowKind::Shared, schema.clone()),
+                        InferKind::Ref(ir::BorrowKind::Shared, evidence.clone()),
+                    ),
+                    (
+                        InferKind::RawPtr(ir::BorrowKind::Shared, schema.clone()),
+                        InferKind::RawPtr(ir::BorrowKind::Shared, evidence.clone()),
+                    ),
+                    (
+                        InferKind::Nominal(own.binder().declaration, Arc::from([schema.clone()])),
+                        InferKind::Nominal(own.binder().declaration, Arc::from([evidence.clone()])),
+                    ),
+                    (
+                        InferKind::FnPointer(
+                            Arc::from([schema.clone()]),
+                            Arc::new(InferKind::Rigid(ir::Ty::Unit)),
+                        ),
+                        InferKind::FnPointer(
+                            Arc::from([evidence.clone()]),
+                            Arc::new(InferKind::Rigid(ir::Ty::Unit)),
+                        ),
+                    ),
+                ];
+                for (left, right) in nested {
+                    let mut nested_state =
+                        CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+                    assert!(
+                        nested_state
+                            .constrain_call_input(&Arc::new(left), &Arc::new(right))
+                            .is_err()
+                    );
+                }
+            }
+        }
+        // A result-context expectation is equality, never a call-input cast.
+        assert!(
+            infer_input_schema_trace_with_context(
+                Some(own.clone()),
+                &[],
+                &raw(ir::BorrowKind::Shared, param(&own, 0)),
+                &[],
+                Some(&reference(ir::BorrowKind::Shared, i32_ty.clone())),
+                &budget,
+                &mut |_, _| unreachable!(),
+            )
+            .is_err()
+        );
+        // An already known pointee must not be reinterpreted through this rule.
+        assert!(
+            infer_input_schema_trace(
+                Some(env(0)),
+                &[raw(ir::BorrowKind::Shared, ir::Ty::Bool)],
+                &ir::Ty::Unit,
+                &[reference(ir::BorrowKind::Shared, i32_ty)],
+                &budget,
+                &mut |_, _| unreachable!(),
+            )
+            .is_err()
+        );
+        let tiny = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            infer(
+                own.clone(),
+                &[raw(ir::BorrowKind::Shared, param(&own, 0))],
+                &[reference(ir::BorrowKind::Shared, ir::Ty::Bool)],
+                &tiny
+            )
+            .unwrap_err()
+            .is_resource()
+        );
+        let first = tiny.first_resource_failure().unwrap();
+        assert!(
+            infer(
+                own.clone(),
+                &[raw(ir::BorrowKind::Shared, param(&own, 0))],
+                &[reference(ir::BorrowKind::Shared, ir::Ty::Bool)],
+                &tiny
+            )
+            .unwrap_err()
+            .is_resource()
+        );
+        assert_eq!(tiny.first_resource_failure(), Some(first));
+    }
 
     fn env(count: usize) -> Arc<ir::ParamEnv> {
         Arc::new(

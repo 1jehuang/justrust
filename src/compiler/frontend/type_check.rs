@@ -1712,6 +1712,18 @@ impl<'s> Checker<'s> {
         }
         for (formal, expr) in schema.signature.params.iter().zip(args) {
             let evidence = self.inference_evidence(expr, 0)?;
+            if let ir::Ty::RawPtr { kind, pointee } = formal
+                && let InferKind::Ref(actual_kind, referent) = evidence.as_ref()
+                && (*kind == ir::BorrowKind::Shared || *actual_kind == ir::BorrowKind::Mut)
+            {
+                // Only original argument inputs may perform this outer
+                // adjustment. Pointee inference remains invariant, and the
+                // ordinary checker must still emit and validate the cast.
+                // Result expectations and nested equations stay strict.
+                self.infer_work(1)?;
+                projected_constraints.push((pointee.as_ref(), referent.clone()));
+                continue;
+            }
             if let Some((kind, element)) = formal.slice_ref_element()
                 && let InferKind::Ref(actual_kind, referent) = evidence.as_ref()
                 && kind == *actual_kind
@@ -8383,7 +8395,16 @@ impl<'a> Checker<'a> {
             }
             return Ok(id);
         }
-        let result = self.expr_with_expectation_inner(e, expectation)?;
+        let reborrow = match expectation.coercion() {
+            Some(expected @ ir::Ty::RawPtr { kind, .. }) => {
+                self.pointer_reference_reborrow(e, expected, *kind)?
+            }
+            _ => None,
+        };
+        let result = match reborrow {
+            Some(result) => result,
+            None => self.expr_with_expectation_inner(e, expectation)?,
+        };
         self.record_runtime_site(e, result)?;
         let result = self.record_original_call(e, result)?;
         match expectation.coercion() {
@@ -8402,6 +8423,9 @@ impl<'a> Checker<'a> {
             }
             Some(expected) if expected.owned_pointer_object().is_some() => {
                 self.coerce_ref_to_dyn(result, expected)
+            }
+            Some(expected @ ir::Ty::RawPtr { .. }) => {
+                self.coerce_reference_to_raw_pointer(result, expected)
             }
             Some(expected) => Ok(self.deref_coercion(e, result, expected)?.unwrap_or(result)),
             _ => Ok(result),
@@ -10381,6 +10405,94 @@ impl<'a> Checker<'a> {
         self.primitive_associated_actuals(expression, &owner, call)?;
         Ok(call)
     }
+    /// Reborrow an existing mutable reference carrier before it is read as a
+    /// value. The requested access is independent of the carrier's mutability.
+    fn pointer_reference_reborrow(
+        &mut self,
+        value: &Expr,
+        target: &ir::Ty,
+        kind: ir::BorrowKind,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let ir::Ty::RawPtr { pointee, .. } = target else {
+            return Ok(None);
+        };
+        let Ok(source_place) = static_source_place(value) else {
+            return Ok(None);
+        };
+        let Ok((mut place, source_ty, _)) = self.checked_place(&source_place) else {
+            return Ok(None);
+        };
+        let ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent,
+        } = &source_ty
+        else {
+            return Ok(None);
+        };
+        let budget = &self.signatures.plan()?.budget;
+        if !ir::identical_type(referent, pointee, budget)?
+            || !ir::ptr_cast_valid(&source_ty, target)
+        {
+            return Ok(None);
+        }
+        if place.projection.len() >= 128 {
+            return Err("pointer cast reborrow projection limit128".into());
+        }
+        place.projection.push(ir::Projection::Deref);
+        Ok(Some(self.borrow_expression(kind, place)?))
+    }
+    /// An implicit adjustment at a genuine expected-type site. The explicit
+    /// cast matrix is deliberately consulted only after exact pointee and
+    /// capability admission, never to authorize reinterpretation.
+    fn coerce_reference_to_raw_pointer(
+        &mut self,
+        value: ir::ExprId,
+        target: &ir::Ty,
+    ) -> Result<ir::ExprId, String> {
+        let source = self.flow(value);
+        let (
+            ir::Ty::Ref { kind, referent },
+            ir::Ty::RawPtr {
+                kind: target_kind,
+                pointee,
+            },
+        ) = (&source.ty, target)
+        else {
+            return Ok(value);
+        };
+        if *target_kind == ir::BorrowKind::Mut && *kind != ir::BorrowKind::Mut {
+            return Ok(value);
+        }
+        let budget = &self.signatures.plan()?.budget;
+        if !ir::identical_type(referent, pointee, budget)? {
+            let unsizing = match (referent.as_ref(), pointee.as_ref()) {
+                (ir::Ty::Array { element, .. }, ir::Ty::Slice { element: expected }) => {
+                    ir::identical_type(element, expected, budget)?
+                }
+                (_, ir::Ty::Dyn(_)) => !matches!(referent.as_ref(), ir::Ty::Dyn(_)),
+                _ => false,
+            };
+            if unsizing {
+                return Err("unsupported: reference-to-raw pointer unsizing".into());
+            }
+            return Ok(value);
+        }
+        if !ir::ptr_cast_valid(&source.ty, target) {
+            return Err("unsupported: reference-to-raw pointer coercion representation".into());
+        }
+        let id = ir::ExprId(self.exprs.len());
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+        self.exprs.push(ir::TypedExpr {
+            kind: ir::ExprKind::PtrCast { value },
+            ty: target.clone(),
+            completion: if source.completes {
+                ir::Completion::Returns
+            } else {
+                ir::Completion::Never
+            },
+        });
+        Ok(id)
+    }
     /// `as` casts whose source or target is a raw pointer. Pairs are exactly
     /// those admitted by `ir::ptr_cast_valid`; everything else is E0606.
     fn pointer_cast_expression(
@@ -10393,26 +10505,7 @@ impl<'a> Checker<'a> {
         // non-Copy `&mut T`, incorrectly invalidating later uses of `self`/`r`.
         // Keep this adjustment specific to an admitted reference-to-pointer
         // cast of a static source place, not ordinary moves or raw casts.
-        let reborrow = if matches!(target, ir::Ty::RawPtr { .. })
-            && let Ok(source_place) = static_source_place(value)
-            && let Ok((mut place, source_ty, _)) = self.checked_place(&source_place)
-            && matches!(
-                source_ty,
-                ir::Ty::Ref {
-                    kind: ir::BorrowKind::Mut,
-                    ..
-                }
-            )
-            && ir::ptr_cast_valid(&source_ty, &target)
-        {
-            if place.projection.len() >= 128 {
-                return Err("pointer cast reborrow projection limit128".into());
-            }
-            place.projection.push(ir::Projection::Deref);
-            Some(self.borrow_expression(ir::BorrowKind::Mut, place)?)
-        } else {
-            None
-        };
+        let reborrow = self.pointer_reference_reborrow(value, &target, ir::BorrowKind::Mut)?;
         let value = match (reborrow, &target) {
             (Some(value), _) => value,
             (None, ir::Ty::RawPtr { .. }) if matches!(value, Expr::Integer(_)) => {

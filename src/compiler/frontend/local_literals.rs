@@ -1173,6 +1173,27 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(());
         }
         match (self.domain(actual), self.domain(expected)) {
+            (Domain::Ref(from, a), Domain::RawPtr(to, b))
+                if to == ir::BorrowKind::Shared || from == ir::BorrowKind::Mut =>
+            {
+                // This coercion preserves the exact pointee type. It is not a
+                // Deref coercion or a raw-pointer reinterpretation. The checker
+                // separately validates representation and emits the adjustment.
+                match (self.domain(a), self.domain(b)) {
+                    (Domain::Array(element, _), Domain::Slice(expected_element)) => {
+                        self.unify(element, expected_element)?;
+                        Err("unsupported: reference-to-raw pointer unsizing".into())
+                    }
+                    (_, Domain::Fixed(ir::Ty::Dyn(_)))
+                        if self
+                            .resolve(a, 0)?
+                            .is_some_and(|ty| !matches!(ty, ir::Ty::Dyn(_))) =>
+                    {
+                        Err("unsupported: reference-to-raw pointer unsizing".into())
+                    }
+                    _ => self.unify(a, b),
+                }
+            }
             (Domain::Ref(_, a), Domain::Ref(_, b)) => {
                 // A reference coercion may run an authoritative Deref chain.
                 // Only equal outer constructors imply equality of type arguments.

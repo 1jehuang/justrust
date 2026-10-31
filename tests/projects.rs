@@ -1106,6 +1106,104 @@ fn locked_registry_unchanged_probe_boundaries() {
 }
 
 #[test]
+fn locked_registry_scopeguard_matches_stock_end_to_end() {
+    let scratch = target_dir("registry-scopeguard-acceptance");
+    let project = scratch.join("project");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    let cargo_home = seed_registry_cache("scopeguard-1.2.0");
+    let checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49";
+    std::fs::write(
+        project.join("Cargo.toml"),
+        "[package]\nname='probe'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nscopeguard='=1.2.0'\n",
+    )
+    .unwrap();
+    std::fs::write(
+        project.join("Cargo.lock"),
+        format!("version=4\n[[package]]\nname='probe'\nversion='0.1.0'\ndependencies=['scopeguard']\n[[package]]\nname='scopeguard'\nversion='1.2.0'\nsource='registry+https://github.com/rust-lang/crates.io-index'\nchecksum='{checksum}'\n"),
+    )
+    .unwrap();
+    let source = r#"fn main() {
+        let counter = std::cell::Cell::new(0usize);
+        {
+            let guard = scopeguard::guard(7u32, |value| counter.set(value as usize));
+            assert_eq!(*guard, 7u32);
+            assert_eq!(counter.get(), 0usize);
+        }
+        assert_eq!(counter.get(), 7usize);
+        println!("scope exit: {}", counter.get());
+    }"#;
+    let client = project.join("src/main.rs");
+    std::fs::write(&client, source).unwrap();
+    let library = scratch.join("libscopeguard.rlib");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args([
+            "--edition=2015",
+            "--crate-type=rlib",
+            "--crate-name=scopeguard",
+            "--cfg=feature=\"use_std\"",
+        ])
+        .arg(
+            cargo_home
+                .join("registry/src")
+                .join(CRATES_IO_CACHE_ID)
+                .join("scopeguard-1.2.0/src/lib.rs"),
+        )
+        .arg("-o")
+        .arg(&library)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let image = scratch.join("stock-client");
+    let stock = Command::new(stock_rustc::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args(["--edition=2024", "--crate-name=probe"])
+        .arg(&client)
+        .arg("--extern")
+        .arg(format!("scopeguard={}", library.display()))
+        .arg("-o")
+        .arg(&image)
+        .output()
+        .unwrap();
+    assert!(stock.status.success(), "{stock:?}");
+    let expected = Command::new(&image).output().unwrap();
+    assert!(expected.status.success(), "{expected:?}");
+    assert_eq!(expected.stdout, b"scope exit: 7\n");
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let output = native_command()
+                .args([command, "-j", workers])
+                .current_dir(&project)
+                .env("CARGO_HOME", &cargo_home)
+                .env(
+                    "CARGO_TARGET_DIR",
+                    scratch.join(format!("native-{workers}")),
+                )
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "workers={workers} {command}: {output:?}"
+            );
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                stderr.contains("Input capture: immutable native project namespace"),
+                "{stderr}"
+            );
+            assert!(
+                !stderr.contains("native input capture is unproven"),
+                "{stderr}"
+            );
+            if command == "run" {
+                assert_eq!(output.stdout, expected.stdout);
+            } else {
+                assert!(output.stdout.is_empty(), "{output:?}");
+            }
+        }
+    }
+}
+
+#[test]
 fn locked_registry_time_core_matches_stock_end_to_end() {
     let scratch = target_dir("registry-time-core-acceptance");
     let project = scratch.join("project");

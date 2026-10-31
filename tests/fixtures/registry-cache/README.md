@@ -9,6 +9,7 @@ scratch cache homes. No registry network fallback is permitted.
 | utf8-width 0.1.8 | 1292c0d970b54115d14f2492fe0170adf21d68a1de108eebc51c1df4f346a091 | MIT, LICENSE inside archive |
 | nix-base32 0.2.0 | d2628953ed836273ee4262e3708a8ef63ca38bd8a922070626eef7f9e5d8d536 | Apache-2.0, LICENSE-APACHE inside archive |
 | time-core 0.1.2 | ef927ca75afb808a4d64dd374f00a2adf8d0fcff8e7b184af886c3c87ec4a3f3 | MIT OR Apache-2.0, both license files inside archive |
+| scopeguard 1.2.0 | 94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49 | MIT OR Apache-2.0, both license files inside archive |
 
 Original authorship, source metadata, manifests, documentation, and licensing
 remain intact inside each archive. They are external test inputs only, never

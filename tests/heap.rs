@@ -3,6 +3,12 @@
 //! -C panic=abort) stdout; every reject_* fixture is rejected by stock.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 
+#[allow(dead_code)] // This target uses the pinned-compiler entry point only.
+#[path = "support/closure_oracle.rs"]
+mod pointer_coercion_oracle;
+#[path = "support/stock_rustc.rs"]
+mod pointer_coercion_stock;
+
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -1228,6 +1234,146 @@ fn source_drop_aggregate_positions_match_stock() {
 #[test]
 fn raw_pointer_reads_writes_casts_and_equality() {
     runs("raw_read_write");
+    use pointer_coercion_oracle::{Case, Expect};
+    pointer_coercion_oracle::check_with_compiler(
+        "reference-raw-coercion",
+        &[
+            Case {
+                name: "canonical_core_std_scalar_ptr_read",
+                source: "fn main(){let value=7i32;let a=unsafe{core::ptr::read(&value)};let b=unsafe{std::ptr::read(&value)};assert!(a==7);assert!(b==7);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "generic_original_pointer_read",
+                source: "unsafe fn read<T>(value:&T)->T{unsafe{core::ptr::read(value)}}fn main(){let value=7i32;let result=unsafe{read(&value)};assert!(result==7);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "original_manually_drop_pointer_read",
+                source: "struct G<T>{value:core::mem::ManuallyDrop<T>}impl<T>G<T>{fn take(self)->T{let guard=core::mem::ManuallyDrop::new(self);unsafe{core::ptr::read(&*guard.value)}}}fn main(){let value=G{value:core::mem::ManuallyDrop::new(7i32)};assert!(value.take()==7);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "mutable_pointer_argument_reborrows_live_carrier",
+                source: "fn increment(pointer:*mut i32){unsafe{*pointer+=1;}}fn main(){let mut value=5i32;let reference=&mut value;increment(reference);*reference+=1;assert!(*reference==7);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "const_pointer_argument_preserves_shared_access",
+                source: "fn read(pointer:*const i32)->i32{unsafe{*pointer}}fn main(){let mut value=7i32;let reference=&mut value;let shared=&*reference;let result=read(reference);assert!(*shared==7);assert!(result==7);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "written_pointer_binding_and_return_context",
+                source: "fn pointer(value:&i32)->*const i32{value}fn main(){let value=7i32;let first:*const i32=&value;let second=pointer(&value);assert!(unsafe{*first}==7);assert!(unsafe{*second}==7);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "original_reference_call_is_evaluated_once",
+                source: "fn original<'a>(value:&'a i32,count:&mut i32)->&'a i32{*count+=1;value}fn main(){let value=7i32;let mut count=0i32;let result=unsafe{core::ptr::read(original(&value,&mut count))};assert!(result==7);assert!(count==1);println!(\"ok\");}",
+                expect: Expect::Run("ok\n"),
+            },
+            Case {
+                name: "unused_shared_reference_cannot_gain_mutable_raw_access",
+                source: "fn accept(pointer:*mut i32){}fn unused(){let value=7i32;accept(&value);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_reference_pointer_pointee_mismatch",
+                source: "fn accept(pointer:*const u64){}fn unused(){let value=7i32;accept(&value);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_nested_pointer_input_does_not_coerce_referent",
+                source: "fn accept<T>(pointer:*const *const T){}fn unused(){let value=7i32;let reference=&value;accept(&reference);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_generic_result_does_not_coerce_nested_reference",
+                source: "fn identity<T>(value:T)->T{value}fn unused(){let value=7i32;let input=(&value,);let output:(*const i32,)=identity(input);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_raw_pointer_does_not_coerce_to_reference",
+                source: "fn accept(value:&i32){}fn unused(){let value=7i32;let pointer=&value as *const i32;accept(pointer);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_raw_pointer_reinterpretation_is_not_implicit",
+                source: "fn accept(pointer:*const u64){}fn unused(){let value=7i32;let pointer=&value as *const i32;accept(pointer);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_integer_does_not_coerce_to_raw_pointer",
+                source: "fn accept(pointer:*const i32){}fn unused(){accept(0usize);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_pointer_read_still_requires_unsafe",
+                source: "fn unused(){let value=7i32;core::ptr::read(&value);}fn main(){}",
+                expect: Expect::Invalid("E0133"),
+            },
+            Case {
+                name: "true_mutable_reference_move_stays_a_move",
+                source: "fn accept(pointer:*mut i32){}fn main(){let mut value=7i32;let reference=&mut value;let moved=reference;accept(moved);*reference=8;}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "mutable_raw_coercion_cannot_cross_live_shared_loan",
+                source: "fn accept(pointer:*mut i32){}fn main(){let mut value=7i32;let reference=&mut value;let shared=&*reference;accept(reference);println!(\"{}\",*shared);}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+        Path::new(&pointer_coercion_stock::stock_rustc()),
+    );
+    for (name, source, boundary) in [
+        (
+            "reference_array_to_raw_slice_unsizing",
+            "fn accept(pointer:*const [i32]){}fn main(){let values=[1i32,2i32];accept(&values);}",
+            "bare by-value slice type [T]",
+        ),
+        (
+            "reference_concrete_to_raw_dyn_unsizing",
+            "trait Mark{}impl Mark for i32{}fn accept(pointer:*const dyn Mark){}fn main(){let value=7i32;accept(&value);}",
+            "reference-to-raw pointer unsizing",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        let stock_image = scratch.path("stock-unsizing");
+        let result = capture(
+            Command::new(pointer_coercion_stock::stock_rustc())
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args(["--edition=2024", "-Cpanic=abort"])
+                .arg(&input)
+                .arg("-o")
+                .arg(&stock_image),
+            &scratch,
+            60,
+        );
+        assert!(
+            result.status.success(),
+            "{name}: stock rejected: {result:?}"
+        );
+        let run = capture(&mut Command::new(&stock_image), &scratch, 20);
+        assert!(run.status.success(), "{name}: stock run: {run:?}");
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let output = scratch.path(&format!("native-unsizing-{workers}-{check}"));
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 60);
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(
+                    !result.status.success(),
+                    "{name}: unsupported source admitted"
+                );
+                assert!(diagnostic.contains("unsupported:"), "{name}: {diagnostic}");
+                assert!(diagnostic.contains(boundary), "{name}: {diagnostic}");
+                assert!(!diagnostic.contains("E0308"), "{name}: {diagnostic}");
+                assert!(!diagnostic.contains("panicked at"), "{name}: {diagnostic}");
+                assert!(!output.exists(), "{name}: published executable");
+            }
+        }
+    }
 }
 
 #[test]
