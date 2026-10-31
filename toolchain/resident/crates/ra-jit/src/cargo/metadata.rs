@@ -210,6 +210,7 @@ pub(crate) fn programs(
     targets: blaze_metadata::Targets<'_>,
 ) -> anyhow::Result<Vec<blaze_metadata::Program>> {
     {
+        let host_phase = super::Phase::new("client planning rustc host");
         let rustc = super::state::rustc_path();
         let asked = |args: &[&str]| {
             let said = super::state::rustc_says(&rustc, args).filter(|it| !it.is_empty());
@@ -223,12 +224,16 @@ pub(crate) fn programs(
                 host.context("rustc names no host")?.to_owned()
             }
         };
+        drop(host_phase);
+        let cfg_phase = super::Phase::new("client planning target cfg");
         let printed = asked(&["--print", "cfg", "--target", &triple])?;
         let cfg = printed.lines().filter(|it| !it.is_empty()).map(|it| {
             use std::str::FromStr;
             cargo_platform::Cfg::from_str(it).with_context(|| format!("the cfg {it}"))
         });
         let cfg = cfg.collect::<anyhow::Result<Vec<_>>>()?;
+        drop(cfg_phase);
+        let setup_phase = super::Phase::new("client planning asked setup");
         let asked = blaze_metadata::Asked {
             cwd,
             env: std::env::vars().collect(),
@@ -248,6 +253,8 @@ pub(crate) fn programs(
             store: None,
             rustc_version: Some(crate::cargo::toolchain::ours_release()),
         };
+        drop(setup_phase);
+        let _resolver_phase = super::Phase::new("client planning owned resolver");
         Ok(blaze_metadata::programs(&asked, targets)?.1)
     }
 }
