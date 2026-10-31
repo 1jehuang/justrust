@@ -1,0 +1,7 @@
+PASS: removing only new helpers/branch/test module recovers baseline home.rs byte-for-byte
+PASS: manifest differs only by two approved devdependencies
+PASS: baseline records new doc absence
+PASS: root Cargo.lock unchanged at source release
+NOT RUN: builds, tests, runtime probes, benchmarks, commits, installs
+PASS: owned home.rs rustfmt check
+PASS: owned source git diff --check

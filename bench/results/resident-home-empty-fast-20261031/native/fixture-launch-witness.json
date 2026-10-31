@@ -1,0 +1,61 @@
+{
+  "cases": [
+    {
+      "RA_JIT_HOME_EMPTY_FAST": null,
+      "RA_JIT_NO_HOME": null,
+      "exit": 0,
+      "extra_arguments": [],
+      "filter": "v68_real_database_",
+      "label": "unset",
+      "run_id": "20261031-050328326-1001960"
+    },
+    {
+      "RA_JIT_HOME_EMPTY_FAST": "0",
+      "RA_JIT_NO_HOME": null,
+      "exit": 0,
+      "extra_arguments": [],
+      "filter": "v68_real_database_",
+      "label": "off",
+      "run_id": "20261031-050328715-1002015"
+    },
+    {
+      "RA_JIT_HOME_EMPTY_FAST": "1",
+      "RA_JIT_NO_HOME": null,
+      "exit": 0,
+      "extra_arguments": [],
+      "filter": "v68_real_database_",
+      "label": "on",
+      "run_id": "20261031-050329164-1002079"
+    },
+    {
+      "RA_JIT_HOME_EMPTY_FAST": "1",
+      "RA_JIT_NO_HOME": "1",
+      "exit": 0,
+      "extra_arguments": [
+        "--",
+        "--ignored"
+      ],
+      "filter": "v68_real_database_no_home_guard",
+      "label": "no_home",
+      "run_id": "20261031-050329749-1002229"
+    }
+  ],
+  "common_arguments": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "limits": "Original fixture console logs and full justrust journals are independent raw evidence for test execution/names/counts. This witness documents command environment from the coordinator's actual tool call only, contains no ambient environment, and does not establish performance. No rerun performed to create this witness.",
+  "observed_task_exit": 0,
+  "observed_task_output": "all four independent fixture processes passed",
+  "observed_task_started_at": "2026-10-31T12:03:28.309Z",
+  "recorded_at": "2026-10-31T12:17:07Z",
+  "runner": "bash set -euo pipefail, sequential four justrust test invocations; command completion plus final print establishes each invocation exited zero",
+  "scope": "Coordinator post-hoc witness of actual tool invocation, not a contemporaneous worker-generated launch receipt",
+  "task_id": "20830930vv",
+  "working_directory": "toolchain/resident"
+}

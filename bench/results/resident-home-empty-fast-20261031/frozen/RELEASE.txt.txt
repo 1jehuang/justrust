@@ -1,0 +1,23 @@
+V68 SOURCE RELEASE
+Released 2026-10-31T11:55:40Z by otter to coordinator skunk.
+Source ownership of toolchain/resident/crates/hir-ty-codegen/home.rs,
+toolchain/resident/crates/hir-ty-codegen/Cargo.toml, and
+docs/resident-home-empty-fast.md is relinquished now, before root gates.
+No further edits to those paths or this candidate bundle until instructed.
+
+Baseline HEAD: a7f5848e389f1224dfd54d5297d5e1074ebd3ddb
+Baseline home.rs SHA256: 17aa54c87bcf5ec64b3404577352d524c7d454e92bcb89ad98dba225ba6438a7
+Candidate home.rs SHA256: e9279a0ad4af94a65fdb65108a2a503a43a1528369a348a5fd01acc1827b6468
+Untouched root lock SHA256: bf3307542b2b5c0e7a4b8c5b1a1e650bba9afece80284cc497a3800560a0c2bc
+
+Source-only checks: bytewise baseline recovery PASS, approved manifest delta PASS,
+new doc absence recorded PASS, root lock unchanged PASS, owned rustfmt PASS,
+owned diff whitespace check PASS. Full SHA256SUMS and sourcechecks.txt preserved.
+No build, test, probe, benchmark, lock mutation, commit, push, or install performed.
+No performance claim.
+
+ROOT ACTION: add ide-db and test-fixture dependency edges to hir-ty-codegen in
+Cargo.lock before locked gates. Run real fixture tests with flag unset/0/1 in
+separate processes, ignored NO_HOME fixture with NO_HOME set in a fresh process,
+and actual counterordered runtime gates before promotion. Marker:
+ra-jit: home-empty-fast-v68 branch

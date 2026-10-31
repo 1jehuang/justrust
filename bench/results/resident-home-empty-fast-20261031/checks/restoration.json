@@ -1,0 +1,10 @@
+{
+  "home_sha256": "17aa54c87bcf5ec64b3404577352d524c7d454e92bcb89ad98dba225ba6438a7",
+  "lock_owner": "root, separate restoration",
+  "manifest_sha256": "f46dec5b2cf06f30456f2379967d4bb1747c9e690ae35a1861d3775c95eab381",
+  "original_lock_sha256": "bf3307542b2b5c0e7a4b8c5b1a1e650bba9afece80284cc497a3800560a0c2bc",
+  "source_cmp_original": true,
+  "source_head_diff_empty": true,
+  "time_utc": "2026-10-31T12:11:00Z",
+  "witness": "worker actual exact backup cmp and scoped HEAD diff after write restoration"
+}

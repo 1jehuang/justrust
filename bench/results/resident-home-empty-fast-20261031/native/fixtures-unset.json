@@ -1,0 +1,7 @@
+[
+  "test home::empty_fast_tests::v68_real_database_no_home_guard ... ignored, run in a fresh process with RA_JIT_NO_HOME=1, independently of regular fixtures",
+  "test home::empty_fast_tests::v68_real_database_signature_and_dependency_revisions ... ok <0.005s>",
+  "test home::empty_fast_tests::v68_real_database_generic_closure_shim_and_caller_bounds_fallback ... ok <0.005s>",
+  "test home::empty_fast_tests::v68_real_database_same_repeated_cross_crate_and_cfg ... ok <0.006s>",
+  "test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 53 filtered out; finished in 0.01s"
+]

@@ -1,0 +1,325 @@
+--- a/home.rs
++++ b/home.rs
+@@ -262,6 +262,27 @@
+     sees: FxHashMap<Crate, FxHashSet<Crate>>,
+ }
+ 
++/// Process-latched, exact opt-in. The dynamic NO_HOME guard stays authoritative.
++fn empty_fast_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| std::env::var_os("RA_JIT_HOME_EMPTY_FAST").is_some_and(|v| v == "1"))
++}
++
++/// Emit only after entering the specialization. Thread-local initialization avoids a
++/// process-wide atomic check on subsequent calls from the same thread.
++fn mark_empty_fast_branch() {
++    thread_local! {
++        static MARKED: () = {
++            static ONCE: std::sync::Once = std::sync::Once::new();
++            ONCE.call_once(|| {
++                use std::io::Write as _;
++                let _ = std::io::stderr().lock().write_all(b"ra-jit: home-empty-fast-v68 branch\n");
++            });
++        };
++    }
++    MARKED.with(|()| {});
++}
++
+ impl Homes {
+     /// The environment to compile `instance` in when a function compiled in `asked` asks for
+     /// it: that of the one crate it mentions that sees all the others, which every crate
+@@ -277,6 +298,21 @@
+         {
+             return asked.clone();
+         }
++        if empty_fast_enabled() && instance.args.as_ref().is_empty() {
++            if let InstanceDef::Fn(func) = instance.def {
++                mark_empty_fast_branch();
++                let krate = func.krate(db);
++                let sees = self
++                    .sees
++                    .entry(krate)
++                    .or_insert_with(|| loaded_crates(db, krate).iter().copied().collect());
++                return if sees.contains(&krate) {
++                    ParamEnvAndCrate { krate, ..asked.as_ref(db) }.store()
++                } else {
++                    asked.clone()
++                };
++            }
++        }
+         let mentions = Mentions::of(db, instance);
+         if mentions.opaque {
+             return asked.clone();
+@@ -294,3 +330,272 @@
+         }
+     }
+ }
++
++#[cfg(test)]
++mod empty_fast_tests {
++    use super::*;
++    use base_db::all_crates;
++    use hir_def::{ModuleDefId, nameres::crate_def_map, signatures::FunctionSignature};
++    use hir_expand::change::ChangeWithProcMacros;
++    use hir_ty::{
++        InferenceResult,
++        next_solver::{GenericArgs, ParamEnv},
++    };
++    use ide_db::RootDatabase;
++    use salsa::plumbing::AsId as _;
++    use test_fixture::WithFixture;
++
++    // Frozen pre-v68 algorithm, deliberately independent of Homes::home and its flag.
++    // Its own cache also makes changed query dependencies observable independently.
++    #[derive(Default)]
++    struct OriginalHomes {
++        sees: FxHashMap<Crate, FxHashSet<Crate>>,
++    }
++
++    impl OriginalHomes {
++        fn home(
++            &mut self,
++            db: &dyn HirDatabase,
++            instance: &Instance,
++            asked: &StoredParamEnvAndCrate,
++        ) -> StoredParamEnvAndCrate {
++            if std::env::var_os("RA_JIT_NO_HOME").is_some()
++                || !asked.param_env(db).caller_bounds().is_empty()
++            {
++                return asked.clone();
++            }
++            let mentions = Mentions::of(db, instance);
++            if mentions.opaque {
++                return asked.clone();
++            }
++            let home = mentions.crates.iter().copied().find(|&krate| {
++                let sees = self
++                    .sees
++                    .entry(krate)
++                    .or_insert_with(|| loaded_crates(db, krate).iter().copied().collect());
++                mentions.crates.iter().all(|it| sees.contains(it))
++            });
++            match home {
++                Some(krate) => ParamEnvAndCrate { krate, ..asked.as_ref(db) }.store(),
++                None => asked.clone(),
++            }
++        }
++    }
++
++    fn function(db: &RootDatabase, name: &str) -> FunctionId {
++        let mut found = Vec::new();
++        for &krate in all_crates(db).iter() {
++            for (_, module) in crate_def_map(db, krate).modules(db) {
++                for def in module.scope(db).declarations() {
++                    if let ModuleDefId::FunctionId(id) = def {
++                        if FunctionSignature::of(db, id).name.as_str() == name {
++                            found.push(id);
++                        }
++                    }
++                }
++            }
++        }
++        assert_eq!(found.len(), 1, "fixture function must be unique: {name}");
++        found[0]
++    }
++
++    fn instance(func: FunctionId) -> Instance {
++        Instance {
++            def: InstanceDef::Fn(func),
++            args: GenericArgs::new_from_slice(&[]).store(),
++            checked: false,
++        }
++    }
++
++    fn asked(db: &RootDatabase, func: FunctionId) -> StoredParamEnvAndCrate {
++        ParamEnvAndCrate { param_env: ParamEnv::empty(), krate: func.krate(db) }.store()
++    }
++
++    fn compare(
++        db: &RootDatabase,
++        candidate: &mut Homes,
++        original: &mut OriginalHomes,
++        instance: &Instance,
++        asked: &StoredParamEnvAndCrate,
++    ) -> StoredParamEnvAndCrate {
++        let expected = original.home(db, instance, asked);
++        let actual = candidate.home(db, instance, asked);
++        // Compare the entire stored environment, not just the chosen crate.
++        assert_eq!(actual, expected);
++        assert_eq!(actual.as_ref(db), expected.as_ref(db));
++        assert_eq!(candidate.sees, original.sees);
++        actual
++    }
++
++    fn fixture(cfg: &str) -> String {
++        format!(
++            r#"
++//- /app.rs crate:app deps:dep cfg:{cfg}
++fn request() {{ dep::target(); }}
++fn local() {{}}
++fn closure_owner() {{ let closure = || 7u32; }}
++trait Bound {{}}
++impl Bound for u32 {{}}
++fn opaque() -> impl Bound {{ 7u32 }}
++fn bounded<T: Bound>() {{}}
++fn generic<T>() {{}}
++//- /dep.rs crate:dep deps:signature cfg:{cfg}
++pub fn target() -> signature::Token {{ signature::Token }}
++#[cfg(selected)] pub fn selected_target() {{}}
++#[cfg(not(selected))] pub fn other_target() {{}}
++//- /signature.rs crate:signature
++pub struct Token;
++"#
++        )
++    }
++
++    #[test]
++    fn v68_real_database_same_repeated_cross_crate_and_cfg() {
++        assert!(std::env::var_os("RA_JIT_NO_HOME").is_none(), "run guard test separately");
++        for cfg in ["selected", "other"] {
++            let db = RootDatabase::with_files(&fixture(cfg));
++            let request = function(&db, "request");
++            let local = function(&db, "local");
++            let target = function(&db, "target");
++            let configured =
++                function(&db, if cfg == "selected" { "selected_target" } else { "other_target" });
++            let mut candidate = Homes::default();
++            let mut original = OriginalHomes::default();
++            for caller in [request, target] {
++                for callee in [local, target, configured] {
++                    for _ in 0..3 {
++                        compare(
++                            &db,
++                            &mut candidate,
++                            &mut original,
++                            &instance(callee),
++                            &asked(&db, caller),
++                        );
++                    }
++                }
++            }
++            // Exercise the false membership outcome explicitly. Never assume self is loaded.
++            let krate = target.krate(&db);
++            candidate.sees.insert(krate, FxHashSet::default());
++            original.sees.insert(krate, FxHashSet::default());
++            let env = asked(&db, request);
++            assert_eq!(compare(&db, &mut candidate, &mut original, &instance(target), &env), env);
++        }
++    }
++
++    #[test]
++    fn v68_real_database_signature_and_dependency_revisions() {
++        assert!(std::env::var_os("RA_JIT_NO_HOME").is_none(), "run guard test separately");
++        let (mut db, files) = RootDatabase::with_many_files(&fixture("selected"));
++        let request = function(&db, "request");
++        let target = function(&db, "target");
++        let env = asked(&db, request);
++        let mut candidate = Homes::default();
++        let mut original = OriginalHomes::default();
++        compare(&db, &mut candidate, &mut original, &instance(target), &env);
++        for source in [
++            "pub fn target() -> u32 { 1 }",
++            "pub fn target() -> signature::Token { signature::Token }",
++        ] {
++            let mut change = ChangeWithProcMacros::default();
++            change.change_file(files[1].file_id(&db), Some(source.into()));
++            change.apply(&mut db);
++            let target = function(&db, "target");
++            // Existing per-Homes cache semantics are retained across database revisions.
++            compare(&db, &mut candidate, &mut original, &instance(target), &env);
++            // Also query independently refreshed loaded_crates dependencies.
++            compare(
++                &db,
++                &mut Homes::default(),
++                &mut OriginalHomes::default(),
++                &instance(target),
++                &env,
++            );
++        }
++    }
++
++    #[test]
++    fn v68_real_database_generic_closure_shim_and_caller_bounds_fallback() {
++        assert!(std::env::var_os("RA_JIT_NO_HOME").is_none(), "run guard test separately");
++        let db = RootDatabase::with_files(&fixture("selected"));
++        let request = function(&db, "request");
++        let target = function(&db, "target");
++        let generic = function(&db, "generic");
++        let bounded = function(&db, "bounded");
++        let owner = function(&db, "closure_owner");
++        let env = asked(&db, request);
++        let mut candidate = Homes::default();
++        let mut original = OriginalHomes::default();
++        let mut nonempty = instance(generic);
++        nonempty.args =
++            GenericArgs::new_from_slice(&[Ty::new_without_interner(TyKind::Bool).into()]).store();
++        assert!(!nonempty.args.as_ref().is_empty());
++        compare(&db, &mut candidate, &mut original, &nonempty, &env);
++        let opaque = function(&db, "opaque");
++        let opaque_ty =
++            db.callable_item_signature(opaque.into()).skip_binder().skip_binder().output();
++        assert!(
++            matches!(opaque_ty.kind(), TyKind::Alias(..)),
++            "fixture must expose a real opaque return type"
++        );
++        let opaque_instance = Instance {
++            args: GenericArgs::new_from_slice(&[opaque_ty.into()]).store(),
++            ..instance(generic)
++        };
++        assert!(Mentions::of(&db, &opaque_instance).opaque);
++        assert_eq!(compare(&db, &mut candidate, &mut original, &opaque_instance, &env), env);
++        let closure = InferenceResult::of(&db, owner)
++            .expression_types()
++            .find_map(|(_, ty)| match ty.kind() {
++                TyKind::Closure(id, args) => Some(Instance {
++                    def: InstanceDef::Closure(id.0.as_id()),
++                    args: args.store(),
++                    checked: false,
++                }),
++                _ => None,
++            })
++            .expect("fixture must infer a real closure");
++        compare(&db, &mut candidate, &mut original, &closure, &env);
++        for def in [
++            InstanceDef::VtableShim(target),
++            InstanceDef::DropGlue,
++            InstanceDef::CallOnceShim,
++            InstanceDef::FnPointerShim,
++            InstanceDef::ReifyShim { receiver: false },
++        ] {
++            compare(
++                &db,
++                &mut candidate,
++                &mut original,
++                &Instance { def, ..instance(target) },
++                &env,
++            );
++        }
++        let bounded_env = ParamEnvAndCrate {
++            param_env: db.trait_environment(bounded.into()),
++            krate: request.krate(&db),
++        }
++        .store();
++        assert!(!bounded_env.param_env(&db).caller_bounds().is_empty());
++        let mut candidate = Homes::default();
++        let mut original = OriginalHomes::default();
++        assert_eq!(
++            compare(&db, &mut candidate, &mut original, &instance(target), &bounded_env),
++            bounded_env
++        );
++        assert!(candidate.sees.is_empty(), "caller bounds must guard before specialization");
++    }
++
++    #[test]
++    #[ignore = "run in a fresh process with RA_JIT_NO_HOME=1, independently of regular fixtures"]
++    fn v68_real_database_no_home_guard() {
++        assert!(std::env::var_os("RA_JIT_NO_HOME").is_some());
++        let db = RootDatabase::with_files(&fixture("selected"));
++        let target = function(&db, "target");
++        let env = asked(&db, function(&db, "request"));
++        let mut candidate = Homes::default();
++        let mut original = OriginalHomes::default();
++        assert_eq!(compare(&db, &mut candidate, &mut original, &instance(target), &env), env);
++        assert!(candidate.sees.is_empty());
++    }
++}

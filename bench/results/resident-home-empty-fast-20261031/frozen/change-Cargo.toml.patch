@@ -1,0 +1,11 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -61,6 +61,8 @@
+ 
+ [dev-dependencies]
+ ra-jit-fuzz.workspace = true
++ide-db.workspace = true
++test-fixture.workspace = true
+ 
+ [features]
+ llvm = ["dep:inkwell"]

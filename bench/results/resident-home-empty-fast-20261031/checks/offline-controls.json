@@ -1,0 +1,32 @@
+{
+  "scope": "Observed offline evidence checks only, no native jobs",
+  "observed_at_utc": "2026-10-31T12:24:20Z",
+  "full_package_manifest_replay": "passed",
+  "strict_runtime_rows": 28,
+  "unchanged_original_oracle_rows": 28,
+  "native_test_counts_preserved": [56, 364],
+  "native_codegen_ignored_preserved": 1,
+  "actual_separate_fixture_controls": 4,
+  "python_tests_passed": 8,
+  "semantic_negative_mutations_rejected": 42,
+  "coherent_wrong_raw_and_parsed_named_test_rejected": true,
+  "exact_patch_context_mutation_rejected": true,
+  "original_tuple_equality_not_weakened": true,
+  "rehashed_failed_native_result_rejected": true,
+  "coherent_timing_root_output_and_arithmetic_rewrite_rejected_after_rehash": true,
+  "isolated_unrelated_directory_relocation": {
+    "passed": true,
+    "python_flags": ["-I", "-B"],
+    "HOME": "fresh empty temporary directory, remained empty",
+    "PATH": "",
+    "ambient_environment_used_for_replay": false
+  },
+  "privacy_audit": "all selected package files are text, no private home roots or binary artifacts",
+  "restoration_recheck": "home.rs, hir-ty-codegen/Cargo.toml and root-owned Cargo.lock scoped HEAD diff all empty",
+  "shared_index_before_staging": "empty",
+  "native_jobs_executed_for_evidence_assembly": 0,
+  "noise": "unknown",
+  "promotion": false,
+  "speed_claim": false,
+  "causal_regression_claim": false
+}
