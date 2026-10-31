@@ -1,0 +1,13 @@
+{
+  "authority_commit": "34dc0a188534edbe92d0b848b9dfa68de71d8bb3",
+  "native_after_matches_before": true,
+  "native_after_ok": 3757,
+  "native_before_count": 3757,
+  "native_before_sha256": "768942465275e5e7b9818fb01abd6e171639bdba0c2daef7119bfb968cef187f",
+  "pinned_after_sha256": "6a501aa42032940dd31f775b17b669e47e3ad1d5985735f253d3f6113f6cbf36",
+  "pinned_before_sha256": "6a501aa42032940dd31f775b17b669e47e3ad1d5985735f253d3f6113f6cbf36",
+  "toolchain_after_count": 4020,
+  "toolchain_after_sha256": "5282da072239bfa4846f22fd349254466f7a1dbcdf71d25a8357a66961f738cc",
+  "toolchain_before_count": 4020,
+  "toolchain_before_sha256": "5282da072239bfa4846f22fd349254466f7a1dbcdf71d25a8357a66961f738cc"
+}

@@ -1,0 +1,567 @@
+{
+  "authority": "34dc0a188",
+  "contract": {
+    "comparison": false,
+    "default_promotion": false,
+    "inclusive": true,
+    "noise": "unknown",
+    "quiet_machine_established": false,
+    "speed_claim": false
+  },
+  "export_original": {
+    "bytes": 11764,
+    "sha256": "adf89f103bf48e6f1e1799813812ecb576acbfc2e6ed4edc5b8f731bc042b302"
+  },
+  "gates": {
+    "candidate-build-v79/check.exit": "0",
+    "candidate-build-v79/compile.exit": "0",
+    "candidate-build-v79/lock-before.sha256": "bf3307542b2b5c0e7a4b8c5b1a1e650bba9afece80284cc497a3800560a0c2bc  Cargo.lock",
+    "candidate-build-v79/orchestration-exit": "0",
+    "candidate-unit-v79/codegen-native.exit": "0",
+    "candidate-unit-v79/exit": "0",
+    "candidate-unit-v79/full-native.exit": "0",
+    "candidate-unit-v79/lock-after.log": "Cargo.lock: OK"
+  },
+  "harness_count": 761,
+  "native": [
+    {
+      "name": "codegen-native",
+      "passed": 53,
+      "run_id": "20261031-084851470-3065538"
+    },
+    {
+      "name": "full-native",
+      "passed": 373,
+      "run_id": "20261031-084852010-3065692"
+    }
+  ],
+  "prepare": {
+    "elapsed_seconds": 31.309061404987006,
+    "error": null,
+    "status": 0,
+    "timed_out": false
+  },
+  "ranges_us": {
+    "client planning": [
+      28930,
+      35106
+    ],
+    "client planning asked setup": [
+      19,
+      26
+    ],
+    "client planning owned resolver": [
+      25154,
+      31148
+    ],
+    "client planning rustc host": [
+      2669,
+      2985
+    ],
+    "client planning target cfg": [
+      801,
+      998
+    ]
+  },
+  "rows": [
+    {
+      "elapsed_seconds": 0.3140075859846547,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2669,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117339,
+          "tid": 1,
+          "ts": 1793462350217692
+        },
+        {
+          "cat": "step",
+          "dur": 801,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117339,
+          "tid": 1,
+          "ts": 1793462350220365
+        },
+        {
+          "cat": "step",
+          "dur": 21,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117339,
+          "tid": 1,
+          "ts": 1793462350221167
+        },
+        {
+          "cat": "step",
+          "dur": 27196,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117339,
+          "tid": 1,
+          "ts": 1793462350221188
+        },
+        {
+          "cat": "step",
+          "dur": 30733,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117339,
+          "tid": 1,
+          "ts": 1793462350217686
+        }
+      ],
+      "kind": "edit",
+      "marker": "JR_RUNTIME_EXECUTED_7901",
+      "noise_contamination": "unknown",
+      "public_pid_count": 3,
+      "replicate": 0,
+      "source_sha256": "839e8f632b73b9b930697d154ff396018d3cad340fb225ac002f2713960d0168",
+      "status": 0,
+      "stdout": "runtime/0-edit.stdout",
+      "timed_out": false,
+      "trace_sha256": "6913dd59268d34d67ca30976e96a3eb8fb2aafc421097b5e652a2f722c5d84a9"
+    },
+    {
+      "elapsed_seconds": 0.05452119800611399,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2944,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117488,
+          "tid": 1,
+          "ts": 1793462350540835
+        },
+        {
+          "cat": "step",
+          "dur": 936,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117488,
+          "tid": 1,
+          "ts": 1793462350543782
+        },
+        {
+          "cat": "step",
+          "dur": 22,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117488,
+          "tid": 1,
+          "ts": 1793462350544720
+        },
+        {
+          "cat": "step",
+          "dur": 26818,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117488,
+          "tid": 1,
+          "ts": 1793462350544742
+        },
+        {
+          "cat": "step",
+          "dur": 30767,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117488,
+          "tid": 1,
+          "ts": 1793462350540832
+        }
+      ],
+      "kind": "noop",
+      "marker": "JR_RUNTIME_EXECUTED_7901",
+      "noise_contamination": "unknown",
+      "public_pid_count": 2,
+      "replicate": 0,
+      "source_sha256": "839e8f632b73b9b930697d154ff396018d3cad340fb225ac002f2713960d0168",
+      "status": 0,
+      "stdout": "runtime/0-noop.stdout",
+      "timed_out": false,
+      "trace_sha256": "dc8c22d342ac32c02ce8ccb6aaae3e2ed1b4e84b6bd26b6eabcdf46e7977e388"
+    },
+    {
+      "elapsed_seconds": 0.1618862440227531,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2873,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117533,
+          "tid": 1,
+          "ts": 1793462350601942
+        },
+        {
+          "cat": "step",
+          "dur": 975,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117533,
+          "tid": 1,
+          "ts": 1793462350604819
+        },
+        {
+          "cat": "step",
+          "dur": 21,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117533,
+          "tid": 1,
+          "ts": 1793462350605796
+        },
+        {
+          "cat": "step",
+          "dur": 29894,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117533,
+          "tid": 1,
+          "ts": 1793462350605819
+        },
+        {
+          "cat": "step",
+          "dur": 33826,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117533,
+          "tid": 1,
+          "ts": 1793462350601936
+        }
+      ],
+      "kind": "edit",
+      "marker": "JR_RUNTIME_EXECUTED_7902",
+      "noise_contamination": "unknown",
+      "public_pid_count": 3,
+      "replicate": 1,
+      "source_sha256": "743abb950fa2018cd7e2d3e4bdf335e5839d4d3a49921a661432652274b0b2e6",
+      "status": 0,
+      "stdout": "runtime/1-edit.stdout",
+      "timed_out": false,
+      "trace_sha256": "eecb3888fe6b330b6d20a08e42fd532cd2a31edce0c07f403e1c29d2c1f2b150"
+    },
+    {
+      "elapsed_seconds": 0.051412011991487816,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2796,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117664,
+          "tid": 1,
+          "ts": 1793462350771449
+        },
+        {
+          "cat": "step",
+          "dur": 911,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117664,
+          "tid": 1,
+          "ts": 1793462350774247
+        },
+        {
+          "cat": "step",
+          "dur": 19,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117664,
+          "tid": 1,
+          "ts": 1793462350775160
+        },
+        {
+          "cat": "step",
+          "dur": 25154,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117664,
+          "tid": 1,
+          "ts": 1793462350775180
+        },
+        {
+          "cat": "step",
+          "dur": 28930,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117664,
+          "tid": 1,
+          "ts": 1793462350771447
+        }
+      ],
+      "kind": "noop",
+      "marker": "JR_RUNTIME_EXECUTED_7902",
+      "noise_contamination": "unknown",
+      "public_pid_count": 2,
+      "replicate": 1,
+      "source_sha256": "743abb950fa2018cd7e2d3e4bdf335e5839d4d3a49921a661432652274b0b2e6",
+      "status": 0,
+      "stdout": "runtime/1-noop.stdout",
+      "timed_out": false,
+      "trace_sha256": "c953e95f2e2bce33ebd16c54e38dfbe5509afcd27c4d289878fa2de93527b0a6"
+    },
+    {
+      "elapsed_seconds": 0.16195704200072214,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2739,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117702,
+          "tid": 1,
+          "ts": 1793462350829205
+        },
+        {
+          "cat": "step",
+          "dur": 894,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117702,
+          "tid": 1,
+          "ts": 1793462350831946
+        },
+        {
+          "cat": "step",
+          "dur": 20,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117702,
+          "tid": 1,
+          "ts": 1793462350832842
+        },
+        {
+          "cat": "step",
+          "dur": 27851,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117702,
+          "tid": 1,
+          "ts": 1793462350832863
+        },
+        {
+          "cat": "step",
+          "dur": 31549,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117702,
+          "tid": 1,
+          "ts": 1793462350829203
+        }
+      ],
+      "kind": "edit",
+      "marker": "JR_RUNTIME_EXECUTED_7903",
+      "noise_contamination": "unknown",
+      "public_pid_count": 3,
+      "replicate": 2,
+      "source_sha256": "0fd76da000992ace9efa301b7e2a256a83441e3ec2fe7ffbace5d842da59510b",
+      "status": 0,
+      "stdout": "runtime/2-edit.stdout",
+      "timed_out": false,
+      "trace_sha256": "8a95ecf783c1fa83bbc7d7075d8e9bb61120f21b6b720882b62a0312d9c983f5"
+    },
+    {
+      "elapsed_seconds": 0.05673579600988887,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2961,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117836,
+          "tid": 1,
+          "ts": 1793462351000857
+        },
+        {
+          "cat": "step",
+          "dur": 998,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117836,
+          "tid": 1,
+          "ts": 1793462351003822
+        },
+        {
+          "cat": "step",
+          "dur": 21,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117836,
+          "tid": 1,
+          "ts": 1793462351004822
+        },
+        {
+          "cat": "step",
+          "dur": 30271,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117836,
+          "tid": 1,
+          "ts": 1793462351004844
+        },
+        {
+          "cat": "step",
+          "dur": 34303,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117836,
+          "tid": 1,
+          "ts": 1793462351000852
+        }
+      ],
+      "kind": "noop",
+      "marker": "JR_RUNTIME_EXECUTED_7903",
+      "noise_contamination": "unknown",
+      "public_pid_count": 2,
+      "replicate": 2,
+      "source_sha256": "0fd76da000992ace9efa301b7e2a256a83441e3ec2fe7ffbace5d842da59510b",
+      "status": 0,
+      "stdout": "runtime/2-noop.stdout",
+      "timed_out": false,
+      "trace_sha256": "de6147ddee9c34b4ad3fd9f0d37ce224cf5f4355c6855ad72489f26d4202e863"
+    },
+    {
+      "elapsed_seconds": 0.16187305300263688,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2985,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3117890,
+          "tid": 1,
+          "ts": 1793462351065367
+        },
+        {
+          "cat": "step",
+          "dur": 929,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3117890,
+          "tid": 1,
+          "ts": 1793462351068355
+        },
+        {
+          "cat": "step",
+          "dur": 26,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3117890,
+          "tid": 1,
+          "ts": 1793462351069286
+        },
+        {
+          "cat": "step",
+          "dur": 27531,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3117890,
+          "tid": 1,
+          "ts": 1793462351069312
+        },
+        {
+          "cat": "step",
+          "dur": 31535,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3117890,
+          "tid": 1,
+          "ts": 1793462351065365
+        }
+      ],
+      "kind": "edit",
+      "marker": "JR_RUNTIME_EXECUTED_7904",
+      "noise_contamination": "unknown",
+      "public_pid_count": 3,
+      "replicate": 3,
+      "source_sha256": "f5872e9cb9117c24eb7a67bb751ee25f1e38ef02a9a3d655273f5e8c373d33be",
+      "status": 0,
+      "stdout": "runtime/3-edit.stdout",
+      "timed_out": false,
+      "trace_sha256": "65a9c54145dfad8beff8a5ebd33b85023ecd0b0c4f75f98c6a72a82c28b27d66"
+    },
+    {
+      "elapsed_seconds": 0.06052371600526385,
+      "error": null,
+      "events": [
+        {
+          "cat": "step",
+          "dur": 2914,
+          "name": "client planning rustc host",
+          "ph": "X",
+          "pid": 3118077,
+          "tid": 1,
+          "ts": 1793462351235799
+        },
+        {
+          "cat": "step",
+          "dur": 960,
+          "name": "client planning target cfg",
+          "ph": "X",
+          "pid": 3118077,
+          "tid": 1,
+          "ts": 1793462351238717
+        },
+        {
+          "cat": "step",
+          "dur": 22,
+          "name": "client planning asked setup",
+          "ph": "X",
+          "pid": 3118077,
+          "tid": 1,
+          "ts": 1793462351239680
+        },
+        {
+          "cat": "step",
+          "dur": 31148,
+          "name": "client planning owned resolver",
+          "ph": "X",
+          "pid": 3118077,
+          "tid": 1,
+          "ts": 1793462351239702
+        },
+        {
+          "cat": "step",
+          "dur": 35106,
+          "name": "client planning",
+          "ph": "X",
+          "pid": 3118077,
+          "tid": 1,
+          "ts": 1793462351235793
+        }
+      ],
+      "kind": "noop",
+      "marker": "JR_RUNTIME_EXECUTED_7904",
+      "noise_contamination": "unknown",
+      "public_pid_count": 2,
+      "replicate": 3,
+      "source_sha256": "f5872e9cb9117c24eb7a67bb751ee25f1e38ef02a9a3d655273f5e8c373d33be",
+      "status": 0,
+      "stdout": "runtime/3-noop.stdout",
+      "timed_out": false,
+      "trace_sha256": "d98f1e5b9e5ccf8a2c847fdeaac9d2b6eab569c6811c7b346990c26a64081ffe"
+    }
+  ],
+  "scope": "Actual accepted native warm-path spans, inclusive diagnostic, not a speed comparison.",
+  "status": "passed",
+  "stop": {
+    "elapsed_seconds": 0.08706833701580763,
+    "error": null,
+    "status": 0,
+    "timed_out": false
+  },
+  "tool_after": "8f5b51734bdeedf6a4b0370efbe2b1f8bb916c91ff957e929e68dd707e81af6c",
+  "tool_before": "8f5b51734bdeedf6a4b0370efbe2b1f8bb916c91ff957e929e68dd707e81af6c",
+  "unchanged": true
+}

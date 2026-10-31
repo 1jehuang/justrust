@@ -1,0 +1,234 @@
+{
+  "candidate-build-v79/all-source-before.sha256": {
+    "bytes": 485842,
+    "sha256": "29b58c80b8313870733a001800947eecc51360f3c95be970bedf88f4a46bced6"
+  },
+  "candidate-build-v79/check.exit": {
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "candidate-build-v79/check.log": {
+    "bytes": 2556,
+    "sha256": "8bc28355274ef7a0a6ef868ecdf9ec669547556f58eb0340bdc30775519eb81c"
+  },
+  "candidate-build-v79/compile.exit": {
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "candidate-build-v79/compile.log": {
+    "bytes": 2181,
+    "sha256": "a353b2cc904df1e2786a7f90d697672d75b2022528321340c2251499d0009a93"
+  },
+  "candidate-build-v79/lock-before.sha256": {
+    "bytes": 77,
+    "sha256": "bbf06b43d38c2a150a291a12ea60fc91e898d2eb3cb9e79b4a54e376189b0567"
+  },
+  "candidate-build-v79/orchestration-exit": {
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "candidate-unit-v79/all-source-after.log": {
+    "bytes": 252908,
+    "sha256": "9d35dc934fc1c56b1e0d32bf0ef52494930bfb4877e84b21bb72ba473c334692"
+  },
+  "candidate-unit-v79/codegen-native.exit": {
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "candidate-unit-v79/codegen-native.log": {
+    "bytes": 1462,
+    "sha256": "6e442a2203642338133f0128aea03debe49a0d792c1d8277a28e749e8cc48abf"
+  },
+  "candidate-unit-v79/exit": {
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "candidate-unit-v79/full-native.exit": {
+    "bytes": 2,
+    "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+  },
+  "candidate-unit-v79/full-native.log": {
+    "bytes": 2911,
+    "sha256": "65b7d0ba31a56a43f8ccf8845cc5a641385ef99f705f13961223742a36e28104"
+  },
+  "candidate-unit-v79/justrust-home/runs/20261031-084851470-3065538/output.jsonl": {
+    "bytes": 159618,
+    "sha256": "74dc39dba449da4484be942e067177518fc68a4bed298e957d09744a475db2f2"
+  },
+  "candidate-unit-v79/justrust-home/runs/20261031-084852010-3065692/output.jsonl": {
+    "bytes": 333692,
+    "sha256": "e26b6fc2e5b4ea9c5421766ff8258cf3e549a810465eb84093be776c4b49a10c"
+  },
+  "candidate-unit-v79/lock-after.log": {
+    "bytes": 15,
+    "sha256": "bed0ad10bf786b7e6a0d8e1c4571088a75a31c05c8efbe235f8ec5e5b2ddfef5"
+  },
+  "planning-subphases-profile-v79/0-edit.stderr": {
+    "bytes": 2760,
+    "sha256": "2d9d5eb869235ef7b6bbdb0d587647392f7ee2a5f09964e9163bfec5d94dda4e"
+  },
+  "planning-subphases-profile-v79/0-edit.stdout": {
+    "bytes": 374,
+    "sha256": "367d89b6164976a4f92111bcbb09c3fd72b1f65bb9953439d61cb926c2c51304"
+  },
+  "planning-subphases-profile-v79/0-edit.trace.json": {
+    "bytes": 5497,
+    "sha256": "6913dd59268d34d67ca30976e96a3eb8fb2aafc421097b5e652a2f722c5d84a9"
+  },
+  "planning-subphases-profile-v79/0-noop.stderr": {
+    "bytes": 1637,
+    "sha256": "e7283e22fbf9fc7e7379e128b50d0f2c5fa8256caf982ff1289ed9a9aecf2da9"
+  },
+  "planning-subphases-profile-v79/0-noop.stdout": {
+    "bytes": 374,
+    "sha256": "367d89b6164976a4f92111bcbb09c3fd72b1f65bb9953439d61cb926c2c51304"
+  },
+  "planning-subphases-profile-v79/0-noop.trace.json": {
+    "bytes": 2925,
+    "sha256": "dc8c22d342ac32c02ce8ccb6aaae3e2ed1b4e84b6bd26b6eabcdf46e7977e388"
+  },
+  "planning-subphases-profile-v79/1-edit.stderr": {
+    "bytes": 2754,
+    "sha256": "77e2b55fa0c72dee7a98185e7fee5777d1afb684fde06d06dc48875c63043e18"
+  },
+  "planning-subphases-profile-v79/1-edit.stdout": {
+    "bytes": 374,
+    "sha256": "d7e811c2a028aff367be8c9ecd5f9df527d3836f7ae9a3d790a7950cc4ea319c"
+  },
+  "planning-subphases-profile-v79/1-edit.trace.json": {
+    "bytes": 7490,
+    "sha256": "eecb3888fe6b330b6d20a08e42fd532cd2a31edce0c07f403e1c29d2c1f2b150"
+  },
+  "planning-subphases-profile-v79/1-noop.stderr": {
+    "bytes": 1637,
+    "sha256": "591f83569386e87fbe54d99fd0235eba3b0e015a567f97dc7c480038111a089f"
+  },
+  "planning-subphases-profile-v79/1-noop.stdout": {
+    "bytes": 374,
+    "sha256": "d7e811c2a028aff367be8c9ecd5f9df527d3836f7ae9a3d790a7950cc4ea319c"
+  },
+  "planning-subphases-profile-v79/1-noop.trace.json": {
+    "bytes": 2929,
+    "sha256": "c953e95f2e2bce33ebd16c54e38dfbe5509afcd27c4d289878fa2de93527b0a6"
+  },
+  "planning-subphases-profile-v79/2-edit.stderr": {
+    "bytes": 2754,
+    "sha256": "e2027a5e2a37d68618a133cea7e7543166e7003d7c1a00ec7d46ecabe06fad42"
+  },
+  "planning-subphases-profile-v79/2-edit.stdout": {
+    "bytes": 374,
+    "sha256": "17c3683ee281e8b720a275890f64ddb7f50fbae10cfef1ee5e214bb3d59907a2"
+  },
+  "planning-subphases-profile-v79/2-edit.trace.json": {
+    "bytes": 7295,
+    "sha256": "8a95ecf783c1fa83bbc7d7075d8e9bb61120f21b6b720882b62a0312d9c983f5"
+  },
+  "planning-subphases-profile-v79/2-noop.stderr": {
+    "bytes": 1636,
+    "sha256": "426938e417d103ebf1d7ee72b3695bbe7e6bdb06c9fe5b99f7b7a0588b33ef2b"
+  },
+  "planning-subphases-profile-v79/2-noop.stdout": {
+    "bytes": 374,
+    "sha256": "17c3683ee281e8b720a275890f64ddb7f50fbae10cfef1ee5e214bb3d59907a2"
+  },
+  "planning-subphases-profile-v79/2-noop.trace.json": {
+    "bytes": 2932,
+    "sha256": "de6147ddee9c34b4ad3fd9f0d37ce224cf5f4355c6855ad72489f26d4202e863"
+  },
+  "planning-subphases-profile-v79/3-edit.stderr": {
+    "bytes": 2754,
+    "sha256": "dc769f07bb3c7df9b2728d0a5899869b9a4f998b3dee682d4bde77abe9276a5c"
+  },
+  "planning-subphases-profile-v79/3-edit.stdout": {
+    "bytes": 374,
+    "sha256": "e4b91a6c0160ee7bd343ccafbaf002535dcb83da19bec4879c56a4cd9b48dbdc"
+  },
+  "planning-subphases-profile-v79/3-edit.trace.json": {
+    "bytes": 7212,
+    "sha256": "65a9c54145dfad8beff8a5ebd33b85023ecd0b0c4f75f98c6a72a82c28b27d66"
+  },
+  "planning-subphases-profile-v79/3-noop.stderr": {
+    "bytes": 1637,
+    "sha256": "4fab6575a47ebc190960a1b0fc7ff5c45fdb449057a6d281b34bc4334c0a3971"
+  },
+  "planning-subphases-profile-v79/3-noop.stdout": {
+    "bytes": 374,
+    "sha256": "e4b91a6c0160ee7bd343ccafbaf002535dcb83da19bec4879c56a4cd9b48dbdc"
+  },
+  "planning-subphases-profile-v79/3-noop.trace.json": {
+    "bytes": 2932,
+    "sha256": "d98f1e5b9e5ccf8a2c847fdeaac9d2b6eab569c6811c7b346990c26a64081ffe"
+  },
+  "planning-subphases-profile-v79/prepare.stderr": {
+    "bytes": 317,
+    "sha256": "cf60b71e30c4395931c4378fea28b1bcbafa3bf4a1cf9525870b9569404ee2f5"
+  },
+  "planning-subphases-profile-v79/prepare.stdout": {
+    "bytes": 349,
+    "sha256": "1bc23de4cbfc0af21e967b9743bfa8a9af25884a5cddd09bd430de6b6076759d"
+  },
+  "planning-subphases-profile-v79/source.original": {
+    "bytes": 39373,
+    "sha256": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f"
+  },
+  "planning-subphases-profile-v79/state.json": {
+    "bytes": 1654864,
+    "sha256": "23b0f106d63baad69bc70cea41b111ee3b69609e81915ad6c155162a27ffaa3f"
+  },
+  "planning-subphases-profile-v79/stop.stderr": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "planning-subphases-profile-v79/stop.stdout": {
+    "bytes": 16,
+    "sha256": "b9a20d94534971c54b9fe106758b82b6fb190d8e11940ae2e945c5c500966950"
+  },
+  "planning-subphases-v79/RELEASE.txt": {
+    "bytes": 674,
+    "sha256": "fe065810b7ab5e78fd95e8a971ebaee4bf7b51dbee5ec7120ccf9fae57a19a41"
+  },
+  "planning-subphases-v79/SHA256SUMS": {
+    "bytes": 706,
+    "sha256": "255f0e9d143bf8bac2d4670c61f1323b450fdbc9ff20057af40e381bbe10abd8"
+  },
+  "planning-subphases-v79/candidate.patch": {
+    "bytes": 5900,
+    "sha256": "f49351a2a9fed4374c321c2e9b6e956386b1d2de6c6ebbd37c2f589911a26c77"
+  },
+  "planning-subphases-v79/candidates/docs/resident-planning-subphases.md": {
+    "bytes": 4176,
+    "sha256": "6928cc352a21422c822beeb588cc3bdfec564ff2f6a082aebbef9e545514e17f"
+  },
+  "planning-subphases-v79/candidates/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs": {
+    "bytes": 28954,
+    "sha256": "bd0984cfde00b7c8e9db1285409e05360a8ab5908bf799bf53450a87a82c0f49"
+  },
+  "planning-subphases-v79/finaldoc/candidate.patch": {
+    "bytes": 3012,
+    "sha256": "879aa6c694d67711675bb6bd8b66de1ddb940ff8363c75f4869cd48477508567"
+  },
+  "planning-subphases-v79/finaldoc/candidates/docs/resident-planning-subphases.md": {
+    "bytes": 6795,
+    "sha256": "89449f5028632d05510736fb44e98e803e2fc58314ccbaa2acb683f6e24786e1"
+  },
+  "planning-subphases-v79/finaldoc/originals/docs/resident-planning-subphases.md": {
+    "bytes": 4176,
+    "sha256": "6928cc352a21422c822beeb588cc3bdfec564ff2f6a082aebbef9e545514e17f"
+  },
+  "planning-subphases-v79/originals/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs": {
+    "bytes": 28570,
+    "sha256": "1c913b348bb893d478d9bba1ab21c80180fafa0aef104d116d31bf7e45d27b48"
+  },
+  "planning-subphases-v79/sourcechecks.txt": {
+    "bytes": 418,
+    "sha256": "907be2bed281eca61bec2fbab1dec5b21530707474e8c7949cb9802a24c2bdc3"
+  },
+  "profile-planning-subphases-v79.py": {
+    "bytes": 3181,
+    "sha256": "4cf691f39a08cfb39608ad551b8dbcb55f6f7fec42cf000a86a9f1515f1c54f6"
+  },
+  "v79-full-harness-regression.log": {
+    "bytes": 6866,
+    "sha256": "093d03fdaf894fa345e4d6a839fe27ee6a75f09584bdd3236f4e05e83ab62210"
+  }
+}

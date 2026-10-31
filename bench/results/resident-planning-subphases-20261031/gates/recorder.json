@@ -1,0 +1,187 @@
+[
+  {
+    "args": [
+      "check",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--tests",
+      "-p",
+      "hir-ty-codegen",
+      "-j",
+      "6"
+    ],
+    "exit": 0,
+    "id": "20261031-084651042-3053551",
+    "subcommand": "check",
+    "tests": {
+      "binaries": [],
+      "failed": 0,
+      "filtered_out": 0,
+      "ignored": 0,
+      "libtest_secs": 0.0,
+      "passed": 0,
+      "timed": 0,
+      "timed_secs": 0.0
+    }
+  },
+  {
+    "args": [
+      "build",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6"
+    ],
+    "exit": 0,
+    "id": "20261031-084711560-3055681",
+    "subcommand": "build",
+    "tests": {
+      "binaries": [],
+      "failed": 0,
+      "filtered_out": 0,
+      "ignored": 0,
+      "libtest_secs": 0.0,
+      "passed": 0,
+      "timed": 0,
+      "timed_secs": 0.0
+    }
+  },
+  {
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "hir-ty-codegen",
+      "-j",
+      "6"
+    ],
+    "exit": 0,
+    "id": "20261031-084851470-3065538",
+    "subcommand": "test",
+    "tests": {
+      "binaries": [
+        {
+          "failed": 0,
+          "filtered_out": 0,
+          "name": "hir_ty_codegen-d85c581ce11daf8e",
+          "passed": 53,
+          "start": 0.426,
+          "wall": 0.054
+        }
+      ],
+      "failed": 0,
+      "filtered_out": 0,
+      "ignored": 0,
+      "libtest_secs": 0.04,
+      "passed": 53,
+      "slowest": [
+        {
+          "binary": "hir_ty_codegen-d85c581ce11daf8e",
+          "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+          "passed": true,
+          "secs": 0.035
+        },
+        {
+          "binary": "hir_ty_codegen-d85c581ce11daf8e",
+          "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+          "passed": true,
+          "secs": 0.032
+        },
+        {
+          "binary": "hir_ty_codegen-d85c581ce11daf8e",
+          "name": "cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct",
+          "passed": true,
+          "secs": 0.021
+        },
+        {
+          "binary": "hir_ty_codegen-d85c581ce11daf8e",
+          "name": "cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc",
+          "passed": true,
+          "secs": 0.02
+        },
+        {
+          "binary": "hir_ty_codegen-d85c581ce11daf8e",
+          "name": "cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key",
+          "passed": true,
+          "secs": 0.013
+        }
+      ],
+      "timed": 53,
+      "timed_secs": 0.173
+    }
+  },
+  {
+    "args": [
+      "test",
+      "--release",
+      "--locked",
+      "-p",
+      "ra-jit",
+      "--bin",
+      "jr-engine",
+      "-j",
+      "6"
+    ],
+    "exit": 0,
+    "id": "20261031-084852010-3065692",
+    "subcommand": "test",
+    "tests": {
+      "binaries": [
+        {
+          "failed": 0,
+          "filtered_out": 0,
+          "name": "jr_engine-93ff5023e9192f9b",
+          "passed": 373,
+          "start": 79.68,
+          "wall": 16.729
+        }
+      ],
+      "failed": 0,
+      "filtered_out": 0,
+      "ignored": 0,
+      "libtest_secs": 16.72,
+      "passed": 373,
+      "slowest": [
+        {
+          "binary": "jr_engine-93ff5023e9192f9b",
+          "name": "remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times",
+          "passed": true,
+          "secs": 16.527
+        },
+        {
+          "binary": "jr_engine-93ff5023e9192f9b",
+          "name": "remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked",
+          "passed": true,
+          "secs": 3.26
+        },
+        {
+          "binary": "jr_engine-93ff5023e9192f9b",
+          "name": "deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound",
+          "passed": true,
+          "secs": 1.972
+        },
+        {
+          "binary": "jr_engine-93ff5023e9192f9b",
+          "name": "remote::gateway::tests::what_is_over_a_put_goes_up_in_parts_checked_whole",
+          "passed": true,
+          "secs": 0.877
+        },
+        {
+          "binary": "jr_engine-93ff5023e9192f9b",
+          "name": "deps::tests::an_archive_that_unpacks_to_more_than_is_taken_is_refused",
+          "passed": true,
+          "secs": 0.58
+        }
+      ],
+      "timed": 373,
+      "timed_secs": 32.356
+    }
+  }
+]

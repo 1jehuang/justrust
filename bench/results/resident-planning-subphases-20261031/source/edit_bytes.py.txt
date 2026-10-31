@@ -1,0 +1,12 @@
+def edit_bytes(original, replicate=0, anchor=b'fn shares_overlapping_time() {', kind='edit'):
+    if original.count(anchor) != 1:
+        raise ValueError('edit anchor must occur exactly once')
+    n = replicate + 1
+    body = (f'let observed = std::hint::black_box({n}u64); '
+            f'assert_eq!(observed, {n}u64); '
+            f'println!("JR_RUNTIME_EXECUTED_{n}");').encode()
+    if kind == 'type-error':
+        body = b'let _: u64 = "JR_RUNTIME_TYPE_ERROR";'
+    elif kind == 'test-failure':
+        body = b'assert_eq!(std::hint::black_box(1u64), 2u64, "JR_RUNTIME_FAILURE");'
+    return original.replace(anchor, anchor + b'\n' + body, 1)

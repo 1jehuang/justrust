@@ -1,0 +1,54 @@
+--- a/docs/resident-planning-subphases.md
++++ b/docs/resident-planning-subphases.md
+@@ -64,3 +64,51 @@
+ the licensed Blaze-derived resident implementation and its existing attribution
+ and dual MIT/Apache-2.0 license lineage. It is not a clean-room rewrite or a newly
+ licensed independent resolver. No license or attribution files are changed.
++
++## Root-observed acceptance and attribution, October 31, 2026
++
++The root native gate `610641drlg` completed successfully (coordinator-reported
++outer duration 217.94 seconds). Read-only review of the actual journals confirms:
++
++- `ROOT/candidate-build-v79/check.exit`, `compile.exit`, and
++  `orchestration-exit` are all 0.
++- `ROOT/candidate-unit-v79/codegen-native.log` records **53 passed**, 0 failed,
++  0 ignored, 0 filtered. Its exit receipt is 0. Run id:
++  `20261031-084851470-3065538`.
++- `ROOT/candidate-unit-v79/full-native.log` records **373 passed**, 0 failed,
++  0 ignored, 0 filtered. Its exit receipt and the unit gate exit are 0. Run id:
++  `20261031-084852010-3065692`.
++
++Root positive profile `317616f4d6` also passed (coordinator-reported outer duration
++34.86 seconds). Its actual `ROOT/planning-subphases-profile-v79/state.json`
++contains eight successful rows, four edits alternating with four noops. Every row
++has status 0, no timeout, and all four new labels. The accepted profile reports
++source/toolchain unchanged, identical engine hashes before/after, and stop status
++0 without timeout or launch error. The preparation run is separate from these
++eight rows.
++
++Ranges below are computed directly from the eight rows' trace event durations,
++converted from microseconds to milliseconds:
++
++| Inclusive phase | Observed range, ms |
++| --- | ---: |
++| `client planning` | 28.930 to 35.106 |
++| `client planning rustc host` | 2.669 to 2.985 |
++| `client planning target cfg` | 0.801 to 0.998 |
++| `client planning asked setup` | 0.019 to 0.026 |
++| `client planning owned resolver` | 25.154 to 31.148 |
++
++The owned-resolver call is the dominant measured portion of client planning in
++this bounded profile, making its internal work the next attribution target.
++This coarse span does not distinguish manifest reads, configuration, resolution,
++or program selection inside the resolver. It does not justify a particular cache
++or resolver rewrite without further measurement and correctness proof.
++
++These are inclusive attribution observations, not before/after comparisons,
++an instrumentation-overhead estimate, or a speedup claim. The profile explicitly
++classifies contamination as unknown and does not establish a quiet machine.
++The workload is not the comprehensive session-weighted suite, and no general
++performance, default promotion, or statistically significant difference from v78
++is claimed. The author only read journals and updated this document after root
++execution. The original source freeze remains unchanged, and the implementation
++retains its licensed Blaze-derived lineage rather than a clean-room claim.

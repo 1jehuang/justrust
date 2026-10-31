@@ -1,0 +1,39 @@
+RELEASE: resident-planning-subphases-v79 portable evidence
+Date: 2026-10-31
+State: STOPEDITS on evidence observations and frozen owned-source derivatives
+Authority: 34dc0a188534edbe92d0b848b9dfa68de71d8bb3 (immutable shipped telemetry)
+Owned: bench/results/resident-planning-subphases-20261031/**
+Owned small link: docs/resident-planning-subphases.md
+Native/live v80 source: untouched by this worker
+
+Validation: python3 -B validate.py --manifest PASS
+Offline: python3 -B test_offline.py, 63 tests, 6.285s, OK
+Relocated -I -S -B Python: empty HOME/PATH, six actual denied probes PASS
+No native/build/test/probe/install/lock operation executed while packaging.
+Read-only Git source access and evidence-only Git commit/push are separate.
+
+Historical observations SHA256:
+5651e2a8576de19eb717e19122edf137ea67dfa81baf41ea1f968da741beed71 observations.json
+Historical evidence aggregate SHA256 (canonical sorted name -> digest map):
+03e21704f58058841f54bc9bcb7a846bfefca967d4d30d043745cf486f249060
+65fb1d4416ba053a172097cb791b2a2aeade5ba726edb38ae2ffe972494fe5c7 private-inputs.json
+bd0984cfde00b7c8e9db1285409e05360a8ab5908bf799bf53450a87a82c0f49 source/candidates.rs
+1c913b348bb893d478d9bba1ab21c80180fafa0aef104d116d31bf7e45d27b48 source/originals.rs
+b46b99ac01c58e225a8a2367b730dde2ad1eb852d85c5ea197ddea8f515f4dd4 source/metadata.patch
+c94af39db0943145d597b0c5186149c098871569ae7f1486bd8d38bd79e7a09d validate.py
+cce2ea6a0ffc8bc10383b8cc50fc9fda42da3de0f11a95f58e91082b1e003b9b test_offline.py
+14c147527cd7548d4da5e76084c8c33a0960429517f87a5faf2b59e1c5fa3e6d offline_sandbox.py
+d63ad9e994e696d4fcdbd9afb95333d1c74c265ac5534e43c02f5b6d1875743f export_private.py
+b3811c800cedac03c76bae87b2cd59d5e8f62dd825196fc42c494bdcbf347ea0 docs/resident-planning-subphases.md (repository link, not package-local)
+
+Eight actual edit/noop rows, four runtime edit nonces, all four planning labels
+plus inclusive parent on each row. Exact original trace duration projections,
+source3757/pinned63/toolchain4020 identities, native53/resident373 named PASS
+lines and historical Python761 gate retained. Private originals SHA/size checked
+unchanged during export. SHA256.json seals every package file except itself.
+Reviewed validator and Git commit, not mutable resealing, are the trust boundary.
+
+Attribution only. No comparison, speed claim, default promotion, significance,
+instrumentation-overhead estimate or comprehensive benchmark. Noise UNKNOWN.
+No quiet-machine claim. No fabricated historical raw console transcript.
+Blaze-derived lineage retained with original MIT/Apache-2.0 licenses/provenance.

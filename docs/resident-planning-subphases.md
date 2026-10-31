@@ -112,3 +112,13 @@ performance, default promotion, or statistically significant difference from v78
 is claimed. The author only read journals and updated this document after root
 execution. The original source freeze remains unchanged, and the implementation
 retains its licensed Blaze-derived lineage rather than a clean-room claim.
+
+## Portable v79 evidence
+
+The small allowlisted archive is
+`bench/results/resident-planning-subphases-20261031/README.md`, bound to immutable
+`34dc0a188` rather than live v80 source. It retains eight actual runtime rows,
+planning trace events, original SHA/size receipts, source joins and native53/373
+gates. Its standalone `validate.py --manifest` and offline adversarial tests
+replay attribution only, with unknown noise and no comparison, speed or
+default-promotion claim. No native command was run while archiving.

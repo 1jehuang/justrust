@@ -1,0 +1,3 @@
+justrust: ok: 373 tests passed in 96.4s
+  tests   373 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 16.73s
+  more    `justrust log 20261031-084852010-3065692` full output, `justrust show 20261031-084852010-3065692` full profile
