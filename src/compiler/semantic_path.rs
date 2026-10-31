@@ -91,7 +91,13 @@ struct PathData {
 // This is a resolver-issued transport certificate, not a name or lookup key.
 // The two payloads are flat shared paths. Re-resolution collapses to the first
 // use site rather than constructing a recursive chain of certificates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum CatalogCallable {
+    ThreadPanicking,
+}
+
 struct ResolvedUse {
+    catalog_callable: Option<CatalogCallable>,
     target_anchor: PathAnchor,
     target: Arc<PathData>,
     original_anchor: PathAnchor,
@@ -122,35 +128,97 @@ impl fmt::Debug for AstPath {
 /// The resolver must precharge traversal before each map lookup or insertion.
 #[derive(Clone)]
 pub struct PathKey {
-    anchor: PathAnchor,
     namespace: Namespace,
-    data: Arc<PathData>,
+    identity: PathKeyIdentity,
+}
+#[derive(Clone)]
+enum PathKeyIdentity {
+    Source {
+        anchor: PathAnchor,
+        data: Arc<PathData>,
+    },
+    Catalog {
+        owner: SessionId,
+        callable: CatalogCallable,
+    },
+}
+impl PathKey {
+    /// Registry identity only, independent of every source occurrence.
+    pub(crate) fn catalog(
+        names: &impl NameAccess,
+        namespace: Namespace,
+        callable: CatalogCallable,
+    ) -> Result<Self, NameError> {
+        names.budget().check()?;
+        names.budget().charge(Counter::Work, 1)?;
+        Ok(Self {
+            namespace,
+            identity: PathKeyIdentity::Catalog {
+                owner: names.session().crate_key(),
+                callable,
+            },
+        })
+    }
 }
 impl PartialEq for PathKey {
     fn eq(&self, other: &Self) -> bool {
-        self.data.owner == other.data.owner
-            && self.anchor == other.anchor
-            && self.namespace == other.namespace
-            && self.data.keys.as_slice() == other.data.keys.as_slice()
+        self.namespace == other.namespace
+            && match (&self.identity, &other.identity) {
+                (
+                    PathKeyIdentity::Source { anchor: a, data: x },
+                    PathKeyIdentity::Source { anchor: b, data: y },
+                ) => x.owner == y.owner && a == b && x.keys.as_slice() == y.keys.as_slice(),
+                (
+                    PathKeyIdentity::Catalog {
+                        owner: a,
+                        callable: x,
+                    },
+                    PathKeyIdentity::Catalog {
+                        owner: b,
+                        callable: y,
+                    },
+                ) => a == b && x == y,
+                _ => false,
+            }
     }
 }
 impl Eq for PathKey {}
 impl Hash for PathKey {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.data.owner.hash(state);
-        self.anchor.hash(state);
         self.namespace.hash(state);
-        self.data.keys.as_slice().hash(state);
+        match &self.identity {
+            PathKeyIdentity::Source { anchor, data } => {
+                0u8.hash(state);
+                data.owner.hash(state);
+                anchor.hash(state);
+                data.keys.as_slice().hash(state);
+            }
+            PathKeyIdentity::Catalog { owner, callable } => {
+                1u8.hash(state);
+                owner.hash(state);
+                callable.hash(state);
+            }
+        }
     }
 }
 impl fmt::Debug for PathKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PathKey")
-            .field("anchor", &self.anchor)
-            .field("owner", &self.data.owner)
-            .field("namespace", &self.namespace)
-            .field("segments", &self.data.keys.len())
-            .finish()
+        let mut value = f.debug_struct("PathKey");
+        value.field("namespace", &self.namespace);
+        match &self.identity {
+            PathKeyIdentity::Source { anchor, data } => {
+                value
+                    .field("anchor", anchor)
+                    .field("owner", &data.owner)
+                    .field("segments", &data.keys.len());
+            }
+            PathKeyIdentity::Catalog { owner, callable } => {
+                value
+                    .field("owner", owner)
+                    .field("catalog_callable", callable);
+            }
+        }
+        value.finish()
     }
 }
 
@@ -330,6 +398,7 @@ impl AstPath {
             anchor: self.anchor.clone(),
             data: self.data.clone(),
             resolved_use: Some(Arc::new(ResolvedUse {
+                catalog_callable: self.catalog_callable(),
                 target_anchor: self.anchor.clone(),
                 target: self.data.clone(),
                 original_anchor,
@@ -337,6 +406,31 @@ impl AstPath {
                 _lease: lease,
             })),
         })
+    }
+
+    pub(crate) fn catalog_callable(&self) -> Option<CatalogCallable> {
+        self.resolved_use
+            .as_ref()
+            .and_then(|origin| origin.catalog_callable)
+    }
+
+    /// Resolver-only catalog binding retains the exact original source use.
+    pub(crate) fn with_catalog_callable(
+        &self,
+        names: &impl NameAccess,
+        callable: CatalogCallable,
+    ) -> Result<Self, NameError> {
+        let source = self.original_use(names)?;
+        let mut result = source.with_resolved_use(names, &source)?;
+        Arc::get_mut(
+            result
+                .resolved_use
+                .as_mut()
+                .ok_or(TokenError::InvalidHandle)?,
+        )
+        .ok_or(TokenError::InvalidHandle)?
+        .catalog_callable = Some(callable);
+        Ok(result)
     }
 
     pub(crate) fn source_occurrences(
@@ -439,9 +533,17 @@ impl AstPath {
     }
     pub fn key(&self, namespace: Namespace) -> PathKey {
         PathKey {
-            anchor: self.anchor.clone(),
             namespace,
-            data: self.data.clone(),
+            identity: match self.catalog_callable() {
+                Some(callable) => PathKeyIdentity::Catalog {
+                    owner: self.data.owner,
+                    callable,
+                },
+                None => PathKeyIdentity::Source {
+                    anchor: self.anchor.clone(),
+                    data: self.data.clone(),
+                },
+            },
         }
     }
     pub fn push(&self, names: &impl NameAccess, ident: AstIdent) -> Result<Self, NameError> {
@@ -588,6 +690,82 @@ mod tests {
     use super::*;
     use std::collections::hash_map::DefaultHasher;
     use std::path::Path;
+
+    #[test]
+    fn catalog_callable_keys_do_not_alias_source_paths_and_keep_original_occurrences() {
+        let (names, identifiers) = fixture(ExpansionBudget::default());
+        let source = AstPath::new(&names, PathAnchor::Relative, &identifiers[..1]).unwrap();
+        let alias = AstPath::new(&names, PathAnchor::Relative, &identifiers[1..2]).unwrap();
+        let canonical = source
+            .with_catalog_callable(&names, CatalogCallable::ThreadPanicking)
+            .unwrap();
+        let imported = alias
+            .with_catalog_callable(&names, CatalogCallable::ThreadPanicking)
+            .unwrap();
+        assert_eq!(
+            canonical.key(Namespace::Value),
+            imported.key(Namespace::Value)
+        );
+        let registry_key =
+            PathKey::catalog(&names, Namespace::Value, CatalogCallable::ThreadPanicking).unwrap();
+        assert_eq!(registry_key, canonical.key(Namespace::Value));
+        let (foreign, _) = fixture(ExpansionBudget::default());
+        let foreign_key =
+            PathKey::catalog(&foreign, Namespace::Value, CatalogCallable::ThreadPanicking).unwrap();
+        assert_ne!(registry_key, foreign_key);
+        assert_ne!(
+            canonical.key(Namespace::Value),
+            source.key(Namespace::Value)
+        );
+        assert_ne!(
+            canonical.key(Namespace::Value),
+            canonical.key(Namespace::Type)
+        );
+        let hash = |path: &AstPath| {
+            let mut hasher = DefaultHasher::new();
+            path.key(Namespace::Value).hash(&mut hasher);
+            hasher.finish()
+        };
+        assert_eq!(hash(&canonical), hash(&imported));
+        assert!(canonical.push(&names, identifiers[2]).is_err());
+        assert!(
+            canonical
+                .with_anchor(PathAnchor::Crate)
+                .check(&names)
+                .is_err()
+        );
+        assert_eq!(
+            canonical
+                .original_use(&names)
+                .unwrap()
+                .key(Namespace::Value),
+            source.key(Namespace::Value)
+        );
+        assert_eq!(
+            names
+                .span(canonical.source_occurrences(&names).unwrap()[0])
+                .unwrap(),
+            names.span(source.segments()[0]).unwrap()
+        );
+        assert_eq!(
+            names
+                .span(imported.source_occurrences(&names).unwrap()[0])
+                .unwrap(),
+            names.span(alias.segments()[0]).unwrap()
+        );
+        let reconstructed = AstPath::new(&names, canonical.anchor(), canonical.segments()).unwrap();
+        assert_ne!(
+            canonical.key(Namespace::Value),
+            reconstructed.key(Namespace::Value)
+        );
+        assert!(
+            canonical
+                .original_use(&names)
+                .unwrap()
+                .catalog_callable()
+                .is_none()
+        );
+    }
 
     fn fixture(budget: ExpansionBudget) -> (NameStoreBuilder, [AstIdent; 3]) {
         let source = SourceSnapshot::from_text(
@@ -888,7 +1066,10 @@ mod tests {
         let before = budget.snapshot();
         let key = path.key(Namespace::Value);
         let anchor_clone = path.with_anchor(PathAnchor::Crate);
-        assert!(Arc::ptr_eq(&path.data, &key.data));
+        let PathKeyIdentity::Source { data, .. } = &key.identity else {
+            panic!("source path key lost source identity");
+        };
+        assert!(Arc::ptr_eq(&path.data, data));
         assert!(Arc::ptr_eq(&path.data, &anchor_clone.data));
         assert_eq!(budget.snapshot().retained_bytes, before.retained_bytes);
         assert_eq!(budget.snapshot().counters, before.counters);

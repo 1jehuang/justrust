@@ -10,7 +10,8 @@
 //! Signed integers are sign-extended and unsigned integers zero-extended from
 //! their declared width. References remain a separate thin-pointer class,
 //! including borrowed receiver argument0 and references to aggregate referents.
-//! All registers are caller-saved. Frames use a sixteen-byte-aligned rbp base
+//! r14 holds the active-panic state and r15 the unwind propagation flag.
+//! Other registers are caller-saved. Frames use a sixteen-byte-aligned rbp base
 //! and stable local slots independent of temporary pushes. The original incoming
 //! frame base is retained for argument access and exact stack restoration. A
 //! disjoint mirrored header keeps the saved rbp and return PC at rbp and rbp+8.
@@ -1219,7 +1220,8 @@ impl<'a> Emitter<'a> {
     }
     /// panic=unwind landing pad: drop every still-initialized owning local
     /// in reverse declaration order, then return with the panic flag set.
-    /// Destructors run with the flag cleared so their own calls proceed.
+    /// Destructors run with the propagation flag cleared so their own calls
+    /// proceed. The independent r14 active-panic state remains set throughout.
     fn unwind_cleanup(&mut self) -> Result<(), String> {
         let sites = std::mem::take(&mut self.unwinds);
         if sites.is_empty() {
@@ -3034,20 +3036,21 @@ fn emit_panic_payload(
         this.patch(more, retry)?;
         let abort = this.position();
         this.patch(failed_write, abort)?;
-        if unwind {
-            // panic=unwind: raise the r15 panic flag and leave through the
-            // function's cleanup path, which runs pending drops and returns.
-            this.bytes(&[0x41, 0xbf, 1, 0, 0, 0])?;
+        let unwinding = if unwind {
+            // r14 is the active-panic state, unlike the r15 propagation flag
+            // which cleanup temporarily clears while it calls destructors.
+            // A second panic must abort, never start another cleanup pass.
+            this.bytes(&[0x45, 0x85, 0xf6])?; // test r14d, r14d
+            let double_panic = this.jump(&[0x0f, 0x85])?;
+            this.bytes(&[0x41, 0xbe, 1, 0, 0, 0])?; // mov r14d, 1
+            this.bytes(&[0x41, 0xbf, 1, 0, 0, 0])?; // mov r15d, 1
             let unwinding = this.jump(&[0xe9])?;
-            let fallback = this.position();
-            for failed in [failed_sigabrt, failed_sigpipe] {
-                this.patch(failed, fallback)?;
-            }
-            this.bytes(&[
-                0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
-            ])?;
-            return Ok(Some(unwinding));
-        }
+            let abort = this.position();
+            this.patch(double_panic, abort)?;
+            Some(unwinding)
+        } else {
+            None
+        };
 
         // This abort-only runtime does not produce core files. In particular a
         // piped core_pattern must not delay termination in an external service.
@@ -3085,7 +3088,7 @@ fn emit_panic_payload(
         this.bytes(&[
             0xbf, 101, 0, 0, 0, 0xb8, 231, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
         ])?;
-        Ok(None)
+        Ok(unwinding)
     }
 }
 
@@ -3147,6 +3150,17 @@ impl Emitter<'_> {
     }
     fn rvalue(&mut self, value: &cfg::Rvalue) -> Result<(), String> {
         match value {
+            cfg::Rvalue::RuntimeQuery(query) => {
+                let facts = self.concrete.facts();
+                query.validate(ir::FactsCtx::Validated(facts), facts.budget())?;
+                match query.kind() {
+                    ir::RuntimeQueryKind::ThreadPanicking => {
+                        // This state is invariant across every cleanup/callee,
+                        // unlike r15 which is cleared during destructor calls.
+                        self.bytes(&[0x44, 0x89, 0xf0]); // mov eax, r14d
+                    }
+                }
+            }
             cfg::Rvalue::TypeAlignment(_) => {
                 return Err("unresolved target alignment reached native code generation".into());
             }
@@ -4456,22 +4470,30 @@ pub fn link(functions: &[(String, Object)]) -> Result<Vec<u8>, String> {
     link_with_panic(functions, false)
 }
 
-/// `unwind` selects the panic=unwind entry: a returned main with the r15
-/// panic flag raised exits 101 after its cleanup ran.
-pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<Vec<u8>, String> {
-    let mut code = if unwind {
-        vec![
+/// Exact immutable entry bytes, shared by emission and metered link-cache
+/// size admission so an ABI change cannot silently drift the size estimator.
+pub(super) fn native_entry_code(unwind: bool) -> &'static [u8] {
+    if unwind {
+        &[
+            0x45, 0x31, 0xf6, // xor r14d, r14d: no active panic at entry
             0x45, 0x31, 0xff, // xor r15d, r15d
             0xe8, 0, 0, 0, 0, 0x31, 0xff, // call main; xor edi, edi
             0x45, 0x85, 0xff, 0x74, 0x05, 0xbf, 101, 0, 0, 0, // r15 ? edi = 101
             0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
         ]
     } else {
-        vec![
+        &[
+            0x45, 0x31, 0xf6, // xor r14d, r14d: no active panic at entry
             0xe8, 0, 0, 0, 0, 0x31, 0xff, 0xb8, 60, 0, 0, 0, 0x0f, 0x05, 0x0f, 0x0b,
         ]
-    };
-    let call_end = if unwind { 8 } else { 5 };
+    }
+}
+
+/// `unwind` selects the panic=unwind entry: a returned main with the r15
+/// panic flag raised exits 101 after its cleanup ran.
+pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<Vec<u8>, String> {
+    let mut code = native_entry_code(unwind).to_vec();
+    let call_end = if unwind { 11 } else { 8 };
     let mut symbols = HashMap::new();
     for (name, object) in functions {
         if symbols.insert(name.as_str(), code.len()).is_some() {

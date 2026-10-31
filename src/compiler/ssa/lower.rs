@@ -162,6 +162,9 @@ fn binary_kind(op: BinaryOp) -> Result<(Option<BinOp>, Option<CmpOp>), &'static 
 /// Validates an rvalue and returns the instructions it adds.
 fn check_rvalue(function: &cfg::Function, rvalue: &cfg::Rvalue) -> Result<usize, &'static str> {
     match rvalue {
+        // A state read must not enter the pure SSA evaluator, CSE, or inliner.
+        // The stack emitter preserves it at its exact runtime call position.
+        cfg::Rvalue::RuntimeQuery(_) => Err("runtime state query requires native runtime"),
         cfg::Rvalue::Use(operand) => check_operand(function, operand),
         cfg::Rvalue::Unary { op, value } => {
             let ty = operand_ty(function, value).ok_or("unsupported operand")?;

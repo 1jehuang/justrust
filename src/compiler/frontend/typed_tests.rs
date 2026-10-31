@@ -339,15 +339,46 @@ fn registered_recipe_bodies_share_counting_and_universal_verification() {
     let budget = ir::PlanBudget::default();
     let plan = PlanCtx::from_shared_program(p.clone(), &budget).unwrap();
     let mut recipes_seen = 0;
+    let mut thread_queries_seen = 0;
     for index in 0..plan.callable_count() {
         let declaration = plan.callable_decl(index).unwrap();
         if let CallableProvider::Recipe { descriptor } =
             plan.callable_provider(declaration).unwrap()
         {
-            recipes_seen += 1;
-            assert!(
-                matches!(plan.declaration_origin(declaration).unwrap(),tr::DeclOrigin::CoreCatalog{item:tr::CatalogItem::Recipe(d),..} if d==descriptor)
-            );
+            if descriptor == tr::RecipeDescriptor::ThreadPanicking {
+                thread_queries_seen += 1;
+                let facts = plan.callable_facts(declaration).unwrap();
+                let catalog = facts.world().canonical_catalog();
+                assert_eq!(declaration, catalog.id(tr::CatalogItem::ThreadPanicking));
+                assert_eq!(
+                    plan.declaration_origin(declaration).unwrap(),
+                    tr::DeclOrigin::CoreCatalog {
+                        version: catalog.version(),
+                        item: tr::CatalogItem::ThreadPanicking,
+                    }
+                );
+                let entry = catalog.declaration(declaration).unwrap();
+                assert_eq!(
+                    entry.callable_provider,
+                    Some(CallableProvider::Recipe {
+                        descriptor: tr::RecipeDescriptor::ThreadPanicking,
+                    })
+                );
+                let schema = entry.schema.as_ref().unwrap();
+                assert_eq!(schema.env.total_arity(), 0);
+                assert!(schema.predicates.is_empty());
+                assert!(schema.signature.params.is_empty());
+                assert_eq!(schema.signature.result, ir::Ty::Bool);
+                assert_eq!(
+                    schema.signature.ref_contract.as_ref(),
+                    &ir::RefContract::default()
+                );
+            } else {
+                recipes_seen += 1;
+                assert!(
+                    matches!(plan.declaration_origin(declaration).unwrap(),tr::DeclOrigin::CoreCatalog{item:tr::CatalogItem::Recipe(d),..} if d==descriptor)
+                );
+            }
             let env = plan.callable_env(declaration).unwrap();
             let target = ir::CallTarget {
                 declaration,
@@ -361,6 +392,7 @@ fn registered_recipe_bodies_share_counting_and_universal_verification() {
         }
     }
     assert!(recipes_seen >= 14);
+    assert_eq!(thread_queries_seen, 1);
     let counts = recipes::counts(tr::RecipeDescriptor::CloneTuple { arity: 33 }, &budget).unwrap();
     assert!(matches!(
         super::super::ownership::preflight_recipe_counts(&counts, &budget).unwrap(),

@@ -2079,6 +2079,80 @@ mod literal_context_tests {
     use super::*;
 
     #[test]
+    fn thread_panicking_transplanted_source_fails_original_replay_and_publication() {
+        let program =
+            parse("fn query()->bool{std::thread::panicking()}fn ordinary()->bool{true}fn main(){}")
+                .unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let query = plan.function_decl(0).unwrap();
+        let ordinary = plan.function_decl(1).unwrap();
+        let PublishedCallableBody::Source(query_publication) =
+            plan.publish_callable_body(query, &budget).unwrap()
+        else {
+            panic!("expected canonical query caller source")
+        };
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(ordinary, &budget).unwrap()
+        else {
+            panic!("expected canonical ordinary source")
+        };
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+        sr::replay_original_calls(
+            publication.source().clone(),
+            publication.original(),
+            publication.facts(),
+            &budget,
+        )
+        .unwrap();
+        assert!(
+            !publication
+                .source()
+                .exprs
+                .iter()
+                .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+        );
+
+        let mut transplanted = program.clone();
+        transplanted.functions[1].body = program.functions[0].body.clone();
+        // This low-level API types an explicitly supplied AST. It does not
+        // authenticate that AST as the retained original declaration body.
+        let typed =
+            Arc::new(type_callable_with_plan(&transplanted, ordinary, &plan, &budget).unwrap());
+        assert!(
+            typed
+                .exprs
+                .iter()
+                .any(|expression| matches!(expression.kind, ir::ExprKind::Call { .. }))
+        );
+        typed
+            .validate_with_facts(ir::FactsCtx::Validated(publication.facts()))
+            .unwrap();
+        // Exercise the same immutable-original replay used by the private
+        // publication factory, not merely an independently typed-body check.
+        let error = sr::replay_original_calls(
+            typed.clone(),
+            publication.original(),
+            publication.facts(),
+            &budget,
+        )
+        .err()
+        .expect("transplanted canonical call must not match the ordinary original source");
+        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        for candidate in [&typed, query_publication.source()] {
+            let error = publication
+                .validate_source(candidate, publication.facts(), &budget)
+                .expect_err("canonical source publication must reject a transplanted body");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+        publication
+            .validate_source(publication.source(), publication.facts(), &budget)
+            .unwrap();
+    }
+
+    #[test]
     fn builtin_method_producers_keep_canonical_occurrence_authority() {
         let program = parse("fn consume(a:&usize){}fn main(){let values=[1i32,2];let slice:&[i32]=&values;let n=slice.len();consume(&n);}").unwrap();
         let budget = ir::PlanBudget::default();

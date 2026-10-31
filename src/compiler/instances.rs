@@ -195,6 +195,7 @@ impl Encoder<'_> {
                         super::module_identity::CatalogModule::Ops => 3,
                         super::module_identity::CatalogModule::Mem => 4,
                         super::module_identity::CatalogModule::Cell => 5,
+                        super::module_identity::CatalogModule::Thread => 6,
                     }])?;
                 }
             }
@@ -218,6 +219,7 @@ impl Encoder<'_> {
             traits::CatalogItem::CellNew => 15,
             traits::CatalogItem::CellGet => 16,
             traits::CatalogItem::CellSet => 17,
+            traits::CatalogItem::ThreadPanicking => 18,
             traits::CatalogItem::ManuallyDrop => 10,
             traits::CatalogItem::ManuallyDropNew => 11,
             traits::CatalogItem::ManuallyDropIntoInner => 12,
@@ -255,6 +257,7 @@ impl Encoder<'_> {
             traits::RecipeDescriptor::CloneSharedRef => self.append(&[6]),
             traits::RecipeDescriptor::ClonePhantomData => self.append(&[9]),
             traits::RecipeDescriptor::CloneFromPhantomData => self.append(&[10]),
+            traits::RecipeDescriptor::ThreadPanicking => self.append(&[11]),
         }
     }
 
@@ -1330,6 +1333,49 @@ pub(super) fn build(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_thread_query_wire_tags_append_without_aliasing_prior_recipes() {
+        let program = frontend::parse("fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let encode = |item| {
+            let mut encoder = Encoder {
+                bytes: Vec::new(),
+                reservations: Vec::new(),
+                budget: &budget,
+                context: &context,
+            };
+            encoder.catalog_item(item).unwrap();
+            encoder.bytes
+        };
+        assert_eq!(encode(traits::CatalogItem::CellSet), vec![17]);
+        assert_eq!(encode(traits::CatalogItem::ThreadPanicking), vec![18]);
+        assert_eq!(
+            encode(traits::CatalogItem::Recipe(
+                traits::RecipeDescriptor::CloneChar
+            )),
+            vec![8, 8]
+        );
+        assert_eq!(
+            encode(traits::CatalogItem::Recipe(
+                traits::RecipeDescriptor::ClonePhantomData
+            )),
+            vec![8, 9]
+        );
+        assert_eq!(
+            encode(traits::CatalogItem::Recipe(
+                traits::RecipeDescriptor::CloneFromPhantomData
+            )),
+            vec![8, 10]
+        );
+        assert_eq!(
+            encode(traits::CatalogItem::Recipe(
+                traits::RecipeDescriptor::ThreadPanicking
+            )),
+            vec![8, 11]
+        );
+    }
 
     // Inventory selection only. Production resolution and entry selection use
     // checked typed APIs, never these persistence atom descriptors.

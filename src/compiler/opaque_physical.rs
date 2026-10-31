@@ -440,7 +440,8 @@ fn specialize_marker_constants(
                     operand(field, specialization, budget)?;
                 }
             }
-            TypeAlignment(_)
+            RuntimeQuery(_)
+            | TypeAlignment(_)
             | Borrow(_)
             | Discriminant(_)
             | Println(_)

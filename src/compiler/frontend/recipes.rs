@@ -4,6 +4,7 @@ use crate::compiler::ownership::RecipePlanCounts;
 
 #[derive(Clone, Copy)]
 enum Event {
+    RuntimeQuery,
     Read,
     Load,
     Borrow { index: usize, array: bool },
@@ -17,6 +18,7 @@ fn walk(
     mut emit: impl FnMut(Event) -> Result<(), String>,
 ) -> Result<(), String> {
     match descriptor {
+        tr::RecipeDescriptor::ThreadPanicking => emit(Event::RuntimeQuery),
         tr::RecipeDescriptor::CloneTuple { arity } => {
             for index in 0..usize::from(arity) {
                 emit(Event::Borrow {
@@ -67,7 +69,9 @@ pub(super) fn counts(
             | tr::RecipeDescriptor::CloneFromPhantomData => 1,
             _ => 0,
         },
-        locals: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+        locals: if descriptor == tr::RecipeDescriptor::ThreadPanicking {
+            1
+        } else if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
             3
         } else {
             2
@@ -77,14 +81,18 @@ pub(super) fn counts(
         } else {
             1
         },
-        formal_origins: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+        formal_origins: if descriptor == tr::RecipeDescriptor::ThreadPanicking {
+            0
+        } else if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
             2
         } else if descriptor == tr::RecipeDescriptor::CloneSharedRef {
             3
         } else {
             1 + components
         },
-        carrier_slots: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+        carrier_slots: if descriptor == tr::RecipeDescriptor::ThreadPanicking {
+            0
+        } else if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
             2
         } else if descriptor == tr::RecipeDescriptor::CloneSharedRef {
             5
@@ -134,7 +142,7 @@ pub(super) fn counts(
                     c.carrier_slots += 2;
                 }
             }
-            Event::PhantomData | Event::PhantomDataCloneFrom => {}
+            Event::RuntimeQuery | Event::PhantomData | Event::PhantomDataCloneFrom => {}
             Event::Product { len, .. } => c.carrier_slots += len,
         }
         Ok(())
@@ -229,6 +237,7 @@ pub(super) fn inventory_validated(
         )?;
     }
     for d in [
+        tr::RecipeDescriptor::ThreadPanicking,
         tr::RecipeDescriptor::CloneFloat(ir::FloatTy::F32),
         tr::RecipeDescriptor::CloneFloat(ir::FloatTy::F64),
         tr::RecipeDescriptor::CloneBool,
@@ -792,6 +801,15 @@ pub(super) fn checked_body(
     budget: &ir::PlanBudget,
 ) -> Result<ir::CheckedFunction, String> {
     let signature = plan.function_schema(target.declaration)?.signature;
+    let runtime_query = descriptor == tr::RecipeDescriptor::ThreadPanicking;
+    if runtime_query
+        && (facts.declaration() != target.declaration
+            || !target.type_args.is_empty()
+            || !signature.params.is_empty()
+            || signature.result != ir::Ty::Bool)
+    {
+        return Err("runtime query recipe owner or signature changed".into());
+    }
     let footprint = counts(descriptor, budget)?;
     if descriptor == tr::RecipeDescriptor::CloneFromPhantomData && signature.params.len() != 2 {
         return Err("marker clone_from recipe parameter arity changed".into());
@@ -799,15 +817,23 @@ pub(super) fn checked_body(
     budget.retain_bytes(footprint.ir_retained_bytes)?;
     let mut f = ir::CheckedFunction {
         runtime_sites: Default::default(),
-        name: "clone".into(),
+        name: if runtime_query { "panicking" } else { "clone" }.into(),
         ref_contract: signature.ref_contract.clone(),
-        params: vec![ir::LocalId(0)],
+        params: if runtime_query {
+            Vec::new()
+        } else {
+            vec![ir::LocalId(0)]
+        },
         result: signature.result.clone(),
-        locals: vec![ir::LocalDecl {
-            name: "self".into(),
-            ty: signature.params[0].clone(),
-            mutable: false,
-        }],
+        locals: if runtime_query {
+            Vec::new()
+        } else {
+            vec![ir::LocalDecl {
+                name: "self".into(),
+                ty: signature.params[0].clone(),
+                mutable: false,
+            }]
+        },
         exprs: Vec::new(),
         call_evidence: Arc::from([]),
         body_substitution: None,
@@ -849,6 +875,12 @@ pub(super) fn checked_body(
     let mut child_ty = None;
     walk(descriptor, |event| {
         match event {
+            Event::RuntimeQuery => {
+                last = Some(emit(
+                    ir::ExprKind::RuntimeQuery(ir::RuntimeQuery::issue(facts)?),
+                    ir::Ty::Bool,
+                )?);
+            }
             Event::PhantomDataCloneFrom => {
                 let [
                     ir::Ty::Ref {

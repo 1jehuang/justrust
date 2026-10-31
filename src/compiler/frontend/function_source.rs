@@ -11,6 +11,7 @@ pub(in crate::compiler) mod packed_query;
 
 #[derive(Clone, Debug)]
 enum FunctionSyntaxEvent {
+    CatalogCallable(Option<super::super::semantic_path::CatalogCallable>),
     Path(PathAnchor, usize),
     OriginalPath(PathAnchor, usize),
     Name(AstIdent),
@@ -38,6 +39,9 @@ fn path(
     emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<(), String> {
     path.check(names).map_err(native_adapter::name_diagnostic)?;
+    emit(FunctionSyntaxEvent::CatalogCallable(
+        path.catalog_callable(),
+    ))?;
     emit(FunctionSyntaxEvent::Path(
         path.anchor(),
         path.segments().len(),
@@ -78,6 +82,9 @@ fn event_equal(
         return Ok(false);
     };
     Ok(match (a, b) {
+        (FunctionSyntaxEvent::CatalogCallable(a), FunctionSyntaxEvent::CatalogCallable(b)) => {
+            a == b
+        }
         (FunctionSyntaxEvent::Path(a, n), FunctionSyntaxEvent::Path(b, m))
         | (FunctionSyntaxEvent::OriginalPath(a, n), FunctionSyntaxEvent::OriginalPath(b, m)) => {
             a == b && n == m
@@ -672,16 +679,25 @@ impl FunctionSource {
                 let path_start = index
                     .checked_add(1)
                     .ok_or("embedded call offset overflow")?;
-                let names_start = path_start
+                if !matches!(
+                    original.events.get(path_start),
+                    Some(FunctionSyntaxEvent::CatalogCallable(None))
+                ) {
+                    return Err("embedded parser call already has catalog authority".into());
+                }
+                let header_start = path_start
                     .checked_add(1)
+                    .ok_or("embedded call header offset overflow")?;
+                let names_start = path_start
+                    .checked_add(2)
                     .ok_or("embedded call names offset overflow")?;
                 let Some(FunctionSyntaxEvent::Path(anchor, count)) =
-                    original.events.get(path_start)
+                    original.events.get(header_start)
                 else {
                     return Err("embedded function call lost original path".into());
                 };
                 let path_end = index
-                    .checked_add(2)
+                    .checked_add(3)
                     .and_then(|n| n.checked_add(*count))
                     .ok_or("embedded function original path sizing overflow")?;
                 let row_bytes = count

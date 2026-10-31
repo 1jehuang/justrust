@@ -6,6 +6,144 @@ use std::sync::Arc;
 #[path = "support/iterator_oracle.rs"]
 mod oracle;
 
+#[test]
+fn thread_panicking_ordinary_source_calls_imports_and_shadows_match_stock() {
+    for source in [
+        "fn main(){assert!(!std::thread::panicking());}",
+        "use std::thread::panicking as query;fn main(){assert!(!query());}",
+        "use std as standard;fn main(){assert!(!standard::thread::panicking());}",
+        "use std::thread as thread_query;fn main(){assert!(!thread_query::panicking());}",
+        "use std::thread::*;fn main(){assert!(!panicking());}",
+        "mod exported{pub use std::thread::panicking as query;}fn main(){assert!(!exported::query());}",
+        "fn main(){let query=std::thread::panicking;assert!(!query());}",
+        "mod std{pub mod thread{pub fn panicking()->bool{true}}}fn main(){assert!(std::thread::panicking());}",
+        "mod std{pub mod thread{pub fn panicking()->bool{true}}}use std as local_std;fn main(){assert!(local_std::thread::panicking());}",
+        "use std::thread::panicking as real;mod local{pub mod std{pub mod thread{pub fn panicking()->bool{true}}}pub fn query()->bool{std::thread::panicking()}}fn main(){assert!(!real());assert!(local::query());}",
+        "mod thread{pub fn panicking()->bool{true}}fn main(){assert!(thread::panicking());assert!(!std::thread::panicking());}",
+        "use std::thread::panicking;fn main(){let panicking=||true;assert!(panicking());assert!(!std::thread::panicking());}",
+        "use std::thread::*;fn panicking()->bool{true}fn main(){assert!(panicking());}",
+    ] {
+        oracle::stock_native(source);
+    }
+}
+
+#[test]
+fn thread_panicking_invalid_unused_calls_and_core_namespace_match_stock_rejection() {
+    for source in [
+        "fn unused(){std::thread::panicking(1i32);}fn main(){}",
+        "fn unused()->i32{std::thread::panicking()}fn main(){}",
+        "fn unused(){std::thread::panicking::<bool>();}fn main(){}",
+        "fn unused(){core::thread::panicking();}fn main(){}",
+        "use core as c;fn unused(){c::thread::panicking();}fn main(){}",
+        "extern crate core as std;fn unused(){std::thread::panicking();}fn main(){}",
+        "const fn unused()->bool{std::thread::panicking()}fn main(){}",
+        "#![no_std]\nfn unused(){std::thread::panicking();}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn thread_panicking_recipe_is_exact_bool_call_and_rejects_forged_owner() {
+    let (program, plan) =
+        plan("fn query()->bool{std::thread::panicking()}fn ordinary()->bool{false}fn main(){}");
+    let query_id = declaration(&program, &plan, "query");
+    let query_facts = plan.callable_facts(query_id).unwrap();
+    let query =
+        frontend::type_callable_with_plan(&program, query_id, &plan, query_facts.budget()).unwrap();
+    let target = query
+        .exprs
+        .iter()
+        .find_map(|expression| match &expression.kind {
+            ir::ExprKind::Call {
+                target: ir::Callee::Direct(target),
+                args,
+                signature,
+                ..
+            } => {
+                assert!(args.is_empty());
+                assert!(signature.params.is_empty());
+                assert_eq!(signature.result, ir::Ty::Bool);
+                Some(target.clone())
+            }
+            _ => None,
+        })
+        .expect("canonical query must remain an ordinary direct call");
+    assert!(matches!(
+        plan.callable_provider(target.declaration).unwrap(),
+        frontend::CallableProvider::Recipe {
+            descriptor: justrust_engine::compiler::traits::RecipeDescriptor::ThreadPanicking
+        }
+    ));
+    let facts = plan.callable_facts(target.declaration).unwrap();
+    let recipe = plan.checked_body(&target, &facts, facts.budget()).unwrap();
+    assert!(recipe.params.is_empty());
+    assert!(recipe.locals.is_empty());
+    assert_eq!(recipe.result, ir::Ty::Bool);
+    assert_eq!(recipe.exprs.len(), 1);
+    assert!(matches!(
+        recipe.exprs[0].kind,
+        ir::ExprKind::RuntimeQuery(_)
+    ));
+    assert_eq!(recipe.exprs[0].completion, ir::Completion::Returns);
+    recipe
+        .validate_with_facts(ir::FactsCtx::Validated(&facts))
+        .unwrap();
+    cfg::lower_template(Arc::new(recipe.clone()), facts.clone(), facts.budget()).unwrap();
+
+    let ordinary_id = declaration(&program, &plan, "ordinary");
+    let ordinary_facts = plan.callable_facts(ordinary_id).unwrap();
+    assert!(
+        recipe
+            .validate_with_facts(ir::FactsCtx::Validated(&ordinary_facts))
+            .is_err()
+    );
+    assert!(
+        cfg::lower_template(
+            Arc::new(recipe.clone()),
+            ordinary_facts.clone(),
+            ordinary_facts.budget()
+        )
+        .is_err()
+    );
+    let mut ordinary =
+        frontend::type_callable_with_plan(&program, ordinary_id, &plan, ordinary_facts.budget())
+            .unwrap();
+    ordinary.exprs.push(recipe.exprs[0].clone());
+    assert!(
+        ordinary
+            .validate_with_facts(ir::FactsCtx::Validated(&ordinary_facts))
+            .is_err(),
+        "an unused forged query expression still needs its genuine recipe owner"
+    );
+
+    let (foreign_program, foreign_plan) =
+        self::plan("fn query()->bool{std::thread::panicking()}fn main(){}");
+    let foreign_id = declaration(&foreign_program, &foreign_plan, "query");
+    let foreign_facts = foreign_plan.callable_facts(foreign_id).unwrap();
+    assert!(
+        recipe
+            .validate_with_facts(ir::FactsCtx::Validated(&foreign_facts))
+            .is_err()
+    );
+}
+
+#[test]
+fn thread_panicking_source_certificate_cannot_be_reconstructed() {
+    let (program, plan) =
+        plan("fn query()->bool{std::thread::panicking()}fn ordinary()->bool{true}fn main(){}");
+    let query_id = declaration(&program, &plan, "query");
+    let facts = plan.callable_facts(query_id).unwrap();
+    let mut forged = program.clone();
+    let frontend::Expr::Call { name, .. } =
+        forged.functions[0].body.tail.as_mut().unwrap().as_mut()
+    else {
+        panic!("query source call changed")
+    };
+    *name = frontend::AstPath::new(program.names.as_ref(), name.anchor(), name.segments()).unwrap();
+    assert!(frontend::type_callable_with_plan(&forged, query_id, &plan, facts.budget()).is_err());
+}
+
 fn plan(source: &str) -> (frontend::Program, frontend::PlanCtx) {
     let program = frontend::parse(source).unwrap();
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();

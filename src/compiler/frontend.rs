@@ -22622,7 +22622,15 @@ impl PlanCtx {
             function_positions_sealed: false,
             closure_owner_sites: HashMap::new(),
         };
-        reserve_registry_map(&mut registry.functions, program.functions.len(), budget)?;
+        reserve_registry_map(
+            &mut registry.functions,
+            program
+                .functions
+                .len()
+                .checked_add(1)
+                .ok_or("catalog callable inventory overflow")?,
+            budget,
+        )?;
         reserve_registry_map(
             &mut registry.closure_recipes,
             program.closure_sources.len(),
@@ -23648,6 +23656,48 @@ impl PlanCtx {
         let registry_mut =
             Arc::get_mut(&mut registry).ok_or("registry shared before catalog seal")?;
         for entry in catalog.declarations() {
+            if matches!(
+                entry.origin,
+                tr::DeclOrigin::CoreCatalog {
+                    item: tr::CatalogItem::ThreadPanicking,
+                    ..
+                }
+            ) {
+                budget.charge_work(1)?;
+                let key = PathKey::catalog(
+                    program.names.as_ref(),
+                    Namespace::Value,
+                    super::semantic_path::CatalogCallable::ThreadPanicking,
+                )
+                .map_err(native_adapter::name_diagnostic)?;
+                if registry_mut.functions.len() == registry_mut.functions.capacity() {
+                    return Err("contract: catalog callable map was not preflighted".into());
+                }
+                registry_mut.functions.insert(key, entry.declaration);
+                if registry_mut.function_ids.len() == registry_mut.function_ids.capacity() {
+                    let required = registry_mut
+                        .function_ids
+                        .len()
+                        .checked_add(1)
+                        .ok_or("catalog callable position capacity overflow")?;
+                    budget.charge_work(required)?;
+                    let bytes = required
+                        .checked_mul(std::mem::size_of::<ir::DeclId>())
+                        .ok_or("catalog callable position allocation overflow")?;
+                    budget.retain_bytes(bytes)?;
+                    registry_mut
+                        .function_ids
+                        .try_reserve_exact(1)
+                        .map_err(|_| "catalog callable position allocation failed")?;
+                    let actual = registry_mut
+                        .function_ids
+                        .capacity()
+                        .checked_mul(std::mem::size_of::<ir::DeclId>())
+                        .ok_or("catalog callable position allocation overflow")?;
+                    budget.retain_bytes(actual.saturating_sub(bytes))?;
+                }
+                registry_mut.function_ids.push(entry.declaration);
+            }
             if entry.declaration.index < u64::from(source_end) {
                 continue;
             }

@@ -32,7 +32,7 @@ fn identity(
     let mut key = KeyBuilder::new(DOMAIN, compiler);
     key.field(&[u8::from(unwind)]);
     key.field(&(functions.len() as u64).to_le_bytes());
-    let mut code = if unwind { 29usize } else { 16usize };
+    let mut code = backend::native_entry_code(unwind).len();
     let mut data = 0usize;
     let mut work = 0usize;
     for (name, object) in functions {
@@ -203,7 +203,23 @@ mod tests {
                 expected,
                 backend::link_with_panic(&base, unwind).unwrap().len()
             );
-            for size in [0, 4066, 4067, 4068, 4080, 4096, 8176] {
+            let first_boundary = 4096 - backend::native_entry_code(unwind).len();
+            let second_boundary = 8192 - backend::native_entry_code(unwind).len();
+            for size in [
+                0,
+                4066,
+                4067,
+                4068,
+                4080,
+                4096,
+                8176,
+                first_boundary - 1,
+                first_boundary,
+                first_boundary + 1,
+                second_boundary - 1,
+                second_boundary,
+                second_boundary + 1,
+            ] {
                 let mut object = object();
                 object.code.resize(size, 0);
                 let functions = vec![("main".into(), object)];

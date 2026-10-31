@@ -228,6 +228,7 @@ impl Encoder<'_, '_> {
         use cfg::Rvalue::*;
         match v {
             TypeAlignment(_)
+            | RuntimeQuery(_)
             | CellNew { .. }
             | CellGet { .. }
             | CellSet { .. }

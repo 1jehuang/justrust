@@ -4,8 +4,9 @@
 //! exactly (see the `backend` module header), so optimized and stack-emitted
 //! functions call each other freely and link with the same linker:
 //! arguments pushed left to right as eight-byte words, read by the callee at
-//! `rbp + 16 + 8 * (later parameters)`, results normalized in `rax`, every
-//! register caller-saved. Source-backed arithmetic panics abort with diagnostics;
+//! `rbp + 16 + 8 * (later parameters)`, results normalized in `rax`. r14 holds
+//! the active-panic state and r15 holds the unwind propagation flag. All other
+//! general registers are caller-saved. Source-backed arithmetic panics abort with diagnostics;
 //! synthetic guards without source authority retain the legacy exit 101.
 //!
 //! Allocation is linear scan over live intervals on the canonical block order
@@ -27,7 +28,8 @@ const RAX: u8 = 0;
 const RCX: u8 = 1;
 const RDX: u8 = 2;
 /// Allocatable registers. rax, rcx and rdx are scratch; rsp and rbp are frame.
-const ALLOCATABLE: [u8; 11] = [3, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+/// r14 and r15 belong to the native panic ABI, including in optimized callees.
+const ALLOCATABLE: [u8; 9] = [3, 6, 7, 8, 9, 10, 11, 12, 13];
 const MAX_ARGS: usize = 4096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1393,5 +1395,66 @@ pub(crate) mod merge_fault {
     }
     pub(crate) fn record(before: usize, payload: usize) {
         SEEN.with(|c| c.set(Some((before, payload))));
+    }
+}
+
+#[cfg(test)]
+mod panic_abi_tests {
+    use super::*;
+    use crate::compiler::ssa::{Builder, SsaBlock};
+
+    #[test]
+    fn register_pressure_never_allocates_panic_state_registers() {
+        let ty = SsaTy::Int(SsaIntTy::U64);
+        let (mut builder, params) = Builder::new(vec![ty; 24], ty);
+        let one = builder.constant(SsaBlock(0), ty, 1);
+        // Entry parameters are incoming stack slots, not register candidates.
+        // Produce all 24 nonconstant candidate values before consuming any:
+        // their intervals must overlap at the first reduction instruction.
+        let live: Vec<_> = params
+            .iter()
+            .map(|&lhs| {
+                builder.inst(
+                    SsaBlock(0),
+                    InstKind::Binary {
+                        op: BinOp::Add,
+                        overflow: Overflow::Wrap,
+                        lhs,
+                        rhs: one,
+                    },
+                )
+            })
+            .collect();
+        let mut value = live[0];
+        for &rhs in &live[1..] {
+            value = builder.inst(
+                SsaBlock(0),
+                InstKind::Binary {
+                    op: BinOp::Add,
+                    overflow: Overflow::Wrap,
+                    lhs: value,
+                    rhs,
+                },
+            );
+        }
+        builder.terminate(SsaBlock(0), SsaTerminator::Return(value));
+        let lowered = Lowered {
+            function: builder.finish(),
+            callees: vec![],
+        };
+        let budget = crate::compiler::ir::PlanBudget::default();
+        let meter = Meter::new(&budget);
+        let types = lowered.verify(&meter).unwrap();
+        let layout = allocate(&lowered, &types, &meter).unwrap();
+        assert!(
+            layout.stats.spilled > 0,
+            "fixture must exercise register pressure"
+        );
+        assert!(
+            layout
+                .loc
+                .iter()
+                .all(|loc| !matches!(loc, Loc::Reg(14 | 15)))
+        );
     }
 }

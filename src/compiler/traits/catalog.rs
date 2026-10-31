@@ -5,9 +5,9 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 11;
+pub const CATALOG_VERSION: u32 = 12;
 
-const BASE_COUNT: u32 = 17;
+const BASE_COUNT: u32 = 18;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
@@ -22,6 +22,7 @@ pub enum RecipeDescriptor {
     CloneSharedRef,
     ClonePhantomData,
     CloneFromPhantomData,
+    ThreadPanicking,
 }
 impl RecipeDescriptor {
     fn order(self) -> (u8, u16) {
@@ -50,6 +51,7 @@ impl RecipeDescriptor {
             Self::CloneSharedRef => (6, 0),
             Self::ClonePhantomData => (10, 0),
             Self::CloneFromPhantomData => (11, 0),
+            Self::ThreadPanicking => (12, 0),
             Self::CloneFloat(float) => (
                 7,
                 match float {
@@ -79,12 +81,16 @@ pub enum CatalogItem {
     CellNew,
     CellGet,
     CellSet,
+    ThreadPanicking,
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
     pub fn module(self) -> CatalogModule {
         match self {
             Self::Cell | Self::CellNew | Self::CellGet | Self::CellSet => CatalogModule::Cell,
+            Self::ThreadPanicking | Self::Recipe(RecipeDescriptor::ThreadPanicking) => {
+                CatalogModule::Thread
+            }
             Self::Sized | Self::Copy | Self::PhantomData => CatalogModule::Marker,
             Self::ManuallyDrop
             | Self::ManuallyDropNew
@@ -105,6 +111,7 @@ impl CatalogItem {
             Self::Copy => Some(BuiltinAtom::Copy),
             Self::Drop => Some(BuiltinAtom::Drop),
             Self::PhantomData => Some(BuiltinAtom::PhantomData),
+            Self::ThreadPanicking => Some(BuiltinAtom::ThreadPanicking),
             Self::Cell => Some(BuiltinAtom::Cell),
             Self::CellNew => Some(BuiltinAtom::CellNew),
             Self::CellGet => Some(BuiltinAtom::CellGet),
@@ -135,6 +142,7 @@ impl CatalogItem {
             Self::CellNew => 14,
             Self::CellGet => 15,
             Self::CellSet => 16,
+            Self::ThreadPanicking => 17,
             Self::Recipe(_) => return None,
         })
     }
@@ -409,7 +417,7 @@ impl CoreCatalogBuilder {
                 | CatalogItem::CellNew
                 | CatalogItem::CellGet
                 | CatalogItem::CellSet => unreachable!(),
-                CatalogItem::Recipe(_) => unreachable!(),
+                CatalogItem::ThreadPanicking | CatalogItem::Recipe(_) => unreachable!(),
             };
             let info = SchemaDecl {
                 declaration,
@@ -606,7 +614,64 @@ impl CoreCatalogBuilder {
         };
         builder.add_manually_drop_operations(budget)?;
         builder.add_cell_operations(budget)?;
+        builder.add_thread_panicking(budget)?;
         Ok(builder)
+    }
+    fn add_thread_panicking(&mut self, budget: &PlanBudget) -> Result<()> {
+        let item = CatalogItem::ThreadPanicking;
+        let declaration = self.id(item);
+        let own = scope(declaration, 0, budget)?;
+        let env = environment(std::slice::from_ref(&own), budget)?;
+        let signature = schema(env.clone(), Vec::new(), Ty::Bool, Vec::new(), budget)?;
+        let mut callables = Vec::new();
+        for header in self.headers.callables.iter() {
+            push(
+                budget,
+                &mut callables,
+                CallableHeader {
+                    declaration: header.declaration,
+                    schema: clone_schema(&header.schema, budget)?,
+                },
+            )?;
+        }
+        push(
+            budget,
+            &mut callables,
+            CallableHeader {
+                declaration,
+                schema: clone_schema(&signature, budget)?,
+            },
+        )?;
+        push(
+            budget,
+            &mut self.declarations,
+            CatalogDecl {
+                declaration,
+                name: "panicking",
+                info: SchemaDecl {
+                    declaration,
+                    kind: DeclKind::Function,
+                    own_env: own,
+                    env,
+                    owner: None,
+                    module: self.modules.catalog_module(CatalogModule::Thread),
+                    visibility: ir::Visibility::Public,
+                    receiver: ReceiverMode::None,
+                    region_contract_mode: RegionContractMode::Positioned,
+                },
+                schema: Some(signature),
+                origin: DeclOrigin::CoreCatalog {
+                    version: CATALOG_VERSION,
+                    item,
+                },
+                callable_provider: Some(CallableProvider::Recipe {
+                    descriptor: RecipeDescriptor::ThreadPanicking,
+                }),
+            },
+        )?;
+        retain::<CallableHeader>(budget, callables.len())?;
+        self.headers.callables = callables.into();
+        Ok(())
     }
     fn add_cell_operations(&mut self, budget: &PlanBudget) -> Result<()> {
         let owner = id(self.snapshot, CatalogItem::Cell);
@@ -895,12 +960,13 @@ impl CoreCatalogBuilder {
         }
         let mut index = source_end;
         for (descriptor, admission) in &inventory.entries {
-            if matches!(descriptor, RecipeDescriptor::CloneNever)
-                || !matches!(
-                    admission,
-                    super::super::ownership::RecipeAdmission::Available(_)
-                )
-            {
+            if matches!(
+                descriptor,
+                RecipeDescriptor::CloneNever | RecipeDescriptor::ThreadPanicking
+            ) || !matches!(
+                admission,
+                super::super::ownership::RecipeAdmission::Available(_)
+            ) {
                 continue;
             }
             let declaration = DeclId {
@@ -1006,6 +1072,11 @@ fn recipe_schema(
     marker_factory: Option<ir::PhantomDataFactory>,
     budget: &PlanBudget,
 ) -> Result<GenericSchema> {
+    if descriptor == RecipeDescriptor::ThreadPanicking {
+        let own = scope(declaration, 0, budget)?;
+        let env = environment(&[own], budget)?;
+        return schema(env, Vec::new(), Ty::Bool, Vec::new(), budget);
+    }
     let arity = match descriptor {
         RecipeDescriptor::CloneTuple { arity } => usize::from(arity),
         RecipeDescriptor::CloneArray { .. }
@@ -1060,6 +1131,7 @@ fn recipe_schema(
         RecipeDescriptor::CloneInt(i) => Ty::Int(i),
         RecipeDescriptor::CloneFloat(float) => Ty::Float(float),
         RecipeDescriptor::CloneBool => Ty::Bool,
+        RecipeDescriptor::ThreadPanicking => unreachable!("handled before clone schema"),
         RecipeDescriptor::CloneChar => Ty::Char,
         RecipeDescriptor::CloneUnit => Ty::Unit,
         RecipeDescriptor::CloneNever => {
@@ -1317,6 +1389,70 @@ pub(super) fn fixture_source_decl(
 #[cfg(test)]
 mod wide_tests {
     use super::*;
+
+    #[test]
+    fn thread_panicking_is_exact_base_catalog_recipe_not_a_clone_suffix() {
+        let budget = PlanBudget::default();
+        let module_budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
+            module_budget.clone(),
+            crate::compiler::owner_path::standalone_issued(
+                &module_budget,
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
+        let builder = CoreCatalogBuilder::new(snapshot, modules.clone(), &budget).unwrap();
+        assert_eq!(builder.source_start(), 18);
+        let catalog = builder
+            .finish(18, RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        assert_eq!(catalog.version(), 12);
+        assert_eq!(catalog.id(CatalogItem::CellSet).index, 16);
+        let declaration = catalog.id(CatalogItem::ThreadPanicking);
+        assert_eq!(declaration.index, 17);
+        assert_eq!(catalog.declarations().len(), 18);
+        let row = catalog.recipe(RecipeDescriptor::ThreadPanicking).unwrap();
+        assert_eq!(row.declaration, declaration);
+        assert_eq!(
+            row.origin,
+            DeclOrigin::CoreCatalog {
+                version: 12,
+                item: CatalogItem::ThreadPanicking,
+            }
+        );
+        assert_eq!(
+            row.callable_provider,
+            Some(CallableProvider::Recipe {
+                descriptor: RecipeDescriptor::ThreadPanicking,
+            })
+        );
+        assert_eq!(row.info.kind, DeclKind::Function);
+        assert_eq!(row.info.owner, None);
+        assert_eq!(row.info.receiver, ReceiverMode::None);
+        assert_eq!(
+            row.info.module,
+            modules.catalog_module(CatalogModule::Thread)
+        );
+        assert_ne!(
+            row.info.module,
+            modules.catalog_module(CatalogModule::Clone)
+        );
+        assert_eq!(row.info.env.total_arity(), 0);
+        let schema = row.schema.as_ref().unwrap();
+        assert!(schema.signature.params.is_empty());
+        assert_eq!(schema.signature.result, Ty::Bool);
+        assert!(schema.predicates.is_empty());
+        assert_eq!(RecipeDescriptor::ThreadPanicking.order(), (12, 0));
+        assert!(
+            RecipeDescriptor::CloneFromPhantomData.order()
+                < RecipeDescriptor::ThreadPanicking.order()
+        );
+    }
 
     #[test]
     fn catalog_declared_sized_bound_rejects_foreign_owner_wrong_binder_and_forged_rows() {

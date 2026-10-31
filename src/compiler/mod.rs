@@ -2692,6 +2692,27 @@ impl Provider for CompilerProvider {
                     // so object code for a ready function overlaps unrelated
                     // checking (ARCHITECTURE.md section 17).
                     let proof: Arc<ConcreteProofFact> = facts.get(sibling(ANALYZE)?).await?;
+                    if this.0.source_options.native_link.emit_object {
+                        // Standalone objects have no native entry bridge to
+                        // initialize the private per-thread panic-state ABI.
+                        for block in &proof.concrete.function().blocks {
+                            this.0.budget.charge_work(1).map_err(Error::new)?;
+                            for statement in &block.statements {
+                                this.0.budget.charge_work(1).map_err(Error::new)?;
+                                if matches!(
+                                    &statement.value,
+                                    cfg::Statement::Assign {
+                                        value: cfg::Rvalue::RuntimeQuery(_),
+                                        ..
+                                    }
+                                ) {
+                                    return Err(Error::new(
+                                        "unsupported: standalone object runtime query requires an initialized native entry",
+                                    ));
+                                }
+                            }
+                        }
+                    }
                     let root = key_root_slot(&key);
                     if has_drop(proof.concrete.function()) {
                         let types = facts.types().await?;
@@ -3331,6 +3352,13 @@ impl Provider for CompilerProvider {
                         }
                         return cx.publish(0, 1);
                     }
+                    if this.0.source_options.native_link.emit_object
+                        && this.0.source_options.panic_unwind
+                    {
+                        return Err(Error::new(
+                            "unsupported: standalone unwind object requires an initialized native entry",
+                        ));
+                    }
                     // Link inventory is the closed direct-demand frontier from
                     // the closed roots: each round requests every new
                     // instance's INSTANCE (and, in early rounds, OBJECT)
@@ -3354,6 +3382,12 @@ impl Provider for CompilerProvider {
                     }
                     let mut pending = Vec::new();
                     let mut pending_symbols: Vec<String> = Vec::new();
+                    let panic_query = types
+                        .trait_world()
+                        .map_err(Error::new)?
+                        .canonical_catalog()
+                        .id(traits::CatalogItem::ThreadPanicking);
+                    let mut uses_panic_query = false;
                     let mut depth = 0usize;
                     while !frontier.is_empty() {
                         this.0.budget.check_depth(depth).map_err(Error::new)?;
@@ -3366,6 +3400,7 @@ impl Provider for CompilerProvider {
                             if !seen.insert(params.clone()) {
                                 continue;
                             }
+                            uses_panic_query |= target.declaration == panic_query;
                             let symbol = instances::symbol_of(&target, &types, &this.0.budget)
                                 .map_err(Error::new)?;
                             if let Some(previous) = symbols.get(&symbol) {
@@ -3437,8 +3472,16 @@ impl Provider for CompilerProvider {
                     }
                     let (mut objects, _objects_reservation) =
                         this.scratch_vec(object_handles.len())?;
+                    let mut has_external_c_entry = false;
                     for (handle, symbol) in object_handles.into_iter().zip(pending_symbols) {
                         let object: Arc<backend::Object> = cx.read_fact(handle).await?;
+                        for (_, name) in &object.exports {
+                            this.0
+                                .budget
+                                .charge_work(name.len().saturating_add(1))
+                                .map_err(Error::new)?;
+                            has_external_c_entry |= !name.starts_with(backend::DROP_THUNK_PREFIX);
+                        }
                         let mut bytes = object.code.len();
                         // Static payloads are copied word-wise by the linker;
                         // their storage is retained in full below.
@@ -3470,6 +3513,18 @@ impl Provider for CompilerProvider {
                         this.0.budget.retain_bytes(bytes).map_err(Error::new)?;
                         this.0.budget.charge_work(copy_work).map_err(Error::new)?;
                         objects.push((symbol, object.as_ref().clone()));
+                    }
+                    // C exports may be entered by constructors before main, or
+                    // by a host thread outside the initialized private entry.
+                    // Resetting state in a callback would also erase an active
+                    // panic. Until external entry has genuine runtime state,
+                    // reject this combination at the existing BUILD join.
+                    if (uses_panic_query || this.0.source_options.panic_unwind)
+                        && has_external_c_entry
+                    {
+                        return Err(Error::new(
+                            "unsupported: runtime panic state with external C entries requires initialized external entry state",
+                        ));
                     }
                     // The linked artifact is released only after the explicit
                     // "every required check passed" fact.

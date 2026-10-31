@@ -194,3 +194,343 @@ fn main(){
     }
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn exported_c_unwind_requires_initialized_runtime_even_without_query() {
+    let dir = std::env::temp_dir().join(format!("jr-external-unwind-{}", std::process::id()));
+    let sources = dir.join("source");
+    std::fs::create_dir_all(&sources).unwrap();
+    let source = sources.join("main.rs");
+    std::fs::write(
+        &source,
+        r#"
+#[unsafe(no_mangle)] pub extern "C" fn exported(fail:bool)->u32 {
+    if fail { panic!("first panic without query"); }
+    7
+}
+fn main(){println!("{}",exported(false));}
+"#,
+    )
+    .unwrap();
+    let stock = dir.join("stock");
+    let compiled =
+        Command::new(std::env::var_os("JR_STOCK_RUSTC").unwrap_or_else(|| "rustc".into()))
+            .args(["--edition=2024", "-Cpanic=unwind"])
+            .arg(&source)
+            .arg("-o")
+            .arg(&stock)
+            .output()
+            .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    let expected = Command::new(&stock).output().unwrap();
+    assert!(expected.status.success(), "{expected:?}");
+    assert_eq!(expected.stdout, b"7\n");
+    for workers in [1, 8] {
+        for emit_object in [false, true] {
+            let output = dir.join(format!("unsupported-{workers}-{emit_object}"));
+            let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+            command
+                .arg(&source)
+                .args(["--panic", "unwind", "--workers"])
+                .arg(workers.to_string());
+            if emit_object {
+                command.arg("--emit-object");
+            }
+            let checked = Command::new(command.get_program())
+                .args(command.get_args())
+                .arg("--check")
+                .output()
+                .unwrap();
+            assert!(checked.status.success(), "CHECK {command:?}: {checked:?}");
+            assert!(!output.exists());
+            let build = command.arg("-o").arg(&output).output().unwrap();
+            assert!(!build.status.success(), "{command:?}: {build:?}");
+            let diagnostic = String::from_utf8_lossy(&build.stderr);
+            assert!(
+                diagnostic.contains("unsupported") && diagnostic.contains("initialized"),
+                "{command:?}: {build:?}"
+            );
+            assert!(!output.exists(), "unsupported BUILD published output");
+        }
+        let executable = dir.join(format!("abort-{workers}"));
+        let build = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .arg(&source)
+            .args(["--panic", "abort", "--workers"])
+            .arg(workers.to_string())
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(build.status.success(), "{build:?}");
+        let actual = Command::new(&executable).output().unwrap();
+        assert!(actual.status.success(), "{actual:?}");
+        assert_eq!(actual.stdout, expected.stdout);
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn c_constructor_exported_panicking_query_requires_runtime_entry_support() {
+    let dir = std::env::temp_dir().join(format!("jr-panicking-constructor-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("query.rs");
+    std::fs::write(
+        &source,
+        r#"
+fn helper()->bool { std::thread::panicking() }
+#[unsafe(no_mangle)] pub extern "C" fn exported_panicking()->bool { helper() }
+fn main(){println!("main");}
+"#,
+    )
+    .unwrap();
+    let constructor = dir.join("constructor.c");
+    std::fs::write(
+        &constructor,
+        r#"
+extern _Bool exported_panicking(void);
+__attribute__((constructor)) static void query_before_main(void) {
+    if (exported_panicking()) __builtin_trap();
+}
+"#,
+    )
+    .unwrap();
+    let object = dir.join("constructor.o");
+    let compiled = Command::new("cc")
+        .arg("-c")
+        .arg(&constructor)
+        .arg("-o")
+        .arg(&object)
+        .output()
+        .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    let stock = dir.join("stock");
+    let compiled =
+        Command::new(std::env::var_os("JR_STOCK_RUSTC").unwrap_or_else(|| "rustc".into()))
+            .args(["--edition=2024", "-Cpanic=abort"])
+            .arg(format!("-Clink-arg={}", object.display()))
+            .arg(&source)
+            .arg("-o")
+            .arg(&stock)
+            .output()
+            .unwrap();
+    assert!(compiled.status.success(), "{compiled:?}");
+    let expected = Command::new(&stock).output().unwrap();
+    assert!(expected.status.success(), "{expected:?}");
+    assert_eq!(expected.stdout, b"main\n");
+    for workers in [1, 8] {
+        for opt in ["off", "final"] {
+            let executable = dir.join(format!("native-{workers}-{opt}"));
+            let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+            command
+                .arg(&source)
+                .args(["--opt", opt, "--workers"])
+                .arg(workers.to_string())
+                .arg("--native-object")
+                .arg(&object);
+            let checked = Command::new(command.get_program())
+                .args(command.get_args())
+                .arg("--check")
+                .output()
+                .unwrap();
+            assert!(checked.status.success(), "CHECK {command:?}: {checked:?}");
+            assert!(!executable.exists(), "CHECK published an executable");
+            let build = command.arg("-o").arg(&executable).output().unwrap();
+            assert!(!build.status.success(), "{command:?}: {build:?}");
+            let diagnostic = String::from_utf8_lossy(&build.stderr);
+            assert!(
+                diagnostic.contains("unsupported") && diagnostic.contains("external C"),
+                "{command:?}: {build:?}"
+            );
+            assert!(
+                !executable.exists(),
+                "unsupported BUILD published an executable"
+            );
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn standalone_object_panicking_query_requires_initialized_native_entry() {
+    let dir = std::env::temp_dir().join(format!("jr-panicking-object-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("query.rs");
+    std::fs::write(
+        &source,
+        "#[unsafe(no_mangle)] pub extern \"C\" fn is_panicking()->bool { std::thread::panicking() } fn main() {}",
+    )
+    .unwrap();
+    for workers in [1, 8] {
+        let object = dir.join(format!("query-{workers}.o"));
+        let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+        command
+            .arg(&source)
+            .args(["--emit-object", "--workers"])
+            .arg(workers.to_string());
+        let checked = Command::new(command.get_program())
+            .args(command.get_args())
+            .arg("--check")
+            .output()
+            .unwrap();
+        assert!(checked.status.success(), "CHECK {command:?}: {checked:?}");
+        assert!(!object.exists(), "CHECK published object bytes");
+        let build = command.arg("-o").arg(&object).output().unwrap();
+        assert!(!build.status.success(), "{command:?}: {build:?}");
+        let diagnostic = String::from_utf8_lossy(&build.stderr);
+        assert!(
+            diagnostic.contains("unsupported") && diagnostic.contains("initialized native entry"),
+            "{command:?}: {build:?}"
+        );
+        assert!(!object.exists(), "unsupported BUILD published object bytes");
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn thread_panicking_state_matches_stock_across_cleanup_and_callees() {
+    let dir = std::env::temp_dir().join(format!("jr-panicking-state-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let normal = r#"
+fn query()->bool { std::thread::panicking() }
+fn work(a:u64,b:u64,c:u64,d:u64,e:u64,f:u64,g:u64,h:u64,i:u64,j:u64,k:u64,l:u64)->u64 {
+    let a=a+1;let b=b+2;let c=c+3;let d=d+4;let e=e+5;let f=f+6;
+    let g=g+7;let h=h+8;let i=i+9;let j=j+10;let k=k+11;let l=l+12;
+    a+b+c+d+e+f+g+h+i+j+k+l
+}
+struct D;
+impl Drop for D { fn drop(&mut self) { println!("normal drop {}",query()); } }
+struct Wrap { value:D }
+trait T { fn value(&self)->bool; }
+impl T for Wrap { fn value(&self)->bool { query() } }
+fn main(){ println!("entry {}",query());println!("work {}",work(1,2,3,4,5,6,7,8,9,10,11,12));let d=Wrap{value:D};let view:&dyn T=&d;assert!(!view.value());drop(d);println!("after {}",query()); }
+"#;
+    let unwind = r#"
+fn query()->bool { std::thread::panicking() }
+fn nested(n:u32)->bool { if n==0 { query() } else { nested(n-1) } }
+struct D(u8);
+impl Drop for D { fn drop(&mut self) { println!("drop {} {} {}",self.0,query(),nested(3)); } }
+fn fail(){let _inner=D(2);panic!("first panic");}
+fn main(){println!("entry {}",query());let _outer=D(1);fail();println!("unreachable");}
+"#;
+    let double = r#"
+fn query()->bool { std::thread::panicking() }
+struct D(u8);
+impl Drop for D { fn drop(&mut self) { println!("drop {} {}",self.0,query());if self.0==2 { panic!("second panic"); } } }
+fn fail(){let _inner=D(2);panic!("first panic");}
+fn main(){println!("entry {}",query());let _outer=D(1);fail();println!("unreachable");}
+"#;
+    let execute = |exe: &std::path::Path| {
+        Command::new("sh")
+            .args(["-c", "ulimit -c 0; exec \"$1\"", "panicking-test"])
+            .arg(exe)
+            .env("RUST_BACKTRACE", "0")
+            .output()
+            .unwrap()
+    };
+    for (name, source, strategy, stdout, exit, signal) in [
+        (
+            "normal-abort",
+            normal,
+            "abort",
+            "entry false\nwork 156\nnormal drop false\nafter false\n",
+            Some(0),
+            None,
+        ),
+        (
+            "normal-unwind",
+            normal,
+            "unwind",
+            "entry false\nwork 156\nnormal drop false\nafter false\n",
+            Some(0),
+            None,
+        ),
+        (
+            "unwind",
+            unwind,
+            "unwind",
+            "entry false\ndrop 2 true true\ndrop 1 true true\n",
+            Some(101),
+            None,
+        ),
+        (
+            "double",
+            double,
+            "unwind",
+            "entry false\ndrop 2 true\n",
+            None,
+            Some(6),
+        ),
+        ("abort", unwind, "abort", "entry false\n", None, Some(6)),
+    ] {
+        let source_dir = dir.join(format!("source-{name}"));
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let path = source_dir.join("main.rs");
+        std::fs::write(&path, source).unwrap();
+        let stock = dir.join(format!("stock-{name}"));
+        let build =
+            Command::new(std::env::var_os("JR_STOCK_RUSTC").unwrap_or_else(|| "rustc".into()))
+                .args(["--edition=2024", "-C"])
+                .arg(format!("panic={strategy}"))
+                .arg(&path)
+                .arg("-o")
+                .arg(&stock)
+                .output()
+                .unwrap();
+        assert!(build.status.success(), "{build:?}");
+        let expected = execute(&stock);
+        assert_eq!(
+            expected.stdout,
+            stdout.as_bytes(),
+            "stock {name}: {expected:?}"
+        );
+        assert_eq!(expected.status.code(), exit, "stock {name}: {expected:?}");
+        assert_eq!(
+            expected.status.signal(),
+            signal,
+            "stock {name}: {expected:?}"
+        );
+        for workers in [1, 8] {
+            for opt in ["off", "final"] {
+                for c_entry in [false, true] {
+                    let exe = dir.join(format!("native-{name}-{workers}-{opt}-{c_entry}"));
+                    let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                    command
+                        .arg(&path)
+                        .args(["--panic", strategy, "--opt", opt, "--workers"])
+                        .arg(workers.to_string());
+                    if c_entry {
+                        command.args(["--native-library", "c"]);
+                    }
+                    let checked = Command::new(command.get_program())
+                        .args(command.get_args())
+                        .arg("--check")
+                        .output()
+                        .unwrap();
+                    assert!(checked.status.success(), "CHECK {command:?}: {checked:?}");
+                    assert!(!exe.exists(), "CHECK must not publish an executable");
+                    let build = command.arg("-o").arg(&exe).output().unwrap();
+                    assert!(build.status.success(), "{command:?}: {build:?}");
+                    let actual = execute(&exe);
+                    assert_eq!(actual.stdout, expected.stdout, "{command:?}: {actual:?}");
+                    assert_eq!(
+                        actual.status.code(),
+                        expected.status.code(),
+                        "{command:?}: {actual:?}"
+                    );
+                    assert_eq!(
+                        actual.status.signal(),
+                        expected.status.signal(),
+                        "{command:?}: {actual:?}"
+                    );
+                    if name == "double" {
+                        assert!(
+                            String::from_utf8_lossy(&actual.stderr).contains("second panic"),
+                            "{actual:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}

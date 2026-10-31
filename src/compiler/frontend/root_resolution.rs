@@ -17,6 +17,8 @@ mod stored_closures;
 enum ResolvedPath {
     Source(AstPath),
     CatalogModule(CatalogModule),
+    StdRoot(Option<AstPath>),
+    ThreadPanicking,
     Builtin(BuiltinTrait),
     PhantomData,
     ManuallyDrop,
@@ -524,6 +526,18 @@ impl Resolver<'_> {
         target
             .with_resolved_use(self.names(), source)
             .map_err(native_adapter::name_diagnostic)
+    }
+    fn callable_use(&self, item: &ResolvedItem, source: &AstPath) -> Result<AstPath, String> {
+        if matches!(item.path, ResolvedPath::ThreadPanicking) {
+            source
+                .with_catalog_callable(
+                    self.names(),
+                    super::super::semantic_path::CatalogCallable::ThreadPanicking,
+                )
+                .map_err(native_adapter::name_diagnostic)
+        } else {
+            self.resolved_use(item.source()?, source)
+        }
     }
     fn certify_generic(&self, target: &mut GenericPath, source: &AstPath) -> Result<(), String> {
         target.resolved_use = None;
@@ -1177,6 +1191,17 @@ impl Resolver<'_> {
         ident: AstIdent,
         namespace: bool,
     ) -> Result<Option<ResolvedItem>, String> {
+        if !namespace
+            && module == CatalogModule::Thread
+            && self.atom_is(ident, BuiltinAtom::ThreadPanicking, Namespace::Value)?
+        {
+            return Ok(Some(ResolvedItem {
+                visibility: ir::Visibility::Public,
+                path: ResolvedPath::ThreadPanicking,
+                module: false,
+                kind: ResolvedKind::Function,
+            }));
+        }
         if namespace
             && module == CatalogModule::Cell
             && self.atom_is(ident, BuiltinAtom::Cell, Namespace::Type)?
@@ -1400,6 +1425,8 @@ impl Resolver<'_> {
                     *path = TraitPath::Builtin(id);
                 }
                 ResolvedPath::CatalogModule(_)
+                | ResolvedPath::StdRoot(_)
+                | ResolvedPath::ThreadPanicking
                 | ResolvedPath::PhantomData
                 | ResolvedPath::ManuallyDrop
                 | ResolvedPath::Cell => {
@@ -1608,8 +1635,18 @@ impl Resolver<'_> {
     }
     fn same_resolved(&self, a: &ResolvedItem, b: &ResolvedItem) -> Result<bool, String> {
         Ok(match (&a.path, &b.path) {
-            (ResolvedPath::Source(x), ResolvedPath::Source(y)) => self.key(x)? == self.key(y)?,
-            (x, y) => format!("{x:?}") == format!("{y:?}"),
+            (ResolvedPath::Source(x), ResolvedPath::Source(y))
+            | (ResolvedPath::StdRoot(Some(x)), ResolvedPath::StdRoot(Some(y))) => {
+                self.key(x)? == self.key(y)?
+            }
+            (ResolvedPath::CatalogModule(x), ResolvedPath::CatalogModule(y)) => x == y,
+            (ResolvedPath::Builtin(x), ResolvedPath::Builtin(y)) => x == y,
+            (ResolvedPath::StdRoot(None), ResolvedPath::StdRoot(None))
+            | (ResolvedPath::ThreadPanicking, ResolvedPath::ThreadPanicking)
+            | (ResolvedPath::PhantomData, ResolvedPath::PhantomData)
+            | (ResolvedPath::ManuallyDrop, ResolvedPath::ManuallyDrop)
+            | (ResolvedPath::Cell, ResolvedPath::Cell) => true,
+            _ => false,
         })
     }
     /// Glob-imported name: `path` is `module::ident` with no explicit
@@ -1656,11 +1693,32 @@ impl Resolver<'_> {
                         self.display(&target)?
                     ));
                 }
-                let ResolvedPath::Source(source) = &base.path else {
-                    return Ok(None);
+                let item = match &base.path {
+                    ResolvedPath::Source(source) => {
+                        let full = self.semantic_append(source, ident)?;
+                        self.item(&full, module, namespace, true)?
+                    }
+                    ResolvedPath::CatalogModule(catalog) => {
+                        self.catalog_child(*catalog, ident, namespace)?
+                    }
+                    ResolvedPath::StdRoot(source) => {
+                        if namespace && self.atom_is(ident, BuiltinAtom::Thread, Namespace::Type)? {
+                            Some(ResolvedItem {
+                                visibility: ir::Visibility::Public,
+                                path: ResolvedPath::CatalogModule(CatalogModule::Thread),
+                                module: true,
+                                kind: ResolvedKind::Module,
+                            })
+                        } else if let Some(source) = source {
+                            let full = self.semantic_append(source, ident)?;
+                            self.item(&full, module, namespace, true)?
+                        } else {
+                            self.catalog_child(CatalogModule::Root, ident, namespace)?
+                        }
+                    }
+                    _ => None,
                 };
-                let full = self.semantic_append(source, ident)?;
-                let Some(mut item) = self.item(&full, module, namespace, true)? else {
+                let Some(mut item) = item else {
                     return Ok(None);
                 };
                 if item
@@ -1772,6 +1830,19 @@ impl Resolver<'_> {
             .modules
             .check(from)
             .map_err(module_diagnostic)?;
+        if path.catalog_callable().is_some() {
+            let original = path
+                .original_use(self.names())
+                .map_err(native_adapter::name_diagnostic)?;
+            let item = self.path(&original, from, namespace, importing)?;
+            if !item
+                .as_ref()
+                .is_some_and(|item| matches!(item.path, ResolvedPath::ThreadPanicking))
+            {
+                return Err("catalog callable source resolution changed".into());
+            }
+            return Ok(item);
+        }
         let parts = path.segments();
         let mut at = 0;
         let initial_module = match path.anchor() {
@@ -1878,7 +1949,11 @@ impl Resolver<'_> {
             {
                 ResolvedItem {
                     visibility: ir::Visibility::Public,
-                    path: ResolvedPath::CatalogModule(CatalogModule::Root),
+                    path: if self.atom_is(*ident, BuiltinAtom::Std, Namespace::Type)? {
+                        ResolvedPath::StdRoot(None)
+                    } else {
+                        ResolvedPath::CatalogModule(CatalogModule::Root)
+                    },
                     module: true,
                     kind: ResolvedKind::Module,
                 }
@@ -1902,6 +1977,28 @@ impl Resolver<'_> {
                 true
             };
             let next = match &current.path {
+                ResolvedPath::StdRoot(source) => {
+                    if type_namespace
+                        && self.atom_is(*ident, BuiltinAtom::Thread, Namespace::Type)?
+                    {
+                        Some(ResolvedItem {
+                            visibility: ir::Visibility::Public,
+                            path: ResolvedPath::CatalogModule(CatalogModule::Thread),
+                            module: true,
+                            kind: ResolvedKind::Module,
+                        })
+                    } else if let Some(source) = source {
+                        let full = self.semantic_append(source, *ident)?;
+                        self.item(
+                            &full,
+                            from,
+                            type_namespace,
+                            importing && at + 1 == parts.len(),
+                        )?
+                    } else {
+                        self.catalog_child(CatalogModule::Root, *ident, type_namespace)?
+                    }
+                }
                 ResolvedPath::CatalogModule(module) => {
                     self.catalog_child(*module, *ident, type_namespace)?
                 }
@@ -1915,6 +2012,7 @@ impl Resolver<'_> {
                     )?
                 }
                 ResolvedPath::Builtin(_)
+                | ResolvedPath::ThreadPanicking
                 | ResolvedPath::PhantomData
                 | ResolvedPath::ManuallyDrop
                 | ResolvedPath::Cell => None,
@@ -2163,6 +2261,42 @@ impl Resolver<'_> {
         if no_std && self.atom_is(first, BuiltinAtom::Std, Namespace::Type)? {
             return Err("unresolved std crate in no_std source; explicit extern crate std opt-in is unsupported".into());
         }
+        if type_namespace
+            && self.atom_is(first, BuiltinAtom::Std, Namespace::Type)?
+            && rest
+                .first()
+                .copied()
+                .map(|name| self.atom_is(name, BuiltinAtom::Thread, Namespace::Type))
+                .transpose()?
+                .unwrap_or(false)
+        {
+            let mut current = Some(ResolvedItem {
+                visibility: ir::Visibility::Public,
+                path: ResolvedPath::CatalogModule(CatalogModule::Thread),
+                module: true,
+                kind: ResolvedKind::Module,
+            });
+            for (index, ident) in rest[1..].iter().enumerate() {
+                self.alias_budget.charge_work(1)?;
+                let Some(ResolvedItem {
+                    path: ResolvedPath::CatalogModule(module),
+                    ..
+                }) = current
+                else {
+                    return Ok(Some(None));
+                };
+                current = self.catalog_child(
+                    module,
+                    *ident,
+                    if index + 2 == rest.len() {
+                        namespace
+                    } else {
+                        true
+                    },
+                )?;
+            }
+            return Ok(Some(current.filter(|item| item.module == namespace)));
+        }
         let library = type_namespace
             && !rest.is_empty()
             && (self.atom_is(first, BuiltinAtom::Core, Namespace::Type)?
@@ -2185,6 +2319,14 @@ impl Resolver<'_> {
                 if let Some(item) = self.item(&canonical, from, true, false)?
                     && item.kind == ResolvedKind::Module
                 {
+                    let item = if self.atom_is(first, BuiltinAtom::Std, Namespace::Type)? {
+                        ResolvedItem {
+                            path: ResolvedPath::StdRoot(Some(canonical)),
+                            ..item
+                        }
+                    } else {
+                        item
+                    };
                     return Ok(Some(Some(item)));
                 }
             }
@@ -2325,6 +2467,9 @@ impl Resolver<'_> {
         })?;
         if item.kind == ResolvedKind::Module {
             return Err("generic arguments are not allowed on modules".into());
+        }
+        if matches!(item.path, ResolvedPath::ThreadPanicking) {
+            return Err("E0107: std::thread::panicking takes no generic arguments".into());
         }
         let mut args = std::mem::take(&mut path.segments[at].args);
         let region_args = std::mem::take(&mut path.segments[at].region_args);
@@ -4113,7 +4258,7 @@ impl Resolver<'_> {
                 {
                     // Function item value: canonical declaration path, typed
                     // later as the zero-sized `Ty::FnItem` of that declaration.
-                    *name = self.resolved_use(item.source()?, name)?;
+                    *name = self.callable_use(item, name)?;
                     return Ok(());
                 }
                 if value_item
@@ -4210,7 +4355,7 @@ impl Resolver<'_> {
                             .collect(),
                     };
                 } else if resolved.kind == ResolvedKind::Function {
-                    *name = self.resolved_use(resolved.source()?, name)?;
+                    *name = self.callable_use(&resolved, name)?;
                 } else if resolved.kind == ResolvedKind::Struct {
                     let expected = self.tuple_struct(resolved.source()?)?.fields.len();
                     if args.len() != expected {
@@ -5195,7 +5340,7 @@ fn resolve_free_function(
                 if target.kind != ResolvedKind::Function {
                     return Ok(None);
                 }
-                resolver.resolved_use(target.source()?, path).map(Some)
+                resolver.callable_use(&target, path).map(Some)
             })?
         } else {
             None
@@ -5595,6 +5740,8 @@ fn collect_trait_imports(
                 ResolvedPath::Source(path) => TraitPath::Source(resolver.alias_source_path(path)?),
                 ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
                 ResolvedPath::CatalogModule(_)
+                | ResolvedPath::StdRoot(_)
+                | ResolvedPath::ThreadPanicking
                 | ResolvedPath::PhantomData
                 | ResolvedPath::ManuallyDrop
                 | ResolvedPath::Cell => {

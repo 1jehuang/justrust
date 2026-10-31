@@ -33,6 +33,7 @@ pub enum CatalogModule {
     Ops,
     Mem,
     Cell,
+    Thread,
 }
 impl CatalogModule {
     fn index(self) -> usize {
@@ -43,6 +44,7 @@ impl CatalogModule {
             Self::Ops => 3,
             Self::Mem => 4,
             Self::Cell => 5,
+            Self::Thread => 6,
         }
     }
 }
@@ -160,7 +162,7 @@ pub struct ModuleArena {
     joined: bool,
     source_names: Option<SessionId>,
     source_root: Option<ModuleId>,
-    catalog: [ModuleId; 6],
+    catalog: [ModuleId; 7],
     nodes: BudgetVec<ModuleNode>,
     children: ChildIndex,
     child_count: usize,
@@ -228,6 +230,7 @@ impl ModuleArenaBuilder {
             CatalogModule::Ops,
             CatalogModule::Mem,
             CatalogModule::Cell,
+            CatalogModule::Thread,
         ]
         .into_iter()
         .enumerate()
@@ -243,7 +246,7 @@ impl ModuleArenaBuilder {
             debug_assert_eq!(nodes.len(), index + 2);
         }
         let source_root = if source_names.is_some() {
-            let root = ModuleId { owner, index: 6 };
+            let root = ModuleId { owner, index: 7 };
             nodes.push(ModuleNode {
                 segment: ModuleSegment::SourceRoot,
                 parent: None,
@@ -272,6 +275,7 @@ impl ModuleArenaBuilder {
                     ModuleId { owner, index: 3 },
                     ModuleId { owner, index: 4 },
                     ModuleId { owner, index: 5 },
+                    ModuleId { owner, index: 6 },
                 ],
                 nodes,
                 children,

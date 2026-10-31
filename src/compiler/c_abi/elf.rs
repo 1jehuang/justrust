@@ -104,21 +104,23 @@ pub fn object_with_panic(
     if entry {
         // A real SysV main lets the host CRT initialize libc and native
         // constructors and flush C streams. The private main may clobber
-        // callee-saved registers, so preserve them across the bridge.
+        // callee-saved registers, so preserve them across the bridge. r14 is
+        // the private active-panic state: initialize it after saving the host's
+        // value, for both panic strategies. C callees preserve it by SysV ABI.
         if unwind {
-            definitions.insert("main".to_string(), (0usize, 52usize));
+            definitions.insert("main".to_string(), (0usize, 55usize));
             text.extend_from_slice(&[
                 0x55, 0x48, 0x89, 0xe5, 0x53, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48,
-                0x83, 0xec, 0x08, 0x45, 0x31, 0xff, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x08, 0x31,
-                0xc0, 0x45, 0x85, 0xff, 0x74, 0x05, 0xb8, 101, 0, 0, 0, 0x41, 0x5f, 0x41, 0x5e,
-                0x41, 0x5d, 0x41, 0x5c, 0x5b, 0xc9, 0xc3,
+                0x83, 0xec, 0x08, 0x45, 0x31, 0xf6, 0x45, 0x31, 0xff, 0xe8, 0, 0, 0, 0, 0x48, 0x83,
+                0xc4, 0x08, 0x31, 0xc0, 0x45, 0x85, 0xff, 0x74, 0x05, 0xb8, 101, 0, 0, 0, 0x41,
+                0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0xc9, 0xc3,
             ]);
         } else {
-            definitions.insert("main".to_string(), (0usize, 39usize));
+            definitions.insert("main".to_string(), (0usize, 42usize));
             text.extend_from_slice(&[
                 0x55, 0x48, 0x89, 0xe5, 0x53, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57, 0x48,
-                0x83, 0xec, 0x08, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x08, 0x41, 0x5f, 0x41, 0x5e,
-                0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x31, 0xc0, 0xc9, 0xc3,
+                0x83, 0xec, 0x08, 0x45, 0x31, 0xf6, 0xe8, 0, 0, 0, 0, 0x48, 0x83, 0xc4, 0x08, 0x41,
+                0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5b, 0x31, 0xc0, 0xc9, 0xc3,
             ]);
         }
     }
@@ -188,7 +190,7 @@ pub fn object_with_panic(
     let mut rel_text = Vec::new();
     let mut rel_data = Vec::new();
     if entry {
-        let at = if unwind { 21 } else { 18 };
+        let at = if unwind { 24 } else { 21 };
         relocation(&mut rel_text, at, indices["__jr_private_main"], 4, -4);
     }
     for ((_, o), start) in functions.iter().zip(starts) {
@@ -372,4 +374,84 @@ pub fn link_with_panic(
     let executable = toolchain.execute(&scratch.0, &options.objects, &bytes, &options.libraries)?;
     budget.retain_bytes(executable.len())?;
     Ok(executable)
+}
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64"))]
+mod panic_entry_tests {
+    use super::*;
+
+    #[test]
+    fn c_entry_initializes_panic_state_and_restores_host_registers() {
+        let scratch = scratch().unwrap();
+        let source = scratch.0.join("entry.S");
+        std::fs::write(
+            &source,
+            r#"
+.global _start
+.text
+_start:
+ mov $0x23456789,%r14d
+ mov $0x34567890,%r15d
+ call main
+ test %eax,%eax
+ jne failed
+ cmp $0x23456789,%r14
+ jne failed
+ cmp $0x34567890,%r15
+ jne failed
+ call main
+ test %eax,%eax
+ jne failed
+ cmp $0x23456789,%r14
+ jne failed
+ cmp $0x34567890,%r15
+ jne failed
+ xor %edi,%edi
+ jmp finish
+failed:
+ mov $78,%edi
+finish:
+ mov $60,%eax
+ syscall
+.section .note.GNU-stack,"",@progbits
+"#,
+        )
+        .unwrap();
+        for unwind in [false, true] {
+            let private = Object {
+                // Fail immediately if the bridge inherited the host's r14.
+                // Otherwise clobber it, proving both initialization and restore.
+                code: vec![
+                    0x45, 0x85, 0xf6, 0x74, 12, 0xbf, 77, 0, 0, 0, 0xb8, 60, 0, 0, 0, 0x0f, 0x05,
+                    0x41, 0xbe, 1, 0, 0, 0, 0x45, 0x31, 0xff, 0xc3,
+                ],
+                calls: vec![],
+                strings: vec![],
+                vtables: vec![],
+                exports: vec![],
+                receipt: None,
+            };
+            let object = object_with_panic(
+                &[("main".into(), private)],
+                true,
+                unwind,
+                &ir::PlanBudget::default(),
+            )
+            .unwrap();
+            let path = scratch.0.join(format!("entry-{unwind}.o"));
+            let exe = scratch.0.join(format!("entry-{unwind}"));
+            std::fs::write(&path, object).unwrap();
+            let compiled = std::process::Command::new("cc")
+                .args(["-nostdlib", "-static", "-no-pie"])
+                .arg(&source)
+                .arg(&path)
+                .arg("-o")
+                .arg(&exe)
+                .output()
+                .unwrap();
+            assert!(compiled.status.success(), "{compiled:?}");
+            let output = std::process::Command::new(&exe).output().unwrap();
+            assert!(output.status.success(), "unwind={unwind}: {output:?}");
+        }
+    }
 }

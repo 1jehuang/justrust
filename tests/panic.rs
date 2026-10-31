@@ -17,6 +17,140 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
+#[path = "support/stock_rustc.rs"]
+mod thread_query_stock;
+
+#[test]
+fn thread_panicking_workers1_8_matches_stock_during_normal_and_panic_cleanup() {
+    let fixtures = [
+        (
+            "normal",
+            r#"use std::thread::panicking as query;
+fn helper()->bool{query()}
+struct Guard;
+impl Drop for Guard{fn drop(&mut self){println!("drop={}",query());println!("helper={}",helper());}}
+fn main(){println!("before={}",query());let _guard=Guard;println!("body={}",helper());}
+"#,
+            "before=false\nbody=false\ndrop=false\nhelper=false\n",
+            Some(0),
+            None,
+        ),
+        (
+            "unwind",
+            r#"use std::thread::panicking as query;
+fn helper()->bool{query()}
+struct Guard;
+impl Drop for Guard{fn drop(&mut self){println!("drop={}",query());println!("helper={}",helper());}}
+fn main(){println!("before={}",query());let _guard=Guard;panic!("query outer panic");}
+"#,
+            "before=false\ndrop=true\nhelper=true\n",
+            Some(101),
+            None,
+        ),
+        (
+            "double-panic",
+            r#"fn helper()->bool{std::thread::panicking()}
+struct Guard;
+impl Drop for Guard{fn drop(&mut self){println!("drop={}",std::thread::panicking());println!("helper={}",helper());panic!("query inner panic");}}
+fn main(){println!("before={}",std::thread::panicking());let _guard=Guard;panic!("query outer panic");}
+"#,
+            "before=false\ndrop=true\nhelper=true\n",
+            None,
+            Some(6),
+        ),
+    ];
+    for (name, source, stdout, code, signal) in fixtures {
+        let scratch = Scratch::new();
+        scratch.write("source.rs", source.as_bytes());
+        let stock_path = scratch.path("stock");
+        let compiled = capture(
+            Command::new(thread_query_stock::stock_rustc())
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args(["--edition=2024", "-Cpanic=unwind", "--color=never"])
+                .arg(scratch.path("source.rs"))
+                .arg("-o")
+                .arg(&stock_path),
+            &scratch,
+            30,
+        );
+        ordinary_exit(&compiled, 0);
+        let stock = capture(
+            Command::new(&stock_path).env("RUST_BACKTRACE", "0"),
+            &scratch,
+            10,
+        );
+        assert_eq!(stock.status.code(), code, "stock {name}: {stock:?}");
+        assert_eq!(stock.status.signal(), signal, "stock {name}: {stock:?}");
+        assert_eq!(stock.stdout, stdout.as_bytes(), "stock {name}: {stock:?}");
+        for workers in [1, 8] {
+            let checked = compiler::compile_observed_with_options(
+                source.into(),
+                workers,
+                true,
+                compiler::source::SourceOptions {
+                    panic_unwind: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|failure| panic!("{name} workers={workers} CHECK: {}", failure.error));
+            assert!(checked.executable.is_none());
+            assert!(
+                !checked.report.published_kind(103),
+                "CHECK demanded codegen"
+            );
+            assert!(checked.analyses.iter().all(|analysis| analysis.passed()));
+            let built = compiler::compile_observed_with_options(
+                source.into(),
+                workers,
+                false,
+                compiler::source::SourceOptions {
+                    panic_unwind: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|failure| panic!("{name} workers={workers} BUILD: {}", failure.error));
+            assert!(built.analyses.iter().all(|analysis| analysis.passed()));
+            let image = built.executable.expect("BUILD omitted executable");
+            assert_eq!(&image[..6], b"\x7fELF\x02\x01");
+            let native_path = scratch.path(&format!("native-{workers}"));
+            fs::write(&native_path, image).unwrap();
+            fs::set_permissions(&native_path, fs::Permissions::from_mode(0o700)).unwrap();
+            let mut command = Command::new(&native_path);
+            no_compiler_tools(&mut command, &scratch);
+            command.env("RUST_BACKTRACE", "0");
+            let native = capture(&mut command, &scratch, 10);
+            assert_eq!(
+                native.status.code(),
+                stock.status.code(),
+                "{name} workers={workers}: {native:?}"
+            );
+            assert_eq!(
+                native.status.signal(),
+                stock.status.signal(),
+                "{name} workers={workers}: {native:?}"
+            );
+            assert_eq!(
+                native.stdout, stock.stdout,
+                "{name} workers={workers}: {native:?}"
+            );
+            let stderr = String::from_utf8_lossy(&native.stderr);
+            if code == Some(0) {
+                assert!(stderr.is_empty(), "{name} workers={workers}: {native:?}");
+            } else {
+                assert!(
+                    stderr.contains("query outer panic"),
+                    "{name} workers={workers}: {native:?}"
+                );
+                if signal == Some(6) {
+                    assert!(
+                        stderr.contains("query inner panic"),
+                        "{name} workers={workers}: {native:?}"
+                    );
+                }
+            }
+        }
+    }
+}
 
 use justrust_engine::compiler::{self, frontend, ir};
 use justrust_engine::{Key, Report};
@@ -34,6 +168,7 @@ enum Native {
     Abort,
     Invalid,
     Unsupported,
+    Unwind,
 }
 struct Case {
     name: &'static str,
@@ -541,8 +676,8 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 119,
             source_fingerprint: 320947439098334438,
             source_sha256: r###"772a046b47d4afe5407292161ed9492d75a743e2f2bf089e7f4c47428fb1aaeb"###,
-            native: Native::Unsupported,
-            boundary: r###"unsupported: normal Drop requires a scalar-field struct"###,
+            native: Native::Unwind,
+            boundary: r###""###,
             stock_compile_code: 0,
             stock_code: Some(101),
             stock_stdout: r###""###,
@@ -566,7 +701,7 @@ dropped
             source_fingerprint: 12183947067569788194,
             source_sha256: r###"351c760037a6c67c5dc9fbd593d5a2cbbb1c43239a8d77fb5a3089a0f1673cc1"###,
             native: Native::Unsupported,
-            boundary: r###"stored closures and capture environments are unsupported"###,
+            boundary: r###"unresolved function std::panic::catch_unwind"###,
             stock_compile_code: 0,
             stock_code: Some(-6),
             stock_stdout: r###""###,
@@ -589,7 +724,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_fingerprint: 12183947067569788194,
             source_sha256: r###"351c760037a6c67c5dc9fbd593d5a2cbbb1c43239a8d77fb5a3089a0f1673cc1"###,
             native: Native::Unsupported,
-            boundary: r###"stored closures and capture environments are unsupported"###,
+            boundary: r###"unresolved function std::panic::catch_unwind"###,
             stock_compile_code: 0,
             stock_code: Some(0),
             stock_stdout: r###"caught=true
@@ -1340,7 +1475,7 @@ fn no_compiler_tools(command: &mut Command, scratch: &Scratch) {
         .env("RUSTC", scratch.path("no-rustc"))
         .env("PATH", scratch.path("no-tools"));
 }
-fn panic_runtime(case: &Case, result: &Captured, source: &Path, stock: bool) {
+fn panic_runtime(case: &Case, result: &Captured, source: &Path, _stock: bool) {
     assert_eq!(
         result.stdout,
         case.stock_stdout.as_bytes(),
@@ -1388,10 +1523,21 @@ fn panic_runtime(case: &Case, result: &Captured, source: &Path, stock: bool) {
         ) {
             assert_eq!(stderr.matches("before\n").count(), 1, "{result:?}");
         }
-        if stock && case.name == "control_unwind_drop" {
-            assert_eq!(stderr.matches("dropped\n").count(), 1);
+        if case.name == "control_unwind_drop" {
+            assert_eq!(stderr.matches("dropped\n").count(), 1, "{result:?}");
+            let actual_tail = stderr.split_once(&format!("{location}:\n")).unwrap().1;
+            let stock_tail = case
+                .stock_stderr
+                .split_once(&format!("source.rs:{}:\n", case.location))
+                .unwrap()
+                .1;
+            assert_eq!(
+                actual_tail, stock_tail,
+                "{}: unwind diagnostic/drop order",
+                case.name
+            );
         }
-        if stock && case.name == "control_abort_drop" {
+        if case.name == "control_abort_drop" {
             assert!(!stderr.contains("dropped"));
         }
     }
@@ -1440,7 +1586,7 @@ fn frozen_panic_source_and_receipt_partitions() {
     let all = cases();
     assert_eq!(all.len(), 47);
     let mut groups = [0; 4];
-    let mut native = [[0; 4]; 4];
+    let mut native = [[0; 5]; 4];
     let mut stock_core = [0; 3];
     for case in &all {
         assert_eq!(case.source.len(), case.source_bytes, "{}", case.name);
@@ -1466,6 +1612,7 @@ fn frozen_panic_source_and_receipt_partitions() {
             Native::Abort => 1,
             Native::Invalid => 2,
             Native::Unsupported => 3,
+            Native::Unwind => 4,
         }] += 1;
         if group == 0 {
             stock_core[if case.stock_compile_code != 0 {
@@ -1518,7 +1665,12 @@ fn frozen_panic_source_and_receipt_partitions() {
     assert_eq!(stock_core, [3, 10, 3]);
     assert_eq!(
         native,
-        [[3, 10, 3, 0], [7, 0, 0, 0], [0, 2, 0, 4], [6, 10, 2, 0]]
+        [
+            [3, 10, 3, 0, 0],
+            [7, 0, 0, 0, 0],
+            [0, 2, 0, 3, 1],
+            [6, 10, 2, 0, 0],
+        ]
     );
 }
 #[test]
@@ -1588,7 +1740,7 @@ fn stock_all_uncached() {
             scratch.write("source.rs", case.source.as_bytes());
             let source = scratch.path("source.rs");
             let image = scratch.path("stock");
-            let unwind = matches!(case.name, "control_unwind_drop" | "control_catch_unwind");
+            let unwind = case_options(&case).panic_unwind;
             let result = capture(
                 Command::new(&rustc)
                     .env_remove("RUSTC_BOOTSTRAP")
@@ -1659,14 +1811,22 @@ fn diagnostic(case: &Case, text: &str) {
             }
         }
         Native::Unsupported => {
-            // Four historical controls remain unsupported. Their earlier parser/
-            // resolution failure is NOT evidence of unwind or formatting support.
+            // Nonliteral panic and catch_unwind remain unsupported. Exact
+            // resolution failure is not evidence of catch or formatting support.
             assert!(
                 text.contains(case.boundary),
                 "{}: expected earlier boundary {:?}: {text}",
                 case.name,
                 case.boundary
             );
+            if matches!(case.name, "control_catch_abort" | "control_catch_unwind") {
+                assert_eq!(text.matches(case.boundary).count(), 1, "{text}");
+                assert!(
+                    text.lines().any(|line| line.ends_with(case.boundary)),
+                    "{text}"
+                );
+                assert!(!text.contains("stored closures and capture environments are unsupported"));
+            }
         }
         _ => panic!("{} unexpectedly rejected: {text}", case.name),
     }
@@ -1682,7 +1842,13 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
     assert_eq!(nodes[0].1, 1, "{}: repeated {key:?}", case.name);
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
-    let program = native_prelude::parse(case.source).expect("positive frozen source parses");
+    let options = case_options(case);
+    let program = if options.panic_unwind {
+        native_prelude::parse_configured(case.source, &options)
+    } else {
+        native_prelude::parse(case.source)
+    }
+    .expect("positive frozen source parses with its panic strategy");
     frontend::check(&program).expect("all bodies checked independent of reachability");
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
     assert_eq!(compiled.source_bytes, case.source.len());
@@ -1765,13 +1931,47 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
     );
     assert!(objects.iter().all(|(_, count)| *count == 1));
 }
+fn case_options(case: &Case) -> compiler::source::SourceOptions {
+    compiler::source::SourceOptions {
+        panic_unwind: matches!(case.name, "control_unwind_drop" | "control_catch_unwind"),
+        ..Default::default()
+    }
+}
+fn selected_case() -> Case {
+    let name = std::env::var("JR_PANIC_CASE").expect("isolated cell names its frozen source");
+    cases()
+        .into_iter()
+        .find(|case| case.name == name)
+        .expect("unknown panic cell")
+}
+fn selected_workers() -> usize {
+    let workers = std::env::var("JR_PANIC_WORKERS").unwrap().parse().unwrap();
+    assert!(matches!(workers, 1 | 8));
+    workers
+}
+fn selected_check() -> bool {
+    match std::env::var("JR_PANIC_CHECK").unwrap().as_str() {
+        "true" => true,
+        "false" => false,
+        _ => panic!("unknown panic cell mode"),
+    }
+}
+fn selected_runtime_count() -> usize {
+    usize::from(
+        !selected_check()
+            && matches!(
+                selected_case().native,
+                Native::Live | Native::Abort | Native::Unwind
+            ),
+    )
+}
 fn cli_all() {
     let mut failures = CellFailures::default();
     let mut cells = 0;
     let mut runtimes = 0;
-    for case in cases() {
-        for workers in [1, 8] {
-            for check in [true, false] {
+    for case in std::iter::once(selected_case()) {
+        for workers in std::iter::once(selected_workers()) {
+            for check in std::iter::once(selected_check()) {
                 failures.check(
                     format!(
                         "CLI {} workers{workers} check{check} {:?}",
@@ -1787,13 +1987,22 @@ fn cli_all() {
                         command
                             .arg(&source)
                             .args(["--workers", &workers.to_string()]);
+                        command.args([
+                            "--panic",
+                            if case_options(&case).panic_unwind {
+                                "unwind"
+                            } else {
+                                "abort"
+                            },
+                        ]);
                         if check {
                             command.arg("--check");
                         } else {
                             command.arg("-o").arg(&image);
                         }
                         let result = capture(&mut command, &scratch, 20);
-                        let accepted = matches!(case.native, Native::Live | Native::Abort);
+                        let accepted =
+                            matches!(case.native, Native::Live | Native::Abort | Native::Unwind);
                         ordinary_exit(&result, i32::from(!accepted));
                         if !accepted {
                             assert!(result.stdout.is_empty());
@@ -1817,17 +2026,19 @@ fn cli_all() {
             }
         }
     }
-    assert_eq!(cells, 188);
-    failures.check("runtime count", || assert_eq!(runtimes, 76));
+    assert_eq!(cells, 1);
+    failures.check("runtime count", || {
+        assert_eq!(runtimes, selected_runtime_count())
+    });
     failures.finish();
 }
 fn graph_all() {
     let mut failures = CellFailures::default();
     let mut cells = 0;
     let mut runtimes = 0;
-    for case in cases() {
-        for workers in [1, 8] {
-            for check in [true, false] {
+    for case in std::iter::once(selected_case()) {
+        for workers in std::iter::once(selected_workers()) {
+            for check in std::iter::once(selected_check()) {
                 failures.check(
                     format!(
                         "graph {} workers{workers} check{check} {:?}",
@@ -1837,10 +2048,18 @@ fn graph_all() {
                         let scratch = Scratch::new();
                         scratch.write("source.rs", case.source.as_bytes());
                         let source = scratch.path("source.rs");
-                        match compiler::compile_file_observed(source.clone(), workers, check) {
+                        match compiler::compile_file_observed_with_options(
+                            source.clone(),
+                            workers,
+                            check,
+                            case_options(&case),
+                        ) {
                             Ok(compiled) => {
                                 assert!(
-                                    matches!(case.native, Native::Live | Native::Abort),
+                                    matches!(
+                                        case.native,
+                                        Native::Live | Native::Abort | Native::Unwind
+                                    ),
                                     "{} unexpectedly accepted",
                                     case.name
                                 );
@@ -1877,8 +2096,10 @@ fn graph_all() {
             }
         }
     }
-    assert_eq!(cells, 188);
-    failures.check("graph runtime count", || assert_eq!(runtimes, 76));
+    assert_eq!(cells, 1);
+    failures.check("graph runtime count", || {
+        assert_eq!(runtimes, selected_runtime_count())
+    });
     failures.finish();
 }
 fn isolated(name: &str, marker: &str, run: fn()) {
@@ -1889,16 +2110,40 @@ fn isolated(name: &str, marker: &str, run: fn()) {
     // Stock comes first with the caller's host-portable tool discovery. The
     // native child then has no stock compiler or linker available in PATH.
     stock_all();
-    let scratch = Scratch::new();
-    let mut command = Command::new(std::env::current_exe().unwrap());
-    no_compiler_tools(&mut command, &scratch);
-    command
-        .args(["--exact", name, "--nocapture"])
-        .env(marker, "1");
-    let result = capture_bounded(&mut command, &scratch, 240, 8 * 1024 * 1024);
-    eprint!("{}", String::from_utf8_lossy(&result.stdout));
-    eprint!("{}", String::from_utf8_lossy(&result.stderr));
-    ordinary_exit(&result, 0);
+    // One child per unchanged case/worker/mode retains the existing 20-second
+    // cell bound. A 188-cell aggregate deadline is not a per-cell hang check.
+    let mut failures = CellFailures::default();
+    let mut cells = 0;
+    let mut runtimes = 0;
+    for case in cases() {
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let label = format!("{name} {} workers{workers} check{check}", case.name);
+                failures.check(label, || {
+                    let scratch = Scratch::new();
+                    let mut command = Command::new(std::env::current_exe().unwrap());
+                    no_compiler_tools(&mut command, &scratch);
+                    command
+                        .args(["--exact", name, "--nocapture"])
+                        .env(marker, "1")
+                        .env("JR_PANIC_CASE", case.name)
+                        .env("JR_PANIC_WORKERS", workers.to_string())
+                        .env("JR_PANIC_CHECK", check.to_string());
+                    let result = capture_bounded(&mut command, &scratch, 20, 8 * 1024 * 1024);
+                    eprint!("{}", String::from_utf8_lossy(&result.stdout));
+                    eprint!("{}", String::from_utf8_lossy(&result.stderr));
+                    ordinary_exit(&result, 0);
+                });
+                cells += 1;
+                runtimes += usize::from(
+                    !check && matches!(case.native, Native::Live | Native::Abort | Native::Unwind),
+                );
+            }
+        }
+    }
+    assert_eq!(cells, 188);
+    assert_eq!(runtimes, 78);
+    failures.finish();
 }
 #[test]
 fn native_panic_workers1_8_check_build_actual_elf() {

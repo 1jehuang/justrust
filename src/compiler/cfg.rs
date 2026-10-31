@@ -384,6 +384,7 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
     }
     match (a, b) {
         (Rvalue::TypeAlignment(a), Rvalue::TypeAlignment(b)) => a.same_query(b, budget),
+        (Rvalue::RuntimeQuery(a), Rvalue::RuntimeQuery(b)) => Ok(a == b),
         (Rvalue::Repeat { ty: a, value: aa }, Rvalue::Repeat { ty: b, value: bb }) => {
             Ok(ir::identical_type(a, b, budget)? && same_operand_types(aa, bb, budget)?)
         }
@@ -1130,6 +1131,8 @@ pub enum Rvalue {
         proof: std::sync::Arc<ManuallyDropTakeProof>,
     },
     TypeAlignment(ir::TypeAlignmentQuery),
+    /// State-dependent read, excluded from pure evaluation and commoning.
+    RuntimeQuery(ir::RuntimeQuery),
     /// Defining-body ownership transport, never an executable representation cast.
     OpaquePack {
         value: Operand,
@@ -1357,7 +1360,8 @@ impl Rvalue {
                 }
             }
             Self::IndexCopy { index, .. } => visit(index)?,
-            Self::TypeAlignment(_)
+            Self::RuntimeQuery(_)
+            | Self::TypeAlignment(_)
             | Self::Borrow(_)
             | Self::Discriminant(_)
             | Self::Println(_)
@@ -1857,7 +1861,7 @@ impl Function {
                                 path(&mut bytes, reference, budget)?;
                                 path(&mut bytes, payload, budget)?;
                             }
-                            Rvalue::TypeAlignment(_) => {}
+                            Rvalue::TypeAlignment(_) | Rvalue::RuntimeQuery(_) => {}
                             Rvalue::NativeSyscall(fields)
                             | Rvalue::RawSlice { args: fields, .. }
                             | Rvalue::Aggregate { fields, .. }
@@ -2646,6 +2650,7 @@ impl Function {
                                 }
                             }
                             Rvalue::TypeAlignment(query) => query.validate(facts, budget)?,
+                            Rvalue::RuntimeQuery(query) => query.validate(facts, budget)?,
                             Rvalue::NativeSyscall(fields)
                             | Rvalue::RawSlice { args: fields, .. } => {
                                 for value in fields {
@@ -3508,6 +3513,14 @@ impl Function {
                 self.require_operand_with_facts(&args[1], &Ty::Int(IntTy::Usize), facts, scratch)?;
                 validate_slice_position(&ty, facts)?;
                 Ok(ty)
+            }
+            Rvalue::RuntimeQuery(query) => {
+                let budget = facts
+                    .validated()
+                    .ok_or("runtime query requires canonical recipe authority")?
+                    .budget();
+                query.validate(facts, budget)?;
+                Ok(Ty::Bool)
             }
             Rvalue::TypeAlignment(query) => {
                 let budget = facts
@@ -5918,6 +5931,15 @@ impl Lowerer<'_> {
                 self.assign(
                     destination.clone(),
                     Rvalue::RawSlice { kind: *kind, args },
+                    origin,
+                );
+            }
+            ir::ExprKind::RuntimeQuery(query) => {
+                let budget = self.budget.ok_or("runtime query requires a task budget")?;
+                query.validate(self.facts, budget)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::RuntimeQuery(query.clone()),
                     origin,
                 );
             }
@@ -14196,7 +14218,8 @@ mod tests {
                             Rvalue::Discriminant(place) => {
                                 assert!(live[place.local.0], "discriminant reads dead storage");
                             }
-                            Rvalue::TypeAlignment(_)
+                            Rvalue::RuntimeQuery(_)
+                            | Rvalue::TypeAlignment(_)
                             | Rvalue::Println(_)
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
