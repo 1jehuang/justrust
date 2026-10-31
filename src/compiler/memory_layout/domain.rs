@@ -12,6 +12,7 @@ use std::sync::Arc;
 struct Requirement {
     parameters: Vec<bool>,
     raw_pointees: Vec<bool>,
+    drop_parameters: Vec<bool>,
     semantic_limits: Vec<Option<usize>>,
     physical_limits: Vec<Option<usize>>,
     thin_pointees: Vec<bool>,
@@ -25,12 +26,13 @@ impl Requirement {
     fn empty(arity: usize, budget: &ir::PlanBudget) -> Result<Self, String> {
         budget.retain_bytes(
             arity
-                .checked_mul(6 + 2 * std::mem::size_of::<Option<usize>>())
+                .checked_mul(7 + 2 * std::mem::size_of::<Option<usize>>())
                 .ok_or("alignment obligation arity overflow")?,
         )?;
         Ok(Self {
             parameters: vec![false; arity],
             raw_pointees: vec![false; arity],
+            drop_parameters: vec![false; arity],
             semantic_limits: vec![None; arity],
             physical_limits: vec![None; arity],
             thin_pointees: vec![false; arity],
@@ -44,6 +46,7 @@ impl Requirement {
     fn merge(&mut self, other: &Self, budget: &ir::PlanBudget) -> Result<bool, String> {
         if self.parameters.len() != other.parameters.len()
             || self.raw_pointees.len() != other.raw_pointees.len()
+            || self.drop_parameters.len() != other.drop_parameters.len()
             || self.semantic_limits.len() != other.semantic_limits.len()
             || self.physical_limits.len() != other.physical_limits.len()
             || self.thin_pointees.len() != other.thin_pointees.len()
@@ -59,6 +62,7 @@ impl Requirement {
             .iter_mut()
             .zip(&other.parameters)
             .chain(self.raw_pointees.iter_mut().zip(&other.raw_pointees))
+            .chain(self.drop_parameters.iter_mut().zip(&other.drop_parameters))
             .chain(self.thin_pointees.iter_mut().zip(&other.thin_pointees))
             .chain(
                 self.metadata_pointees
@@ -552,6 +556,57 @@ fn normalize_query(
     }
 }
 
+// Only exact rigid parameters and builtin owning aggregate edges are reduced
+// into finite cleanup dependencies. Other unresolved forms retain the existing
+// closed-replay requirement rather than assuming nominal or hidden drop facts.
+fn normalize_drop(
+    ty: &ir::Ty,
+    facts: &traits::ValidatedFacts,
+    parameters: &[ir::ParamId],
+    out: &mut Requirement,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    if !facts.budget().same_authority(budget) {
+        return Err("cleanup obligation changed task budget authority".into());
+    }
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match facts
+        .normal_drop_plan(ty)
+        .map_err(|e| e.into_legacy_diagnostic(budget))?
+    {
+        traits::NormalDropPlan::Trivial => return Ok(()),
+        traits::NormalDropPlan::Destructor(_) => {
+            out.deferred_dispatch = true;
+            return Ok(());
+        }
+        traits::NormalDropPlan::Unresolved => {}
+    }
+    match ty {
+        ir::Ty::Param(parameter) => {
+            let slot = parameters
+                .iter()
+                .position(|p| p == parameter)
+                .ok_or("cleanup obligation contains a foreign rigid parameter")?;
+            *out.drop_parameters
+                .get_mut(slot)
+                .ok_or("cleanup obligation changed parameter arity")? = true;
+        }
+        ir::Ty::Tuple(parts) => {
+            for part in parts.iter() {
+                normalize_drop(part, facts, parameters, out, budget, depth + 1)?;
+            }
+        }
+        ir::Ty::Array { element, .. } => {
+            // The authentic plan above decides zero-length array behavior.
+            normalize_drop(element, facts, parameters, out, budget, depth + 1)?;
+        }
+        _ => out.deferred_dispatch = true,
+    }
+    Ok(())
+}
+
 fn may_own_drop(ty: &ir::Ty) -> bool {
     !matches!(
         ty,
@@ -571,6 +626,7 @@ type Argument = (
     Requirement,
     Requirement,
     SizeArgument,
+    Requirement,
     Requirement,
     Requirement,
     Requirement,
@@ -691,7 +747,17 @@ impl Local {
             if original.generic_env().total_arity() != target.type_args.len() {
                 return Err("alignment call changed original generic arity".into());
             }
+            budget.retain_bytes(
+                target
+                    .type_args
+                    .len()
+                    .checked_mul(std::mem::size_of::<Argument>())
+                    .ok_or("alignment argument backing size overflow")?,
+            )?;
             let mut arguments = Vec::new();
+            arguments
+                .try_reserve_exact(target.type_args.len())
+                .map_err(|_| "infrastructure: alignment argument allocation failed")?;
             for actual in target.type_args.iter() {
                 let mut requirement = Requirement::empty(parameters.len(), budget)?;
                 normalize(actual, &parameters, &mut requirement, budget, 0)?;
@@ -706,11 +772,22 @@ impl Local {
                 normalize_mut_ref_pointee(actual, &parameters, &mut mutable, budget)?;
                 let mut metadata = Requirement::empty(parameters.len(), budget)?;
                 normalize_metadata_pointee(actual, &parameters, &mut metadata, budget)?;
-                arguments.push((requirement, raw, size, thin, pointer, mutable, metadata));
+                let mut drop = Requirement::empty(parameters.len(), budget)?;
+                if facts.has_normal_drop_impls() {
+                    normalize_drop(actual, &facts, &parameters, &mut drop, budget, 0)?;
+                }
+                arguments.push((
+                    requirement,
+                    raw,
+                    size,
+                    thin,
+                    pointer,
+                    mutable,
+                    metadata,
+                    drop,
+                ));
             }
-            budget.retain_bytes(
-                std::mem::size_of::<Edge>() + arguments.len() * std::mem::size_of::<Argument>(),
-            )?;
+            budget.retain_bytes(std::mem::size_of::<Edge>())?;
             edges.push(Edge {
                 occurrence,
                 target,
@@ -728,12 +805,7 @@ impl Local {
             {
                 budget.charge_work(1)?;
                 if may_own_drop(ty) {
-                    direct.deferred_dispatch |= !matches!(
-                        facts
-                            .normal_drop_plan(ty)
-                            .map_err(|e| e.into_legacy_diagnostic(budget))?,
-                        traits::NormalDropPlan::Trivial
-                    );
+                    normalize_drop(ty, &facts, &parameters, &mut direct, budget, 0)?;
                 }
             }
         }

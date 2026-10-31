@@ -60,7 +60,7 @@ impl Header {
                     .direct
                     .parameters
                     .len()
-                    .saturating_mul(6 + 2 * std::mem::size_of::<Option<usize>>()),
+                    .saturating_mul(7 + 2 * std::mem::size_of::<Option<usize>>()),
         )?;
         let receipt = Arc::new(HeaderReceipt {
             owner: local.owner,
@@ -283,7 +283,7 @@ impl Summary {
                     .direct
                     .parameters
                     .len()
-                    .saturating_mul(4 * (6 + 2 * std::mem::size_of::<Option<usize>>())),
+                    .saturating_mul(4 * (7 + 2 * std::mem::size_of::<Option<usize>>())),
             )?;
             if positions.insert(header.owner, index).is_some() {
                 return Err("alignment SCC repeats a local header".into());
@@ -357,6 +357,9 @@ impl Summary {
                     }
                     if required.raw_pointees[slot] {
                         next.merge(&argument.1, budget)?;
+                    }
+                    if required.drop_parameters[slot] {
+                        next.merge(&argument.7, budget)?;
                     }
                     if let Some(limit) = required.semantic_limits[slot] {
                         argument.2.apply(limit, &mut next, budget)?;
@@ -455,6 +458,9 @@ impl Summary {
             }
             if required.raw_pointees[slot] {
                 super::normalize_raw_pointee(argument, &[], &mut closed, budget)?;
+            }
+            if required.drop_parameters[slot] {
+                super::normalize_drop(argument, facts, &[], &mut closed, budget, 0)?;
             }
             if let Some(limit) = required.semantic_limits[slot] {
                 super::normalize_semantic_size(argument, &[], limit, &mut closed, budget)?;

@@ -44,6 +44,9 @@ impl Method {
             if required.raw_pointees[slot] {
                 super::super::normalize_raw_pointee(argument, &[], &mut closed, budget)?;
             }
+            // Binding has no closed invocation facts. Keep prefix cleanup
+            // conservative until the exact source owner is requested.
+            closed.deferred_dispatch |= required.drop_parameters[slot];
             if let Some(limit) = required.semantic_limits[slot] {
                 super::super::normalize_semantic_size(argument, &[], limit, &mut closed, budget)?;
             }
@@ -67,6 +70,7 @@ impl Method {
             budget.charge_work(1)?;
             own.parameters[slot] = required.parameters[prefix.len() + slot];
             own.raw_pointees[slot] = required.raw_pointees[prefix.len() + slot];
+            own.drop_parameters[slot] = required.drop_parameters[prefix.len() + slot];
             own.semantic_limits[slot] = required.semantic_limits[prefix.len() + slot];
             own.physical_limits[slot] = required.physical_limits[prefix.len() + slot];
             own.thin_pointees[slot] = required.thin_pointees[prefix.len() + slot];
@@ -81,7 +85,7 @@ impl Method {
             std::mem::size_of::<MethodReceipt>()
                 + 2 * std::mem::size_of::<usize>()
                 + arity
-                    .checked_mul(6 + 2 * std::mem::size_of::<Option<usize>>())
+                    .checked_mul(7 + 2 * std::mem::size_of::<Option<usize>>())
                     .ok_or("opaque method receipt arity overflow")?,
         )?;
         let prefix: Arc<[ir::Ty]> = Arc::from(prefix);
@@ -102,7 +106,7 @@ impl Method {
         })
     }
     fn validate_receipt(&self, budget: &ir::PlanBudget) -> Result<(), String> {
-        budget.charge_work(1 + self.own.parameters.len().saturating_mul(8))?;
+        budget.charge_work(1 + self.own.parameters.len().saturating_mul(9))?;
         if self.declaration != self.receipt.declaration
             || self.item != self.receipt.item
             || self.closed != self.receipt.closed
@@ -136,6 +140,9 @@ impl Method {
             }
             if self.own.raw_pointees[slot] {
                 super::super::normalize_raw_pointee(actual, &[], &mut required, budget)?;
+            }
+            if self.own.drop_parameters[slot] {
+                super::super::normalize_drop(actual, facts, &[], &mut required, budget, 0)?;
             }
             if let Some(limit) = self.own.semantic_limits[slot] {
                 super::super::normalize_semantic_size(actual, &[], limit, &mut required, budget)?;
@@ -484,7 +491,7 @@ mod tests {
         let actuals = [ir::Ty::Int(ir::IntTy::U8)];
         method.validate_receipt(&budget).unwrap();
         method.instantiate(&actuals, &facts, &budget).unwrap();
-        for field in 0..8 {
+        for field in 0..9 {
             let mut changed = method.clone();
             match field {
                 0 => changed.own.semantic_limits[0] = None,
@@ -494,6 +501,7 @@ mod tests {
                 4 => changed.own.pointer_strides[0] = !method.own.pointer_strides[0],
                 5 => changed.own.physical_limits[0] = Some(0),
                 6 => changed.own.metadata_pointees[0] = true,
+                7 => changed.own.drop_parameters[0] = !method.own.drop_parameters[0],
                 _ => changed.own.parameters[0] = true,
             }
             assert!(

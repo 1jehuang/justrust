@@ -686,6 +686,8 @@ fn main(){if run()==7{println!("generic oracle ok");}}"#,
 
 #[test]
 fn rejects_resource_expanding_recursive_instances() {
+    use std::io::{BufRead, BufReader, Read};
+
     // Stock rustc accepts this under `--emit=metadata` (check) and rejects it
     // only while instantiating for codegen ("reached the recursion limit while
     // instantiating"). CHECK must therefore accept, BUILD must reject.
@@ -695,7 +697,65 @@ fn main(){if run()==7{println!("generic oracle ok");}}"#;
         let scratch = Scratch::new();
         let input = scratch.source(source);
         let output = scratch.path("must-not-exist");
-        let result = capture(&mut compiler(&input, &output, workers, true), &scratch, 20);
+        let profile = scratch.path("recursive-check-profile.json");
+        let trace = scratch.path("recursive-check-trace.txt");
+        let mut command = compiler(&input, &output, workers, true);
+        command
+            .arg("--profile")
+            .arg(&profile)
+            .arg("--trace")
+            .arg(&trace);
+        let result = capture(&mut command, &scratch, 20);
+        if !result.status.success() {
+            // No JSON dependency is needed: the profile writer places exact
+            // first_failure_task (producer node/kind/params) before graph data.
+            // Read and print only this bounded prefix, never the full graph.
+            let profile_prefix = (|| -> std::io::Result<String> {
+                let mut bytes = Vec::new();
+                fs::File::open(&profile)?
+                    .take(16 * 1024)
+                    .read_to_end(&mut bytes)?;
+                let text = String::from_utf8_lossy(&bytes);
+                Ok(text.split(",\"graph\":").next().unwrap_or(&text).to_owned())
+            })();
+            eprintln!(
+                "recursive CHECK workers={workers} profile prefix (<=16KiB): {profile_prefix:?}"
+            );
+            // The Debug trace has a distinct node_errors section. Bound both
+            // scanning (64MiB) and output (48 lines, 512 characters per line).
+            // Keep diagnostic I/O failure secondary to the unchanged assertion.
+            let trace_errors = (|| -> std::io::Result<()> {
+                let file = fs::File::open(&trace)?;
+                let mut lines = BufReader::new(file.take(64 * 1024 * 1024)).lines();
+                let mut found = false;
+                for line in lines.by_ref() {
+                    let line = line?;
+                    if line.trim_start().starts_with("node_errors:") {
+                        eprintln!("recursive CHECK workers={workers} first producer errors:");
+                        eprintln!("{}", line.chars().take(512).collect::<String>());
+                        found = true;
+                        break;
+                    }
+                }
+                if found {
+                    for line in lines.take(47) {
+                        let line = line?;
+                        if line.trim_start().starts_with("demands:") {
+                            break;
+                        }
+                        eprintln!("{}", line.chars().take(512).collect::<String>());
+                    }
+                } else {
+                    eprintln!(
+                        "recursive CHECK workers={workers}: node_errors section absent in bounded trace scan"
+                    );
+                }
+                Ok(())
+            })();
+            if let Err(error) = trace_errors {
+                eprintln!("recursive CHECK trace diagnostic read failed: {error}");
+            }
+        }
         assert_eq!(
             result.status.code(),
             Some(0),

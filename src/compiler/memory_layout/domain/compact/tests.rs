@@ -3,6 +3,201 @@ use crate::compiler::memory_layout::domain::tests::{fixture_locals, fixture_plan
 use crate::compiler::{frontend, memory_layout::domain::Local};
 
 #[test]
+fn cleanup_parameter_transfer_keeps_expanding_check_finite_and_receipts_exact() {
+    let (locals, root, budget, mut plan) = fixture_plan(
+        "fn grow<T>(x:T){grow::<(T,)>((x,));}fn run()->i32{grow::<i32>(1);7}fn main(){}",
+        "run",
+    );
+    let caller = locals.iter().find(|local| local.owner == root).unwrap();
+    let grow = caller.edges[0].target.declaration;
+    let generic = locals.iter().find(|local| local.owner == grow).unwrap();
+    assert!(generic.facts.has_normal_drop_impls());
+    let summary = source_summary(&plan, grow, &budget);
+    let required = summary.requirement(grow).unwrap();
+    assert_eq!(required.drop_parameters, [true]);
+    assert!(!required.deferred_dispatch);
+    assert_eq!(generic.edges[0].arguments[0].7.drop_parameters, [true]);
+    let target = ir::CallTarget {
+        declaration: grow,
+        type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+    };
+    let facts = plan.instance_facts(&target).unwrap();
+    assert!(
+        !summary
+            .closed_requirements(&target, &facts, &budget)
+            .unwrap()
+    );
+    let header = closed_header(&mut plan, target.clone(), &budget);
+    assert_eq!(header.targets().count(), 0);
+    assert!(header.opaque_calls().is_empty());
+    let root_target = ir::CallTarget {
+        declaration: root,
+        type_args: Arc::from([]),
+    };
+    let root_facts = plan.instance_facts(&root_target).unwrap();
+    assert!(
+        summary
+            .closed_requirements(&target, &root_facts, &budget)
+            .is_err()
+    );
+    assert_eq!(
+        closed_header(&mut plan, root_target, &budget)
+            .targets()
+            .count(),
+        0
+    );
+
+    let mut erased_local = generic.clone();
+    erased_local.direct.drop_parameters[0] = false;
+    assert!(erased_local.validate(&budget).is_err());
+    let mut erased_edge = generic.clone();
+    let mut edges = erased_edge.edges.to_vec();
+    edges[0].arguments[0].7.drop_parameters[0] = false;
+    erased_edge.edges = edges.into();
+    assert!(erased_edge.validate(&budget).is_err());
+    let mut erased_summary = summary.as_ref().clone();
+    Arc::make_mut(&mut erased_summary.members)[0]
+        .1
+        .drop_parameters[0] = false;
+    assert!(erased_summary.admit_symbolic(grow).is_err());
+    let mut erased_header = Header::capture(
+        generic.source.clone(),
+        generic.publication.clone(),
+        generic.facts.clone(),
+        &budget,
+    )
+    .unwrap();
+    erased_header.direct.drop_parameters[0] = false;
+    assert!(erased_header.validate_receipt().is_err());
+    let mut erased_transfer = Header::capture(
+        generic.source.clone(),
+        generic.publication.clone(),
+        generic.facts.clone(),
+        &budget,
+    )
+    .unwrap();
+    Arc::make_mut(&mut Arc::make_mut(&mut erased_transfer.transfers)[0].arguments)[0]
+        .7
+        .drop_parameters[0] = false;
+    assert!(erased_transfer.validate_receipt().is_err());
+    let mut incomplete = required.clone();
+    incomplete.drop_parameters.clear();
+    assert!(incomplete.merge(required, &budget).is_err());
+}
+
+#[test]
+fn cleanup_parameter_actuals_preserve_destructors_and_nonowning_references() {
+    let (locals, root, budget, plan) = fixture_plan(
+        "struct D{value:i32}impl Drop for D{fn drop(&mut self){}}fn keep<T>(x:T){}fn run(){keep::<D>(D{value:1});}fn main(){}",
+        "run",
+    );
+    let caller = locals.iter().find(|local| local.owner == root).unwrap();
+    let target = caller
+        .edges
+        .iter()
+        .find(|edge| !edge.target.type_args.is_empty())
+        .unwrap()
+        .target
+        .clone();
+    let facts = plan.instance_facts(&target).unwrap();
+    let summary = source_summary(&plan, target.declaration, &budget);
+    assert_eq!(
+        summary
+            .requirement(target.declaration)
+            .unwrap()
+            .drop_parameters,
+        [true]
+    );
+    assert!(
+        summary
+            .closed_requirements(&target, &facts, &budget)
+            .unwrap()
+    );
+    assert!(closed::Header::no_continuation(target.clone(), &summary, &facts, &budget).is_err());
+    let actual = target.type_args[0].clone();
+    for ty in [
+        actual.clone(),
+        ir::Ty::Tuple(Arc::from([actual.clone()])),
+        ir::Ty::Array {
+            element: Arc::new(actual.clone()),
+            len: 0,
+        },
+        ir::Ty::Array {
+            element: Arc::new(actual),
+            len: 2,
+        },
+    ] {
+        let expected = !matches!(
+            facts.normal_drop_plan(&ty).unwrap(),
+            traits::NormalDropPlan::Trivial
+        );
+        let mut requirement = Requirement::empty(0, &budget).unwrap();
+        super::super::normalize_drop(&ty, &facts, &[], &mut requirement, &budget, 0).unwrap();
+        assert_eq!(requirement.deferred_dispatch, expected);
+    }
+    let generic = locals
+        .iter()
+        .find(|local| local.owner == target.declaration)
+        .unwrap();
+    let param = generic.parameters[0];
+    let mut requirement = Requirement::empty(1, &budget).unwrap();
+    super::super::normalize_drop(
+        &ir::Ty::Param(param),
+        &generic.facts,
+        &[],
+        &mut requirement,
+        &budget,
+        0,
+    )
+    .unwrap_err();
+    let foreign_budget = ir::PlanBudget::default();
+    assert!(
+        super::super::normalize_drop(
+            &ir::Ty::Param(param),
+            &generic.facts,
+            &[param],
+            &mut requirement,
+            &foreign_budget,
+            0
+        )
+        .is_err()
+    );
+    let mut missing = Requirement::empty(0, &budget).unwrap();
+    assert!(
+        super::super::normalize_drop(
+            &ir::Ty::Param(param),
+            &generic.facts,
+            &[param],
+            &mut missing,
+            &budget,
+            0
+        )
+        .is_err()
+    );
+    let (locals, root, budget, _) = fixture_plan("fn refs<T>(x:&T){}fn main(){}", "refs");
+    let local = locals.iter().find(|local| local.owner == root).unwrap();
+    let ty = &local
+        .source
+        .locals
+        .iter()
+        .find(|local| matches!(local.ty, ir::Ty::Ref { .. }))
+        .expect("original borrowed parameter")
+        .ty;
+    let mut requirement = Requirement::empty(1, &budget).unwrap();
+    super::super::normalize_drop(
+        ty,
+        &local.facts,
+        &local.parameters,
+        &mut requirement,
+        &budget,
+        0,
+    )
+    .unwrap();
+    assert_eq!(requirement.drop_parameters, [false]);
+    assert!(!requirement.deferred_dispatch);
+}
+
+#[test]
 fn semantic_size_domain_bounds_and_source_transfer_shapes_are_sealed() {
     let (locals, root, budget, plan) = fixture_plan(
         "fn size<T>()->usize{std::mem::size_of::<[T;3]>()}fn main(){}",
