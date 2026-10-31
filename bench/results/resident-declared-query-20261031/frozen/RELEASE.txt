@@ -1,0 +1,16 @@
+RELEASED SOURCE ONLY: declared-query-v69
+Accepted source HEAD: afa7d609519aa1ba05a6fa71770f12aa8ae76011
+Scope: toolchain/resident/crates/ra-jit/src/main.rs + NEW docs/resident-declared-query.md
+Main candidate SHA256: 1b697f35ac35831b6e77e36980bda0dddeca026d034d624e4a0b0fa8f23bc34a
+Doc candidate SHA256: 5792a00fc5b68b7181c62d524ab0d0b418f480eb4583f1ce18f258be024594f9
+Patch SHA256: a0088bed25885417b2f92892ab0b4d5a7336adf048de05d03793838f682ee9e9
+Full artifact checksums: SHA256SUMS
+
+Implementation: exact first-use default-OFF RA_JIT_DECLARED_QUERY=1. Native Salsa tracked crate_declarations keyed by ide_db::base_db::Crate returns ref full Declared, caller clones. OFF original body byte-for-byte preserved as declared_in_original, including parallel lower. Final provider uses sequential native fragment calls and retains actual dependencies. No persistent decoder, v39/v47 reuse, mutable global graph caches or untracked read suppression.
+
+Provider-entry-only marker: RA_JIT_DECLARED_QUERY_MARKER appends once/process, ignored open/write errors, pid-tagged. Not a cache-hit or successful-completion marker. cfg(test) TLS counts exclusively actual provider entry. Added exact flag test, real RootDatabase cold/repeat/full-original and independent walker equality with body/nested/macro/provided/const/static/closure/cfg/signature revisions, unrelated-crate green reuse, dependency macro/signature edit with nonvacuous emitted-name assertion. Full equality includes order and all fields. Revalidation may backdate equal graphs without provider rerun.
+
+Source checks PASS: rustfmt --check skip_children=true, git diff --check, original body bytewise, Declared/fragments/lower unchanged, accepted original exact SHA, tracked base-ID/ref declaration and provider source audit. Complete patch reverse git apply --check PASS.
+NOT RUN: native builds/tests/probes/locks/install/commits. Tests are unexecuted candidate fixtures, not correctness evidence. No speed claim or default promotion. Sequential ON cold query must be measured against original parallel OFF.
+
+Source is now frozen and available for coordinator root gates. Worker will not mutate owned files after this release without coordination. Existing unrelated FINDINGS/data/runs/.wrangler modifications preserved.

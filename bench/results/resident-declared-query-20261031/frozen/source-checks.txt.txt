@@ -1,0 +1,8 @@
+PASS accepted HEAD original SHA256 0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176
+PASS original disabled algorithm body byte-for-byte, including parallel lower
+PASS Declared, fragment queries, scope walker and lower unchanged
+PASS tracked final query actual base Crate ID, ref output, no parallel snapshot/prewarming
+PASS source-only audit: new provider calls crate_def_map/module/body fragments, no lower-level callback to final provider
+PASS owned-source rustfmt --check and git diff --check
+NOT RUN native builds/tests/probes/locks/install/commits; correctness and latency pending root gates
+candidate main SHA256 1b697f35ac35831b6e77e36980bda0dddeca026d034d624e4a0b0fa8f23bc34a

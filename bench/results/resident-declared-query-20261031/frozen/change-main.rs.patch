@@ -1,0 +1,286 @@
+--- a/main.rs
++++ b/main.rs
+@@ -4207,7 +4207,27 @@
+     }
+ }
+ 
++/// Frozen on first use in this process, including a first call on the OFF path.
++fn declared_query_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED
++        .get_or_init(|| declared_query_flag(std::env::var_os("RA_JIT_DECLARED_QUERY").as_deref()))
++}
++
++fn declared_query_flag(value: Option<&std::ffi::OsStr>) -> bool {
++    value == Some(std::ffi::OsStr::new("1"))
++}
++
+ fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
++    if declared_query_enabled() {
++        crate_declarations(db, krate.into()).clone()
++    } else {
++        declared_in_original(db, krate)
++    }
++}
++
++// Keep the original algorithm intact as the disabled path and independent query oracle.
++fn declared_in_original(db: &RootDatabase, krate: Crate) -> Declared {
+     let start = Instant::now();
+     // The first thing asked of a crate after an edit: name resolution is redone here.
+     hir_def::nameres::crate_def_map(db, krate.into());
+@@ -4619,6 +4639,48 @@
+             false => self.bodies.push(id),
+         }
+     }
++}
++
++#[cfg(test)]
++thread_local! {
++    // Incremented ONLY inside the actual tracked provider, never at its call sites.
++    static DECLARED_QUERY_PROVIDERS: std::cell::Cell<usize> = const {
++        std::cell::Cell::new(0)
++    };
++}
++
++/// Final graph keyed by Salsa's input crate ID, not the public HIR wrapper.
++/// No snapshot/prewarming: all reads stay on the provider's dependency stack.
++#[salsa::tracked(returns(ref))]
++fn crate_declarations(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> Declared {
++    #[cfg(test)]
++    DECLARED_QUERY_PROVIDERS.set(DECLARED_QUERY_PROVIDERS.get() + 1);
++    // This marker witnesses provider entry, NOT a cache hit or successful completion.
++    // Ignoring I/O errors must not alter declaration discovery or cancellation.
++    static FIRST_PROVIDER: std::sync::Once = std::sync::Once::new();
++    FIRST_PROVIDER.call_once(|| {
++        if let Some(path) = std::env::var_os("RA_JIT_DECLARED_QUERY_MARKER") {
++            use std::io::Write;
++            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
++                let _ = writeln!(file, "declared-query-provider-entry pid={}", std::process::id());
++            }
++        }
++    });
++    hir_def::nameres::crate_def_map(db, krate);
++    let mut declared = module_declarations(db, krate).clone();
++    while !declared.bodies.is_empty() || !declared.provided.is_empty() {
++        for under_provided in [false, true] {
++            let bodies = if under_provided {
++                std::mem::take(&mut declared.provided)
++            } else {
++                std::mem::take(&mut declared.bodies)
++            };
++            for body in bodies {
++                declared.extend(body_declarations(db, body, under_provided));
++            }
++        }
++    }
++    declared
+ }
+ 
+ /// Declaration graph nodes, separate from the bodies' executable code. These queries
+@@ -11929,6 +11991,206 @@
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn declared_query_flag_is_exact_and_default_off() {
++        use std::ffi::OsStr;
++        assert!(declared_query_flag(Some(OsStr::new("1"))));
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!declared_query_flag(value.map(OsStr::new)));
++        }
++    }
++
++    // Independent scope/body walk: neither fragment query nor final query is used.
++    // The final graph's traversal-state field remains its original default false.
++    fn declared_query_full_walk(db: &RootDatabase, krate: Crate) -> Declared {
++        let mut expected = Declared::default();
++        expected.in_modules(db, krate);
++        while !expected.bodies.is_empty() || !expected.provided.is_empty() {
++            for under_provided in [false, true] {
++                let bodies = if under_provided {
++                    std::mem::take(&mut expected.provided)
++                } else {
++                    std::mem::take(&mut expected.bodies)
++                };
++                for body in bodies {
++                    let mut fragment = Declared { under_provided, ..Declared::default() };
++                    for (_, def_map) in Body::of(db, body).blocks(db) {
++                        for (_, module) in def_map.modules(db) {
++                            fragment.in_scope(db, module.scope(db));
++                        }
++                    }
++                    expected.extend(&fragment);
++                }
++            }
++        }
++        expected
++    }
++
++    /// No env mutation or pretend cache events: directly exercise the real Salsa provider.
++    fn check_declared_query(db: &RootDatabase, file: vfs::FileId, label: &str) -> usize {
++        hir::attach_db(db, || {
++            let krate = hir::Semantics::new(db)
++                .file_to_module_defs(file)
++                .next()
++                .expect("fixture crate")
++                .krate(db);
++            DECLARED_QUERY_PROVIDERS.set(0);
++            let actual = crate_declarations(db, krate.into()).clone();
++            let entered = DECLARED_QUERY_PROVIDERS.get();
++            eprintln!("declared-query-fixture label={label:?} provider_entries={entered}");
++            assert!(entered <= 1, "{label}: provider entered more than once");
++            assert!(actual == declared_in_original(db, krate), "{label}: original algorithm");
++            assert!(actual == declared_query_full_walk(db, krate), "{label}: independent walk");
++            assert!(!actual.functions.is_empty(), "{label}: vacuous functions");
++            assert!(!actual.under_provided, "{label}: traversal state leaked");
++            assert!(actual.bodies.is_empty() && actual.provided.is_empty());
++            DECLARED_QUERY_PROVIDERS.set(0);
++            assert!(
++                actual == *crate_declarations(db, krate.into()),
++                "{label}: repeat order/fields"
++            );
++            assert_eq!(DECLARED_QUERY_PROVIDERS.get(), 0, "{label}: repeat provider entry");
++            entered
++        })
++    }
++
++    #[test]
++    fn declared_query_real_database_revisions_match_both_original_walkers() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        const SOURCE: &str = r#"
++//- /main.rs crate:main cfg:enabled
++macro_rules! nested { () => { fn expanded() {} }; }
++fn main() { fn inner() {} nested!(); let _ = 1; let _ = || { fn closure_inner() {} }; }
++trait Tr { fn default() { fn provided_inner() {} } const C: usize = { fn provided_const() {} 1 }; }
++const C: usize = { fn const_inner() {} 1 };
++static S: usize = { fn static_inner() {} 1 };
++#[cfg(enabled)] fn configured() {}
++"#;
++        let (mut db, file) = RootDatabase::with_single_file(SOURCE);
++        let file = file.file_id(&db);
++        assert_eq!(check_declared_query(&db, file, "cold"), 1);
++        assert_eq!(check_declared_query(&db, file, "warm"), 0);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = crate_declarations(&db, krate.into());
++            assert_eq!(graph.statics.len(), 1);
++            let names: Vec<_> = graph
++                .functions
++                .iter()
++                .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
++                .collect();
++            for name in
++                ["inner", "expanded", "closure_inner", "const_inner", "static_inner", "configured"]
++            {
++                assert!(names.iter().any(|it| it == name), "missing {name}");
++            }
++            let provided: Vec<_> = graph
++                .in_provided
++                .iter()
++                .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
++                .collect();
++            for name in ["provided_inner", "provided_const"] {
++                assert!(provided.iter().any(|it| it == name), "missing {name}");
++            }
++        });
++        for (label, source, changes_graph) in [
++            ("body only", SOURCE.replace("let _ = 1", "let _ = 2"), false),
++            (
++                "nested",
++                SOURCE.replace("fn inner() {}", "fn inner() {} fn added() { fn deeper() {} }"),
++                true,
++            ),
++            (
++                "macro",
++                SOURCE.replace("fn expanded() {}", "fn expanded() {} fn macro_added() {}"),
++                true,
++            ),
++            (
++                "provided",
++                SOURCE.replace(
++                    "fn provided_inner() {}",
++                    "fn provided_inner() {} fn provided_added() {}",
++                ),
++                true,
++            ),
++            (
++                "const",
++                SOURCE.replace("fn const_inner() {}", "fn const_inner() {} fn const_added() {}"),
++                true,
++            ),
++            (
++                "static",
++                SOURCE.replace("fn static_inner() {}", "fn static_inner() {} fn static_added() {}"),
++                true,
++            ),
++            (
++                "closure",
++                SOURCE.replace(
++                    "fn closure_inner() {}",
++                    "fn closure_inner() {} fn closure_added() {}",
++                ),
++                true,
++            ),
++            ("cfg", SOURCE.replace("#[cfg(enabled)]", "#[cfg(disabled)]"), true),
++            ("signature", SOURCE.replace("fn main()", "fn main(x: u8)"), true),
++            ("restore", SOURCE.to_owned(), false),
++            ("signature only", SOURCE.replace("fn main()", "fn main(x: u16)"), false),
++            ("signature only again", SOURCE.replace("fn main()", "fn main(x: u32)"), false),
++        ] {
++            db.set_file_text_with_durability(file, &source, Durability::LOW);
++            let entered = check_declared_query(&db, file, label);
++            // Signature IDs can remain equal. Revalidation, not provider execution,
++            // is the contract there; graph-changing revisions must execute.
++            if changes_graph && label != "signature" {
++                assert_eq!(entered, 1, "{label}: changed graph not recomputed");
++            }
++        }
++    }
++
++    #[test]
++    fn declared_query_tracks_dependency_macros_and_reuses_unrelated_crate() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        let (mut db, files) = RootDatabase::with_many_files(
++            r#"
++//- /main.rs crate:app deps:dep
++fn main() { dep::items!(); }
++//- /dep.rs crate:dep
++#[macro_export] macro_rules! items { () => { fn from_dep() {} }; }
++pub fn dependency() {}
++//- /other.rs crate:other
++fn unrelated() { let _ = 1; }
++"#,
++        );
++        let [app, dep, other] = [0, 1, 2].map(|i| files[i].file_id(&db));
++        assert_eq!(check_declared_query(&db, app, "app cold"), 1);
++        assert_eq!(check_declared_query(&db, other, "other cold"), 1);
++        db.set_file_text_with_durability(other, "fn unrelated() { let _ = 2; }", Durability::LOW);
++        assert_eq!(check_declared_query(&db, app, "unrelated body"), 0);
++        db.set_file_text_with_durability(
++            dep,
++            r#"
++#[macro_export] macro_rules! items { () => { fn from_dep() {} fn added_from_dep() {} }; }
++pub fn dependency(x: u8) {}
++"#,
++            Durability::LOW,
++        );
++        assert_eq!(check_declared_query(&db, app, "dependency macro and signature"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(app).next().unwrap().krate(&db);
++            assert!(
++                crate_declarations(&db, krate.into())
++                    .functions
++                    .iter()
++                    .any(|&id| { hir::Function::from(id).name(&db).as_str() == "added_from_dep" }),
++                "dependency macro fixture did not expand"
++            );
++        });
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());

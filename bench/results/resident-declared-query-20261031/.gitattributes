@@ -1,0 +1,4 @@
+# Historical unified-diff context lines containing a single space are evidence.
+# Do not normalize them or weaken whitespace checks for the archived Rust source.
+frozen/change-main.rs.patch whitespace=-blank-at-eol
+frozen/candidate.patch.txt whitespace=-blank-at-eol

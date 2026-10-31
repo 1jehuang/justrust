@@ -1,0 +1,419 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index 9288ae995..0530fb329 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -4207,7 +4207,27 @@ impl Listed {
+     }
+ }
+ 
++/// Frozen on first use in this process, including a first call on the OFF path.
++fn declared_query_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED
++        .get_or_init(|| declared_query_flag(std::env::var_os("RA_JIT_DECLARED_QUERY").as_deref()))
++}
++
++fn declared_query_flag(value: Option<&std::ffi::OsStr>) -> bool {
++    value == Some(std::ffi::OsStr::new("1"))
++}
++
+ fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
++    if declared_query_enabled() {
++        crate_declarations(db, krate.into()).clone()
++    } else {
++        declared_in_original(db, krate)
++    }
++}
++
++// Keep the original algorithm intact as the disabled path and independent query oracle.
++fn declared_in_original(db: &RootDatabase, krate: Crate) -> Declared {
+     let start = Instant::now();
+     // The first thing asked of a crate after an edit: name resolution is redone here.
+     hir_def::nameres::crate_def_map(db, krate.into());
+@@ -4621,6 +4641,48 @@ impl Declared {
+     }
+ }
+ 
++#[cfg(test)]
++thread_local! {
++    // Incremented ONLY inside the actual tracked provider, never at its call sites.
++    static DECLARED_QUERY_PROVIDERS: std::cell::Cell<usize> = const {
++        std::cell::Cell::new(0)
++    };
++}
++
++/// Final graph keyed by Salsa's input crate ID, not the public HIR wrapper.
++/// No snapshot/prewarming: all reads stay on the provider's dependency stack.
++#[salsa::tracked(returns(ref))]
++fn crate_declarations(db: &dyn HirDatabase, krate: ide_db::base_db::Crate) -> Declared {
++    #[cfg(test)]
++    DECLARED_QUERY_PROVIDERS.set(DECLARED_QUERY_PROVIDERS.get() + 1);
++    // This marker witnesses provider entry, NOT a cache hit or successful completion.
++    // Ignoring I/O errors must not alter declaration discovery or cancellation.
++    static FIRST_PROVIDER: std::sync::Once = std::sync::Once::new();
++    FIRST_PROVIDER.call_once(|| {
++        if let Some(path) = std::env::var_os("RA_JIT_DECLARED_QUERY_MARKER") {
++            use std::io::Write;
++            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
++                let _ = writeln!(file, "declared-query-provider-entry pid={}", std::process::id());
++            }
++        }
++    });
++    hir_def::nameres::crate_def_map(db, krate);
++    let mut declared = module_declarations(db, krate).clone();
++    while !declared.bodies.is_empty() || !declared.provided.is_empty() {
++        for under_provided in [false, true] {
++            let bodies = if under_provided {
++                std::mem::take(&mut declared.provided)
++            } else {
++                std::mem::take(&mut declared.bodies)
++            };
++            for body in bodies {
++                declared.extend(body_declarations(db, body, under_provided));
++            }
++        }
++    }
++    declared
++}
++
+ /// Declaration graph nodes, separate from the bodies' executable code. These queries
+ /// retain all name-resolution, macro-expansion and body dependencies through Salsa.
+ /// In particular, a body is not assumed to preserve its nested items after an edit.
+@@ -11929,6 +11991,206 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn declared_query_flag_is_exact_and_default_off() {
++        use std::ffi::OsStr;
++        assert!(declared_query_flag(Some(OsStr::new("1"))));
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!declared_query_flag(value.map(OsStr::new)));
++        }
++    }
++
++    // Independent scope/body walk: neither fragment query nor final query is used.
++    // The final graph's traversal-state field remains its original default false.
++    fn declared_query_full_walk(db: &RootDatabase, krate: Crate) -> Declared {
++        let mut expected = Declared::default();
++        expected.in_modules(db, krate);
++        while !expected.bodies.is_empty() || !expected.provided.is_empty() {
++            for under_provided in [false, true] {
++                let bodies = if under_provided {
++                    std::mem::take(&mut expected.provided)
++                } else {
++                    std::mem::take(&mut expected.bodies)
++                };
++                for body in bodies {
++                    let mut fragment = Declared { under_provided, ..Declared::default() };
++                    for (_, def_map) in Body::of(db, body).blocks(db) {
++                        for (_, module) in def_map.modules(db) {
++                            fragment.in_scope(db, module.scope(db));
++                        }
++                    }
++                    expected.extend(&fragment);
++                }
++            }
++        }
++        expected
++    }
++
++    /// No env mutation or pretend cache events: directly exercise the real Salsa provider.
++    fn check_declared_query(db: &RootDatabase, file: vfs::FileId, label: &str) -> usize {
++        hir::attach_db(db, || {
++            let krate = hir::Semantics::new(db)
++                .file_to_module_defs(file)
++                .next()
++                .expect("fixture crate")
++                .krate(db);
++            DECLARED_QUERY_PROVIDERS.set(0);
++            let actual = crate_declarations(db, krate.into()).clone();
++            let entered = DECLARED_QUERY_PROVIDERS.get();
++            eprintln!("declared-query-fixture label={label:?} provider_entries={entered}");
++            assert!(entered <= 1, "{label}: provider entered more than once");
++            assert!(actual == declared_in_original(db, krate), "{label}: original algorithm");
++            assert!(actual == declared_query_full_walk(db, krate), "{label}: independent walk");
++            assert!(!actual.functions.is_empty(), "{label}: vacuous functions");
++            assert!(!actual.under_provided, "{label}: traversal state leaked");
++            assert!(actual.bodies.is_empty() && actual.provided.is_empty());
++            DECLARED_QUERY_PROVIDERS.set(0);
++            assert!(
++                actual == *crate_declarations(db, krate.into()),
++                "{label}: repeat order/fields"
++            );
++            assert_eq!(DECLARED_QUERY_PROVIDERS.get(), 0, "{label}: repeat provider entry");
++            entered
++        })
++    }
++
++    #[test]
++    fn declared_query_real_database_revisions_match_both_original_walkers() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        const SOURCE: &str = r#"
++//- /main.rs crate:main cfg:enabled
++macro_rules! nested { () => { fn expanded() {} }; }
++fn main() { fn inner() {} nested!(); let _ = 1; let _ = || { fn closure_inner() {} }; }
++trait Tr { fn default() { fn provided_inner() {} } const C: usize = { fn provided_const() {} 1 }; }
++const C: usize = { fn const_inner() {} 1 };
++static S: usize = { fn static_inner() {} 1 };
++#[cfg(enabled)] fn configured() {}
++"#;
++        let (mut db, file) = RootDatabase::with_single_file(SOURCE);
++        let file = file.file_id(&db);
++        assert_eq!(check_declared_query(&db, file, "cold"), 1);
++        assert_eq!(check_declared_query(&db, file, "warm"), 0);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = crate_declarations(&db, krate.into());
++            assert_eq!(graph.statics.len(), 1);
++            let names: Vec<_> = graph
++                .functions
++                .iter()
++                .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
++                .collect();
++            for name in
++                ["inner", "expanded", "closure_inner", "const_inner", "static_inner", "configured"]
++            {
++                assert!(names.iter().any(|it| it == name), "missing {name}");
++            }
++            let provided: Vec<_> = graph
++                .in_provided
++                .iter()
++                .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
++                .collect();
++            for name in ["provided_inner", "provided_const"] {
++                assert!(provided.iter().any(|it| it == name), "missing {name}");
++            }
++        });
++        for (label, source, changes_graph) in [
++            ("body only", SOURCE.replace("let _ = 1", "let _ = 2"), false),
++            (
++                "nested",
++                SOURCE.replace("fn inner() {}", "fn inner() {} fn added() { fn deeper() {} }"),
++                true,
++            ),
++            (
++                "macro",
++                SOURCE.replace("fn expanded() {}", "fn expanded() {} fn macro_added() {}"),
++                true,
++            ),
++            (
++                "provided",
++                SOURCE.replace(
++                    "fn provided_inner() {}",
++                    "fn provided_inner() {} fn provided_added() {}",
++                ),
++                true,
++            ),
++            (
++                "const",
++                SOURCE.replace("fn const_inner() {}", "fn const_inner() {} fn const_added() {}"),
++                true,
++            ),
++            (
++                "static",
++                SOURCE.replace("fn static_inner() {}", "fn static_inner() {} fn static_added() {}"),
++                true,
++            ),
++            (
++                "closure",
++                SOURCE.replace(
++                    "fn closure_inner() {}",
++                    "fn closure_inner() {} fn closure_added() {}",
++                ),
++                true,
++            ),
++            ("cfg", SOURCE.replace("#[cfg(enabled)]", "#[cfg(disabled)]"), true),
++            ("signature", SOURCE.replace("fn main()", "fn main(x: u8)"), true),
++            ("restore", SOURCE.to_owned(), false),
++            ("signature only", SOURCE.replace("fn main()", "fn main(x: u16)"), false),
++            ("signature only again", SOURCE.replace("fn main()", "fn main(x: u32)"), false),
++        ] {
++            db.set_file_text_with_durability(file, &source, Durability::LOW);
++            let entered = check_declared_query(&db, file, label);
++            // Signature IDs can remain equal. Revalidation, not provider execution,
++            // is the contract there; graph-changing revisions must execute.
++            if changes_graph && label != "signature" {
++                assert_eq!(entered, 1, "{label}: changed graph not recomputed");
++            }
++        }
++    }
++
++    #[test]
++    fn declared_query_tracks_dependency_macros_and_reuses_unrelated_crate() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        let (mut db, files) = RootDatabase::with_many_files(
++            r#"
++//- /main.rs crate:app deps:dep
++fn main() { dep::items!(); }
++//- /dep.rs crate:dep
++#[macro_export] macro_rules! items { () => { fn from_dep() {} }; }
++pub fn dependency() {}
++//- /other.rs crate:other
++fn unrelated() { let _ = 1; }
++"#,
++        );
++        let [app, dep, other] = [0, 1, 2].map(|i| files[i].file_id(&db));
++        assert_eq!(check_declared_query(&db, app, "app cold"), 1);
++        assert_eq!(check_declared_query(&db, other, "other cold"), 1);
++        db.set_file_text_with_durability(other, "fn unrelated() { let _ = 2; }", Durability::LOW);
++        assert_eq!(check_declared_query(&db, app, "unrelated body"), 0);
++        db.set_file_text_with_durability(
++            dep,
++            r#"
++#[macro_export] macro_rules! items { () => { fn from_dep() {} fn added_from_dep() {} }; }
++pub fn dependency(x: u8) {}
++"#,
++            Durability::LOW,
++        );
++        assert_eq!(check_declared_query(&db, app, "dependency macro and signature"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(app).next().unwrap().krate(&db);
++            assert!(
++                crate_declarations(&db, krate.into())
++                    .functions
++                    .iter()
++                    .any(|&id| { hir::Function::from(id).name(&db).as_str() == "added_from_dep" }),
++                "dependency macro fixture did not expand"
++            );
++        });
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+diff --git a/docs/resident-declared-query.md b/docs/resident-declared-query.md
+new file mode 100644
+index 000000000..72371cc5c
+--- /dev/null
++++ b/docs/resident-declared-query.md
+@@ -0,0 +1,125 @@
++# Resident declared graph query (v69)
++
++## Status and ownership
++
++Source-only candidate against accepted `afa7d609519aa1ba05a6fa71770f12aa8ae76011`.
++Only `toolchain/resident/crates/ra-jit/src/main.rs` and this new document are owned.
++No native build, test, probe, build lock, installation, or commit was performed
++for this candidate. The coordinator owns correctness and latency gates after
++release. There is no measured speedup and no default promotion.
++
++Motivation supplied by the coordinator: accepted v68 OFF recovery worker
++`home-empty-fast-v68-off-repeat-seven/04-type-recovery-worker-0.log` reports
++roots 4.0s, eager scope/body listing, and core's 6490-body listing twice.
++This is motivation, not evidence that this candidate is faster.
++
++## Selection and output
++
++`RA_JIT_DECLARED_QUERY=1` opts in. Every other value, including unset, empty,
++`0`, `true`, `01`, and `1 `, is OFF. A process `OnceLock` freezes selection
++on the first `declared_in` call, even if OFF. Restart the daemon and workers
++when changing it. This is not a per-request switch.
++
++OFF calls `declared_in_original`. Its algorithm body is byte-for-byte the
++accepted `declared_in` body, including the parallel `lower` prewarming and
++listing telemetry. Only its function name changed.
++
++ON calls the native Salsa `crate_declarations` tracked query using
++`ide_db::base_db::Crate`, the actual Salsa input ID. The provider returns a
++reference to the complete `Declared`; the existing value-returning caller
++clones it. Nothing is sorted, deduplicated, reconstructed from a decoder,
++or dropped. `functions`, `statics`, `in_provided`, the exhausted worklists,
++and `under_provided` all participate in existing `PartialEq`/`Eq`.
++Expansion visits ordinary then provided worklists in the same order as OFF,
++including work appended to the next pass. The final traversal-state flag
++remains false exactly as in OFF's `extend`-based algorithm.
++
++No persistent graph store, v39 decoder cache, v47 scope-only cache, revision
++map, mutable global graph cache, or correctness bypass is introduced.
++The immutable selection and one-time marker control do not cache query values.
++
++## Dependency and cycle audit
++
++The provider explicitly reads `crate_def_map`, clones `module_declarations`,
++and recursively expands the returned body IDs through `body_declarations`.
++Those tracked calls, and their results, remain visible to Salsa.
++
++* `module_declarations` walks module children, definition maps and scopes.
++* `Declared::in_scope` reads declaration order, unnamed constants, impls,
++  trait/impl associated items, function containers, and function signatures
++  through `is_bodiless_intrinsic`. This retains signature/attribute reads.
++* `body_declarations` reads `Body::of`, then block definition maps, modules,
++  and each block's scope. It includes constants, statics, closure blocks,
++  macro expansions and provided-method nested declarations, not only functions.
++* The owned `Body::of` is itself tracked and reads `Body::relative` or
++  `Body::with_source_map`. No `untracked`, synthetic dependency, or
++  `report_untracked_read` workaround is used.
++* Existing lower-level library providers cannot call this new binary-local
++  provider. No existing query was redirected to `declared_in`. The final
++  provider calls fragments, never itself. Worklist recursion follows the
++  original nested-item traversal, not recursive final-query calls. Existing
++  name-resolution/body cycle handling is unchanged. Dynamic cycle behavior
++  still needs the coordinator's real execution gates.
++
++The provider receives `&dyn HirDatabase`, not a cloneable RootDatabase
++snapshot. It therefore lowers sequentially through `body_declarations`,
++without off-stack or cross-snapshot prewarming. No sound native parallel
++provider is established by this patch. OFF retains its original parallel
++lowering. ON cold-query cost might regress substantially and must be measured.
++Warm validation can still lower/revalidate fragments before finding their
++outputs equal. A final provider cache hit does not prove zero lower-level work.
++Signature/body edits may leave declaration IDs equal and allow green reuse;
++provider reruns are not forced to manufacture activity.
++
++## Observability and source tests
++
++Optional `RA_JIT_DECLARED_QUERY_MARKER=/path` appends
++`declared-query-provider-entry pid=<pid>` once per process, inside the actual
++provider. File-open/write errors are ignored. It proves provider entry only,
++not a hit, successful completion, revision count, or a speedup. The first
++provider entry consumes the one-time attempt even if no path is set or I/O
++fails. It is diagnostic output only, never a database dependency or input to
++selection/results.
++
++`cfg(test)` TLS `DECLARED_QUERY_PROVIDERS` increments exclusively inside the
++real tracked provider. Tests call it on real RootDatabase fixtures without
++mutating process environment and without dummy event names. They compare
++full `Declared` equality, including vector order and all fields, against both:
++
++1. The preserved OFF algorithm, retaining parallel `lower`.
++2. A direct independent module/scope/body walker using neither tracked
++   declaration fragment query nor the final graph query.
++
++Fixtures require cold entry 1 and unchanged repeat entry 0. They include
++nonempty named nested items, provided methods and associated constants,
++ordinary constants/statics, closures, cfg attributes, macro-generated items,
++signature-only edits, removals/recovery through successive revisions, and
++cross-crate dependency macro/signature changes. Graph-changing revisions
++require actual provider execution. Body-only and signature-only revisions
++compare full oracle equality without forcing provider counts when Salsa can
++backdate unchanged outputs. An unrelated crate's body edit must retain the
++app's green graph. A dependent macro must actually emit its added named item,
++so that dependency invalidation cannot pass vacuously.
++
++These tests are written, not executed. Pure flag tests cover exact selection;
++process-first-use behavior also needs separate fresh-process ON/OFF gates,
++not an unsafe environment mutation in concurrent unit tests.
++
++## Coordinator gates after source release
++
++Use identical accepted source inputs and fresh daemon/worker process trees
++for OFF and ON. Run the `declared_query_` real-database fixtures and existing
++`resident_graph_reuse_tracks_nested_items_and_macro_edits` fixture, then full
++native correctness/root gates. Confirm actual provider-entry markers only
++on ON processes, including worker inheritance. Keep all diagnostics visible.
++Measure cold traversal separately from repeat and edit/recovery traversal,
++including the supplied recovery workload and core duplicate-listing case.
++Compare cold parallel OFF against cold sequential ON explicitly. Run broader
++representative workloads before any promotion, and do not infer latency from
++provider counts or missing listing lines. Preserve binaries, logs, source
++hashes and gate commands under the coordinator's root.
++
++Release artifacts are under
++`<PRIVATE_EXPERIMENT_ROOT>/declared-query-v69`:
++`main.original.rs`, `main.candidate.rs`, `resident-declared-query.candidate.md`,
++`candidate.patch`, `SHA256SUMS`, `source-checks.txt`, and `RELEASE`.
