@@ -212,6 +212,7 @@ fn source_fact_error(error: traits::FactsError, budget: &ir::PlanBudget) -> Erro
         traits::FactsErrorKind::Ambiguous => "Ambiguous",
         traits::FactsErrorKind::Cycle => "Cycle",
         traits::FactsErrorKind::Resource => "ResourceLimit",
+        traits::FactsErrorKind::Infrastructure => "Infrastructure",
     };
     let Ok(message) = error.into_diagnostic(budget) else {
         return Error::new(EXHAUSTED);

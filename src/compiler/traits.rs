@@ -82,6 +82,51 @@ pub enum FactsErrorKind {
     Ambiguous,
     Cycle,
     Resource,
+    Infrastructure,
+}
+#[cfg(test)]
+mod infrastructure_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn precise_infrastructure_prefix_preserves_other_diagnostic_classes() {
+        let budget = PlanBudget::default();
+        for (message, expected) in [
+            (
+                "infrastructure: function pointer scratch allocation failed",
+                FactsErrorKind::Infrastructure,
+            ),
+            (
+                "infrastructure: allocator resource exhausted",
+                FactsErrorKind::Infrastructure,
+            ),
+            (
+                "generic planning resource limit exceeded",
+                FactsErrorKind::Resource,
+            ),
+            (
+                "unsupported: function pointer call",
+                FactsErrorKind::Unsupported,
+            ),
+            (
+                "invalid signature metadata",
+                FactsErrorKind::InvalidMetadata,
+            ),
+            (
+                "invalid infrastructure: source spelling",
+                FactsErrorKind::InvalidMetadata,
+            ),
+        ] {
+            assert_eq!(
+                FactsError::from_message(&budget, message).kind(),
+                expected,
+                "{message}"
+            );
+        }
+        assert_eq!(
+            FactsError::infrastructure(&budget, "allocation failed").kind(),
+            FactsErrorKind::Infrastructure
+        );
+    }
 }
 #[derive(Clone, Debug)]
 enum Diagnostic {
@@ -164,6 +209,9 @@ impl FactsError {
     pub fn resource(b: &PlanBudget, m: &str) -> Self {
         Self::make(b, FactsErrorKind::Resource, m)
     }
+    pub fn infrastructure(b: &PlanBudget, m: &str) -> Self {
+        Self::make(b, FactsErrorKind::Infrastructure, m)
+    }
     pub fn from_message(b: &PlanBudget, m: &str) -> Self {
         if let Some(message) = Self::generic_resource_message(m) {
             return Self {
@@ -174,7 +222,9 @@ impl FactsError {
         if b.charge_work(m.len()).is_err() {
             return Self::resource(b, "trait diagnostic classification resource boundary");
         }
-        let kind = if m.contains("limit")
+        let kind = if m.starts_with("infrastructure:") {
+            FactsErrorKind::Infrastructure
+        } else if m.contains("limit")
             || m.contains("resource")
             || m.contains("poison")
             || m.contains("overflow")
