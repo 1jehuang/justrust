@@ -1,0 +1,1055 @@
+//! Detect inefficiencies in a recorded run.
+//!
+//! Each check looks at one known way builds waste time and, when it fires,
+//! estimates how many seconds of this run it cost. Agent-mode output lists
+//! every finding, so a run is never silently slower than it needs to be.
+
+use crate::summary::Summary;
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Finding {
+    /// Stable identifier, for grouping across runs.
+    pub kind: String,
+    /// Estimated seconds of this run's wall time the issue cost.
+    pub cost_secs: f64,
+    pub message: String,
+}
+
+impl Finding {
+    fn new(kind: &str, cost_secs: f64, message: String) -> Finding {
+        Finding {
+            kind: kind.to_owned(),
+            cost_secs: cost_secs.max(0.0),
+            message,
+        }
+    }
+}
+
+/// Ignore findings worth less than this many seconds.
+const MIN_COST: f64 = 0.3;
+
+/// Run every check and return findings, most expensive first.
+pub fn analyze(s: &Summary) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let p = &s.phases;
+    let r = &s.resources;
+    let ncpu = s.ncpu.max(1) as f64;
+
+    // Waiting on another cargo for the build directory.
+    if p.lock_wait >= MIN_COST {
+        let on_dir =
+            s.locks_waited.is_empty() || s.locks_waited.iter().any(|l| l.contains("directory"));
+        let what = if s.locks_waited.is_empty() {
+            "the build directory".to_owned()
+        } else {
+            s.locks_waited.join(", ")
+        };
+        let slot_hint = match &s.slot {
+            Some(i) if i.slot.is_none() && on_dir => format!(
+                "; all {} justrust build slots were busy, raise JUSTRUST_SLOTS",
+                i.capacity
+            ),
+            Some(i) if i.slot.is_some() && on_dir => {
+                "; another process used this build slot".to_owned()
+            }
+            _ if !on_dir => "; cargo's shared CARGO_HOME lock, not the target dir".to_owned(),
+            _ => " (parallel builds in the same target dir serialize)".to_owned(),
+        };
+        out.push(Finding::new(
+            "lock_wait",
+            p.lock_wait,
+            format!(
+                "waited {:.1}s for another cargo to release the lock on {what}{slot_hint}",
+                p.lock_wait
+            ),
+        ));
+    }
+
+    // Seeding a new build slot (reflink copy of the shared target dir).
+    if let Some(i) = &s.slot
+        && i.seed_secs >= MIN_COST
+    {
+        out.push(Finding::new(
+            "slot_seed",
+            i.seed_secs,
+            format!(
+                "seeded build slot {} from the shared target dir in {:.1}s \
+                 (once per slot, before cargo started)",
+                i.slot.unwrap_or(0),
+                i.seed_secs
+            ),
+        ));
+    }
+
+    // Waited for an identical build in another session, then reused its slot.
+    if let Some(i) = &s.slot
+        && i.how == "joined"
+    {
+        out.push(Finding::new(
+            "slot_join",
+            i.join_wait_secs,
+            format!(
+                "waited {:.1}s (before cargo started, not in the times above) for an \
+                 identical build another agent was running in slot {}, then reused its \
+                 result instead of compiling the same crates in parallel (JUSTRUST_JOIN=0 disables)",
+                i.join_wait_secs,
+                i.slot.unwrap_or(0)
+            ),
+        ));
+    }
+
+    // All slots busy: this run shared the target dir and could block others.
+    if let Some(i) = &s.slot
+        && i.slot.is_none()
+    {
+        out.push(Finding::new(
+            "slots_full",
+            MIN_COST,
+            format!(
+                "all {} build slots were busy, so this run used the shared target dir \
+                 and may have blocked or been blocked by other builds (JUSTRUST_SLOTS raises the cap)",
+                i.capacity
+            ),
+        ));
+    }
+
+    // Other processes competing for the CPU.
+    if r.avg_other_cores >= 0.5 * ncpu && s.wall >= 2.0 {
+        // While others used N of C cores, this build could at best have had the
+        // remainder. Estimate the slowdown as the share of the machine taken.
+        let share = (r.avg_other_cores / ncpu).min(0.95);
+        let cost = s.wall * share * 0.5;
+        out.push(Finding::new(
+            "busy_machine",
+            cost,
+            format!(
+                "machine was busy: other processes used {:.0} of {} cores on average{} \
+                 and tasks stalled {:.1}s waiting for CPU",
+                r.avg_other_cores,
+                s.ncpu,
+                if r.max_foreign_rustc > 0 {
+                    format!(" (up to {} rustc from other builds)", r.max_foreign_rustc)
+                } else {
+                    String::new()
+                },
+                r.psi_cpu_secs
+            ),
+        ));
+    }
+
+    // Dependencies compiled because the shared dependency cache had no entry.
+    // The next build of the same dependency in any target dir will hit.
+    let u = &s.units;
+    if u.depcache_misses > 0 && u.depcache_miss_secs >= 5.0 {
+        let cost = u.depcache_miss_secs / ncpu.min(u.depcache_misses as f64).max(1.0);
+        out.push(Finding::new(
+            "depcache_miss",
+            cost,
+            format!(
+                "{} dependency units missed the shared dependency cache and compiled \
+                 ({:.1}s of rustc); they are cached now, so other target dirs, slots, \
+                 and checkouts reuse them",
+                u.depcache_misses, u.depcache_miss_secs
+            ),
+        ));
+    }
+
+    // Memory pressure.
+    if r.psi_mem_secs >= MIN_COST {
+        out.push(Finding::new(
+            "memory_pressure",
+            r.psi_mem_secs,
+            format!(
+                "tasks stalled {:.1}s on memory (lowest available {:.1} GB, build peak {:.1} GB)",
+                r.psi_mem_secs,
+                r.min_mem_available_mb as f64 / 1024.0,
+                r.peak_build_rss_mb / 1024.0
+            ),
+        ));
+    }
+
+    // Dependencies or build scripts rebuilt: usually flags, features, toolchain,
+    // or target-dir changes rather than real edits.
+    let deps: Vec<_> = s.top_units.iter().filter(|u| !u.local).collect();
+    let dep_secs: f64 = deps.iter().map(|u| u.wall_share).sum();
+    if s.units.dependencies + s.units.build_scripts > 0 && dep_secs >= MIN_COST {
+        let reasons = summarize_reasons(s, false);
+        out.push(Finding::new(
+            "dependency_rebuild",
+            dep_secs,
+            format!(
+                "rebuilt {} registry dependencies and {} build scripts ({:.1}s){}",
+                s.units.dependencies,
+                s.units.build_scripts,
+                dep_secs,
+                reasons.map(|r| format!(": {r}")).unwrap_or_default()
+            ),
+        ));
+    }
+
+    // Local crates rebuilt only because something upstream changed.
+    let cascades: Vec<_> = s
+        .rebuild_reasons
+        .iter()
+        .filter(|r| r.reason.starts_with("the dependency ") && r.reason.ends_with(" was rebuilt"))
+        .filter(|r| {
+            s.top_units
+                .iter()
+                .any(|u| u.local && unit_matches(&u.name, &r.package))
+        })
+        .collect();
+    if !cascades.is_empty() {
+        let names: Vec<&str> = cascades.iter().map(|r| r.package.as_str()).collect();
+        let cost: f64 = s
+            .top_units
+            .iter()
+            .filter(|u| names.iter().any(|n| unit_matches(&u.name, n)))
+            .map(|u| u.wall_share)
+            .sum();
+        if cost >= MIN_COST {
+            let upstream: Vec<String> = cascades
+                .iter()
+                .filter_map(|r| {
+                    r.reason
+                        .strip_prefix("the dependency `")
+                        .and_then(|x| x.split('`').next())
+                        .map(str::to_owned)
+                })
+                .collect::<std::collections::BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            // The files whose edits started the cascade.
+            let edited: Vec<&str> = s
+                .rebuild_reasons
+                .iter()
+                .filter_map(|r| {
+                    r.reason
+                        .strip_prefix("the file `")
+                        .and_then(|x| x.strip_suffix("` has changed"))
+                })
+                .collect();
+            let origin = match edited.as_slice() {
+                [] => String::new(),
+                [one] => format!(" (edited {one})"),
+                [one, rest @ ..] => format!(" (edited {one} and {} more)", rest.len()),
+            };
+            out.push(Finding::new(
+                "upstream_cascade",
+                cost,
+                format!(
+                    "{} rebuilt only because {} changed{origin} ({:.1}s). {}",
+                    names.join(", "),
+                    upstream.join(", "),
+                    cost,
+                    split_advice(
+                        s,
+                        "Edits to shared upstream crates force downstream recompiles; \
+                         `justrust split` shows which code to move out to stop this"
+                    )
+                ),
+            ));
+        }
+    }
+
+    // A unit whose codegen dominated: usually the incremental cache did not
+    // help (upstream API changed, flags changed) or the crate is huge.
+    for u in s.top_units.iter().filter(|u| u.local) {
+        let Some(sp) = &u.split else { continue };
+        if sp.codegen >= 3.0 && sp.codegen >= sp.frontend {
+            let mono = u
+                .top_passes
+                .iter()
+                .find(|p| p.name == "monomorphization_collector_graph_walk")
+                .map(|p| p.secs)
+                .unwrap_or(0.0);
+            out.push(Finding::new(
+                "heavy_codegen",
+                sp.codegen,
+                format!(
+                    "{} spent {:.1}s in codegen{} vs {:.1}s type-checking. Large codegen after \
+                     a small edit means little was reused from the incremental cache",
+                    u.name,
+                    sp.codegen,
+                    if mono > 0.5 {
+                        format!(" ({mono:.1}s monomorphizing)")
+                    } else {
+                        String::new()
+                    },
+                    sp.frontend
+                ),
+            ));
+        }
+        if sp.link >= 1.0 {
+            out.push(Finding::new(
+                "slow_link",
+                sp.link,
+                format!("{} spent {:.1}s linking", u.name, sp.link),
+            ));
+        }
+        if sp.incremental >= 1.0 && sp.incremental >= 0.15 * u.wall {
+            out.push(Finding::new(
+                "incremental_overhead",
+                sp.incremental,
+                format!(
+                    "{} spent {:.1}s loading and saving its incremental cache ({:.0}% of the unit)",
+                    u.name,
+                    sp.incremental,
+                    100.0 * sp.incremental / u.wall.max(1e-9)
+                ),
+            ));
+        }
+        if let Some(pass) = u.top_passes.iter().find(|p| p.name == "macro_expand_crate")
+            && pass.secs >= 1.5
+            && pass.secs >= 0.2 * u.wall
+        {
+            out.push(Finding::new(
+                "macro_expansion",
+                pass.secs,
+                format!(
+                    "{} spent {:.1}s expanding macros on every rebuild (derives, proc macros)",
+                    u.name, pass.secs
+                ),
+            ));
+        }
+    }
+
+    // Built a test binary but ran almost none of it.
+    let ran = s.tests.passed + s.tests.failed;
+    let total_tests = ran + s.tests.filtered_out + s.tests.ignored;
+    if ran > 0 && total_tests >= 200 && (ran as f64) < 0.02 * total_tests as f64 {
+        let test_units: f64 = s
+            .top_units
+            .iter()
+            .filter(|u| u.kind == "test")
+            .map(|u| u.wall_share)
+            .sum();
+        if test_units >= 2.0 {
+            out.push(Finding::new(
+                "filtered_test_build",
+                test_units * 0.5,
+                format!(
+                    "compiled a test binary with {} tests ({:.1}s) to run {}. Tests in a \
+                     smaller crate or `justrust check` first would be faster",
+                    total_tests, test_units, ran
+                ),
+            ));
+        }
+    }
+
+    // The build used few cores for a long time: a serial bottleneck.
+    if p.compile >= 5.0
+        && r.avg_build_cores < 0.25 * ncpu
+        && r.avg_other_cores < 0.5 * ncpu
+        && let Some(u) = s
+            .top_units
+            .first()
+            .filter(|u| u.wall_share >= 0.6 * p.compile)
+    {
+        let threads = u
+            .frontend_threads
+            .map(|t| format!(" (frontend threads {t})"))
+            .unwrap_or_else(|| " (single-threaded frontend)".to_owned());
+        out.push(Finding::new(
+            "serial_bottleneck",
+            u.wall_share * 0.3,
+            format!(
+                "build averaged {:.1} of {} cores: {} ran {:.1}s mostly alone{}",
+                r.avg_build_cores, s.ncpu, u.name, u.wall_share, threads
+            ),
+        ));
+    }
+
+    out.extend(giant_crates(s));
+
+    // Build gaps: no rustc running inside the build window.
+    if p.build_gaps >= 1.0 {
+        out.push(Finding::new(
+            "build_gaps",
+            p.build_gaps,
+            format!(
+                "{:.1}s inside the build with no compiler running (build scripts or scheduling)",
+                p.build_gaps
+            ),
+        ));
+    }
+
+    // Cargo startup.
+    if p.startup >= 1.5 {
+        out.push(Finding::new(
+            "slow_startup",
+            p.startup - 0.5,
+            format!(
+                "cargo took {:.1}s before compiling anything (resolving, fingerprinting, \
+                 lock file, registry)",
+                p.startup
+            ),
+        ));
+    }
+
+    // A slow test binary.
+    if let Some(b) = s
+        .tests
+        .binaries
+        .iter()
+        .max_by(|a, b| a.wall.total_cmp(&b.wall))
+        && b.wall >= 3.0
+    {
+        out.push(Finding::new(
+            "slow_tests",
+            b.wall,
+            format!("tests in {} took {:.1}s to run", b.name, b.wall),
+        ));
+    }
+
+    out.retain(|f| f.cost_secs >= MIN_COST);
+    out.extend(avoidable_test_targets(s));
+
+    out.sort_by(|a, b| b.cost_secs.total_cmp(&a.cost_secs));
+    // The split recommendation is shown once, on the costliest finding that
+    // carries it.
+    if !s.split_hints.is_empty() {
+        let advice = split_advice(s, "");
+        let mut shown = false;
+        for f in &mut out {
+            if f.message.contains(&advice) {
+                if shown {
+                    f.message = f
+                        .message
+                        .replace(&advice, "See the split recommendation above");
+                }
+                shown = true;
+            }
+        }
+    }
+    out
+}
+
+/// Crates at least this big (lines under `src/`) are flagged as split candidates.
+const GIANT_CRATE_LINES: u64 = 40_000;
+/// Only when they cost at least this much of the run.
+const GIANT_CRATE_SECS: f64 = 5.0;
+/// Size a split-out crate is assumed to end up at when estimating savings.
+const SPLIT_TARGET_LINES: f64 = 20_000.0;
+
+/// Local crates so large that recompiling them dominates the run. rustc
+/// redoes most of a crate's front-end after any edit to it, so per-edit cost
+/// scales with crate size, and every downstream crate rebuilds too. No flag
+/// fixes that; splitting the crate does. On Jcode Desktop, edits in crates
+/// split out of a 143k-line UI crate compiled 6-13x faster (FINDINGS.md 2).
+fn giant_crates(s: &Summary) -> Option<Finding> {
+    // One entry per crate: `foo` and `foo (test)` are the same source.
+    let mut by_crate: Vec<(String, u64, f64, bool, Option<u32>)> = Vec::new();
+    for u in s.top_units.iter().filter(|u| u.local) {
+        let Some(lines) = u.source_lines.filter(|&l| l >= GIANT_CRATE_LINES) else {
+            continue;
+        };
+        let krate = u.name.split(" (").next().unwrap_or(&u.name).to_owned();
+        match by_crate.iter_mut().find(|e| e.0 == krate) {
+            Some(e) => {
+                e.2 += u.wall_share;
+                e.4 = e.4.or(u.frontend_threads);
+            }
+            None => {
+                let pkg_dirty = s.rebuild_reasons.iter().any(|r| {
+                    unit_matches(&krate, &r.package)
+                        && r.reason.starts_with("the dependency ")
+                        && r.reason.ends_with(" was rebuilt")
+                });
+                by_crate.push((krate, lines, u.wall_share, pkg_dirty, u.frontend_threads));
+            }
+        }
+    }
+    by_crate.retain(|e| e.2 >= GIANT_CRATE_SECS);
+    if by_crate.is_empty() {
+        return None;
+    }
+    by_crate.sort_by(|a, b| b.2.total_cmp(&a.2));
+    // Rough model: compile time scales with lines, so an edit landing in a
+    // split-out crate of SPLIT_TARGET_LINES costs that fraction of today's.
+    let cost: f64 = by_crate
+        .iter()
+        .map(|(_, lines, secs, ..)| secs * (1.0 - SPLIT_TARGET_LINES / *lines as f64).max(0.0))
+        .sum();
+    let list: Vec<String> = by_crate
+        .iter()
+        .map(|(k, lines, secs, cascade, _)| {
+            format!(
+                "{k} ({}k lines, {secs:.1}s{})",
+                lines / 1000,
+                if *cascade {
+                    ", rebuilt for an upstream change"
+                } else {
+                    ""
+                }
+            )
+        })
+        .collect();
+    let single_threaded = by_crate.iter().any(|e| e.4.is_none());
+    let total: f64 = by_crate.iter().map(|e| e.2).sum();
+    Some(Finding::new(
+        "giant_crate",
+        cost,
+        format!(
+            "{total:.1}s went to recompiling oversized crates: {}. {}{}",
+            list.join(", "),
+            split_advice(
+                s,
+                "rustc redoes most of a crate after any edit to it and rebuilds everything \
+                 downstream, so per-edit cost grows with crate size and no compiler flag \
+                 removes it. Split them: move the modules that change often (the ones you are \
+                 editing) into new leaf crates that depend on the big crate rather than the \
+                 other way round, and keep their tests there. Edits in split-out crates \
+                 measured 6-13x faster. `justrust split` names the modules to move, from this \
+                 workspace's recorded edits"
+            ),
+            if single_threaded {
+                ". Also, these units ran rustc's front-end single-threaded; a -Zthreads \
+                 rustc wrapper typically halves a full rebuild"
+            } else {
+                ""
+            }
+        ),
+    ))
+}
+
+/// The specific recommendation for what this run edited, from the
+/// workspace's stored split hints, or `generic` when there is none yet.
+fn split_advice(s: &Summary, generic: &str) -> String {
+    match s.split_hints.first() {
+        Some(h) => {
+            let mut t = format!("Specifically, {}", h.text);
+            if let Some(h2) = s.split_hints.get(1) {
+                t.push_str(&format!(". Also, {}", h2.text));
+            }
+            t.push_str(" (`justrust split` for all candidates)");
+            t
+        }
+        None => generic.to_owned(),
+    }
+}
+
+/// Summarize rebuild reasons for local (`local=true`) or non-local units.
+fn summarize_reasons(s: &Summary, local: bool) -> Option<String> {
+    let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
+    for r in &s.rebuild_reasons {
+        let is_local = s
+            .top_units
+            .iter()
+            .any(|u| u.local && unit_matches(&u.name, &r.package));
+        if is_local != local {
+            continue;
+        }
+        *counts.entry(generalize_reason(&r.reason)).or_default() += 1;
+    }
+    if counts.is_empty() {
+        return None;
+    }
+    let mut v: Vec<_> = counts.into_iter().collect();
+    v.sort_by_key(|e| std::cmp::Reverse(e.1));
+    Some(
+        v.into_iter()
+            .take(3)
+            .map(|(r, n)| if n > 1 { format!("{r} (x{n})") } else { r })
+            .collect::<Vec<_>>()
+            .join("; "),
+    )
+}
+
+/// Collapse a reason to a short category so similar reasons group together.
+fn generalize_reason(r: &str) -> String {
+    if r.starts_with("the dependency ") && r.ends_with(" was rebuilt") {
+        return "an upstream dependency was rebuilt".into();
+    }
+    if r.contains("has changed") && r.starts_with("the file") {
+        return "source file changed".into();
+    }
+    if r.contains("RUSTFLAGS") || r.contains("rustflags") {
+        return "RUSTFLAGS changed".into();
+    }
+    if r.contains("features") {
+        return "features changed".into();
+    }
+    if r.contains("profile") {
+        return "profile changed".into();
+    }
+    if r.contains("rustc") {
+        return "compiler changed".into();
+    }
+    if r.contains("env var") || r.contains("environment variable") {
+        return "environment variable changed".into();
+    }
+    r.chars().take(80).collect()
+}
+
+/// Unit names are crate names (`jcode_desktop_ui (test)`), packages use dashes.
+fn unit_matches(unit_name: &str, package: &str) -> bool {
+    let base = unit_name.split(" (").next().unwrap_or(unit_name);
+    base == package.replace('-', "_") || base == package
+}
+
+/// Cargo flags that take a value, so the next arg is not a test filter.
+const VALUE_FLAGS: &[&str] = &[
+    "-p",
+    "--package",
+    "-F",
+    "--features",
+    "--target",
+    "--profile",
+    "-j",
+    "--jobs",
+    "--manifest-path",
+    "--target-dir",
+    "--config",
+    "-Z",
+    "--color",
+    "--message-format",
+    "--exclude",
+    "--bin",
+    "--test",
+    "--example",
+    "--bench",
+    "--lockfile-path",
+];
+
+/// Flags that already select targets: the user chose what to build.
+const TARGET_SELECTORS: &[&str] = &[
+    "--lib",
+    "--bins",
+    "--bin",
+    "--test",
+    "--tests",
+    "--examples",
+    "--example",
+    "--benches",
+    "--bench",
+    "--all-targets",
+    "--doc",
+];
+
+/// `test -p X [filter]` without a target selector builds X's plain lib (and
+/// bins, integration tests, doctests) even when only the lib's unit tests
+/// matter. Suggest `--lib` with the time those extra targets cost.
+fn avoidable_test_targets(s: &Summary) -> Option<Finding> {
+    if s.subcommand != "test" {
+        return None;
+    }
+    let args: Vec<&str> = s.args.iter().map(String::as_str).skip(1).collect();
+    let cargo_args = match args.iter().position(|a| *a == "--") {
+        Some(i) => &args[..i],
+        None => &args[..],
+    };
+    let mut packages = Vec::new();
+    let mut i = 0;
+    while i < cargo_args.len() {
+        let a = cargo_args[i];
+        let flag = a.split('=').next().unwrap_or(a);
+        if TARGET_SELECTORS.contains(&flag) || a == "--workspace" || a == "--all" {
+            return None;
+        }
+        if a == "-p" || a == "--package" {
+            packages.extend(cargo_args.get(i + 1).copied());
+            i += 2;
+            continue;
+        }
+        if let Some(p) = a.strip_prefix("--package=") {
+            packages.push(p);
+        } else if VALUE_FLAGS.contains(&a) {
+            i += 1;
+        }
+        i += 1;
+    }
+    let [pkg] = packages[..] else { return None };
+    if pkg.contains(['*', '?', '@', ':']) {
+        return None;
+    }
+    let krate = pkg.replace('-', "_");
+    let lib_test_name = format!("{krate} (test)");
+    // Lib unit tests must exist in this run, or `--lib` would skip everything.
+    if !s.top_units.iter().any(|u| u.name == lib_test_name) {
+        return None;
+    }
+    // Test binaries other than the lib's: integration tests, bin tests, doctests.
+    let lib_bin_prefix = format!("{krate}-");
+    let is_lib_bin = |n: &str| {
+        n.strip_prefix(&lib_bin_prefix)
+            .is_some_and(|h| h.len() == 16 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+    };
+    let others: Vec<_> = s
+        .tests
+        .binaries
+        .iter()
+        .filter(|b| !is_lib_bin(&b.name))
+        .collect();
+    let others_ran_tests = others.iter().any(|b| b.passed + b.failed > 0);
+    let lib_ran_tests = s
+        .tests
+        .binaries
+        .iter()
+        .any(|b| is_lib_bin(&b.name) && b.passed + b.failed > 0);
+    // Fire only when the lib's unit tests were the only tests that ran
+    // (with or without a filter): `--lib` would then run exactly the same tests.
+    if !lib_ran_tests || others_ran_tests {
+        return None;
+    }
+    // Units `--lib` would not build: the non-test lib/bin of this package and
+    // its other test targets. Only this package's targets are tested, so every
+    // local test unit other than the lib's belongs to it.
+    let mut extra = Vec::new();
+    let mut secs = 0.0;
+    for u in s.top_units.iter().filter(|u| u.local) {
+        let plain = u.name == krate && u.kind != "test";
+        if plain || (u.kind == "test" && u.name != lib_test_name) {
+            secs += u.wall_share;
+            extra.push(format!("{} {:.1}s", u.name, u.wall_share));
+        }
+    }
+    let run_secs: f64 = others.iter().map(|b| b.wall).sum();
+    if run_secs > 0.0 {
+        extra.push(format!(
+            "{} other test binaries/doctests {:.1}s",
+            others.len(),
+            run_secs
+        ));
+    }
+    let cost = secs + run_secs;
+    if cost < MIN_COST {
+        return None;
+    }
+    let cmd = s.args.join(" ").replacen("test", "test --lib", 1);
+    Some(Finding::new(
+        "avoidable_targets",
+        cost,
+        format!(
+            "only {pkg}'s lib unit tests ran, but the command also built its other targets \
+             ({}); `cargo {cmd}` would skip them, saving ~{cost:.1}s",
+            extra.join(", ")
+        ),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::summary::{RebuildReason, Split, UnitBreakdown};
+
+    fn base() -> Summary {
+        Summary {
+            wall: 20.0,
+            ncpu: 16,
+            ..Default::default()
+        }
+    }
+
+    /// Fixture from run 20261008-210412035-4101929.
+    fn desktop_ui_test_run(args: &[&str]) -> Summary {
+        use crate::summary::TestBinary;
+        let mut s = base();
+        s.subcommand = args[0].into();
+        s.args = args.iter().map(|a| a.to_string()).collect();
+        for (name, kind, share) in [
+            ("jcode_desktop_ui (test)", "test", 25.3),
+            ("jcode_desktop_ui", "lib", 9.0),
+            ("jcode_desktop_ui_core", "lib", 1.8),
+            ("build_version (test)", "test", 0.2),
+        ] {
+            s.top_units.push(UnitBreakdown {
+                name: name.into(),
+                kind: kind.into(),
+                local: true,
+                wall_share: share,
+                ..Default::default()
+            });
+        }
+        s.tests.binaries.push(TestBinary {
+            name: "jcode_desktop_ui-c27361aede4d4dda".into(),
+            wall: 5.6,
+            passed: 70,
+            failed: 3,
+            filtered_out: 1271,
+            ..Default::default()
+        });
+        s.tests.binaries.push(TestBinary {
+            name: "build_version-0123456789abcdef".into(),
+            wall: 0.1,
+            filtered_out: 4,
+            ..Default::default()
+        });
+        s
+    }
+
+    #[test]
+    fn suggests_lib_when_only_lib_tests_ran() {
+        let s = desktop_ui_test_run(&["test", "-p", "jcode-desktop-ui", "--", "composer"]);
+        let f = analyze(&s);
+        let f = f.iter().find(|f| f.kind == "avoidable_targets").unwrap();
+        assert!((f.cost_secs - 9.3).abs() < 0.01, "{f:?}");
+        assert!(
+            f.message
+                .contains("cargo test --lib -p jcode-desktop-ui -- composer")
+        );
+        assert!(f.message.contains("jcode_desktop_ui 9.0s"));
+    }
+
+    #[test]
+    fn no_lib_hint_when_selected_or_other_tests_ran() {
+        for args in [
+            &["test", "-p", "jcode-desktop-ui", "--lib"][..],
+            &["test", "-p", "jcode-desktop-ui", "--test", "x"],
+            &["test", "--workspace"],
+            &["test", "-p", "a", "-p", "jcode-desktop-ui"],
+            &["check", "-p", "jcode-desktop-ui"],
+        ] {
+            let s = desktop_ui_test_run(args);
+            assert!(
+                analyze(&s).iter().all(|f| f.kind != "avoidable_targets"),
+                "{args:?}"
+            );
+        }
+        let mut s = desktop_ui_test_run(&["test", "-p", "jcode-desktop-ui"]);
+        s.tests.binaries[1].passed = 1;
+        assert!(analyze(&s).iter().all(|f| f.kind != "avoidable_targets"));
+    }
+
+    #[test]
+    fn clean_fast_run_has_no_findings() {
+        let mut s = base();
+        s.wall = 0.6;
+        s.phases.compile = 0.5;
+        assert!(analyze(&s).is_empty());
+    }
+
+    #[test]
+    fn detects_upstream_cascade_and_heavy_codegen() {
+        let mut s = base();
+        s.top_units.push(UnitBreakdown {
+            name: "jcode_desktop_ui (test)".into(),
+            local: true,
+            kind: "test".into(),
+            wall: 35.0,
+            wall_share: 35.0,
+            split: Some(Split {
+                frontend: 5.0,
+                codegen: 23.6,
+                link: 0.7,
+                incremental: 1.1,
+                other: 0.0,
+            }),
+            ..Default::default()
+        });
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-desktop-ui".into(),
+            reason: "the dependency `jcode_base` was rebuilt".into(),
+        });
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-base".into(),
+            reason: "the file `crates/jcode-base/src/auth.rs` has changed".into(),
+        });
+        let f = analyze(&s);
+        let kinds: Vec<&str> = f.iter().map(|f| f.kind.as_str()).collect();
+        assert!(kinds.contains(&"upstream_cascade"), "{kinds:?}");
+        assert!(kinds.contains(&"heavy_codegen"), "{kinds:?}");
+        assert!(f.iter().any(|f| f.message.contains("jcode_base")));
+        let c = f.iter().find(|f| f.kind == "upstream_cascade").unwrap();
+        assert!(
+            c.message.contains("(edited crates/jcode-base/src/auth.rs)"),
+            "{}",
+            c.message
+        );
+        assert!(c.message.contains("justrust split"), "{}", c.message);
+    }
+
+    #[test]
+    fn detects_lock_wait_first() {
+        let mut s = base();
+        s.phases.lock_wait = 12.0;
+        let f = analyze(&s);
+        assert_eq!(f[0].kind, "lock_wait");
+    }
+
+    #[test]
+    fn reports_slot_seed_and_fallback() {
+        let mut s = base();
+        s.slot = Some(crate::slots::SlotInfo {
+            slot: Some(1),
+            how: "new".into(),
+            seed_secs: 9.0,
+            capacity: 4,
+            ..Default::default()
+        });
+        let f = analyze(&s);
+        assert_eq!(f[0].kind, "slot_seed");
+        s.slot = Some(crate::slots::SlotInfo {
+            slot: None,
+            how: "fallback".into(),
+            busy: 4,
+            capacity: 4,
+            ..Default::default()
+        });
+        s.phases.lock_wait = 5.0;
+        let f = analyze(&s);
+        let kinds: Vec<&str> = f.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds, ["lock_wait", "slots_full"]);
+        assert!(f[0].message.contains("JUSTRUST_SLOTS"));
+        s.locks_waited = vec!["package cache".into()];
+        let f = analyze(&s);
+        assert!(f[0].message.contains("CARGO_HOME"), "{}", f[0].message);
+        assert!(!f[0].message.contains("JUSTRUST_SLOTS"));
+        s.phases.lock_wait = 0.0;
+        s.slot = Some(crate::slots::SlotInfo {
+            slot: Some(2),
+            how: "joined".into(),
+            join_wait_secs: 8.4,
+            ..Default::default()
+        });
+        let f = analyze(&s);
+        assert_eq!(f[0].kind, "slot_join");
+        assert!(f[0].message.contains("8.4s"), "{}", f[0].message);
+    }
+
+    fn giant_unit(name: &str, kind: &str, share: f64, lines: Option<u64>) -> UnitBreakdown {
+        UnitBreakdown {
+            name: name.into(),
+            kind: kind.into(),
+            local: true,
+            wall: share,
+            wall_share: share,
+            source_lines: lines,
+            ..Default::default()
+        }
+    }
+
+    /// Fixture from run 20261009-000724334-1218993 (jcode-tui onboarding tests).
+    #[test]
+    fn flags_giant_crates_and_merges_test_units() {
+        let mut s = base();
+        s.top_units = vec![
+            giant_unit("jcode_tui (test)", "test", 47.1, Some(220_975)),
+            giant_unit("jcode_app_core", "lib", 32.2, Some(159_692)),
+            giant_unit("jcode_base", "lib", 21.6, Some(138_891)),
+            giant_unit("jcode_protocol", "lib", 3.5, Some(12_000)),
+        ];
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-app-core".into(),
+            reason: "the dependency `jcode-base` was rebuilt".into(),
+        });
+        let f = analyze(&s);
+        let g = f
+            .iter()
+            .find(|f| f.kind == "giant_crate")
+            .expect("giant_crate");
+        assert!(g.message.starts_with("100.9s went to"), "{}", g.message);
+        assert!(
+            g.message.contains("jcode_tui (220k lines, 47.1s)"),
+            "{}",
+            g.message
+        );
+        assert!(
+            g.message
+                .contains("jcode_app_core (159k lines, 32.2s, rebuilt for an upstream change)"),
+            "{}",
+            g.message
+        );
+        assert!(!g.message.contains("jcode_protocol"));
+        assert!(g.message.contains("single-threaded"));
+        // 47.1*(1-20/221) + 32.2*(1-20/160) + 21.6*(1-20/139)
+        assert!((g.cost_secs - 89.2).abs() < 0.5, "{}", g.cost_secs);
+
+        // Test and lib units of one crate count once, and threaded units
+        // do not get the -Zthreads hint.
+        s.top_units = vec![
+            giant_unit("jcode_base (test)", "test", 4.0, Some(138_891)),
+            giant_unit("jcode_base", "lib", 3.0, Some(138_891)),
+        ];
+        for u in &mut s.top_units {
+            u.frontend_threads = Some(8);
+        }
+        s.rebuild_reasons.clear();
+        let f = analyze(&s);
+        let g = f.iter().find(|f| f.kind == "giant_crate").expect("merged");
+        assert!(
+            g.message.contains("jcode_base (138k lines, 7.0s)"),
+            "{}",
+            g.message
+        );
+        assert!(!g.message.contains("single-threaded"));
+    }
+
+    #[test]
+    fn stored_split_hint_replaces_generic_advice_once() {
+        let mut s = base();
+        s.top_units = vec![
+            giant_unit("jcode_app_core", "lib", 32.2, Some(159_692)),
+            giant_unit("jcode_base", "lib", 21.6, Some(138_891)),
+        ];
+        s.rebuild_reasons.push(RebuildReason {
+            package: "jcode-app-core".into(),
+            reason: "the dependency `jcode-base` was rebuilt".into(),
+        });
+        // Without a hint: generic advice.
+        let f = analyze(&s);
+        assert!(
+            f.iter()
+                .any(|f| f.message.contains("`justrust split` names the modules"))
+        );
+        s.split_hints.push(crate::summary::SplitHint {
+            file: "crates/jcode-base/src/config/config_file.rs".into(),
+            secs: 15.8,
+            text: "edits to jcode-base::config::config_file cost ~16.0s each here".into(),
+            age_secs: 3.0,
+        });
+        let f = analyze(&s);
+        let with: Vec<&Finding> = f
+            .iter()
+            .filter(|f| {
+                f.message
+                    .contains("Specifically, edits to jcode-base::config::config_file")
+            })
+            .collect();
+        assert_eq!(with.len(), 1, "{f:#?}");
+        assert!(
+            with[0]
+                .message
+                .contains("(`justrust split` for all candidates)")
+        );
+        assert!(
+            !f.iter()
+                .any(|f| f.message.contains("names the modules to move"))
+        );
+        assert!(
+            f.iter()
+                .any(|f| f.message.contains("See the split recommendation above"))
+        );
+    }
+
+    #[test]
+    fn no_giant_crate_for_small_or_cheap_crates() {
+        let mut s = base();
+        s.top_units = vec![
+            giant_unit("small", "lib", 30.0, Some(39_000)),
+            giant_unit("big_but_fast", "lib", 4.0, Some(200_000)),
+            giant_unit("unknown", "lib", 30.0, None),
+        ];
+        assert!(analyze(&s).iter().all(|f| f.kind != "giant_crate"));
+    }
+
+    #[test]
+    fn counts_rust_lines() {
+        let dir = std::env::temp_dir().join(format!("justrust-lines-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("a/b")).unwrap();
+        std::fs::create_dir_all(dir.join("target")).unwrap();
+        std::fs::write(dir.join("lib.rs"), "a\nb\n").unwrap();
+        std::fs::write(dir.join("a/b/m.rs"), "x\ny\nz\n").unwrap();
+        std::fs::write(dir.join("a/notes.txt"), "1\n2\n").unwrap();
+        std::fs::write(dir.join("target/gen.rs"), "1\n2\n").unwrap();
+        assert_eq!(crate::summary::count_rust_lines(&dir), Some(5));
+        assert_eq!(crate::summary::count_rust_lines(&dir.join("missing")), None);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn parses_unit_names() {
+        assert!(unit_matches("jcode_desktop_ui (test)", "jcode-desktop-ui"));
+        assert!(!unit_matches("jcode_base", "jcode-desktop-ui"));
+    }
+}

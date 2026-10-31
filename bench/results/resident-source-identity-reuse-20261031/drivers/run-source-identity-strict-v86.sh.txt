@@ -1,0 +1,7 @@
+#!/bin/bash
+set -euo pipefail
+ROOT=<EXPERIMENT>
+for arm in off on on-repeat off-repeat; do
+ case "$arm" in on*) flag=1;; *) flag=0;; esac
+ python3 -B "$ROOT/probe-source-identity-reuse-seven-v86.py" --engine "$ROOT/candidate-v86-bin/jr-engine" --output "$ROOT/source-identity-reuse-seven-v86-$arm" --private "<PRIVATE_HOME>/s86-$arm" --cache-miss-stats 1 --whole-reload 0 --watched-manifest-bytes 1 --source-identity-reuse "$flag"
+done

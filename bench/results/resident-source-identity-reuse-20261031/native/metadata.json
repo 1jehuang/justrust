@@ -1,0 +1,11 @@
+{
+  "lines": [
+    "test source_identity_v86::repeated_mixed_exact_strings_full_identity_and_warnings ... ok <0.002s>",
+    "test source_identity_v86::cached_cratesio_hit_preserves_new_config_read_warnings ... ok <0.003s>",
+    "test source_identity_v86::failures_are_not_cached_and_cratesio_revalidates_on_hits ... ok <0.003s>",
+    "test source_identity_v86::full_fetch_packages_paths_order_errors_and_warnings ... ok <0.005s>",
+    "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+  ],
+  "passed": 4,
+  "status": 0
+}

@@ -1,0 +1,374 @@
+diff --git a/toolchain/resident/crates/blaze-metadata/src/lib.rs b/toolchain/resident/crates/blaze-metadata/src/lib.rs
+index 99f733249..bb6c51f47 100644
+--- a/toolchain/resident/crates/blaze-metadata/src/lib.rs
++++ b/toolchain/resident/crates/blaze-metadata/src/lib.rs
+@@ -1013,6 +1013,102 @@ fn fetch(
+     checksums: &FxHashMap<PackageId, Option<String>>,
+     ctx: &Context,
+     sources: &blaze_registry::Sources,
++) -> Result<Vec<Package>> {
++    if !source_identity_reuse_enabled() {
++        return fetch_original(ids, checksums, ctx, sources);
++    }
++    fetch_source_identity_reuse(ids, checksums, ctx, sources)
++}
++
++fn source_identity_reuse_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| std::env::var_os("RA_JIT_SOURCE_ID_REUSE").is_some_and(|v| v == "1"))
++}
++
++#[derive(Default)]
++struct SourceIdentityReuse {
++    successful: FxHashMap<String, blaze_manifest::source::SourceId>,
++    hits: usize,
++}
++
++impl SourceIdentityReuse {
++    fn resolve(
++        &mut self,
++        source: &str,
++        config: &Config,
++    ) -> Result<blaze_manifest::source::SourceId> {
++        if let Some(resolved) = self.successful.get(source) {
++            // This is the only configuration-sensitive arm of manifest_source. Repeat its
++            // exact validation at every original occurrence, before returning a cached ID.
++            if source.strip_prefix("registry+") == Some(blaze_manifest::source::CRATES_IO_INDEX) {
++                config.check_registry_index_not_set()?;
++            }
++            self.hits += 1;
++            source_identity_reuse_marker();
++            return Ok(resolved.clone());
++        }
++        let resolved = manifest_source(source, config)?;
++        self.successful.insert(source.to_owned(), resolved.clone());
++        Ok(resolved)
++    }
++}
++
++fn source_identity_reuse_marker() {
++    use std::io::Write as _;
++    static MARKER: std::sync::Once = std::sync::Once::new();
++    MARKER.call_once(|| {
++        let _ = std::io::stderr().lock().write_all(b"ra-jit: source-identity-reuse-v86 batch\n");
++    });
++}
++
++fn fetch_source_identity_reuse(
++    ids: &[PackageId],
++    checksums: &FxHashMap<PackageId, Option<String>>,
++    ctx: &Context,
++    sources: &blaze_registry::Sources,
++) -> Result<Vec<Package>> {
++    let mut locked = Vec::new();
++    let mut texts = Vec::new();
++    for &id in ids {
++        let source = id.source_id();
++        let source_text = source.as_url().to_string();
++        let from = sources.map().replacement(source)?;
++        if from.is_remote_registry() && !from.is_sparse() {
++            bail!("{source_text} is read from a git index, which blaze does not read yet");
++        }
++        let mut checksum = checksums.get(&id).cloned().flatten().unwrap_or_default();
++        // A lock file of cargo before 1.53 may name no checksum: the index's.
++        if checksum.is_empty() && from.is_remote_registry() {
++            checksum = sources.registry(from)?.checksum(id.name().as_str(), id.version())?;
++        }
++        let package = blaze_registry::Package {
++            name: id.name().to_string(),
++            version: id.version().clone(),
++            checksum,
++        };
++        locked.push(blaze_registry::Locked { source, package });
++        texts.push(source_text);
++    }
++    let roots = sources.fetch(&locked)?;
++    let mut read = Vec::with_capacity(texts.len());
++    let mut reuse = SourceIdentityReuse::default();
++    for (source_text, (dir, _)) in texts.into_iter().zip(roots) {
++        let manifest_path = dir.join("Cargo.toml");
++        let source = reuse.resolve(&source_text, &ctx.config)?;
++        let EitherManifest::Real(manifest) = read_manifest(&manifest_path, source, ctx)? else {
++            bail!("{} has no package", manifest_path.display());
++        };
++        read.push(Package { manifest_path, manifest, locked_source: Some(source_text) });
++    }
++    Ok(read)
++}
++
++// Frozen original implementation: the disabled path and independent fetch fixture oracle.
++fn fetch_original(
++    ids: &[PackageId],
++    checksums: &FxHashMap<PackageId, Option<String>>,
++    ctx: &Context,
++    sources: &blaze_registry::Sources,
+ ) -> Result<Vec<Package>> {
+     let mut locked = Vec::new();
+     let mut texts = Vec::new();
+@@ -1319,3 +1415,231 @@ fn source_config(config: &Config) -> Result<blaze_registry::SourceConfig> {
+         config.get_string("registries.crates-io.protocol")?.is_some_and(|it| it.val == "git");
+     Ok(out)
+ }
++
++#[cfg(test)]
++mod source_identity_v86 {
++    use super::*;
++
++    struct Fixture(PathBuf);
++
++    impl Fixture {
++        fn new() -> Self {
++            static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++            let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++            let root =
++                std::env::temp_dir().join(format!("blaze-source-v86-{}-{n}", std::process::id()));
++            std::fs::create_dir(&root).unwrap();
++            std::fs::create_dir(root.join(".cargo")).unwrap();
++            std::fs::create_dir(root.join("home")).unwrap();
++            Self(root)
++        }
++
++        fn config_text(&self, text: &str) {
++            std::fs::write(self.0.join(".cargo/config.toml"), text).unwrap();
++        }
++
++        fn config(&self) -> Config {
++            Config::load(
++                &self.0,
++                [("CARGO_HOME".into(), self.0.join("home").to_str().unwrap().into())],
++                &[],
++            )
++            .unwrap()
++        }
++    }
++
++    impl Drop for Fixture {
++        fn drop(&mut self) {
++            let _ = std::fs::remove_dir_all(&self.0);
++        }
++    }
++
++    // Full accepted manifest_source, deliberately independent of the candidate helper.
++    fn original_manifest_source(
++        source: &str,
++        config: &Config,
++    ) -> Result<blaze_manifest::source::SourceId> {
++        use blaze_manifest::source::{CRATES_IO_INDEX, SourceId};
++        use cargo_util_schemas::core::GitReference;
++        let (kind, rest) = source.split_once('+').context("a source with no kind")?;
++        match kind {
++            "registry" if rest == CRATES_IO_INDEX => SourceId::crates_io(config),
++            "registry" => Ok(SourceId::for_registry(&rest.parse()?)),
++            "sparse" => Ok(SourceId::for_registry(&source.parse()?)),
++            "git" => {
++                let mut url: url::Url = rest.parse()?;
++                let query: BTreeMap<String, String> = url.query_pairs().into_owned().collect();
++                let reference = match (query.get("branch"), query.get("tag"), query.get("rev")) {
++                    (Some(branch), _, _) => GitReference::Branch(branch.clone()),
++                    (_, Some(tag), _) => GitReference::Tag(tag.clone()),
++                    (_, _, Some(rev)) => GitReference::Rev(rev.clone()),
++                    _ => GitReference::DefaultBranch,
++                };
++                url.set_fragment(None);
++                url.set_query(None);
++                Ok(SourceId::for_git(&url, reference))
++            }
++            _ => bail!("the source {source} is not one blaze reads yet"),
++        }
++    }
++
++    #[test]
++    fn repeated_mixed_exact_strings_full_identity_and_warnings() {
++        let fixture = Fixture::new();
++        fixture.config_text("[registries.crates-io]\nprotocol = 'git'\n");
++        let original = fixture.config();
++        let candidate = fixture.config();
++        let mut reuse = SourceIdentityReuse::default();
++        let sources = [
++            "registry+https://github.com/rust-lang/crates.io-index",
++            "registry+https://example.invalid/index",
++            "registry+https://example.invalid/index/",
++            "sparse+https://example.invalid/index/",
++            "git+https://example.invalid/repo?branch=hello%20world#1234",
++            "git+https://example.invalid/repo?tag=v1#5678",
++            "git+https://example.invalid/repo?rev=abc#1234",
++            "git+https://example.invalid/repo#1234",
++            "git+https://example.invalid/repo?branch=x&tag=y&rev=z#1234",
++        ];
++        for _ in 0..2 {
++            for source in sources {
++                assert_eq!(
++                    reuse.resolve(source, &candidate).unwrap(),
++                    original_manifest_source(source, &original).unwrap()
++                );
++                assert_eq!(candidate.take_warnings(), original.take_warnings());
++            }
++        }
++        assert_eq!(reuse.successful.len(), sources.len());
++        assert_eq!(reuse.hits, sources.len());
++    }
++
++    #[test]
++    fn cached_cratesio_hit_preserves_new_config_read_warnings() {
++        let fixture = Fixture::new();
++        let cratesio = "registry+https://github.com/rust-lang/crates.io-index";
++        let mut reuse = SourceIdentityReuse::default();
++        reuse.resolve(cratesio, &fixture.config()).unwrap();
++        fixture.config_text("");
++        std::fs::write(fixture.0.join(".cargo/config"), "").unwrap();
++        let candidate = fixture.config();
++        let original = fixture.config();
++        assert_eq!(
++            reuse.resolve(cratesio, &candidate).unwrap(),
++            original_manifest_source(cratesio, &original).unwrap()
++        );
++        let expected = original.take_warnings();
++        assert!(!expected.is_empty());
++        assert_eq!(candidate.take_warnings(), expected);
++        assert_eq!(reuse.hits, 1);
++    }
++
++    #[test]
++    fn failures_are_not_cached_and_cratesio_revalidates_on_hits() {
++        let fixture = Fixture::new();
++        let config = fixture.config();
++        let mut reuse = SourceIdentityReuse::default();
++        let cratesio = "registry+https://github.com/rust-lang/crates.io-index";
++        reuse.resolve(cratesio, &config).unwrap();
++        fixture.config_text("[registry]\nindex = 'https://example.invalid/'\n");
++        let changed = fixture.config();
++        let original = fixture.config();
++        for source in [cratesio, "no-kind", "registry+not a url", "path+file:///tmp/a", cratesio] {
++            let got = reuse.resolve(source, &changed).unwrap_err();
++            let expected = original_manifest_source(source, &original).unwrap_err();
++            assert_eq!(format!("{got:#}"), format!("{expected:#}"));
++            assert_eq!(changed.take_warnings(), original.take_warnings());
++        }
++        assert_eq!(reuse.successful.len(), 1);
++        assert_eq!(reuse.hits, 0);
++        let mut fresh = SourceIdentityReuse::default();
++        assert!(fresh.resolve(cratesio, &fixture.config()).is_err());
++        assert!(fresh.successful.is_empty());
++        fixture.config_text("[registry]\nindex = 42\n");
++        let invalid = fixture.config();
++        assert_eq!(
++            format!("{:#}", reuse.resolve(cratesio, &invalid).unwrap_err()),
++            format!("{:#}", original_manifest_source(cratesio, &fixture.config()).unwrap_err())
++        );
++        fixture.config_text("");
++        assert_eq!(
++            fresh.resolve(cratesio, &fixture.config()).unwrap(),
++            original_manifest_source(cratesio, &fixture.config()).unwrap()
++        );
++        assert_eq!(fresh.hits, 0);
++    }
++
++    fn observe_fetch(
++        fixture: &Fixture,
++        ids: &[PackageId],
++        candidate: bool,
++    ) -> (Result<Vec<(PathBuf, Option<String>, serde_json::Value)>, String>, Vec<String>) {
++        let ctx = Context::new(fixture.config());
++        let result = (|| -> Result<_> {
++            let sources = sources(&ctx, true, None, true, None)?;
++            let packages = if candidate {
++                fetch_source_identity_reuse(ids, &FxHashMap::default(), &ctx, &sources)?
++            } else {
++                fetch_original(ids, &FxHashMap::default(), &ctx, &sources)?
++            };
++            packages
++                .into_iter()
++                .map(|p| {
++                    let value =
++                        serde_json::to_value(export_package(&p.manifest_path, &p.manifest))?;
++                    Ok((p.manifest_path, p.locked_source, value))
++                })
++                .collect()
++        })()
++        .map_err(|e| format!("{e:#}"));
++        (result, ctx.config.take_warnings())
++    }
++
++    #[test]
++    fn full_fetch_packages_paths_order_errors_and_warnings() {
++        let fixture = Fixture::new();
++        let vendor = fixture.0.join("vendor");
++        std::fs::create_dir(&vendor).unwrap();
++        for name in ["first", "second"] {
++            let dir = vendor.join(name);
++            std::fs::create_dir(&dir).unwrap();
++            std::fs::create_dir(dir.join("src")).unwrap();
++            std::fs::write(dir.join("src/lib.rs"), "").unwrap();
++            std::fs::write(
++                dir.join("Cargo.toml"),
++                format!("[package]\nname = '{name}'\nversion = '1.0.0'\nedition = '2021'\n"),
++            )
++            .unwrap();
++            std::fs::write(dir.join(".cargo-checksum.json"), r#"{"package":null,"files":{}}"#)
++                .unwrap();
++        }
++        fixture.config_text(&format!(
++            "[source.crates-io]\nreplace-with = 'vendored'\n[source.vendored]\ndirectory = {}\n",
++            toml::Value::String(vendor.to_str().unwrap().into())
++        ));
++        let source = blaze_resolve::SourceId::from_url(
++            "registry+https://github.com/rust-lang/crates.io-index",
++        )
++        .unwrap();
++        let ids = [
++            PackageId::try_new("second", "1.0.0", source).unwrap(),
++            PackageId::try_new("first", "1.0.0", source).unwrap(),
++        ];
++        let original = observe_fetch(&fixture, &ids, false);
++        let candidate = observe_fetch(&fixture, &ids, true);
++        assert_eq!(candidate, original);
++        let packages = candidate.0.unwrap();
++        assert_eq!(packages.len(), 2);
++        assert_eq!(packages[0].0, vendor.join("second/Cargo.toml"));
++        assert_eq!(packages[1].0, vendor.join("first/Cargo.toml"));
++        // A semantic manifest failure after fetching must stay at the first read in ID order.
++        std::fs::write(
++            vendor.join("second/Cargo.toml"),
++            "[package]\nname = 'second'\nversion = '1.0.0'\nedition = 'bogus'\n",
++        )
++        .unwrap();
++        let original = observe_fetch(&fixture, &ids, false);
++        assert!(original.0.is_err());
++        assert_eq!(observe_fetch(&fixture, &ids, true), original);
++    }
++}
+diff --git a/docs/resident-source-identity-reuse.md b/docs/resident-source-identity-reuse.md
+new file mode 100644
+index 000000000..77770e10a
+--- /dev/null
++++ b/docs/resident-source-identity-reuse.md
+@@ -0,0 +1,29 @@
++# Resident source identity reuse, v86
++
++## Scope and lineage
++
++This source-only experiment modifies `toolchain/resident/crates/blaze-metadata/src/lib.rs` in the imported Blaze lineage (`indexable-inc/blaze`). The resident tree retains its MIT and Apache-2.0 license files and existing attribution. This is a justrust integration experiment, not an independent clean-room implementation or a claim of upstream authorship.
++
++## Contract
++
++`RA_JIT_SOURCE_ID_REUSE=1` is the only enabling value, sampled on first use by a process-local `OnceLock<bool>`. Missing, non-Unicode, empty, and other values stay OFF. OFF dispatches to the full frozen original fetch body. The accepted `manifest_source` remains unchanged, and a separate full original source resolver is retained in the fixture module.
++
++ON allocates a fresh successful-resolution map inside each fetch, after the original fetch batch completes. Its key is the exact original formatted source string, without normalization. It inserts only successful `manifest_source` results. Hits clone the full manifest SourceId, including kind, URL, git reference and registry key. No result survives the invocation. Formatting PackageId sources, source replacement, checksum lookup, fetch batching, root zip order, manifest reads, package pushes and error exits remain in their original positions. There is no failure caching or manifest/package caching.
++
++## Configuration audit
++
++`blaze-manifest/src/source.rs::SourceId::crates_io` calls the public `Config::check_registry_index_not_set` and then parses the constant crates.io index and constructs an alternate registry SourceId. `check_registry_index_not_set` calls `get_string("registry.index")`, which can read configuration, produce warnings, reject a typed value, or reject an obsolete index setting. Consequently each cached crates.io occurrence repeats that exact public validation before returning the cached ID, at the original resolution position. Only its constant URL parse and ID construction are shared. Other registry/sparse/git arms have no configuration access and share successful pure resolution. Future changes to these constructors require reauditing this assumption.
++
++The cache never changes Config's own lifetime/caching rules. Fixtures deliberately load new Config instances after filesystem configuration changes, and additionally exercise a previously populated reuse map against a newly invalid Config to verify hit validation remains live.
++
++## Marker
++
++Only an actual successful repeated-source hit, after crates.io validation succeeds, triggers the once-per-process fixed stderr line `ra-jit: source-identity-reuse-v86 batch`. Writing uses `write_all` with ignored I/O errors. Flag entry, first resolution, invalid sources, and failed hit validation do not trigger the marker. The marker is intentional additional ON stderr and is not an error/warning suppression mechanism.
++
++## Fixtures and acceptance boundary
++
++Unexecuted source fixtures cover repeated/mixed exact registry, sparse and git strings, distinct slash variants, branch/tag/rev/default and precedence, full SourceId equality, ordered config warnings, obsolete and invalidly typed registry.index errors, uncached invalid URLs and path rejection, and fresh calls after config edits. A real vendored-directory replacement fixture compares complete exported package observations, manifest paths, locked source strings, ID order, errors and configuration warnings against the original fetch. It also places a semantic manifest error at the first requested package. No new dependency or lockfile change is required.
++
++The full original fetch body and manifest_source body are statically compared to the accepted HEAD. The ON fetch body is statically compared to that full original with only map construction and the individual resolution call substituted. These checks establish source structure, not Rust type correctness or runtime correctness. Fixture coverage does not substitute for native acceptance, stderr/marker subprocess checks, malformed filesystem ordering permutations, or performance measurements.
++
++Only exact-file rustfmt and Python static checks are performed by this lane. No builds, tests, native probes, dependency resolution, installation, commits, or performance claims are made. Root owns native fixture execution, OFF bytewise observations, strict/pinned acceptance, profiling, and any measured decision. The source handoff is frozen under `<EXPERIMENT>/source-identity-v86` with accepted originals, candidate sources, patch, hashes, static checks and explicit RELEASE. No speedup is claimed.

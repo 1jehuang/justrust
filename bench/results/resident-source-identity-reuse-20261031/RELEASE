@@ -1,0 +1,13 @@
+RELEASE v86 rejected portable evidence, 2026-10-31
+
+Decision: REJECT promotion. First completed pinned descriptive delta -11.777378539702832%, independent repeat -1.6778106115021507%, noise unknown. Separate raw samples and first touches retained, no pooling and no general speedup or causal regression claim.
+
+Shipping metadata lib restored bytewise to original SHA256 6c225dd077fb24b8fd83afffa739044d1752bb4581fb41390ac12cfd3fb0b59b. Exact-file HEAD diff passed. Source ownership released at20:12:28Z. Original private freeze and preserved rollback copies untouched after release.
+
+Evidence: actual native counts36/22/4/53/373, four source fixtures, eight runtime-profile rows, strict28, two completed pinned54-call/20-sample/24-nonce/5-stop runs, initial INCOMPLETE8-row optional-server factor-OFF buildscript failure with two stops, initial pre-native wrong-path failure, four post-measurement strict stops, restored761 Python regression. Cause of initial buildscript failure not proven. Both initial and final exact-driver18 mocked receipts retained separately from native. Two driver revision values are descriptive only, exact patch and pure-oracle AST equality verified.
+
+Portable historical observation SHA256 29f043be4ea16c34ae8ccdc3b7609a045ba8d229f56858a6aec725e0b5893502. Keep reviewed validate.py as trust root. SHA256.json is an inventory, not external authentication. Explicit private-input field/line allowlists and original SHA/byte sizes retained. No ambient environment maps, private workload source, binaries or cache/store bytes published. Public pinned git blobs retain three disclosed historical path-bearing files.
+
+Offline checks17: complete replay, coherent reseals, first-touch retention in both runs, source/native outcome checks, failed-attempt retention, exact original tuple semantic oracles, audited relocated empty HOME/PATH and explicit external read/write/mutation/native/network/dlopen denials. Final transcripts in checks/. Native runs were coordinator-owned; this lane only exported, replayed, and restored source as assigned.
+
+After final checks/SHA seal, ALL SOURCE/DOC/BUNDLE EDITS STOPPED pending coordinator audit. No staging or commits by this lane. Only docs/resident-source-identity-reuse.md and this NEW bundle are handoff changes. Unrelated work preserved. Root index grant required before staging.

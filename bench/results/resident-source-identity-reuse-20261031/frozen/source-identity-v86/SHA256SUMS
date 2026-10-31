@@ -1,0 +1,7 @@
+6c225dd077fb24b8fd83afffa739044d1752bb4581fb41390ac12cfd3fb0b59b  <EXPERIMENT>/source-identity-v86/accepted-HEAD-lib.rs
+6c225dd077fb24b8fd83afffa739044d1752bb4581fb41390ac12cfd3fb0b59b  <EXPERIMENT>/source-identity-v86/original-lib.rs
+b761a33a6c7be01917fbacefd825aba0cb77a8d538371f11e7a54566203525bd  <EXPERIMENT>/source-identity-v86/candidate-lib.rs
+bd228e723fd4f45f9c95f004a45562ab620fb2f33587c9e6b02a029c3c06a33f  <EXPERIMENT>/source-identity-v86/candidate-resident-source-identity-reuse.md
+3bd33d1ff0f4efd91b9fb84dcec8e3c2528bbd59c403e0745f12481f977126a9  <EXPERIMENT>/source-identity-v86/candidate.patch
+3f395006109c979cc9b1718b1e6e8dd209dcc3f1a683a1b8a67596a152a77b5a  <EXPERIMENT>/source-identity-v86/sourcechecks.py
+4c4dfca1d89c2321e0ccc9278b994bcf80a374326984eba1d210a09bebe75853  <EXPERIMENT>/source-identity-v86/sourcechecks.txt

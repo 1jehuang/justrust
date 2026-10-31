@@ -1,0 +1,45 @@
+{
+  "correctness": {
+    "profile": 8,
+    "strict": 28
+  },
+  "decision": "rejected-below-10-percent-floor",
+  "incomplete_calls": 8,
+  "native": [
+    36,
+    22,
+    4,
+    53,
+    373
+  ],
+  "noise": "unknown",
+  "repeat": {
+    "calls": 54,
+    "delta_percent": -1.6778106115021507,
+    "first_touch_seconds": {
+      "segment-0": 0.051610047987196594,
+      "segment-1": 0.06458290299633518,
+      "segment-2": 0.05566886198357679,
+      "segment-3": 0.056362458009971306
+    },
+    "measured": 20,
+    "off_median_seconds": 0.054563309997320175,
+    "on_median_seconds": 0.053647840992198326,
+    "runtime_nonces": 24
+  },
+  "source_restored": true,
+  "timing": {
+    "calls": 54,
+    "delta_percent": -11.777378539702832,
+    "first_touch_seconds": {
+      "segment-0": 0.0598599259974435,
+      "segment-1": 0.052869579987600446,
+      "segment-2": 0.050768276007147506,
+      "segment-3": 0.059696589974919334
+    },
+    "measured": 20,
+    "off_median_seconds": 0.060376224500942044,
+    "on_median_seconds": 0.053265487993485294,
+    "runtime_nonces": 24
+  }
+}

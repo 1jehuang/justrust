@@ -1,0 +1,8 @@
+PASS: accepted HEAD equals initial full source
+PASS: OFF fetch body bytewise original, manifest_source bytewise original
+PASS: independent full manifest_source oracle tokenwise original
+PASS: ON fetch differs only by local map and resolution call
+PASS: hit validation precedes marker, successful resolution precedes insertion
+PASS: exact first-use flag and fixed marker present
+UNEXECUTED: Rust type checks, fixtures, native/off-bytewise/marker/performance acceptance
+candidate SHA256: b761a33a6c7be01917fbacefd825aba0cb77a8d538371f11e7a54566203525bd

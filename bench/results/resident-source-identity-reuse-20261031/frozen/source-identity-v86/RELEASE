@@ -1,0 +1,23 @@
+RELEASE: source-identity-v86
+Timestamp: 2026-10-31T19:48:00Z
+ALL SOURCE EDITS STOPPED. Released to root for native acceptance gates.
+
+Owned checkout edits only:
+- toolchain/resident/crates/blaze-metadata/src/lib.rs
+- docs/resident-source-identity-reuse.md (new)
+
+Accepted HEAD: ddf921d4c40dba929cabec2135a592671eee0529
+Original lib SHA256: 6c225dd077fb24b8fd83afffa739044d1752bb4581fb41390ac12cfd3fb0b59b
+Candidate lib SHA256: b761a33a6c7be01917fbacefd825aba0cb77a8d538371f11e7a54566203525bd
+Candidate doc SHA256: bd228e723fd4f45f9c95f004a45562ab620fb2f33587c9e6b02a029c3c06a33f
+See SHA256SUMS for all frozen originals/candidates/patch/sourcechecks.
+
+PASS: exact-file rustfmt and Python static source checks.
+UNEXECUTED: all Rust builds/tests/native probes, subprocess marker/OFF acceptance and performance.
+No dependency/lock/install/commit actions. No speedup claim.
+
+Safety: exact first-use default-OFF flag. Per-fetch successful exact-string map only. Cratesio hits repeat exact config.check_registry_index_not_set before clone/marker. Only actual validated hit emits once/process ignored-error fixed stderr marker. Frozen OFF fetch and manifest_source bodies statically match accepted originals. Candidate full fetch differs only by local map declaration and resolution substitution.
+
+Fixture source coverage: mixed full source IDs and warning sequence, fresh Config after edits, populated-cache hit validation for obsolete/invalid config, nonempty warning on a hit, full exported vendored packages/path/order/source/error/warnings. Fixtures are not yet compiled or executed. Broader native observation/performance belongs to root. Source assumptions require reauditing if constructors gain config effects.
+
+Unrelated FINDINGS.md, data/runs/xps14/2026-10.jsonl and .wrangler/cache/ preserved.

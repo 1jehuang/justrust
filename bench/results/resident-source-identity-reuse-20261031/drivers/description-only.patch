@@ -1,0 +1,13 @@
+--- initial-mocked.py
++++ current.py
+@@ -26,8 +26,8 @@
+  ('actual_batch_stderr_marker','actual_conversion_stderr_marker'),
+  # Preserve the original wrong-version negative after renaming v81 to v86.
+  ("line.replace('v81', 'v80')","line.replace('v86', 'v80')"),
+- ('noop/clientplanning parser factor','noop/clientplanning warm registry fetch factor'),
+- ('Parser flag explicitly','Warm registry fetch flag explicitly'),
++ ('noop/clientplanning parser factor','noop/clientplanning source identity reuse factor'),
++ ('Parser flag explicitly','Source identity reuse flag explicitly'),
+ )
+ 
+ def transformed(path):
