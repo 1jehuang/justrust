@@ -8,6 +8,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
 impl Scratch {
@@ -142,6 +145,97 @@ fn runs(source: &str, expected: &str) {
         );
     }
 }
+fn stock_and_native_runs(source: &str) {
+    let expected = b"projected returns oracle ok\n";
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock-program");
+    let metadata = scratch.path("stock.rmeta");
+    let checked = capture(
+        Command::new(stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .arg("--edition=2024")
+            .arg("--emit=metadata")
+            .arg(&input)
+            .arg("-o")
+            .arg(&metadata),
+        &scratch,
+        30,
+    );
+    assert!(
+        checked.status.success(),
+        "stock CHECK: {checked:?}\n{source}"
+    );
+    assert!(!output.exists(), "stock CHECK published executable");
+    let built = capture(
+        Command::new(stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .arg("--edition=2024")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        30,
+    );
+    assert!(built.status.success(), "stock BUILD: {built:?}\n{source}");
+    let result = capture(&mut Command::new(output), &scratch, 5);
+    assert!(result.status.success(), "stock runtime: {result:?}");
+    assert_eq!(result.stdout, expected);
+    assert!(result.stderr.is_empty(), "stock runtime: {result:?}");
+    runs(source, std::str::from_utf8(expected).unwrap());
+}
+
+fn stock_and_native_reject_borrow(label: &str, source: &str) {
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock-must-not-exist");
+    let result = capture(
+        Command::new(stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .arg("--edition=2024")
+            .arg("--emit=metadata")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        30,
+    );
+    assert!(
+        !result.status.success(),
+        "stock accepted {label}: {result:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("E0506"),
+        "stock wrong rejection {label}: {result:?}"
+    );
+    assert!(!output.exists(), "stock published invalid metadata");
+    rejects(label, source);
+}
+
+#[test]
+fn rejects_invalid_enum_payload_parent_write_while_result_live() {
+    stock_and_native_reject_borrow(
+        "enum_payload_parent_write",
+        r#"enum E{A(i32),B} fn get<'a>(p:&'a E)->&'a i32{match p{E::A(v)=>v,E::B=>loop{}}} fn main(){let mut p=E::A(7);let r=get(&p);p=E::B;println!("{}",*r);}"#,
+    );
+}
+
+#[test]
+fn rejects_invalid_dynamic_index_parent_write_while_result_live() {
+    stock_and_native_reject_borrow(
+        "dynamic_index_parent_write",
+        r#"fn get<'a>(p:&'a[i32;2],i:usize)->&'a i32{&(*p)[i]} fn main(){let mut p=[3,7];let r=get(&p,1usize);p[0]=9;println!("{}",*r);}"#,
+    );
+}
+
+#[test]
+fn rejects_invalid_computed_call_borrow_parent_write_while_result_live() {
+    stock_and_native_reject_borrow(
+        "computed_call_borrow_parent_write",
+        r#"fn get<'a>(p:&'a(i32,i32))->&'a i32{&(*p).1} fn main(){let mut p=(3,7);let r=&*get(&p);p.0=9;println!("{}",*r);}"#,
+    );
+}
+
 fn rejects(label: &str, source: &str) {
     for workers in [1, 8] {
         let scratch = Scratch::new();
@@ -437,10 +531,8 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_enum_payload_projection() {
-    // Stock accepts and runs this fixture, outside the bounded projected-return slice.
-    rejects(
-        "enum_payload_projection",
+fn accepts_enum_payload_projection() {
+    stock_and_native_runs(
         r#"enum E{A(i32),B} fn get<'a>(p:&'a E)->&'a i32{match p{E::A(v)=>v,E::B=>loop{}}} fn run()->i32{let p=E::A(7);*get(&p)}
 fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 "#,
@@ -448,10 +540,8 @@ fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_dynamic_index_projection() {
-    // Stock accepts and runs this fixture, outside the bounded projected-return slice.
-    rejects(
-        "dynamic_index_projection",
+fn accepts_dynamic_index_projection() {
+    stock_and_native_runs(
         r#"fn get<'a>(p:&'a[i32;2],i:usize)->&'a i32{&(*p)[i]} fn run()->i32{let p=[3,7];*get(&p,1usize)}
 fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 "#,
@@ -459,10 +549,8 @@ fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_borrow_computed_call_result() {
-    // Stock accepts and runs this fixture, outside the bounded projected-return slice.
-    rejects(
-        "borrow_computed_call_result",
+fn accepts_borrow_computed_call_result() {
+    stock_and_native_runs(
         r#"fn get<'a>(p:&'a(i32,i32))->&'a i32{&(*p).1} fn run()->i32{let p=(3,7);let r=&*get(&p);*r}
 fn main() { if run() == 7 { println!("projected returns oracle ok"); } }
 "#,
