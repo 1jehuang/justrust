@@ -1,0 +1,30 @@
+{
+  "args": [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "exit": 0,
+  "id": "20261030-201741916-1435769",
+  "route": "JUSTRUST_REMOTE=off",
+  "scope": "Derived path-free native receipt, joined to retained raw journal.",
+  "start": 1793416661.9309745,
+  "subcommand": "build",
+  "tests": {
+    "binaries": [],
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 0,
+    "libtest_secs": 0.0,
+    "passed": 0,
+    "timed": 0,
+    "timed_secs": 0.0
+  },
+  "wall": 83.04857754707336
+}

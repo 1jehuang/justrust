@@ -1,0 +1,31 @@
+{
+  "args": [
+    "check",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--tests",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "exit": 0,
+  "id": "20261030-201141823-1399835",
+  "route": "JUSTRUST_REMOTE=off",
+  "scope": "Derived path-free native receipt, joined to retained raw journal.",
+  "start": 1793416301.8361027,
+  "subcommand": "check",
+  "tests": {
+    "binaries": [],
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 0,
+    "libtest_secs": 0.0,
+    "passed": 0,
+    "timed": 0,
+    "timed_secs": 0.0
+  },
+  "wall": 14.713477849960327
+}

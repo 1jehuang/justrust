@@ -1,0 +1,15 @@
+{
+  "excluded": [
+    "engine binaries",
+    "targets",
+    "private caches",
+    "telemetry homes",
+    "ambient environment recapture"
+  ],
+  "gate_runs": 7,
+  "live_rust_reads": 0,
+  "native_calls": 0,
+  "sessions": 2,
+  "source": "Existing frozen source packages, original raw journals/state snapshots and prior pinned source/helper/license package only",
+  "state_rows": 14
+}

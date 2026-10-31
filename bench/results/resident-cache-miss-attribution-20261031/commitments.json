@@ -1,0 +1,872 @@
+{
+  "frozen": {
+    "frozen/Cargo.lock.cb9d8a010": "bf3307542b2b5c0e7a4b8c5b1a1e650bba9afece80284cc497a3800560a0c2bc",
+    "frozen/store-lib-cb9d8a010.rs": "7a9d13ecf128b6a5f51a07e3b505bb224fd52a4af1f3804090193529f2f2d104",
+    "frozen/v42/BASE_HEAD": "513b1781341ab60d625712bdbe3d89c8c408a6a0d5e82ff629d6b461392f43fe",
+    "frozen/v42/FROZEN_READY.txt": "42dc38552ddf04e2eb80f521ba62ec5eacd2502672681eba446f1a2ff4e14cef",
+    "frozen/v42/SHA256SUMS": "e20555c83fd2b975ef0ac5bd10e1d2b15e1a9fb4a9c9cc01f897a39b42975c2e",
+    "frozen/v42/candidate.patch": "11350ea2271b43e744f5728788a53201e60ce448e5a832979452b066fed2fa8c",
+    "frozen/v42/candidate/docs/resident-cache-miss-attribution.md": "099962c671561a9e4ce3bb60bc22bb86d615a36737a630c879a18c4ce31ea6e8",
+    "frozen/v42/candidate/toolchain/resident/crates/hir-ty-codegen/cached.rs": "0ddf3c0fd19ea34f55b6790caa3dc941abc203ff80a30e3a6d3489afea468c34",
+    "frozen/v42/candidate/toolchain/resident/crates/hir-ty-codegen/mod.rs": "ec08cb7a35fa6c4bcdfbf3514e7fceb367a84eb3958817ef9f803703100a7b14",
+    "frozen/v42/original/NEW_DOCUMENT": "38a7b4cc8923619d76d9f671be64c4567fb6dfc4fca63550ec1beac3f03f9794",
+    "frozen/v42/original/toolchain/resident/crates/hir-ty-codegen/cached.rs": "bcc541e0985c74d7cba79f74623c59603033b28dddd41d236e74e7fe9f19dfb6",
+    "frozen/v42/original/toolchain/resident/crates/hir-ty-codegen/mod.rs": "ee9fa1b2298f22fc2c1e062b3692383a7bb3e2df3f5fbeee9070270b3368c98c",
+    "frozen/v43/BASE_HEAD": "513b1781341ab60d625712bdbe3d89c8c408a6a0d5e82ff629d6b461392f43fe",
+    "frozen/v43/FROZEN_READY.txt": "87848204516261f5afa8a88ca0bd2740b4d7581d06d90005a03f41b6bb85904f",
+    "frozen/v43/HEAD_AT_REPAIR": "002726d5a5d1ad3a27550b18a79c93a7adbe066e9fa7c019939d65f505e2c86e",
+    "frozen/v43/SHA256SUMS": "b8046308303275a148bdda33692c35b8d705d7578ca034f8b55f04925026dcd5",
+    "frozen/v43/candidate.patch": "2777c80c1204c1ad8cb8270fcc05fddca900a60065fb7ec10f3ca32ef0e256e9",
+    "frozen/v43/candidate/docs/resident-cache-miss-attribution.md": "726555f53efd55c4f7a0ba994bb1f847d4dc7a2771684cbd7fa0ee61f0cf0d8e",
+    "frozen/v43/candidate/toolchain/resident/crates/hir-ty-codegen/cached.rs": "11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f",
+    "frozen/v43/candidate/toolchain/resident/crates/hir-ty-codegen/mod.rs": "ec08cb7a35fa6c4bcdfbf3514e7fceb367a84eb3958817ef9f803703100a7b14",
+    "frozen/v43/failed-v42/codegen-native.log": "38228a85f8051df6cccbd4e6a5005e5be5d537a40f64b49026394d1e92904902",
+    "frozen/v43/final-doc/RELEASE.txt": "0e060d1386275b51c60dec4cf8bd5f06945bdf6a32bfef74dc5421d4cf8e672d",
+    "frozen/v43/final-doc/resident-cache-miss-attribution.md": "2e6b08a8871eec8c0db0d3a5256ce57943dc45211ba330db331e498b7065dbd4",
+    "frozen/v43/original/docs/resident-cache-miss-attribution.md": "099962c671561a9e4ce3bb60bc22bb86d615a36737a630c879a18c4ce31ea6e8",
+    "frozen/v43/original/toolchain/resident/crates/hir-ty-codegen/cached.rs": "0ddf3c0fd19ea34f55b6790caa3dc941abc203ff80a30e3a6d3489afea468c34",
+    "frozen/v43/original/toolchain/resident/crates/hir-ty-codegen/mod.rs": "ec08cb7a35fa6c4bcdfbf3514e7fceb367a84eb3958817ef9f803703100a7b14",
+    "frozen/v43/repair-from-v42.patch": "c7038692fc8f834c92fcf1a6c671c52b16134440595d174d271db366d9137525"
+  },
+  "gates": [
+    {
+      "exit": 0,
+      "group": "candidate-build-v42",
+      "receipt": "check",
+      "run": "20261030-201141823-1399835",
+      "tests": {
+        "binaries": [],
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 0.0,
+        "passed": 0,
+        "timed": 0,
+        "timed_secs": 0.0
+      }
+    },
+    {
+      "exit": 0,
+      "group": "candidate-build-v42",
+      "receipt": "compile",
+      "run": "20261030-201156567-1401692",
+      "tests": {
+        "binaries": [],
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 0.0,
+        "passed": 0,
+        "timed": 0,
+        "timed_secs": 0.0
+      }
+    },
+    {
+      "exit": 101,
+      "group": "candidate-unit-v42",
+      "receipt": "codegen-native",
+      "run": "20261030-201323863-1411935",
+      "tests": {
+        "binaries": [
+          {
+            "failed": 3,
+            "filtered_out": 0,
+            "name": "hir_ty_codegen-d85c581ce11daf8e",
+            "passed": 50,
+            "start": 18.8797869682312,
+            "wall": 0.023850679397583008
+          }
+        ],
+        "failed": 3,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 0.02,
+        "passed": 50,
+        "slowest": [
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+            "passed": true,
+            "secs": 0.019
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+            "passed": true,
+            "secs": 0.018
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "sve::tests::stubs_are_what_llvm_selects",
+            "passed": true,
+            "secs": 0.004
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc",
+            "passed": false,
+            "secs": 0.003
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct",
+            "passed": false,
+            "secs": 0.003
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_miss_arrival_reasons_follow_real_decode_and_remap",
+            "passed": true,
+            "secs": 0.002
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key",
+            "passed": false,
+            "secs": 0.002
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+            "passed": true,
+            "secs": 0.002
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once",
+            "passed": true,
+            "secs": 0.001
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+            "passed": true,
+            "secs": 0.001
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::cache_miss_stats_gate_is_exact",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::an_entry_is_read_back_as_it_was_written",
+            "passed": true,
+            "secs": 0.0
+          }
+        ],
+        "timed": 53,
+        "timed_secs": 0.05500000000000001
+      }
+    },
+    {
+      "exit": 0,
+      "group": "candidate-build-v43",
+      "receipt": "check",
+      "run": "20261030-201727383-1433832",
+      "tests": {
+        "binaries": [],
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 0.0,
+        "passed": 0,
+        "timed": 0,
+        "timed_secs": 0.0
+      }
+    },
+    {
+      "exit": 0,
+      "group": "candidate-build-v43",
+      "receipt": "compile",
+      "run": "20261030-201741916-1435769",
+      "tests": {
+        "binaries": [],
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 0.0,
+        "passed": 0,
+        "timed": 0,
+        "timed_secs": 0.0
+      }
+    },
+    {
+      "exit": 0,
+      "group": "candidate-unit-v43",
+      "receipt": "codegen-native",
+      "run": "20261030-201905159-1445554",
+      "tests": {
+        "binaries": [
+          {
+            "failed": 0,
+            "filtered_out": 0,
+            "name": "hir_ty_codegen-d85c581ce11daf8e",
+            "passed": 53,
+            "start": 20.842379093170166,
+            "wall": 0.023347854614257812
+          }
+        ],
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 0.02,
+        "passed": 53,
+        "slowest": [
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+            "passed": true,
+            "secs": 0.019
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+            "passed": true,
+            "secs": 0.014
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc",
+            "passed": true,
+            "secs": 0.007
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct",
+            "passed": true,
+            "secs": 0.007
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key",
+            "passed": true,
+            "secs": 0.004
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "sve::tests::stubs_are_what_llvm_selects",
+            "passed": true,
+            "secs": 0.004
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::native_miss_arrival_reasons_follow_real_decode_and_remap",
+            "passed": true,
+            "secs": 0.002
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+            "passed": true,
+            "secs": 0.002
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once",
+            "passed": true,
+            "secs": 0.001
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+            "passed": true,
+            "secs": 0.001
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::cache_miss_stats_gate_is_exact",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it",
+            "passed": true,
+            "secs": 0.0
+          },
+          {
+            "binary": "hir_ty_codegen-d85c581ce11daf8e",
+            "name": "cached::tests::an_entry_that_names_what_it_lacks_is_no_entry",
+            "passed": true,
+            "secs": 0.0
+          }
+        ],
+        "timed": 53,
+        "timed_secs": 0.061
+      }
+    },
+    {
+      "exit": 0,
+      "group": "candidate-unit-v43",
+      "receipt": "full-native",
+      "run": "20261030-201926060-1448168",
+      "tests": {
+        "binaries": [
+          {
+            "failed": 0,
+            "filtered_out": 0,
+            "name": "jr_engine-93ff5023e9192f9b",
+            "passed": 360,
+            "start": 74.0042622089386,
+            "wall": 16.59382128715515
+          }
+        ],
+        "failed": 0,
+        "filtered_out": 0,
+        "ignored": 0,
+        "libtest_secs": 16.59,
+        "passed": 360,
+        "slowest": [
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times",
+            "passed": true,
+            "secs": 16.521
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked",
+            "passed": true,
+            "secs": 1.79
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound",
+            "passed": true,
+            "secs": 0.993
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::gateway::tests::what_is_over_a_put_goes_up_in_parts_checked_whole",
+            "passed": true,
+            "secs": 0.595
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::tests::a_pack_that_unpacks_to_more_than_its_list_says_is_not_written",
+            "passed": true,
+            "secs": 0.249
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::gateway::tests::a_pack_goes_up_and_comes_back_in_ranges",
+            "passed": true,
+            "secs": 0.224
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "whole::tests::packed_reads_back_as_it_was",
+            "passed": true,
+            "secs": 0.224
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "whole::tests::read_by_a_link_is_not_removed",
+            "passed": true,
+            "secs": 0.224
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "whole::tests::written_anew_leaves_nothing_of_the_last",
+            "passed": true,
+            "secs": 0.224
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::signed::tests::no_bytes_are_taken_for_a_list_that_was_signed",
+            "passed": true,
+            "secs": 0.221
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "deps::tests::an_archive_that_unpacks_to_more_than_is_taken_is_refused",
+            "passed": true,
+            "secs": 0.213
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "splice::tests::a_program_written_in_place_starts_after_the_write",
+            "passed": true,
+            "secs": 0.211
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "socket::tests::a_client_that_never_reads_is_given_up_on",
+            "passed": true,
+            "secs": 0.208
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "socket::tests::a_socket_let_go_of_is_free_while_processes_start",
+            "passed": true,
+            "secs": 0.201
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::tests::a_manifest_longer_than_is_read_is_refused",
+            "passed": true,
+            "secs": 0.186
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "cargo::closure::tests::fetched_pushed_pulled_and_laid_out",
+            "passed": true,
+            "secs": 0.152
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "deps::tests::a_list_of_units_longer_than_is_read_is_refused",
+            "passed": true,
+            "secs": 0.137
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::gateway::tests::a_pack_the_gateway_changed_is_rejected_and_not_kept",
+            "passed": true,
+            "secs": 0.109
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "socket::tests::a_silent_or_endless_client_is_given_up_on",
+            "passed": true,
+            "secs": 0.108
+          },
+          {
+            "binary": "jr_engine-93ff5023e9192f9b",
+            "name": "remote::signed::tests::two_that_take_at_once_remember_the_later",
+            "passed": true,
+            "secs": 0.092
+          }
+        ],
+        "timed": 360,
+        "timed_secs": 23.983
+      }
+    }
+  ],
+  "helpers": {
+    "provenance/blaze_edit_compare.py": "9c451fdb939d3a8c024ddf7e2b8c2fd3a8badc7c164a429415a7c636eb8c41a8",
+    "provenance/blaze_runtime_compare.py": "a7e2af863e2b1ea2878ae5c66a0f01aab1ad7fb9efe2e1027254a1269eefb568",
+    "provenance/build-test-candidate-v42.sh": "436c6d16e75e3e62bbd0c69512b33f7ba5fc08cae5834a587b464638d3a76ea5",
+    "provenance/build-test-candidate-v43.sh": "3d22200df9fcd25ee591c7c51fefaa611fc97af7d6f02dab359816a9be725d62",
+    "provenance/probe-cache-miss-attribution-v42.py": "9c7ae4162b631c7249238c192a24c07cb29656a75f7b96f0707b35e57c0a67f2",
+    "provenance/resident_engine_compare.py": "7da5b024344f662743b81043f4c200a23b3a49f61356e933b48257b2860c5a80",
+    "provenance/resident_state_matrix.py": "138aa2fb7e1791de92d43c8855c6151abd188e5f57fdb4d28c22e326c54be738",
+    "provenance/resident_workload_compare.py": "e47ef667315c0044e2b0072eb43a9db68860f32b50757bdd927b49522de1e92d",
+    "provenance/retention-receipt.json": "176ea5d9e4c8428e6e1f8f54952ef26a72ed2e4b3ee85e682dba0b28fed067cd",
+    "provenance/validate-cache-miss-v43.py": "afde55462482e6796309a6268b899089c3f740a7a289c185eb6b28ac1bd7b146"
+  },
+  "native": {
+    "42": {
+      "engine_sha": "3e142eaadbcc60c12c3066e8fc6f2cc496f1a4235e61803fd47a7b3e2600b3ff",
+      "version": "jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-b9817658770dfc2f5936ad3afad3fde9d35b33550abab4a4fff36a748310216c)"
+    },
+    "43": {
+      "engine_sha": "1197df17843a18b1cf5af78b22dc805d15bfe45056eefe1a04113599e681e3e0",
+      "version": "jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-b0afadc7bfbd49b5ad10ac04fd51db74051172138256e9d418dfca637b3b6840)"
+    }
+  },
+  "observations": {
+    "off": [
+      {
+        "elapsed_seconds": 16.290473907996784,
+        "last_report": null,
+        "phase": "cold-prepare",
+        "report_count_in_cumulative_log": 0,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 0.04335267300484702,
+        "last_report": null,
+        "phase": "repeated-noop-1",
+        "report_count_in_cumulative_log": 0,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 7.557778492991929,
+        "last_report": null,
+        "phase": "manifest-feature-add",
+        "report_count_in_cumulative_log": 0,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 7.480696593993343,
+        "last_report": null,
+        "phase": "type-error",
+        "report_count_in_cumulative_log": 0,
+        "status": 101
+      },
+      {
+        "elapsed_seconds": 6.933860338001978,
+        "last_report": null,
+        "phase": "type-recovery",
+        "report_count_in_cumulative_log": 0,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 1.5795223320019431,
+        "last_report": null,
+        "phase": "assert-failure",
+        "report_count_in_cumulative_log": 0,
+        "status": 101
+      },
+      {
+        "elapsed_seconds": 0.4225679079972906,
+        "last_report": null,
+        "phase": "assert-recovery",
+        "report_count_in_cumulative_log": 0,
+        "status": 0
+      }
+    ],
+    "on": [
+      {
+        "elapsed_seconds": 19.855566708007245,
+        "last_report": {
+          "arrived": 0,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 0,
+          "dependency_settled_positive": 0,
+          "dependency_unavailable": 0,
+          "direct_key_missing": 90996,
+          "direct_unavailable": 91018,
+          "get_negative": 139835,
+          "get_positive": 0,
+          "key_unavailable": 0,
+          "native_imports": 0,
+          "path_remap": 0,
+          "settled_negative": 107984,
+          "settled_positive": 0,
+          "transitive_failure": 0,
+          "usable_positive": 0
+        },
+        "phase": "cold-prepare",
+        "report_count_in_cumulative_log": 1,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 0.03045559198653791,
+        "last_report": {
+          "arrived": 0,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 0,
+          "dependency_settled_positive": 0,
+          "dependency_unavailable": 0,
+          "direct_key_missing": 90996,
+          "direct_unavailable": 91018,
+          "get_negative": 139835,
+          "get_positive": 0,
+          "key_unavailable": 0,
+          "native_imports": 0,
+          "path_remap": 0,
+          "settled_negative": 107984,
+          "settled_positive": 0,
+          "transitive_failure": 0,
+          "usable_positive": 0
+        },
+        "phase": "repeated-noop-1",
+        "report_count_in_cumulative_log": 1,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 7.284145797995734,
+        "last_report": {
+          "arrived": 45207,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 1,
+          "dependency_settled_positive": 32779,
+          "dependency_unavailable": 25,
+          "direct_key_missing": 45508,
+          "direct_unavailable": 45495,
+          "get_negative": 55518,
+          "get_positive": 187729,
+          "key_unavailable": 0,
+          "native_imports": 9,
+          "path_remap": 0,
+          "settled_negative": 15351,
+          "settled_positive": 52829,
+          "transitive_failure": 26,
+          "usable_positive": 8225
+        },
+        "phase": "manifest-feature-add",
+        "report_count_in_cumulative_log": 1,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 7.96679817099357,
+        "last_report": {
+          "arrived": 45090,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 1,
+          "dependency_settled_positive": 34602,
+          "dependency_unavailable": 25,
+          "direct_key_missing": 45473,
+          "direct_unavailable": 45465,
+          "get_negative": 55455,
+          "get_positive": 188727,
+          "key_unavailable": 0,
+          "native_imports": 9,
+          "path_remap": 0,
+          "settled_negative": 15289,
+          "settled_positive": 52610,
+          "transitive_failure": 26,
+          "usable_positive": 8182
+        },
+        "phase": "type-error",
+        "report_count_in_cumulative_log": 1,
+        "status": 101
+      },
+      {
+        "elapsed_seconds": 7.026804269000422,
+        "last_report": {
+          "arrived": 55754,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 3,
+          "dependency_settled_positive": 48750,
+          "dependency_unavailable": 26,
+          "direct_key_missing": 34863,
+          "direct_unavailable": 34846,
+          "get_negative": 34895,
+          "get_positive": 230643,
+          "key_unavailable": 0,
+          "native_imports": 9,
+          "path_remap": 0,
+          "settled_negative": 155,
+          "settled_positive": 49018,
+          "transitive_failure": 29,
+          "usable_positive": 7013
+        },
+        "phase": "type-recovery",
+        "report_count_in_cumulative_log": 1,
+        "status": 0
+      },
+      {
+        "elapsed_seconds": 1.6056846089923056,
+        "last_report": {
+          "arrived": 55754,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 3,
+          "dependency_settled_positive": 48750,
+          "dependency_unavailable": 26,
+          "direct_key_missing": 34863,
+          "direct_unavailable": 34846,
+          "get_negative": 34895,
+          "get_positive": 230643,
+          "key_unavailable": 0,
+          "native_imports": 9,
+          "path_remap": 0,
+          "settled_negative": 155,
+          "settled_positive": 49018,
+          "transitive_failure": 29,
+          "usable_positive": 7013
+        },
+        "phase": "assert-failure",
+        "report_count_in_cumulative_log": 1,
+        "status": 101
+      },
+      {
+        "elapsed_seconds": 0.3932628909969935,
+        "last_report": {
+          "arrived": 55754,
+          "banned": 0,
+          "debug_types": 0,
+          "decode_or_sound": 0,
+          "dependency_native_imports": 0,
+          "dependency_settled_negative": 3,
+          "dependency_settled_positive": 48750,
+          "dependency_unavailable": 26,
+          "direct_key_missing": 34863,
+          "direct_unavailable": 34846,
+          "get_negative": 34895,
+          "get_positive": 230643,
+          "key_unavailable": 0,
+          "native_imports": 9,
+          "path_remap": 0,
+          "settled_negative": 155,
+          "settled_positive": 49018,
+          "transitive_failure": 29,
+          "usable_positive": 7013
+        },
+        "phase": "assert-recovery",
+        "report_count_in_cumulative_log": 1,
+        "status": 0
+      }
+    ]
+  },
+  "scope": "Native diagnostic observations, not performance or unique compiled-function losses",
+  "source_before": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "source_commit": "cb9d8a010",
+  "toolchain_sha256": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371"
+}

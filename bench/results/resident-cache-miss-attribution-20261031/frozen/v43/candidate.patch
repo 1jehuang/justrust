@@ -1,0 +1,486 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/cached.rs b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+index 4eba401e7..107adb533 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/cached.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+@@ -593,6 +593,62 @@ impl Entry {
+     }
+ }
+ 
++#[derive(Clone, Copy)]
++#[repr(usize)]
++enum Miss {
++    KeyUnavailable,
++    DirectKeyMissing,
++    Banned,
++    DecodeOrSound,
++    DebugTypes,
++    PathRemap,
++    Arrived,
++    GetPositive,
++    GetNegative,
++    SettledPositive,
++    SettledNegative,
++    DirectUnavailable,
++    NativeImports,
++    DependencySettledPositive,
++    DependencySettledNegative,
++    DependencyUnavailable,
++    DependencyNativeImports,
++    TransitiveFailure,
++    UsablePositive,
++}
++const MISS_LABELS: [&str; 19] = [
++    "key_unavailable",
++    "direct_key_missing",
++    "banned",
++    "decode_or_sound",
++    "debug_types",
++    "path_remap",
++    "arrived",
++    "get_positive",
++    "get_negative",
++    "settled_positive",
++    "settled_negative",
++    "direct_unavailable",
++    "native_imports",
++    "dependency_settled_positive",
++    "dependency_settled_negative",
++    "dependency_unavailable",
++    "dependency_native_imports",
++    "transitive_failure",
++    "usable_positive",
++];
++struct MissStats([std::sync::atomic::AtomicU64; MISS_LABELS.len()]);
++impl MissStats {
++    fn enabled(value: Option<&std::ffi::OsStr>) -> bool {
++        value == Some(std::ffi::OsStr::new("1"))
++    }
++    fn startup() -> bool {
++        static ENABLED: OnceLock<bool> = OnceLock::new();
++        *ENABLED
++            .get_or_init(|| Self::enabled(std::env::var_os("RA_JIT_CACHE_MISS_STATS").as_deref()))
++    }
++}
++
+ /// The entries of the store that one program was asked about.
+ pub(super) struct Entries {
+     store: &'static Store,
+@@ -609,6 +665,7 @@ pub(super) struct Entries {
+     /// Whether the program can be built from an entry and everything it calls.
+     usable: Sharded<Arc<str>, bool>,
+     types: Sharded<[u8; KEY], Arc<OnceLock<Option<TypeSet>>>>,
++    miss_stats: Option<Box<MissStats>>,
+ }
+ 
+ /// A map behind a lock for each of its shards: a restart has every thread look up the stored
+@@ -809,6 +866,26 @@ struct Visit {
+ }
+ 
+ impl Entries {
++    fn count(&self, reason: Miss) {
++        if let Some(stats) = &self.miss_stats {
++            stats.0[reason as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        }
++    }
++    pub(super) fn report_misses(&self) {
++        let Some(stats) = &self.miss_stats else { return };
++        let counts = MISS_LABELS
++            .iter()
++            .zip(&stats.0)
++            .map(|(label, count)| {
++                format!("{label}={}", count.load(std::sync::atomic::Ordering::Relaxed))
++            })
++            .collect::<Vec<_>>()
++            .join(" ");
++        let _ = std::io::Write::write_fmt(
++            &mut std::io::stderr().lock(),
++            format_args!("ra-jit cache-miss-stats v1 {counts}\n"),
++        );
++    }
+     pub(super) fn new(
+         store: &'static Store,
+         debug: Told,
+@@ -817,7 +894,10 @@ impl Entries {
+         library: Option<super::LibrarySources>,
+     ) -> Entries {
+         let (entries, usable, types) = Default::default();
+-        Entries { store, debug, program, cargo_home, library, entries, usable, types }
++        let miss_stats = MissStats::startup().then(|| {
++            Box::new(MissStats(std::array::from_fn(|_| std::sync::atomic::AtomicU64::new(0))))
++        });
++        Entries { store, debug, program, cargo_home, library, entries, usable, types, miss_stats }
+     }
+ 
+     /// Never use the entry again in this process: it did not fit the object it was read for.
+@@ -833,16 +913,30 @@ impl Entries {
+     pub(super) fn get(&self, name: &str) -> Option<Arc<Entry>> {
+         let cell = self.cell(name);
+         let read = || {
+-            let key = Entry::key(name, self.debug, self.program.as_ref())?;
+-            self.arrived(&self.store.get(&key)?)
++            let Some(key) = Entry::key(name, self.debug, self.program.as_ref()) else {
++                self.count(Miss::KeyUnavailable);
++                return None;
++            };
++            let Some(bytes) = self.store.get(&key) else {
++                self.count(Miss::DirectKeyMissing);
++                return None;
++            };
++            self.arrived(&bytes)
+         };
+-        cell.get_or_init(|| {
+-            let tally = super::backend::Tally::global();
+-            let entry =
+-                (!Self::is_banned(name)).then(|| tally.step(super::backend::Step::StoreRead, read));
+-            entry.flatten().map(Arc::new)
+-        })
+-        .clone()
++        let found = cell
++            .get_or_init(|| {
++                let tally = super::backend::Tally::global();
++                let entry = if Self::is_banned(name) {
++                    self.count(Miss::Banned);
++                    None
++                } else {
++                    Some(tally.step(super::backend::Step::StoreRead, read))
++                };
++                entry.flatten().map(Arc::new)
++            })
++            .clone();
++        self.count(if found.is_some() { Miss::GetPositive } else { Miss::GetNegative });
++        found
+     }
+ 
+     fn cell(&self, name: &str) -> Arc<OnceLock<Option<Arc<Entry>>>> {
+@@ -859,15 +953,21 @@ impl Entries {
+ 
+     /// The entry the store keeps as `bytes`, as this build reads it.
+     fn arrived(&self, bytes: &[u8]) -> Option<Entry> {
+-        let entry = Entry::decode(bytes)?;
++        let Some(entry) = Entry::decode(bytes) else {
++            self.count(Miss::DecodeOrSound);
++            return None;
++        };
+         // The types are read when the function is described (`describe`), which a build
+         // whose object is the one it has already never does.
+         let stored = |key: &[u8; KEY]| self.store.has_used(key) || self.types(key).is_some();
+         let debug = entry.debug.as_ref();
+         if !debug.is_none_or(|it| it.stored_types.iter().all(stored)) {
++            self.count(Miss::DebugTypes);
+             return None;
+         }
+-        entry.arrived(self.cargo_home.as_deref(), self.library.as_ref())
++        let entry = entry.arrived(self.cargo_home.as_deref(), self.library.as_ref());
++        self.count(if entry.is_some() { Miss::Arrived } else { Miss::PathRemap });
++        entry
+     }
+ 
+     /// Reads the entries of `names` and of everything they call, as [`Entries::get`] would
+@@ -889,9 +989,19 @@ impl Entries {
+                 .filter(|(_, cell)| cell.get().is_none())
+                 .collect();
+             let keyed: Vec<(usize, [u8; KEY])> = (cells.iter().enumerate())
+-                .filter(|(_, (name, _))| !Self::is_banned(name))
++                .filter(|(_, (name, _))| {
++                    let banned = Self::is_banned(name);
++                    if banned {
++                        self.count(Miss::Banned);
++                    }
++                    !banned
++                })
+                 .filter_map(|(at, (name, _))| {
+-                    Some((at, Entry::key(name, self.debug, self.program.as_ref())?))
++                    let key = Entry::key(name, self.debug, self.program.as_ref());
++                    if key.is_none() {
++                        self.count(Miss::KeyUnavailable);
++                    }
++                    Some((at, key?))
+                 })
+                 .collect();
+             let keys: Vec<[u8; KEY]> = keyed.iter().map(|it| it.1).collect();
+@@ -899,6 +1009,9 @@ impl Entries {
+                 tally.step(super::backend::Step::StoreRead, || self.store.get_many(&keys, threads));
+             let mut read: Vec<Option<Vec<u8>>> = vec![None; cells.len()];
+             for ((at, _), value) in keyed.iter().zip(values) {
++                if value.is_none() {
++                    self.count(Miss::DirectKeyMissing);
++                }
+                 read[*at] = value;
+             }
+             let next = std::sync::atomic::AtomicUsize::new(0);
+@@ -964,10 +1077,18 @@ impl Entries {
+     pub(super) fn usable(&self, name: &str, defines: &dyn Fn(&str) -> bool) -> bool {
+         let settled = |name: &str| self.usable.shard(name).get(name).copied();
+         if let Some(usable) = settled(name) {
++            self.count(if usable { Miss::SettledPositive } else { Miss::SettledNegative });
+             return usable;
+         }
+         let name: Arc<str> = Arc::from(name);
+-        let Some(entry) = self.get(&name).filter(|it| it.links(defines)) else {
++        let Some(entry) = self.get(&name).filter(|it| {
++            let links = it.links(defines);
++            if !links {
++                self.count(Miss::NativeImports);
++            }
++            links
++        }) else {
++            self.count(Miss::DirectUnavailable);
+             self.settle(name, false);
+             return false;
+         };
+@@ -1001,12 +1122,31 @@ impl Entries {
+                 continue;
+             }
+             let found = match settled(callee) {
+-                Some(true) => continue,
+-                Some(false) => None,
+-                None => self.get(callee).filter(|it| it.links(defines)),
++                Some(true) => {
++                    self.count(Miss::DependencySettledPositive);
++                    continue;
++                }
++                Some(false) => {
++                    self.count(Miss::DependencySettledNegative);
++                    None
++                }
++                None => {
++                    let found = self.get(callee);
++                    if found.is_none() {
++                        self.count(Miss::DependencyUnavailable);
++                    }
++                    found.filter(|it| {
++                        let links = it.links(defines);
++                        if !links {
++                            self.count(Miss::DependencyNativeImports);
++                        }
++                        links
++                    })
++                }
+             };
+             let callee: Arc<str> = Arc::from(callee);
+             let Some(entry) = found else {
++                self.count(Miss::TransitiveFailure);
+                 self.settle(callee, false);
+                 for visit in path {
+                     self.settle(visit.name, false);
+@@ -1023,6 +1163,7 @@ impl Entries {
+                 below: unsettled.len() - 1,
+             });
+         }
++        self.count(Miss::UsablePositive);
+         true
+     }
+ }
+@@ -1047,6 +1188,149 @@ mod tests {
+         *,
+     };
+ 
++    fn stats_fixture() -> (Entries, std::path::PathBuf) {
++        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
++        let dir = std::env::temp_dir().join(format!(
++            "ra-jit-miss-fixture-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
++        ));
++        std::fs::create_dir_all(&dir).unwrap();
++        let store = Box::leak(Box::new(Store::open_by_content(&dir).unwrap()));
++        let mut entries = Entries::new(store, Told::of(false, false), None, None, None);
++        entries.miss_stats = Some(Box::new(MissStats(std::array::from_fn(|_| {
++            std::sync::atomic::AtomicU64::new(0)
++        }))));
++        (entries, dir)
++    }
++
++    fn store_fixture(entries: &Entries, name: &str, entry: &Entry) {
++        let key = Entry::key(name, entries.debug, entries.program.as_ref()).unwrap();
++        let bytes = entry.encode().unwrap();
++        assert!(Entry::decode(&bytes).is_some());
++        entries.store.insert(&key, &bytes);
++        // Reads see sealed packs, not the open pack that insert appends to.
++        // Publish through the real native boundary before exercising get/usable.
++        entries.store.seal();
++        assert_eq!(entries.store.get(&key).as_deref(), Some(bytes.as_slice()));
++    }
++
++    fn dependency_fixture(callee: &str) -> Entry {
++        let mut entry = entry();
++        entry.debug = None;
++        entry.datas.clear();
++        entry.code = code(Vec::new());
++        entry.funcs =
++            vec![CachedFunc { target: CachedTarget::Named(callee.to_owned()), sig: signature() }];
++        entry
++    }
++
++    fn observed(entries: &Entries, reason: Miss) -> u64 {
++        entries.miss_stats.as_ref().unwrap().0[reason as usize]
++            .load(std::sync::atomic::Ordering::Relaxed)
++    }
++
++    #[test]
++    fn cache_miss_stats_gate_is_exact() {
++        use std::ffi::OsStr;
++        assert!(MissStats::enabled(Some(OsStr::new("1"))));
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!MissStats::enabled(value.map(OsStr::new)));
++        }
++    }
++
++    #[test]
++    fn native_miss_arrival_reasons_follow_real_decode_and_remap() {
++        let (entries, dir) = stats_fixture();
++        assert!(entries.arrived(&[255]).is_none());
++        assert_eq!(observed(&entries, Miss::DecodeOrSound), 1);
++        let mut invalid = entry();
++        invalid.code = code(vec![reloc(0, 0, 999)]);
++        assert!(entries.arrived(&invalid.encode().unwrap()).is_none());
++        assert_eq!(observed(&entries, Miss::DecodeOrSound), 2);
++        let mut fetched = fetched_to(super::super::CARGO_HOME);
++        fetched.debug = None;
++        assert!(entries.arrived(&fetched.encode().unwrap()).is_none());
++        assert_eq!(observed(&entries, Miss::PathRemap), 1);
++        let mut valid = entry();
++        valid.debug = None;
++        assert!(entries.arrived(&valid.encode().unwrap()).is_some());
++        assert_eq!(observed(&entries, Miss::Arrived), 1);
++        std::fs::remove_dir_all(dir).unwrap();
++    }
++
++    #[test]
++    fn native_cache_stats_cover_debug_imports_bans_and_positive_scc() {
++        let (entries, dir) = stats_fixture();
++        let mut debug_entry = entry();
++        debug_entry.debug.as_mut().unwrap().stored_types = vec![[251; KEY]];
++        assert!(entries.arrived(&debug_entry.encode().unwrap()).is_none());
++        assert_eq!(observed(&entries, Miss::DebugTypes), 1);
++        let banned = "c:1f:miss_stats::banned";
++        Entries::ban(banned);
++        assert!(entries.get(banned).is_none());
++        assert_eq!(observed(&entries, Miss::Banned), 1);
++        let imported = "c:1f:miss_stats::imported";
++        store_fixture(&entries, imported, &entry());
++        assert!(!entries.usable(imported, &|_| false));
++        assert_eq!(observed(&entries, Miss::NativeImports), 1);
++        let a = "c:1f:miss_stats::cycle_a";
++        let b = "c:1f:miss_stats::cycle_b";
++        for (name, callee) in [(a, b), (b, a)] {
++            store_fixture(&entries, name, &dependency_fixture(callee));
++        }
++        assert!(entries.usable(a, &|_| true));
++        assert!(entries.usable(b, &|_| true));
++        assert_eq!(observed(&entries, Miss::UsablePositive), 1);
++        assert_eq!(observed(&entries, Miss::SettledPositive), 1);
++        std::fs::remove_dir_all(dir).unwrap();
++    }
++
++    #[test]
++    fn native_prefetch_missing_and_dependency_failures_are_distinct() {
++        let (entries, dir) = stats_fixture();
++        let absent = "c:1f:miss_stats::prefetch_absent";
++        let banned = "c:1f:miss_stats::prefetch_banned";
++        Entries::ban(banned);
++        entries.prefetch([Arc::from(absent), Arc::from(banned)]);
++        assert_eq!(observed(&entries, Miss::DirectKeyMissing), 1);
++        assert_eq!(observed(&entries, Miss::Banned), 1);
++        assert!(entries.get(absent).is_none());
++        assert_eq!(observed(&entries, Miss::DirectKeyMissing), 1);
++        let parent = "c:1f:miss_stats::prefetch_parent";
++        store_fixture(&entries, parent, &dependency_fixture(absent));
++        assert!(!entries.usable(parent, &|_| true));
++        assert_eq!(observed(&entries, Miss::DependencyUnavailable), 1);
++        assert_eq!(observed(&entries, Miss::TransitiveFailure), 1);
++        let imports = "c:1f:miss_stats::dependency_imports";
++        store_fixture(&entries, imports, &entry());
++        let parent = "c:1f:miss_stats::import_parent";
++        store_fixture(&entries, parent, &dependency_fixture(imports));
++        assert!(!entries.usable(parent, &|_| false));
++        assert_eq!(observed(&entries, Miss::DependencyNativeImports), 1);
++        assert_eq!(observed(&entries, Miss::TransitiveFailure), 2);
++        std::fs::remove_dir_all(dir).unwrap();
++    }
++
++    #[test]
++    fn native_usable_negative_memo_is_not_a_fresh_missing_key() {
++        let (entries, dir) = stats_fixture();
++        let root = "c:1f:miss_stats::root";
++        assert!(!entries.usable(root, &|_| true));
++        let missing = observed(&entries, Miss::DirectKeyMissing);
++        assert_eq!(missing, 1);
++        assert!(!entries.usable(root, &|_| true));
++        assert_eq!(observed(&entries, Miss::DirectKeyMissing), missing);
++        assert_eq!(observed(&entries, Miss::SettledNegative), 1);
++        let parent_name = "c:1f:miss_stats::parent";
++        store_fixture(&entries, parent_name, &dependency_fixture(root));
++        assert!(!entries.usable(parent_name, &|_| true));
++        assert_eq!(observed(&entries, Miss::DependencySettledNegative), 1);
++        assert_eq!(observed(&entries, Miss::TransitiveFailure), 1);
++        assert_eq!(observed(&entries, Miss::DirectKeyMissing), missing);
++        std::fs::remove_dir_all(dir).unwrap();
++    }
++
+     fn signature() -> Signature {
+         let mut signature = Signature::new(CallConv::SystemV);
+         signature.params.push(AbiParam::new(types::I64));
+diff --git a/toolchain/resident/crates/hir-ty-codegen/mod.rs b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+index 0719419e5..7ea96c0ee 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/mod.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+@@ -1331,6 +1331,9 @@ impl CodegenUnit {
+                         .map_err(|e| CodegenError::Backend(format!("layout log: {e}")))?;
+                 }
+                 // The object frees them as it is written, on a thread of its own.
++                if let Some(entries) = entries.as_ref() {
++                    entries.report_misses();
++                }
+                 drop(entries.take());
+                 let start = stdx::time::Instant::now();
+                 let inventory = cg.inventory(roots, &compiled, &skipped, denied);
+--- /dev/null
++++ b/docs/resident-cache-miss-attribution.md
+@@ -0,0 +1,46 @@
++# Native cache-miss attribution (v43 candidate)
++
++Source-only diagnostic proposal against accepted HEAD `679d34ffa0f5c11e81ca1f6d1fe35c703c62ef36`. This is not a cache-policy or root-eligibility change. The reported baseline of 10,833 compiled / 44,995 reused functions, versus recovery 178 compiled / 55,650 reused, motivates measurement but does not establish why any entry failed.
++
++## Activation and output
++
++Set exactly `RA_JIT_CACHE_MISS_STATS=1` before starting the native process. The first native `Entries` construction latches the process gate in a `OnceLock`; subsequent environment changes are ignored. Missing, empty, `0`, `true`, and whitespace variants remain off. Each `Entries` owns optional native relaxed atomic aggregate counters. Disabled mode allocates no counter array, performs no counter atomic operations, adds no store reads or clocks, and emits nothing. Existing key computation, store reads, decode/soundness checks, short-circuit ordering, banned lookup, path remapping, import predicates, memoization, and SCC settlement decisions remain intact.
++
++At the successful native compilation boundary, immediately before releasing the shared entries map, `mod.rs` requests one bounded snapshot. It contains only the fixed prefix `ra-jit cache-miss-stats v1`, fixed counter labels, and unsigned counts. No function names, paths, cache keys, environment values, or imported symbols are printed. Stderr write errors are ignored. Counters span native retry rounds sharing that entries map. Aborted compilations do not promise a snapshot. A new compilation has a new entries population. This is not a process-lifetime counter report.
++
++## Populations, not exclusive explanations
++
++| Counter | Actual observation |
++| --- | --- |
++| `key_unavailable` | Existing `Entry::key` returned `None` in get initialization or prefetch key construction. Not called a missing stored key. |
++| `direct_key_missing` | Existing direct `Store::get` or keyed `get_many` result was `None`. Store-layer absence/read failure is not distinguished. Counts reads of dependency entries too, not only compilation roots. |
++| `banned` | Existing ban check rejected a fresh get initialization or a prefetch candidate. |
++| `decode_or_sound` | Existing `Entry::decode` returned `None`, including malformed encoding or failed internal reference soundness. |
++| `debug_types` | Existing stored-debug-type availability predicate rejected the decoded entry. It retains the exact `has_used || types` short circuit. |
++| `path_remap` | Existing `Entry::arrived` returned `None`. Currently this means cargo-placeholder files without a local cargo directory. |
++| `arrived` | Decode, debug-type predicate, and path remapping accepted the entry. This does not imply usable transitive dependencies. |
++| `get_positive`, `get_negative` | Every `Entries::get` return, including repeated positive or negative OnceLock memo hits. Prefetch is not a get call. |
++| `settled_positive`, `settled_negative` | Root `usable` returned immediately from an existing settled result. A negative SCC memo is expressly not counted as a fresh missing key. |
++| `direct_unavailable` | Fresh root usable evaluation failed its existing get-and-links filter. Inclusive of get failures and native-import failures. Read-reason counters provide context, not a new guessed cause. |
++| `native_imports` | Existing root `links(defines)` predicate failed. |
++| `dependency_settled_positive`, `dependency_settled_negative` | Traversal encountered an already settled dependency. Negative settlement is not classified as absence and does not trigger another get. |
++| `dependency_unavailable` | Existing get returned None for an unsettled dependency. It can be a negative get memo, not necessarily a fresh missing key. |
++| `dependency_native_imports` | Existing links predicate failed on an unsettled dependency entry. |
++| `transitive_failure` | Existing traversal rejection branch propagated a dependency failure to the active path, including settled-negative dependency failures. One count per traversal rejection, not one per ancestor. |
++| `usable_positive` | A fresh root traversal completed successfully. Includes SCC reuse without changing the native algorithm. |
++
++These populations overlap across stages and repeated requests. For example one absent dependency can contribute a missing-store result, a negative get return, an unavailable dependency, a transitive rejection, and later settled-negative observations. Prefetch can race with get or another prefetch, as before; observations of attempted work are included even when `cell.set` loses a race. Arrived acceptance is not a count of functions actually inserted into the final object. Counts must not be summed as unique failed functions or interpreted as time savings. No clocks, estimated durations, or hypothetical recovered-function counts are introduced.
++
++## v42 root result and v43 repair
++
++Root reported that actual v42 check and build passed, but the native codegen suite passed only 50 of 53 tests. Its preserved log is `ROOT/candidate-unit-v42/codegen-native.log`. Three added fixtures expected one observation but observed zero: root native-import rejection, unavailable dependency traversal, and settled-negative dependency traversal. These results invalidate the v42 fixture gate, not establish a miss distribution or performance result.
++
++The semantic cause is the real store publication contract. In `ra-jit-store/src/lib.rs`, `Store::insert` appends to an open pack, whereas `Store::get` reads sealed packs. The existing native test `sealed_pack_is_named_by_its_bytes_and_read_back` explicitly asserts absence after insert and presence after publication. The v42 fixture helper inserted encoded parents/imported entries without publishing them. Consequently `usable` failed at the root get instead of reaching the import predicate or dependency traversal, explaining all three zero counters without changing their expectations.
++
++The v43 repair adds the actual native `Store::seal()` boundary to the fixture helper and asserts exact byte readback before exercising get/usable. Unlike flush with a size threshold, seal publishes however small the fixture pack. No native counter expectations are weakened, no production instrumentation or decisions change, and `mod.rs` stays byte-identical to frozen v42. Added store reads/publication are confined to `#[cfg(test)]` fixture setup, not disabled production code. Root must gate this new identity. Worker performed no native runs for the repair. The v43 archive retains exact failed v42 originals and the root failure log, plus repaired candidates, repair/full patches, hashes, and explicit readiness.
++
++## Native fixture sources and root acceptance
++
++The added tests reside alongside the existing native `Entry` fixtures in `cached.rs`. They exercise the actual `Store::open_by_content`, insertion, native key computation, encoding/decoding, soundness, debug-type lookup, remapping, ban checks, get memoization, import predicate, and positive cyclic/transitive-negative usable traversal. There is no replacement decoder, mocked store, or copied SCC algorithm. Fixture counters are explicitly enabled on their own entries to avoid process-environment mutation. Source-only fixtures are not evidence that tests passed.
++
++Worker did not run native builds, tests, workloads, or commits. Root owns compilation, native fixture execution, disabled-output and exact-gate checks, actual strict-state workloads, and all acceptance decisions after frozen-source release. No speedup or root cause is claimed before those gates. Frozen v42 originals, candidates, complete patch, and SHA-256 manifests remain preserved under `ROOT/cache-miss-attribution-v42`. The distinct v43 repair identity is under `ROOT/cache-miss-attribution-v43`.

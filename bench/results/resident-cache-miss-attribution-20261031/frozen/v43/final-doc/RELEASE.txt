@@ -1,0 +1,7 @@
+FINAL DOC FROZEN AND RELEASED TO FULLROOT session_skunk_1793325801268_bca6e773d45c6a0a for atomic three-path commit.
+Doc SHA256: 2e6b08a8871eec8c0db0d3a5256ce57943dc45211ba330db331e498b7065dbd4
+Path: docs/resident-cache-miss-attribution.md
+
+Only owned documentation updated after root supplied actual v43 results. Read cache-miss-v43-validation.json and validate-cache-miss-v43.py before recording scope. Document records actual check/build, 53 codegen/360 resident pass IDs, enabled/disabled strict seven-state success, immutable/restored identities, bounded manifest/recovery observations, no failures in decode/debug/path/banned populations, zero disabled report lines, and cumulative-log repeated-snapshot caveat. No speed or causal proof claimed. Worker ran no native workloads/tests/builds/commits.
+
+Both Rust files cmp-identical to v43 frozen candidates. Original v43 source-ready candidate documentation and its manifest remain preserved unchanged. final-doc/resident-cache-miss-attribution.md holds this final doc identity. No further doc edits without root reassignment. Root owns commit.

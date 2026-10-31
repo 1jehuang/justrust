@@ -60,6 +60,12 @@ Enabled reports recorded no decode/soundness, debug-type, path-remapping, or ban
 
 All disabled-mode logs contained zero report lines. These gates validate native behavior and the enabled/disabled reporting scope on this workload. They establish neither a speedup nor causal proof of the baseline/recovery compilation difference. No timing comparison or savings claim is made.
 
+## Retained portable evidence
+
+The committed evidence package is `bench/results/resident-cache-miss-attribution-20261031/`. It retains failed v42 originals and actual 50/53 log/journal, the exact fixture-only v43 repair, full 53/360 native run journals, raw check/build and 3,757-source/lock receipts, both complete strict seven-state sessions, pinned source63/toolchain identities, original runners and root validation, licenses, and the actual 733-test benchmark-regression PASS log. There are no retained engines, ELF files, private caches, or full ambient environments. Rust sources were read only from frozen packages and the immutable source commit for evidence retention.
+
+From that directory, `python3 -B validate.py` performs portable actual semantic replay, while `python3 -B test_validate.py` relocates the package under empty HOME/PATH, forbids original checkout/home inputs and native/network processes, and rejects 25 coherently re-sealed semantic corruptions. All 19 actual counter fields, off-mode zero report lines, overlapping populations, and repeated last snapshots remain bound without unique-function arithmetic or fresh assertion-phase claims. These commands are offline audits, not fresh native correctness or performance runs. See the package README for exact retained paths and checksum/independent-commitment limitations.
+
 ## Native fixture sources and root acceptance
 
 The added tests reside alongside the existing native `Entry` fixtures in `cached.rs`. They exercise the actual `Store::open_by_content`, insertion, native key computation, encoding/decoding, soundness, debug-type lookup, remapping, ban checks, get memoization, import predicate, and positive cyclic/transitive-negative usable traversal. There is no replacement decoder, mocked store, or copied SCC algorithm. Fixture counters are explicitly enabled on their own entries to avoid process-environment mutation. The initial source-only fixture release was not evidence that tests passed. The actual root-run native results above now supply the executed fixture gate.

@@ -1,0 +1,15 @@
+FROZEN SOURCE READINESS AND OWNERSHIP RELEASE: v43
+Released by dove to FULLROOT session_skunk_1793325801268_bca6e773d45c6a0a.
+
+Frozen source identities:
+11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f  toolchain/resident/crates/hir-ty-codegen/cached.rs
+ec08cb7a35fa6c4bcdfbf3514e7fceb367a84eb3958817ef9f803703100a7b14  toolchain/resident/crates/hir-ty-codegen/mod.rs
+726555f53efd55c4f7a0ba994bb1f847d4dc7a2771684cbd7fa0ee61f0cf0d8e  docs/resident-cache-miss-attribution.md
+
+Only cached.rs and owned doc reacquired and edited. mod.rs never edited and cmp verifies byte identity with frozen v42. Root-reported v42 actual check/build PASS and codegen 50/53 are preserved, including failed-v42/codegen-native.log. Original v42 archive remains untouched. Full failed v42 originals and full v43 candidates are retained here. candidate.patch is full proposal from accepted 679d34ffa base, repair-from-v42.patch is exact small repair, HEAD_AT_REPAIR records concurrent root HEAD e556d162bf9ebfca2d26b91a59facc94cf115bad.
+
+Semantic cause: native Store::insert appends an open pack. Store::get only sees sealed packs, as its docs and existing sealed_pack_is_named_by_its_bytes_and_read_back native test demonstrate. v42 fixtures omitted publication, so root imported/parent entries appeared missing before reaching the expected import/dependency branches. v43 adds actual Store::seal() and exact byte readback assertion in cfg(test) store_fixture only. All expected counters and production code are unchanged. This uses native behavior, not a mock or softened assertion.
+
+SOURCE READY, NOT ACCEPTED. Worker ran rustfmt on cached.rs and source-only git diff --check, original/candidate SHA verification, and frozen mod.rs cmp. No native builds, tests, workloads, or commits run by worker. Root must gate v43 as a new identity, including all native fixtures. SHA256SUMS verifies originals, candidates, failed log, complete patches, and base/head metadata.
+
+All owned sources frozen and released now. No further edits without explicit root assignment. Root may execute acceptance, reject/restore, or accept the proposal.

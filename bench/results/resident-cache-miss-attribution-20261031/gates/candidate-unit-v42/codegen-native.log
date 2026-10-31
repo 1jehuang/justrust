@@ -1,0 +1,70 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+test cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key ... FAILED <0.002s>
+test cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc ... FAILED <0.003s>
+test cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct ... FAILED <0.003s>
+
+failures:
+
+---- cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key stdout ----
+
+thread 'cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key' (1414279) panicked at crates/hir-ty-codegen/cached.rs:1324:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc stdout ----
+
+thread 'cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc' (1414276) panicked at crates/hir-ty-codegen/cached.rs:1272:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+---- cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct stdout ----
+
+thread 'cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct' (1414278) panicked at crates/hir-ty-codegen/cached.rs:1299:9:
+assertion `left == right` failed
+  left: 0
+ right: 1
+
+failures:
+    cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc
+    cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct
+    cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key
+
+test result: FAILED. 50 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+error: test failed, to rerun pass `-p hir-ty-codegen --lib`
+
+justrust: FAILED: 3 of 53 tests failed in 18.9s
+  time    startup 0.22s | compile 18.64s | tests 0.02s | after 0.03s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 182 fresh. Rebuilt because: edited crates/hir-ty-codegen/mod.rs (hir-ty-codegen)
+          hir_ty_codegen (test)             18.64s  cpu  65.0s   1552 MB
+  tests   50 passed, 3 failed, 0 ignored, 0 filtered out, 1 binary in 0.02s
+  cpu     65.6s total, avg 3.5/peak 6.3 of 16 cores; others used 3.2 cores
+  memory  peak 1666 MB build, 1552 MB largest rustc, 36.3 GB free; stalls cpu 0.19s mem 0.00s io 0.00s
+  output  3 warnings shown, 225 hidden; 188 progress and 50 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  5.6s  build averaged 3.5 of 16 cores: hir_ty_codegen (test) ran 18.6s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-201323863-1411935` full output, `justrust show 20261030-201323863-1411935` full profile

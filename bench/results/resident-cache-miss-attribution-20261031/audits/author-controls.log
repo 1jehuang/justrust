@@ -1,0 +1,6 @@
+.
+----------------------------------------------------------------------
+Ran 1 test in 8.556s
+
+OK
+{"relocated": true, "empty_home_path": true, "forbid_original_checkout": true, "forbid_native_network": true, "coherently_resealed_negatives": 25}

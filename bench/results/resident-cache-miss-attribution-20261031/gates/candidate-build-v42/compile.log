@@ -1,0 +1,35 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: build succeeded, tests not run in 87.1s
+  time    startup 0.21s | compile 86.85s | gaps 0.02s | after 0.03s
+  units   2 compiled (2 local, 0 deps, 0 build scripts), 425 fresh. Rebuilt because: edited crates/hir-ty-codegen/mod.rs (hir-ty-codegen); ra-jit changed (ra-jit)
+          jr_engine                         59.47s  cpu 230.5s   2858 MB
+          hir_ty_codegen                    27.38s  cpu  96.9s   1729 MB
+  cpu     328.0s total, avg 3.8/peak 6.3 of 16 cores; others used 3.4 cores
+  memory  peak 2949 MB build, 2858 MB largest rustc, 35.1 GB free; stalls cpu 0.79s mem 0.00s io 0.08s
+  output  3 warnings shown, 250 hidden; 432 progress and 0 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 44.5s  59.5s went to recompiling oversized crates: jr_engine (79k lines, 59.5s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 17.8s  build averaged 3.8 of 16 cores: jr_engine ran 59.5s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-201156567-1401692` full output, `justrust show 20261030-201156567-1401692` full profile

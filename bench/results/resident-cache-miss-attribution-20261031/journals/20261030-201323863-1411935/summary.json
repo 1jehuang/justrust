@@ -1,0 +1,267 @@
+{
+  "id": "20261030-201323863-1411935",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "e556d162bf9e",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793416403.879371,
+  "wall": 18.912142038345337,
+  "exit": 101,
+  "cpu_secs": 65.580485,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 92,
+    "processes": 3,
+    "sample_span_secs": 18.920568466186523,
+    "max_sample_gap_secs": 0.21738171577453613
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.22200250625610352,
+    "lock_wait": 0.0,
+    "compile": 18.636847496032715,
+    "build_gaps": 0.0019071102142333984,
+    "test_run": 0.023850679397583008,
+    "tail": 0.02753424644470215
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 182,
+    "rustc_cpu_secs": 65.0,
+    "rustc_wall_sum": 18.636847496032715,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "hir_ty_codegen (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.22200250625610352,
+      "wall": 18.636847496032715,
+      "wall_share": 18.636847496032715,
+      "cpu": 64.999465,
+      "max_rss_mb": 1552.16796875,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "hir_ty_codegen-d85c581ce11daf8e",
+        "start": 18.8797869682312,
+        "wall": 0.023850679397583008,
+        "passed": 50,
+        "failed": 3,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 50,
+    "failed": 3,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.02,
+    "slowest": [
+      {
+        "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.019,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.018,
+        "passed": true
+      },
+      {
+        "name": "sve::tests::stubs_are_what_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.004,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.003,
+        "passed": false
+      },
+      {
+        "name": "cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.003,
+        "passed": false
+      },
+      {
+        "name": "cached::tests::native_miss_arrival_reasons_follow_real_decode_and_remap",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": false
+      },
+      {
+        "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::cache_miss_stats_gate_is_exact",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::an_entry_is_read_back_as_it_was_written",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.05500000000000001,
+    "timed": 53
+  },
+  "resources": {
+    "avg_build_cores": 3.467639195339809,
+    "peak_build_cores": 6.292149566486306,
+    "peak_build_rss_mb": 1666.46484375,
+    "peak_unit_rss_mb": 1552.16796875,
+    "min_mem_available_mb": 37152,
+    "avg_other_cores": 3.2314653943559755,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.18523299999999998,
+    "psi_mem_secs": 0.000088,
+    "psi_io_secs": 0.002565
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 228,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "hir-ty-codegen",
+      "reason": "the file `crates/hir-ty-codegen/mod.rs` has changed"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-201323863-1411935.scope",
+    "final_weight": 478,
+    "setup_secs": 0.015129512,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

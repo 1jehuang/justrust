@@ -1,0 +1,161 @@
+{
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "exit": 0,
+  "id": "20261030-201926060-1448168",
+  "route": "JUSTRUST_REMOTE=off",
+  "scope": "Derived path-free native receipt, joined to retained raw journal.",
+  "start": 1793416766.0774398,
+  "subcommand": "test",
+  "tests": {
+    "binaries": [
+      {
+        "failed": 0,
+        "filtered_out": 0,
+        "name": "jr_engine-93ff5023e9192f9b",
+        "passed": 360,
+        "start": 74.0042622089386,
+        "wall": 16.59382128715515
+      }
+    ],
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 0,
+    "libtest_secs": 16.59,
+    "passed": 360,
+    "slowest": [
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times",
+        "passed": true,
+        "secs": 16.521
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked",
+        "passed": true,
+        "secs": 1.79
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound",
+        "passed": true,
+        "secs": 0.993
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::gateway::tests::what_is_over_a_put_goes_up_in_parts_checked_whole",
+        "passed": true,
+        "secs": 0.595
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::tests::a_pack_that_unpacks_to_more_than_its_list_says_is_not_written",
+        "passed": true,
+        "secs": 0.249
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::gateway::tests::a_pack_goes_up_and_comes_back_in_ranges",
+        "passed": true,
+        "secs": 0.224
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "whole::tests::packed_reads_back_as_it_was",
+        "passed": true,
+        "secs": 0.224
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "whole::tests::read_by_a_link_is_not_removed",
+        "passed": true,
+        "secs": 0.224
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "whole::tests::written_anew_leaves_nothing_of_the_last",
+        "passed": true,
+        "secs": 0.224
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::signed::tests::no_bytes_are_taken_for_a_list_that_was_signed",
+        "passed": true,
+        "secs": 0.221
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "deps::tests::an_archive_that_unpacks_to_more_than_is_taken_is_refused",
+        "passed": true,
+        "secs": 0.213
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "splice::tests::a_program_written_in_place_starts_after_the_write",
+        "passed": true,
+        "secs": 0.211
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "socket::tests::a_client_that_never_reads_is_given_up_on",
+        "passed": true,
+        "secs": 0.208
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "socket::tests::a_socket_let_go_of_is_free_while_processes_start",
+        "passed": true,
+        "secs": 0.201
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::tests::a_manifest_longer_than_is_read_is_refused",
+        "passed": true,
+        "secs": 0.186
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "cargo::closure::tests::fetched_pushed_pulled_and_laid_out",
+        "passed": true,
+        "secs": 0.152
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "deps::tests::a_list_of_units_longer_than_is_read_is_refused",
+        "passed": true,
+        "secs": 0.137
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::gateway::tests::a_pack_the_gateway_changed_is_rejected_and_not_kept",
+        "passed": true,
+        "secs": 0.109
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "socket::tests::a_silent_or_endless_client_is_given_up_on",
+        "passed": true,
+        "secs": 0.108
+      },
+      {
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "name": "remote::signed::tests::two_that_take_at_once_remember_the_later",
+        "passed": true,
+        "secs": 0.092
+      }
+    ],
+    "timed": 360,
+    "timed_secs": 23.983
+  },
+  "wall": 90.61212372779846
+}

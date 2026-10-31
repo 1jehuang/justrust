@@ -1,0 +1,258 @@
+{
+  "status": "passed",
+  "scope": "Actual overlapping native cache observations, not performance or unique function misses",
+  "native": [
+    {
+      "run_id": "20261030-201905159-1445554",
+      "passed": 53
+    },
+    {
+      "run_id": "20261030-201926060-1448168",
+      "passed": 360
+    }
+  ],
+  "modes": {
+    "on": [
+      {
+        "phase": "cold-prepare",
+        "status": 0,
+        "elapsed_seconds": 19.855566708007245,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 90996,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 0,
+          "get_positive": 0,
+          "get_negative": 139835,
+          "settled_positive": 0,
+          "settled_negative": 107984,
+          "direct_unavailable": 91018,
+          "native_imports": 0,
+          "dependency_settled_positive": 0,
+          "dependency_settled_negative": 0,
+          "dependency_unavailable": 0,
+          "dependency_native_imports": 0,
+          "transitive_failure": 0,
+          "usable_positive": 0
+        }
+      },
+      {
+        "phase": "repeated-noop-1",
+        "status": 0,
+        "elapsed_seconds": 0.03045559198653791,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 90996,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 0,
+          "get_positive": 0,
+          "get_negative": 139835,
+          "settled_positive": 0,
+          "settled_negative": 107984,
+          "direct_unavailable": 91018,
+          "native_imports": 0,
+          "dependency_settled_positive": 0,
+          "dependency_settled_negative": 0,
+          "dependency_unavailable": 0,
+          "dependency_native_imports": 0,
+          "transitive_failure": 0,
+          "usable_positive": 0
+        }
+      },
+      {
+        "phase": "manifest-feature-add",
+        "status": 0,
+        "elapsed_seconds": 7.284145797995734,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 45508,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 45207,
+          "get_positive": 187729,
+          "get_negative": 55518,
+          "settled_positive": 52829,
+          "settled_negative": 15351,
+          "direct_unavailable": 45495,
+          "native_imports": 9,
+          "dependency_settled_positive": 32779,
+          "dependency_settled_negative": 1,
+          "dependency_unavailable": 25,
+          "dependency_native_imports": 0,
+          "transitive_failure": 26,
+          "usable_positive": 8225
+        }
+      },
+      {
+        "phase": "type-error",
+        "status": 101,
+        "elapsed_seconds": 7.96679817099357,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 45473,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 45090,
+          "get_positive": 188727,
+          "get_negative": 55455,
+          "settled_positive": 52610,
+          "settled_negative": 15289,
+          "direct_unavailable": 45465,
+          "native_imports": 9,
+          "dependency_settled_positive": 34602,
+          "dependency_settled_negative": 1,
+          "dependency_unavailable": 25,
+          "dependency_native_imports": 0,
+          "transitive_failure": 26,
+          "usable_positive": 8182
+        }
+      },
+      {
+        "phase": "type-recovery",
+        "status": 0,
+        "elapsed_seconds": 7.026804269000422,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 34863,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 55754,
+          "get_positive": 230643,
+          "get_negative": 34895,
+          "settled_positive": 49018,
+          "settled_negative": 155,
+          "direct_unavailable": 34846,
+          "native_imports": 9,
+          "dependency_settled_positive": 48750,
+          "dependency_settled_negative": 3,
+          "dependency_unavailable": 26,
+          "dependency_native_imports": 0,
+          "transitive_failure": 29,
+          "usable_positive": 7013
+        }
+      },
+      {
+        "phase": "assert-failure",
+        "status": 101,
+        "elapsed_seconds": 1.6056846089923056,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 34863,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 55754,
+          "get_positive": 230643,
+          "get_negative": 34895,
+          "settled_positive": 49018,
+          "settled_negative": 155,
+          "direct_unavailable": 34846,
+          "native_imports": 9,
+          "dependency_settled_positive": 48750,
+          "dependency_settled_negative": 3,
+          "dependency_unavailable": 26,
+          "dependency_native_imports": 0,
+          "transitive_failure": 29,
+          "usable_positive": 7013
+        }
+      },
+      {
+        "phase": "assert-recovery",
+        "status": 0,
+        "elapsed_seconds": 0.3932628909969935,
+        "report_count_in_cumulative_log": 1,
+        "last_report": {
+          "key_unavailable": 0,
+          "direct_key_missing": 34863,
+          "banned": 0,
+          "decode_or_sound": 0,
+          "debug_types": 0,
+          "path_remap": 0,
+          "arrived": 55754,
+          "get_positive": 230643,
+          "get_negative": 34895,
+          "settled_positive": 49018,
+          "settled_negative": 155,
+          "direct_unavailable": 34846,
+          "native_imports": 9,
+          "dependency_settled_positive": 48750,
+          "dependency_settled_negative": 3,
+          "dependency_unavailable": 26,
+          "dependency_native_imports": 0,
+          "transitive_failure": 29,
+          "usable_positive": 7013
+        }
+      }
+    ],
+    "off": [
+      {
+        "phase": "cold-prepare",
+        "status": 0,
+        "elapsed_seconds": 16.290473907996784,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      },
+      {
+        "phase": "repeated-noop-1",
+        "status": 0,
+        "elapsed_seconds": 0.04335267300484702,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      },
+      {
+        "phase": "manifest-feature-add",
+        "status": 0,
+        "elapsed_seconds": 7.557778492991929,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      },
+      {
+        "phase": "type-error",
+        "status": 101,
+        "elapsed_seconds": 7.480696593993343,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      },
+      {
+        "phase": "type-recovery",
+        "status": 0,
+        "elapsed_seconds": 6.933860338001978,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      },
+      {
+        "phase": "assert-failure",
+        "status": 101,
+        "elapsed_seconds": 1.5795223320019431,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      },
+      {
+        "phase": "assert-recovery",
+        "status": 0,
+        "elapsed_seconds": 0.4225679079972906,
+        "report_count_in_cumulative_log": 0,
+        "last_report": null
+      }
+    ]
+  }
+}

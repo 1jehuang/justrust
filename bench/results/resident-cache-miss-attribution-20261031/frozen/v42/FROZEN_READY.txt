@@ -1,0 +1,16 @@
+FROZEN SOURCE READINESS AND OWNERSHIP RELEASE: v42
+
+Base HEAD: 679d34ffa0f5c11e81ca1f6d1fe35c703c62ef36
+Owner: dove, session_dove_1793415361538_c0116a0152de7c07
+Released to FULLROOT: session_skunk_1793325801268_bca6e773d45c6a0a
+
+Frozen files:
+0ddf3c0fd19ea34f55b6790caa3dc941abc203ff80a30e3a6d3489afea468c34  toolchain/resident/crates/hir-ty-codegen/cached.rs
+ec08cb7a35fa6c4bcdfbf3514e7fceb367a84eb3958817ef9f803703100a7b14  toolchain/resident/crates/hir-ty-codegen/mod.rs
+099962c671561a9e4ce3bb60bc22bb86d615a36737a630c879a18c4ce31ea6e8  docs/resident-cache-miss-attribution.md
+
+Full originals, candidates, BASE_HEAD, candidate.patch, SHA256SUMS are alongside this file. Original new-document absence is recorded in original/NEW_DOCUMENT. SHA256SUMS verification and git diff --check succeeded. Only owned Rust files were formatted, using rustfmt with skip_children=true. No native builds, tests, workloads, commits, branches, or worktrees were run/created by worker.
+
+This is SOURCE READY, NOT ACCEPTED. All five new native tests remain unexecuted. Root must execute the full native compilation gate, real native fixture tests, exact gate/default-off checks, actual workloads, and acceptance decisions. No speedup or observed miss distribution is claimed. Native keys/decisions/serialization/cache policy were not changed. Disabled adds no store reads or clocks. Counters distinguish settled-positive/negative root and dependency observations from fresh read misses.
+
+Worker freezes and releases all three owned files now and will not edit them again without an explicit new root assignment. Root may copy, build, test, reject/restore, or accept them. Unrelated changes were preserved.
