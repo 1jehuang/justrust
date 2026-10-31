@@ -1,0 +1,94 @@
+symbols: read 753.5µs (0 of 0 files ahead), added 633.0ns, indexed 6.0µs
+symbols: 0 copies of statics renamed or private, 0 not to be shared
+symbols: 0 in 820.3µs
+load-us: metadata=38995 plan=3258 scripts=12696
+load-us: workspaces=55074 files=90972
+load-us: loaded=147274 toolchain=224 cargo=0
+load workspace: 147.5ms
+resolved cfg_if: names 89.2ms, impls 38.9ms, +69022016 bytes Lang(Dependency)
+resolved adler2: names 89.6ms, impls 39.2ms, +67040496 bytes Lang(Dependency)
+resolved memchr: names 99.9ms, impls 30.2ms, +72431264 bytes Lang(Dependency)
+resolved compiler_builtins: names 93.2ms, impls 37.9ms, +75015224 bytes Lang(Other)
+resolved rustc_demangle: names 89.9ms, impls 43.3ms, +79864880 bytes Lang(Dependency)
+resolved unwind: names 465.3µs, impls 3.4ms, +9545040 bytes Lang(Other)
+resolved libc: names 400.9µs, impls 7.1ms, +16537976 bytes Lang(Dependency)
+resolved rustc_literal_escaper: names 577.9µs, impls 503.4µs, +1804152 bytes Lang(Dependency)
+resolved miniz_oxide: names 93.6ms, impls 44.3ms, +91085232 bytes Lang(Dependency)
+resolved hashbrown: names 93.8ms, impls 44.6ms, +89651360 bytes Lang(Dependency)
+resolved alloc: names 93.4ms, impls 45.8ms, +92306600 bytes Lang(Alloc)
+resolved addr2line: names 97.7ms, impls 44.8ms, +104837560 bytes Lang(Dependency)
+resolved object: names 102.0ms, impls 42.6ms, +106355984 bytes Lang(Dependency)
+resolved panic_abort: names 498.0µs, impls 12.7ms, +32907880 bytes Lang(Other)
+resolved panic_unwind: names 620.1µs, impls 15.6ms, +38356776 bytes Lang(Other)
+resolved std_detect: names 17.8ms, impls 786.5µs, +36034512 bytes Lang(Other)
+resolved gimli: names 97.3ms, impls 50.5ms, +109581752 bytes Lang(Dependency)
+resolved std: names 156.1ms, impls 22.5ms, +177195760 bytes Lang(Std)
+resolved test: names 158.8ms, impls 20.4ms, +167700232 bytes Lang(Test)
+resolved generation_fixture: names 157.9ms, impls 22.1ms, +170483392 bytes Local { repo: None, name: Some("generation-fixture") }
+resolved getopts: names 158.2ms, impls 22.3ms, +168880656 bytes Lang(Dependency)
+resolved proc_macro: names 23.4ms, impls 22.1ms, +97507840 bytes Lang(ProcMacro)
+resolved core: names 89.8ms, impls 135.3ms, +161946632 bytes Lang(Core)
+resolve: 23 crates in 303.1ms
+frozen, of 22 crates: def maps of 22, impls of 22, lang items of 22 from the store, 0 written in 102.9µs
+manifest: 2 files of the program from the store in 14.8ms, nothing compiled
+check: FileId(33): the bodies of 1 of 1 functions asked
+check: 1 files in 18.9ms
+link-us: read=0
+link-us: spliced=6
+link: 49.1ms (exit status: 0; not spliced: no executable to add to)
+watching 2 files
+tier: off (RA_JIT_TIER=off, blaze built without `--features llvm`, or not macOS on AArch64)
+listing: name resolution 15.1µs, scopes 20.8µs, 1 bodies 135.9µs
+taking the program's code from the store, for the first edit to patch: src/main.rs
+change: 0 files
+types-us: 0
+apply-us: change=8 outlines=69 rest=10
+check-us: 100
+request: sync at_us=1793433339535000
+listing: name resolution 1.8µs, scopes 419.7µs, 6 bodies 516.9µs
+listing: name resolution 2.9µs, scopes 69.2µs, 0 bodies 3.7µs
+listing: name resolution 1.9µs, scopes 1.2ms, 16 bodies 896.9µs
+listing: name resolution 3.3µs, scopes 2.0ms, 6 bodies 716.6µs
+listing: name resolution 2.0µs, scopes 5.4ms, 63 bodies 8.4ms
+listing: name resolution 12.3µs, scopes 4.2ms, 82 bodies 10.0ms
+listing: name resolution 2.6µs, scopes 8.9ms, 91 bodies 12.6ms
+listing: name resolution 1.6µs, scopes 29.2ms, 651 bodies 9.4ms
+listing: name resolution 656.0ns, scopes 14.1ms, 114 bodies 26.6ms
+listing: name resolution 1.8µs, scopes 42.9ms, 486 bodies 16.8ms
+listing: name resolution 1.9µs, scopes 100.8ms, 2942 bodies 37.5ms
+listing: name resolution 1.4µs, scopes 163.2ms, 3992 bodies 74.9ms
+listing: name resolution 950.0ns, scopes 179.2ms, 2580 bodies 75.9ms
+listing: name resolution 6.6µs, scopes 298.7ms, 3712 bodies 50.0ms
+listing: name resolution 1.4µs, scopes 291.3ms, 6972 bodies 58.0ms
+listing: name resolution 447.0ns, scopes 432.4ms, 6490 bodies 79.5ms
+listing: name resolution 946.0ns, scopes 1.1s, 25307 bodies 248.2ms
+entries: 109.6µs
+setup-us: module=54 debug=0 mixed=6 settled=0 names=16
+stored roots: 2023 of 25961 in 91.3ms
+store: 82 functions found, 0 compiled and added
+entries: 8272 found, 0 added, 0 as stored, 0 not as stored, 0 instances and 47 requests without a stable name
+not kept: [("call of no instance", 47)]
+not found: [("no entry", 28)]
+base from the store: 2018 roots, 6254 other functions of the checkout (42 called by code compiled here)
+steps: infer 23.0ms, mir 11.9ms, monomorphize 1.6ms, translate 258.4ms, describe 0.0ns, store read 34.0ms, store write 342.7µs
+cranelift passes:
+======== ========  ==================================
+   Total     Self  Pass
+-------- --------  ----------------------------------
+   0.006    0.006  Try loading from incremental cache
+   0.000    0.000  Control flow graph
+   0.000    0.000  Dominator tree
+======== ========  ==================================
+backend: cranelift compiled 73 functions, 30384 bytes, 7.1ms (97.8µs each)
+roots: 1.6s, revalidate: 510.9µs, compile: 510.3ms
+edit (apply 89.3µs): compiled 2062 of 2062 fns (+70 instances) in 2.1s (+6.3µs emit)
+stats: 73 of 8345 functions compiled, 8272 reused
+phases: compile 10.9ms, resolve 2.7ms, define 59.4ms, fallback 23.3µs, object 28.0ms, 1 rounds
+refuse-us: out_of_date=2 refusal=1 copies=0 tests=16
+link-us: read=1
+link-us: spliced=11
+link: 47.6ms (exit status: 0; not spliced: the whole object was written again)
+timeline-us: notice=0 settle=0 read=70 apply=89 roots=1617584 check=510 reach=10865 resolve=2707 define=59409 object=27960 discarded=0 statics=0 setup=0 compile-rest=409404 write=6 build-rest=681 report=61 refuse=46 link=54827
+asked: 0 roots, 0 instances, slowest 0.0ns; unchanged by their items: 0 roots, 0 instances; longest on a thread: roots 0.0ns, instances 0.0ns, statics 0.0ns, left 0.0ns
+edit-to-binary: 2.2s
+request: sync at_us=1793433341818496

@@ -1,0 +1,48 @@
+v56 SOURCE-ONLY RELEASE: NATIVE RELOAD CORRECTNESS PREREQUISITE
+NO GENERATION REUSE ACTIVATION
+
+Date: 2026-10-31
+Licensed Blaze-derived resident, not cleanroom.
+
+Owned paths: cargo/whole.rs, cargo/daemon.rs, src/main.rs under
+ toolchain/resident/crates/ra-jit/, and docs/resident-whole-generation-reuse.md.
+Only main.rs and the doc differ from v56 originals. Whole/daemon remain
+byte-identical. The prior v55 freeze remains unchanged.
+
+Native invalidation now refreshes full Parts even same-members/debug,
+clears own_lines AND initial args.link_cmd, waits/forgets native splice
+baselines and LINKED, resets native full-object/wrote/test/frozen Rejections
+state while preserving patching, marks all owned watched source files for
+original diagnostics and evicts their CLEAN cache entries, and retires native
+harnessed/outline state. Existing nonwhole predicate and known/listed/settle/
+join/as_built invalidation are preserved.
+
+Unit fixture SOURCE added, NOT EXECUTED:
+- native_reload_cfg_only_rechecks_unreachable_errors_and_recovers
+- native_reload_leaves_original_nonwhole_fast_path_unchanged
+Real RootDatabase cfg-only changes, actual diagnostics, separate fresh DB
+oracle, repeated E0308/recovery and retained-field assertions. Unit fixtures
+do not substitute for native Cargo/PID/lifecycle/error/recovery acceptance.
+
+ABI restart guard proposal was sent to root before release: old/new resolved
+native-load certificate covering compiler/toolchain/sysroot, target spec/ABI,
+effective flags, prebuilt identity and relevant config. Changed/unresolvable
+certificate must use original cold restart, never unsupported-build errors.
+Exact further source ownership proposed: ra-jit/src/inputs.rs and
+vendor/rust-analyzer/crates/load-cargo/src/lib.rs. No incomplete certificate
+or toggle was implemented. Existing kept:false is the conservative restart
+guard for this stage, with process-global SYSROOT never silently retargeted.
+
+RA_JIT_WHOLE_RELOAD=1 remains UNIMPLEMENTED. No activation marker, no ambient
+environment serialization, no daemon worker identity/config protocol changes.
+An ON run of this candidate is NOT evidence of whole-generation reuse.
+No speed claim or native correctness acceptance claim.
+
+Checks performed: owned-source rustfmt (skip_children), source diff review,
+git diff --check, original/candidate byte comparison, SHA256 inventory.
+No builds, tests, native workloads, installation, commits, or measurements.
+Root owns native full builds/tests and actual strict lifecycle controls.
+
+Artifacts: originals/ and candidates/ contain full four-path snapshots.
+candidate.patch is relative to this v56 original snapshot, not an inferred
+HEAD baseline. SHA256SUMS inventories snapshots, patch and this release.

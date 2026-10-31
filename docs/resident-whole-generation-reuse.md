@@ -408,3 +408,17 @@ Changed whole generations still use the original `kept: false` cold restart.
 The toolchain/sysroot/native-ABI restart certificate and actual retained-worker
 controls remain prerequisites to any future exact opt-in activation. This is
 licensed Blaze-derived resident work, not a clean-room implementation.
+
+## Portable native reload evidence
+
+The source-only [native reload evidence bundle](../bench/results/resident-native-reload-20261031/README.md)
+retains the v55 through v58/final-doc freezes, failed v56/v57 gates, complete
+v58 53-codegen/364-resident journals, actual environment/file A/B/A probes,
+nine manifest states, seven default-correctness states and 733-test regression
+receipt. Environment-bearing metadata is explicitly allowlisted with original
+and published SHA/omission accounting, leaving private originals unchanged.
+Its stdlib-only validator replays patches and exact semantic receipts, with
+coherently re-signed mutation tests and audited empty-HOME/PATH relocation.
+No binaries or secrets are published, and no native job is needed for replay.
+Whole-generation reuse remains **UNIMPLEMENTED**. This is default correctness
+evidence only, not a speed claim or a general performance-goal completion.

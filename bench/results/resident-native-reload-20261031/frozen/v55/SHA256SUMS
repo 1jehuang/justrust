@@ -1,0 +1,8 @@
+dc66632f3f08d2383ff1e73646d1a82cebb3a0f15a40ff73caeca3134f5c2551  candidates/docs/resident-whole-generation-reuse.md
+d488bffe1498847e8e234e6513474c26b38b19939b94915feacaa60decbe0b5c  candidates/toolchain/resident/crates/ra-jit/src/cargo/daemon.rs
+34b391dd07b92e735b7f640641c8298897c4ec9d3c239493682985c43a473b81  candidates/toolchain/resident/crates/ra-jit/src/cargo/whole.rs
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  originals/docs-resident-whole-generation-reuse.md.ABSENT
+d488bffe1498847e8e234e6513474c26b38b19939b94915feacaa60decbe0b5c  originals/toolchain/resident/crates/ra-jit/src/cargo/daemon.rs
+34b391dd07b92e735b7f640641c8298897c4ec9d3c239493682985c43a473b81  originals/toolchain/resident/crates/ra-jit/src/cargo/whole.rs
+df727b4d67e84e63c1eb68c5bea4751c35eae0403624bbb52a8d2f0f7701b04d  candidate.patch
+d7fbd3ed449c3f9f742272f538280ab9f3f5b5964b34cae8ed3cfe945747aa03  RELEASE.txt

@@ -1,0 +1,18 @@
+daemon 0.20261027.0-e6f3a041-77d47c8-18e37f071727cec3 (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-b0afadc7bfbd49b5ad10ac04fd51db74051172138256e9d418dfca637b3b6840)) of pid 3651861 listens on /home/jeremy/gf550/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 4e29c5e657c0576a of pid 3651864 for /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/manifest-cfg-reload-v58/original/
+/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/manifest-cfg-reload-v58/original: ready
+worker 4e29c5e657c0576a of pid 3654614 for /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/manifest-cfg-reload-v58/original/
+the worker of pid 3654614 for /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/manifest-cfg-reload-v58/original/ ended (exit status: 1); its log /home/jeremy/gf550/engine/engine-home/resident-v1/runtime/workers/4e29c5e657c0576a/log ends with:
+     0.000    0.000  Dominator tree
+  ======== ========  ==================================
+  backend: cranelift compiled 74 functions, 30601 bytes, 8.7ms (117.4µs each)
+  roots: 1.9s, revalidate: 2.2ms, compile: 582.8ms
+  cold: compiled 2062 of 2062 fns (+75 instances) in 2.5s (+9.6µs emit)
+  check: FileId(33): the bodies of 2 of 2 functions asked
+  check: 1 files in 2.5ms
+  Error: error[E0308]: expected u32, found &'static str
+   --> src/main.rs:2:44
+    |
+  2 | #[cfg(feature="bad")] fn unused_bad()->u32{"JR_GENERATION_ERROR_94b957ac58fd4bf89c5500573b32e757"}
+    |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/manifest-cfg-reload-v58/original: the source has an error

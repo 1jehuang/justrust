@@ -1,0 +1,44 @@
+{
+  "rows": [
+    {
+      "case": "native-reload-v58-seven-state",
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v58-bin/jr-engine",
+        "stop"
+      ],
+      "elapsed_seconds": 0.06537907701567747,
+      "environment": {
+        "HOME": "/home/jeremy"
+      },
+      "error": null,
+      "noise": {
+        "after": {
+          "busy_seconds": 661980.87,
+          "loadavg": [
+            8.29345703125,
+            12.146484375,
+            12.85205078125
+          ]
+        },
+        "before": {
+          "busy_seconds": 661980.43,
+          "loadavg": [
+            8.29345703125,
+            12.146484375,
+            12.85205078125
+          ]
+        },
+        "child_cpu_seconds": 0.0035649999999999996,
+        "contamination": "unknown",
+        "other_cpu_seconds_estimate": 0.43643499994412066,
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine."
+      },
+      "post_measurement_only": true,
+      "private": "/home/jeremy/nr580",
+      "status": 0,
+      "timed_out": false
+    }
+  ],
+  "scope": "Post-validation stop of one exact completed private namespaces, preserving stores.",
+  "stores_deleted": false
+}

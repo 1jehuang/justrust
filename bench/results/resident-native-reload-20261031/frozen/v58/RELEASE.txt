@@ -1,0 +1,10 @@
+v58 SOURCE-ONLY RELEASE
+Owned paths: toolchain/resident/crates/ra-jit/src/main.rs, toolchain/resident/crates/ra-jit/src/inputs.rs, docs/resident-whole-generation-reuse.md.
+Originals are the exact pre-v58 live sources (including v57 prerequisite). Candidates are complete current sources. candidate.patch is incremental originals-to-candidates.
+Conservative input witness fix: environment transitions require actual reload, failed/missing file raw-output proof requires actual reload, no incomplete WorkspaceBuildScripts equality and no consumption of env/file witnesses on those paths. Existing successful raw-output/generated-digest proof remains.
+Main v58 change only serializes the two global CLEAN diagnostic fixtures on one test-only mutex, preserving every callback/cache/diagnostic assertion. Production main prerequisite from v56 and fixture correction from v57 remain.
+New unit SOURCE covers A/B/A and unset/set non-consumption, and Linux real cc/ar archive-byte changes with identical Rust source/link directives. Worker has NOT executed tests or native commands. Root must run complete native gates and independent real Cargo A/B/A recovery/relink/lifecycle/diagnostic controls.
+Whole/daemon unchanged. Generation retention remains OFF/unimplemented, kept:false unchanged, no positive marker. ABI/sysroot restart certificate remains prerequisite. No unsupported-build error added. No acceptance or performance claim.
+Worker checks: rustfmt --check using resident config, git diff --check, source diff review and SHA inventory only. No builds/tests/workloads/install/commit.
+Preserved v56/v57 failed gate copies are evidence, NOT passing acceptance. Original frozen v56/v57 inventories remain untouched.
+Explicitly released to coordinator skunk for root-owned execution once SHA256SUMS verifies. No further live edits by this worker after freeze without new authorization.

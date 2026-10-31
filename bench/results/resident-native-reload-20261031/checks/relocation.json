@@ -1,0 +1,118 @@
+{
+  "audit": "Only bundle reads allowed after stdlib startup. External checkout, directories, writes, native execution and network denied.",
+  "cwd": "fresh relocated scratch directory",
+  "environment": {
+    "HOME": "fresh empty directory",
+    "PATH": ""
+  },
+  "exit": 0,
+  "result": {
+    "audit_enabled": true,
+    "evidence_sha256": "c7452457085be8dfbfc5b1418bb3da828a709dd2e05e6c4f92e682c166df3bda",
+    "gates": [
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-003148347-3430117",
+        "kind": "build",
+        "passed": 0,
+        "version": 56
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-003201745-3432037",
+        "kind": "build",
+        "passed": 0,
+        "version": 56
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-003312769-3441325",
+        "kind": "unit",
+        "passed": 53,
+        "version": 56
+      },
+      {
+        "exit": 101,
+        "failed": 1,
+        "id": "20261031-003313134-3441477",
+        "kind": "unit",
+        "passed": 361,
+        "version": 56
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-003821058-3493821",
+        "kind": "build",
+        "passed": 0,
+        "version": 57
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-003834286-3495248",
+        "kind": "build",
+        "passed": 0,
+        "version": 57
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-003953853-3507145",
+        "kind": "unit",
+        "passed": 53,
+        "version": 57
+      },
+      {
+        "exit": 101,
+        "failed": 1,
+        "id": "20261031-003954733-3507446",
+        "kind": "unit",
+        "passed": 361,
+        "version": 57
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-005137690-3615070",
+        "kind": "build",
+        "passed": 0,
+        "version": 58
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-005152404-3617189",
+        "kind": "build",
+        "passed": 0,
+        "version": 58
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-005259835-3624809",
+        "kind": "unit",
+        "passed": 53,
+        "version": 58
+      },
+      {
+        "exit": 0,
+        "failed": 0,
+        "id": "20261031-005300124-3624968",
+        "kind": "unit",
+        "passed": 364,
+        "version": 58
+      }
+    ],
+    "patches_replayed": 9,
+    "runtime_rows": 34,
+    "scope": "Default native reload correctness only. No native jobs executed.",
+    "speed_claim": false,
+    "status": "passed",
+    "whole_generation_reuse": "UNIMPLEMENTED"
+  },
+  "status": "passed"
+}

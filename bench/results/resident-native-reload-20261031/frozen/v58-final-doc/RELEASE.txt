@@ -1,0 +1,5 @@
+v58 FINAL DOC RELEASE
+Only docs/resident-whole-generation-reuse.md changed after immutable v58 source freeze. Original copied from v58 candidate, candidate is full final doc, incremental patch and SHA inventory included.
+Root released actual correctness gates 0975668sp6,277567rzkc,303003qoqj,352678zgk4. New doc records them alongside retained failures and explicitly distinguishes default regression from unimplemented whole-generation retention. No speed claim.
+No Rust edits/builds/tests/native workloads/commits by worker. Root owns atomic scoped main.rs+inputs.rs+doc source commit. Immutable v55/v56/v57/v58 freezes preserved.
+Explicit final documentation release to skunk, no further edits without authorization.

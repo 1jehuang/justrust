@@ -1,0 +1,3 @@
+daemon 0.20261027.0-e72e4f28-77d2c10-18e38ce532e12ad6 (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-3dacc3e7b67657ba6ef82a737576df61c3602872ea9b461427cd9e693c971694)) of pid 3458565 listens on /home/jeremy/nl561/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 850453e2eb5537c9 of pid 3458569 for /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/native-link-reload-v56-candidate/source/
+/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/native-link-reload-v56-candidate/source: ready

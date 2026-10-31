@@ -1,0 +1,13 @@
+In archive /home/jeremy/nl560/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a:
+
+native.o:     file format elf64-x86-64
+
+
+Disassembly of section .text:
+
+0000000000000000 <native_value>:
+   0:	55                   	push   %rbp
+   1:	48 89 e5             	mov    %rsp,%rbp
+   4:	b8 0b 00 00 00       	mov    $0xb,%eax
+   9:	5d                   	pop    %rbp
+   a:	c3                   	ret

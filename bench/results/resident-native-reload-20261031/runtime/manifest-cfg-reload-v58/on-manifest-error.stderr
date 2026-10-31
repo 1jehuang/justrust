@@ -1,0 +1,22 @@
+error[E0308]: expected u32, found &'static str
+ --> src/main.rs:2:44
+  |
+2 | #[cfg(feature="bad")] fn unused_bad()->u32{"JR_GENERATION_ERROR_674825e59292484dbe69b364df0aee2a"}
+  |                                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `generation-fixture` (bin "generation-fixture") due to 1 previous error
+blaze time: 3231.7 ms: daemon 3218.6 (100%), client planning 6.1 (0%), client command 5.8 (0%), client metadata 0.4 (0%), client↔daemon 0.3 (0%), daemon read request 0.1 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     5.8 ms   0.2%
+blaze    client build                       0.1 ms   0.0%
+blaze    client metadata                    0.4 ms   0.0%
+blaze    client planning                    6.1 ms   0.2%
+blaze    client checkout                    0.1 ms   0.0%
+blaze    client whole build                 0.0 ms   0.0%
+blaze    client↔daemon                      0.3 ms   0.0%
+blaze    daemon read request                0.1 ms   0.0%
+blaze    daemon                          3218.6 ms  99.6%
+blaze    client install artifacts           0.0 ms   0.0%
+blaze    total                           3231.7 ms 100.0%

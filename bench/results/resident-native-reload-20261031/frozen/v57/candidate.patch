@@ -1,0 +1,85 @@
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -12066,12 +12066,26 @@
+             });
+             lock(&CLEAN).retain(|(id, _, _), _| *id != file);
+             let fixture = if bad {
+-                SOURCE.replace("crate:main", "crate:main cfg:feature=\"bad\"")
++                // Fixture metadata interns cfg values verbatim, unlike Rust's cfg
++                // syntax. Quotes here would select a different feature named `"bad"`.
++                SOURCE.replace("crate:main", "crate:main cfg:feature=bad")
+             } else {
+                 SOURCE.to_owned()
+             };
+             let (fresh_db, fresh_file) = RootDatabase::with_single_file(&fixture);
+             let fresh_file = fresh_file.file_id(&fresh_db);
++            let fresh_crates = ide_db::base_db::relevant_crates(&fresh_db, fresh_file);
++            assert_eq!(fresh_crates.len(), 1, "fresh oracle must load the same crate");
++            assert_eq!(
++                fresh_crates[0].cfg_options(&fresh_db),
++                krate.cfg_options(&db),
++                "fresh oracle must load the same cfg, not a quoted feature value"
++            );
++            assert_eq!(
++                fresh_db.file_text(fresh_file).text(&fresh_db),
++                &original_text,
++                "fresh oracle must parse exactly the unchanged Rust bytes"
++            );
+             let fresh = hir::attach_db(&fresh_db, || {
+                 errors_of(&fresh_db, &config, fresh_file, None, (false, false))
+             });
+--- a/docs/resident-whole-generation-reuse.md
++++ b/docs/resident-whole-generation-reuse.md
+@@ -230,3 +230,52 @@
+ SHA-256 inventory and explicit no-activation release. Only source formatting,
+ diff inspection and artifact checks are permitted here. No builds, tests,
+ native workloads, installation, commits or speedup claims were made.
++
++## v57: repair the independent cfg fixture, not production behavior
++
++Root executed the actual v56 gate after the source-only handoff. Check,
++native build and codegen gates exited zero, but the resident unit suite had
++361 passing tests and one failing test. This is a **failed candidate gate**,
++not acceptance. Root's preserved log is
++`ROOT/candidate-unit-v56/full-native.log`, lines 23-37. The failed assertion
++compared two actual E0308 diagnostics (ranges `142..145` and `205..209`)
++against an empty fresh-oracle result. The original v56 source freeze and
++failure evidence are not modified by v57.
++
++Source investigation identifies a fixture setup mismatch:
++
++* The live database setter interns feature key `feature` with value `bad`.
++* The v56 fresh fixture used metadata `cfg:feature="bad"`.
++* `test-utils/src/fixture.rs` parses cfg metadata using comma splitting and
++  `split_once('=')`, preserving the value verbatim. `FileMeta::from_fixture`
++  in `test-fixture/src/lib.rs` interns that same value without unquoting it.
++  Thus the fresh database enabled a feature whose value included the quote
++  characters. Rust `#[cfg(feature = "bad")]` did not match it.
++
++The production reloaded database returning both expected errors is evidence
++that the tested diagnostic path did not skip these errors in that run.
++It is not sufficient evidence of overall production correctness or native
++generation reuse. The observed failure is in the independently constructed
++fixture's cfg inputs, rather than a demonstrated production invalidation
++failure. Root must rerun the repaired full gate before any acceptance claim.
++
++v57 changes only fixture code under `#[cfg(test)]` and this document:
++
++* Use the parser's documented unquoted fixture syntax `cfg:feature=bad`.
++* Before invoking oracle diagnostics, assert there is exactly one relevant
++  fresh crate, its complete cfg options equal the live database's options,
++  and its parsed Rust bytes equal the original unchanged source.
++* Preserve exact actual/fresh diagnostic equality, repeated cfg-only
++  error/recovery transitions and the requirement for both E0308 diagnostics.
++  No expected error is removed and no comparison is relaxed.
++
++Production native invalidation code, cold restart behavior, ABI boundary,
++`cargo/whole.rs`, and `cargo/daemon.rs` are unchanged from v56. There is still
++no generation-reuse switch or marker. The source owner ran no native tests,
++builds or workloads. v57 is a fixture-only source repair, not a speedup or
++acceptance claim.
++
++The distinct source-only freeze at
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/whole-generation-reuse-v57`
++contains full original/candidate snapshots of the two reacquired owned
++paths, an incremental patch relative to v56, SHA inventory and release.

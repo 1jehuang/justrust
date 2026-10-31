@@ -1,0 +1,21 @@
+v55 SOURCE-ONLY RELEASE: REJECT ACTIVATION / DOCUMENTATION ONLY
+
+Owned production Rust sources are unchanged. No switch or retention marker
+was installed. RA_JIT_WHOLE_RELOAD=1 does not activate this candidate.
+
+Concrete prerequisite outside assigned edit scope: Program::own_lines in
+src/main.rs caches native linker commands by executable path and survives
+Program::start_over. Existing crate/DB reload does not invalidate that cache.
+Same-members/debug reload also skips updating link_args/lints_capped.
+See docs/resident-whole-generation-reuse.md for investigation and follow-up.
+
+No builds, tests, native workloads, measurements, installation or commits.
+No speedup claim. Root must not treat ON/OFF runs of this documentation-only
+candidate as retention measurements. Existing restart and nonwhole semantics
+are preserved exactly.
+
+originals/ holds full original Rust files and ABSENT document sentinel.
+candidates/ holds full candidate Rust files and new document.
+candidate.patch contains the documentation-only repository-relative patch.
+SHA256SUMS inventories originals, candidates, patch, and this release.
+The initial toolchain/ directory also preserves the first original copies.

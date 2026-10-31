@@ -1,0 +1,10 @@
+{
+  "command": [
+    "python3",
+    "-B",
+    "test_validate.py"
+  ],
+  "exit": 0,
+  "native_jobs": 0,
+  "status": "passed"
+}

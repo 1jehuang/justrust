@@ -1,0 +1,56 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+test tests::native_reload_cfg_only_rechecks_unreachable_errors_and_recovers ... FAILED <0.005s>
+
+failures:
+
+---- tests::native_reload_cfg_only_rechecks_unreachable_errors_and_recovers stdout ----
+
+thread 'tests::native_reload_cfg_only_rechecks_unreachable_errors_and_recovers' (3449604) panicked at crates/ra-jit/src/main.rs:12078:13:
+assertion `left == right` failed
+  left: [(FileRangeWrapper { file_id: FileId(0), range: 142..145 }, "E0308", "expected bool, found u8"), (FileRangeWrapper { file_id: FileId(0), range: 205..209 }, "E0308", "expected u8, found bool")]
+ right: []
+
+failures:
+    tests::native_reload_cfg_only_rechecks_unreachable_errors_and_recovers
+
+test result: FAILED. 361 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.62s
+
+error: test failed, to rerun pass `-p ra-jit --bin jr-engine`
+
+justrust: FAILED: 1 of 362 tests failed in 72.0s
+  time    startup 0.19s | compile 55.12s | tests 16.62s | after 0.04s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 428 fresh. Rebuilt because: ra-jit changed (ra-jit)
+          jr_engine (test)                  55.12s  cpu 213.4s   2607 MB
+  tests   361 passed, 1 failed, 0 ignored, 0 filtered out, 1 binary in 16.62s
+          slowest tests (362 timed, 24.9s summed; a suite cannot finish before its slowest test):
+             16.53s  remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times
+              1.88s  remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked
+  cpu     220.0s total, avg 3.1/peak 8.7 of 16 cores; others used 5.3 cores
+  memory  peak 2721 MB build, 2607 MB largest rustc, 45.1 GB free; stalls cpu 2.50s mem 0.02s io 0.06s
+  output  3 warnings shown, 250 hidden; 434 progress and 361 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~ 41.3s  55.1s went to recompiling oversized crates: jr_engine (79k lines, 55.1s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 16.6s  tests in jr_engine-93ff5023e9192f9b took 16.6s to run; the slowest test alone took 16.5s (remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times). Speed it up or split it, or filter to the tests you changed
+          ~ 16.5s  build averaged 3.1 of 16 cores: jr_engine (test) ran 55.1s mostly alone (single-threaded frontend)
+  more    `justrust log 20261031-003313134-3441477` full output, `justrust show 20261031-003313134-3441477` full profile

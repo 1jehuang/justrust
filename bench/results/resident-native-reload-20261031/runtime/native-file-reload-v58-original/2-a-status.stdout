@@ -1,0 +1,5 @@
+plain cargo: not through blaze (`blaze enable` turns it on)
+daemon: pid 3545623, version 0.20261027.0-e6f3a041-77d47c8-18e37f071727cec3, exits after 1800s idle, workers hold at most 31897 MB
+  worker: pid 3545627, /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/native-file-reload-v58-original/source/, holds 1276 MB, log /home/jeremy/nf580/engine/engine-home/resident-v1/runtime/workers/9eeac5c066708929/log
+    /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/native-file-reload-v58-original/source: ready
+store: 27 MB, at most 32768 MB (`blaze cache gc` collects it), /home/jeremy/nf580/engine/engine-home/resident-v1/store/resident-v1-b0afadc7bfbd49b5ad10ac04fd51db74051172138256e9d418dfca637b3b6840

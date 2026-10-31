@@ -1,0 +1,185 @@
+{
+  "files": [
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl560/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl560/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl560/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/b/libnativechoice.a",
+      "sha256": "cee720472a9ae93d4de7e24371f23ecb743c64c95f9ff7e0afa0bb844ccddc40",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl560/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/b/native.o",
+      "sha256": "0b8a48321725f5f52eeed34e7596903452e173d070a0a7d71f8b1729ddd59e8b",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl560/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl560/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl561/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl561/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl561/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/b/libnativechoice.a",
+      "sha256": "cee720472a9ae93d4de7e24371f23ecb743c64c95f9ff7e0afa0bb844ccddc40",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl561/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/b/native.o",
+      "sha256": "0b8a48321725f5f52eeed34e7596903452e173d070a0a7d71f8b1729ddd59e8b",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl561/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl561/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl582/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl582/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl582/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/b/libnativechoice.a",
+      "sha256": "cee720472a9ae93d4de7e24371f23ecb743c64c95f9ff7e0afa0bb844ccddc40",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl582/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/b/native.o",
+      "sha256": "0b8a48321725f5f52eeed34e7596903452e173d070a0a7d71f8b1729ddd59e8b",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nl582/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nl582/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nf580/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nf580/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nf580/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nf580/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nf581/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nf581/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nf581/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nf581/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nf582/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nf582/engine/target/rust-analyzer/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1374,
+      "path": "/home/jeremy/nf582/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/libnativechoice.a",
+      "sha256": "176400777c90d8a05ea64199aad94911e408176654ec1b4587973d857a10493f",
+      "unchanged_verified": true
+    },
+    {
+      "bytes": 1224,
+      "path": "/home/jeremy/nf582/engine/target/rust-analyzer-rustc/debug/build/native-reload-probe/0f7364c422f9d21a/out/a/native.o",
+      "sha256": "0c68e266a41c35b0a866d63a06804e3439cf90ce6e0cfa8af195f92f60116d03",
+      "unchanged_verified": true
+    }
+  ],
+  "scope": "Post-run read-only hashes of preserved stores, not binaries, not archive re-execution. Original A/B disassembly captured separately at runtime/native-link-reload-v56-original."
+}

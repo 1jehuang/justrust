@@ -1,0 +1,30 @@
+v57 SOURCE-ONLY RELEASE: FIX INDEPENDENT CFG ORACLE SETUP
+NO PRODUCTION CHANGE FROM v56 / NO ACTIVATION / NO ACCEPTANCE
+
+Root's actual v56 gate: check/build/codegen exited0, resident suite361PASS1FAIL.
+The preserved full-native.log reports actual two E0308 diagnostics versus
+fresh oracle[]. V56 failed acceptance and its freeze/failure are preserved.
+
+Source-diagnosed cause: fixture cfg metadata splits key/value verbatim.
+v56 fresh directive cfg:feature="bad" interns a value containing quotes,
+whereas the live DB setter uses bad without quotes. Fresh oracle therefore
+loaded the wrong cfg and disabled both errors. This distinguishes fixture
+setup mismatch from a demonstrated production invalidation failure. Actual
+production diagnostic-path results alone do NOT establish full correctness.
+
+v57 changes ONLY #[cfg(test)] fixture code in main.rs and the owned doc:
+- documented metadata cfg:feature=bad, no literal quotes
+- assert fresh single-crate cfg options exactly equal live DB options
+- assert fresh parsed Rust bytes exactly equal original bytes
+- retain exact diagnostics equality, repeated cfg-only error/recovery and
+  >=2 E0308 assertions without relaxation
+
+Production main.rs code is unchanged from v56. Whole/daemon not edited.
+No switch/marker, worker protocol, ABI guard or kept behavior changed.
+Source owner ran no builds/tests/native workloads/commits/installations.
+Root owns rerunning the failed test/full native suite and all acceptance.
+
+Artifacts: full two-file originals/candidates, v57 incremental candidate.patch,
+SHA256SUMS and this release. Evidence copy contains root's unmodified v56
+failure log for lineage. V56's own SHA inventory was reverified unchanged.
+Source-only rustfmt and diff/hash checks are the only worker checks.

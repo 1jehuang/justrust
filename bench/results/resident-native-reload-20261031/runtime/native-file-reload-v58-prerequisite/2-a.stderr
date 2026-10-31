@@ -1,0 +1,18 @@
+    Finished `dev` profile [blaze] target(s) in 0.05s
+     Running `/home/jeremy/nf581/engine/target/debug/native-reload-probe`
+blaze time: 52.5 ms: daemon↔worker 40.6 (77%), client command 5.1 (10%), client planning 4.3 (8%), client run execution 1.0 (2%), client metadata 0.4 (1%), client↔daemon 0.3 (1%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.1%
+blaze    client command                     5.1 ms   9.7%
+blaze    client build                       0.1 ms   0.1%
+blaze    client metadata                    0.4 ms   0.7%
+blaze    client planning                    4.3 ms   8.1%
+blaze    client checkout                    0.1 ms   0.2%
+blaze    client whole build                 0.0 ms   0.1%
+blaze    client↔daemon                      0.3 ms   0.6%
+blaze    daemon read request                0.1 ms   0.3%
+blaze    daemon                             0.3 ms   0.5%
+blaze    daemon↔worker                     40.6 ms  77.3%
+blaze    client install artifacts           0.2 ms   0.4%
+blaze    client run execution               1.0 ms   1.9%
+blaze    total                             52.5 ms 100.0%

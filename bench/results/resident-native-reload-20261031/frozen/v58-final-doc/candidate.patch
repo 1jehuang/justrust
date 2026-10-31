@@ -1,0 +1,41 @@
+--- a/docs/resident-whole-generation-reuse.md
++++ b/docs/resident-whole-generation-reuse.md
+@@ -373,3 +373,38 @@
+ The v56/v57 freezes and original failure artifacts remain untouched. Worker
+ checks are source rustfmt, diff inspection and hashes only. No commit,
+ installation, native result, product acceptance or speedup is claimed.
++
++### Root-observed final correctness release, 2026-10-31
++
++After the immutable source-only v58 freeze, root executed and released the
++following actual gates. These results supersede the pending-gate status above
++for the reload correctness prerequisite only, not generation retention:
++
++| Root task | Actual result | Evidence under `ROOT` |
++| --- | --- | --- |
++| `0975668sp6` | Complete native gate passed in 168.75 s: check/build exit 0, 53 codegen tests and 364 resident tests passed; source/root-lock after-checks 0 | `candidate-unit-v58/full-native.log`, `candidate-build-v58/` |
++| `277567rzkc` | Six bidirectional native checks passed in 15.0 s: exact environment A/B/A returned 11/22/11 and C-content A/B/A returned 11/33/11; source unchanged | `native-link-reload-v58-candidate/state.json`, `native-file-reload-v58-candidate/state.json` and their raw outputs |
++| `303003qoqj` | Manifest-only cfg diagnostic/error/recovery controls passed 9/9 in 39.76 s, across original/OFF/ON labels | `manifest-cfg-reload-v58/state.json` and raw outputs |
++| `352678zgk4` | Strict default seven-state correctness regression passed 7/7 in 53.22 s | `native-reload-v58-seven-state/state.json` and raw outputs |
++
++Durations identify gate executions, not a speed comparison. The strict
++seven-state receipt's historical scope label says whole-generation-reuse,
++but its `RA_JIT_WHOLE_RELOAD` control is 0 and generation reuse is unimplemented.
++Likewise the manifest probe's OFF/ON labels exercise the existing default
++restart path with different ambient control values, not an activated feature.
++These are default correctness regressions, not same-worker changed-generation
++retention evidence. No process-retention or performance claim follows.
++
++The rejected v56 fresh-oracle/native B-to-A failures and v57 shared-CLEAN
++complete-gate failure remain retained, as do the original and intermediate
++native-file failures. Passing v58 results do not rewrite those observations.
++The immutable `whole-generation-reuse-v58` snapshot remains the tested Rust
++source freeze. This later documentation-only release is frozen separately in
++`whole-generation-reuse-v58-final-doc` with originals/candidate, patch, hashes
++and release. Root owns the atomic scoped main/inputs/document source commit.
++This worker performed no Rust edits, native runs or commits during that release.
++
++Changed whole generations still use the original `kept: false` cold restart.
++The toolchain/sysroot/native-ABI restart certificate and actual retained-worker
++controls remain prerequisites to any future exact opt-in activation. This is
++licensed Blaze-derived resident work, not a clean-room implementation.

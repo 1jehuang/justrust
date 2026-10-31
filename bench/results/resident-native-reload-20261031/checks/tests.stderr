@@ -1,0 +1,34 @@
+test_733_regression_result (__main__.EvidenceTests.test_733_regression_result) ... ok
+test_audit_denies_external_checkout_native_network_and_writes (__main__.EvidenceTests.test_audit_denies_external_checkout_native_network_and_writes) ... ok
+test_baseline (__main__.EvidenceTests.test_baseline) ... ok
+test_cleanup_no_store_deletion (__main__.EvidenceTests.test_cleanup_no_store_deletion) ... ok
+test_coherent_assert_summary (__main__.EvidenceTests.test_coherent_assert_summary) ... ok
+test_coherent_nonce_replacement (__main__.EvidenceTests.test_coherent_nonce_replacement) ... ok
+test_coherent_patch_candidate (__main__.EvidenceTests.test_coherent_patch_candidate) ... ok
+test_coherent_source_bytes_change (__main__.EvidenceTests.test_coherent_source_bytes_change) ... ok
+test_coherent_tc_change (__main__.EvidenceTests.test_coherent_tc_change) ... ok
+test_coherent_tool_change (__main__.EvidenceTests.test_coherent_tool_change) ... ok
+test_coherent_wrong_native_value (__main__.EvidenceTests.test_coherent_wrong_native_value) ... ok
+test_empty_home_path_relocation_audited (__main__.EvidenceTests.test_empty_home_path_relocation_audited) ... ok
+test_failure_history_not_pass (__main__.EvidenceTests.test_failure_history_not_pass) ... ok
+test_file_call_source_hash (__main__.EvidenceTests.test_file_call_source_hash) ... ok
+test_journal_failure_preserved (__main__.EvidenceTests.test_journal_failure_preserved) ... ok
+test_launcher_build_version (__main__.EvidenceTests.test_launcher_build_version) ... ok
+test_manifest_missing_diagnostic (__main__.EvidenceTests.test_manifest_missing_diagnostic) ... ok
+test_manifest_runtime_nonce (__main__.EvidenceTests.test_manifest_runtime_nonce) ... ok
+test_native_error_not_success (__main__.EvidenceTests.test_native_error_not_success) ... ok
+test_omission_count (__main__.EvidenceTests.test_omission_count) ... ok
+test_private_env_injection (__main__.EvidenceTests.test_private_env_injection) ... ok
+test_return_to_a_not_stale_b (__main__.EvidenceTests.test_return_to_a_not_stale_b) ... ok
+test_rootlock_change (__main__.EvidenceTests.test_rootlock_change) ... ok
+test_sanitizer_explicit_allowlist_and_nonmutation (__main__.EvidenceTests.test_sanitizer_explicit_allowlist_and_nonmutation) ... ok
+test_source3757_missing (__main__.EvidenceTests.test_source3757_missing) ... ok
+test_status_identity (__main__.EvidenceTests.test_status_identity) ... ok
+test_status_pid_exact (__main__.EvidenceTests.test_status_pid_exact) ... ok
+test_type_error_nonce (__main__.EvidenceTests.test_type_error_nonce) ... ok
+test_whole_reload_not_activated (__main__.EvidenceTests.test_whole_reload_not_activated) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 34.637s
+
+OK

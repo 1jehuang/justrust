@@ -1,0 +1,1632 @@
+{"l": "warning: unused workspace dependency `arrayvec`", "s": "e", "t": 1793431992.797376}
+{"l": "   --> Cargo.toml:154:1", "s": "e", "t": 1793431992.797382}
+{"l": "    |", "s": "e", "t": 1793431992.7973852}
+{"l": "154 | arrayvec = \"0.7.6\"", "s": "e", "t": 1793431992.797388}
+{"l": "    | ^^^^^^^^", "s": "e", "t": 1793431992.7973912}
+{"l": "    |", "s": "e", "t": 1793431992.7973945}
+{"l": "    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default", "s": "e", "t": 1793431992.7973974}
+{"l": "help: consider removing the workspace dependency `arrayvec`", "s": "e", "t": 1793431992.7974005}
+{"l": "warning: unused workspace dependency `bitflags`", "s": "e", "t": 1793431992.7974033}
+{"l": "   --> Cargo.toml:155:1", "s": "e", "t": 1793431992.7974064}
+{"l": "    |", "s": "e", "t": 1793431992.797409}
+{"l": "155 | bitflags = \"2.9.1\"", "s": "e", "t": 1793431992.7974117}
+{"l": "    | ^^^^^^^^", "s": "e", "t": 1793431992.7974145}
+{"l": "    |", "s": "e", "t": 1793431992.7974172}
+{"l": "help: consider removing the workspace dependency `bitflags`", "s": "e", "t": 1793431992.7974198}
+{"l": "warning: unused workspace dependency `camino`", "s": "e", "t": 1793431992.797463}
+{"l": "   --> Cargo.toml:157:1", "s": "e", "t": 1793431992.7974658}
+{"l": "    |", "s": "e", "t": 1793431992.797469}
+{"l": "157 | camino = \"1.2.2\"", "s": "e", "t": 1793431992.7974741}
+{"l": "    | ^^^^^^", "s": "e", "t": 1793431992.797477}
+{"l": "    |", "s": "e", "t": 1793431992.7974796}
+{"l": "help: consider removing the workspace dependency `camino`", "s": "e", "t": 1793431992.7974825}
+{"l": "warning: unused workspace dependency `crossbeam-channel`", "s": "e", "t": 1793431992.7974832}
+{"l": "   --> Cargo.toml:158:1", "s": "e", "t": 1793431992.7974837}
+{"l": "    |", "s": "e", "t": 1793431992.7974842}
+{"l": "158 | crossbeam-channel = \"0.5.15\"", "s": "e", "t": 1793431992.7974849}
+{"l": "    | ^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7974854}
+{"l": "    |", "s": "e", "t": 1793431992.7974858}
+{"l": "help: consider removing the workspace dependency `crossbeam-channel`", "s": "e", "t": 1793431992.7974863}
+{"l": "warning: unused workspace dependency `dashmap`", "s": "e", "t": 1793431992.797487}
+{"l": "   --> Cargo.toml:217:1", "s": "e", "t": 1793431992.7974875}
+{"l": "    |", "s": "e", "t": 1793431992.7974877}
+{"l": "217 | dashmap = { version = \"=6.2.1\", features = [\"raw-api\", \"inline\"] }", "s": "e", "t": 1793431992.7974882}
+{"l": "    | ^^^^^^^", "s": "e", "t": 1793431992.7974892}
+{"l": "    |", "s": "e", "t": 1793431992.7974896}
+{"l": "help: consider removing the workspace dependency `dashmap`", "s": "e", "t": 1793431992.7974901}
+{"l": "warning: unused workspace dependency `dissimilar`", "s": "e", "t": 1793431992.7975092}
+{"l": "   --> Cargo.toml:159:1", "s": "e", "t": 1793431992.7975147}
+{"l": "    |", "s": "e", "t": 1793431992.7975152}
+{"l": "159 | dissimilar = \"1.0.10\"", "s": "e", "t": 1793431992.7975154}
+{"l": "    | ^^^^^^^^^^", "s": "e", "t": 1793431992.7975159}
+{"l": "    |", "s": "e", "t": 1793431992.7975163}
+{"l": "help: consider removing the workspace dependency `dissimilar`", "s": "e", "t": 1793431992.79752}
+{"l": "warning: unused workspace dependency `dot`", "s": "e", "t": 1793431992.7975564}
+{"l": "   --> Cargo.toml:160:1", "s": "e", "t": 1793431992.7975605}
+{"l": "    |", "s": "e", "t": 1793431992.797561}
+{"l": "160 | dot = \"0.1.4\"", "s": "e", "t": 1793431992.7975612}
+{"l": "    | ^^^", "s": "e", "t": 1793431992.7975616}
+{"l": "    |", "s": "e", "t": 1793431992.7975621}
+{"l": "help: consider removing the workspace dependency `dot`", "s": "e", "t": 1793431992.7975655}
+{"l": "warning: unused workspace dependency `edition`", "s": "e", "t": 1793431992.7975926}
+{"l": "   --> Cargo.toml:134:1", "s": "e", "t": 1793431992.797597}
+{"l": "    |", "s": "e", "t": 1793431992.7975972}
+{"l": "134 | edition = { path = \"vendor/rust-analyzer/crates/edition\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.797598}
+{"l": "    | ^^^^^^^", "s": "e", "t": 1793431992.7975986}
+{"l": "    |", "s": "e", "t": 1793431992.7976022}
+{"l": "help: consider removing the workspace dependency `edition`", "s": "e", "t": 1793431992.7976027}
+{"l": "warning: unused workspace dependency `hashbrown`", "s": "e", "t": 1793431992.797624}
+{"l": "   --> Cargo.toml:212:1", "s": "e", "t": 1793431992.797628}
+{"l": "    |", "s": "e", "t": 1793431992.7976282}
+{"l": "212 | hashbrown = { version = \"0.17.0\", features = [", "s": "e", "t": 1793431992.7976286}
+{"l": "    | ^^^^^^^^^", "s": "e", "t": 1793431992.7976294}
+{"l": "    |", "s": "e", "t": 1793431992.7976327}
+{"l": "help: consider removing the workspace dependency `hashbrown`", "s": "e", "t": 1793431992.7976332}
+{"l": "warning: unused workspace dependency `hir-ide`", "s": "e", "t": 1793431992.7976525}
+{"l": "   --> Cargo.toml:108:1", "s": "e", "t": 1793431992.7976573}
+{"l": "    |", "s": "e", "t": 1793431992.7976577}
+{"l": "108 | hir-ide = { path = \"vendor/rust-analyzer/crates/hir-ide\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7976582}
+{"l": "    | ^^^^^^^", "s": "e", "t": 1793431992.7976587}
+{"l": "    |", "s": "e", "t": 1793431992.7976592}
+{"l": "help: consider removing the workspace dependency `hir-ide`", "s": "e", "t": 1793431992.7976623}
+{"l": "warning: unused workspace dependency `hir-ty-wfcheck`", "s": "e", "t": 1793431992.797682}
+{"l": "  --> Cargo.toml:93:1", "s": "e", "t": 1793431992.7976868}
+{"l": "   |", "s": "e", "t": 1793431992.7976873}
+{"l": "93 | hir-ty-wfcheck = { path = \"vendor/rust-analyzer/crates/hir-ty-wfcheck\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7976882}
+{"l": "   | ^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7976892}
+{"l": "   |", "s": "e", "t": 1793431992.7976894}
+{"l": "help: consider removing the workspace dependency `hir-ty-wfcheck`", "s": "e", "t": 1793431992.7976944}
+{"l": "warning: unused workspace dependency `ide`", "s": "e", "t": 1793431992.7977521}
+{"l": "   --> Cargo.toml:109:1", "s": "e", "t": 1793431992.7977529}
+{"l": "    |", "s": "e", "t": 1793431992.797753}
+{"l": "109 | ide = { path = \"vendor/rust-analyzer/crates/ide\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7977538}
+{"l": "    | ^^^", "s": "e", "t": 1793431992.7977543}
+{"l": "    |", "s": "e", "t": 1793431992.7977548}
+{"l": "help: consider removing the workspace dependency `ide`", "s": "e", "t": 1793431992.7977552}
+{"l": "warning: unused workspace dependency `ide-assists`", "s": "e", "t": 1793431992.7977557}
+{"l": "   --> Cargo.toml:110:1", "s": "e", "t": 1793431992.7977564}
+{"l": "    |", "s": "e", "t": 1793431992.797757}
+{"l": "110 | ide-assists = { path = \"vendor/rust-analyzer/crates/ide-assists\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7977574}
+{"l": "    | ^^^^^^^^^^^", "s": "e", "t": 1793431992.797758}
+{"l": "    |", "s": "e", "t": 1793431992.7977586}
+{"l": "help: consider removing the workspace dependency `ide-assists`", "s": "e", "t": 1793431992.7977588}
+{"l": "warning: unused workspace dependency `ide-completion`", "s": "e", "t": 1793431992.7977629}
+{"l": "   --> Cargo.toml:111:1", "s": "e", "t": 1793431992.7977674}
+{"l": "    |", "s": "e", "t": 1793431992.7977676}
+{"l": "111 | ide-completion = { path = \"vendor/rust-analyzer/crates/ide-completion\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.797768}
+{"l": "    | ^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7977688}
+{"l": "    |", "s": "e", "t": 1793431992.7977724}
+{"l": "help: consider removing the workspace dependency `ide-completion`", "s": "e", "t": 1793431992.797773}
+{"l": "warning: unused workspace dependency `ide-ssr`", "s": "e", "t": 1793431992.7977905}
+{"l": "   --> Cargo.toml:114:1", "s": "e", "t": 1793431992.797791}
+{"l": "    |", "s": "e", "t": 1793431992.7977953}
+{"l": "114 | ide-ssr = { path = \"vendor/rust-analyzer/crates/ide-ssr\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7977955}
+{"l": "    | ^^^^^^^", "s": "e", "t": 1793431992.7977962}
+{"l": "    |", "s": "e", "t": 1793431992.7977967}
+{"l": "help: consider removing the workspace dependency `ide-ssr`", "s": "e", "t": 1793431992.7977972}
+{"l": "warning: unused workspace dependency `line-index`", "s": "e", "t": 1793431992.7978144}
+{"l": "   --> Cargo.toml:148:1", "s": "e", "t": 1793431992.7978184}
+{"l": "    |", "s": "e", "t": 1793431992.7978187}
+{"l": "148 | line-index = { version = \"0.1.2\" }", "s": "e", "t": 1793431992.7978191}
+{"l": "    | ^^^^^^^^^^", "s": "e", "t": 1793431992.7978196}
+{"l": "    |", "s": "e", "t": 1793431992.79782}
+{"l": "help: consider removing the workspace dependency `line-index`", "s": "e", "t": 1793431992.7978232}
+{"l": "warning: unused workspace dependency `lsp-server`", "s": "e", "t": 1793431992.797846}
+{"l": "   --> Cargo.toml:150:1", "s": "e", "t": 1793431992.7978475}
+{"l": "    |", "s": "e", "t": 1793431992.7978485}
+{"l": "150 | lsp-server = { version = \"0.7.9\" }", "s": "e", "t": 1793431992.7978544}
+{"l": "    | ^^^^^^^^^^", "s": "e", "t": 1793431992.7978554}
+{"l": "    |", "s": "e", "t": 1793431992.7978559}
+{"l": "help: consider removing the workspace dependency `lsp-server`", "s": "e", "t": 1793431992.7978566}
+{"l": "warning: unused workspace dependency `macros`", "s": "e", "t": 1793431992.7978666}
+{"l": "  --> Cargo.toml:85:1", "s": "e", "t": 1793431992.7978714}
+{"l": "   |", "s": "e", "t": 1793431992.7978718}
+{"l": "85 | macros = { path = \"vendor/rust-analyzer/crates/macros\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7978725}
+{"l": "   | ^^^^^^", "s": "e", "t": 1793431992.797873}
+{"l": "   |", "s": "e", "t": 1793431992.7978735}
+{"l": "help: consider removing the workspace dependency `macros`", "s": "e", "t": 1793431992.7978768}
+{"l": "warning: unused workspace dependency `mbe`", "s": "e", "t": 1793431992.7978933}
+{"l": "   --> Cargo.toml:117:1", "s": "e", "t": 1793431992.797894}
+{"l": "    |", "s": "e", "t": 1793431992.7979002}
+{"l": "117 | mbe = { path = \"vendor/rust-analyzer/crates/mbe\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7979007}
+{"l": "    | ^^^", "s": "e", "t": 1793431992.7979014}
+{"l": "    |", "s": "e", "t": 1793431992.7979019}
+{"l": "help: consider removing the workspace dependency `mbe`", "s": "e", "t": 1793431992.7979052}
+{"l": "warning: unused workspace dependency `nohash-hasher`", "s": "e", "t": 1793431992.7979228}
+{"l": "   --> Cargo.toml:166:1", "s": "e", "t": 1793431992.797927}
+{"l": "    |", "s": "e", "t": 1793431992.7979271}
+{"l": "166 | nohash-hasher = \"0.2.0\"", "s": "e", "t": 1793431992.7979276}
+{"l": "    | ^^^^^^^^^^^^^", "s": "e", "t": 1793431992.797928}
+{"l": "    |", "s": "e", "t": 1793431992.7979283}
+{"l": "help: consider removing the workspace dependency `nohash-hasher`", "s": "e", "t": 1793431992.7979317}
+{"l": "warning: unused workspace dependency `oorandom`", "s": "e", "t": 1793431992.7979653}
+{"l": "   --> Cargo.toml:167:1", "s": "e", "t": 1793431992.7979665}
+{"l": "    |", "s": "e", "t": 1793431992.7979672}
+{"l": "167 | oorandom = \"11.1.5\"", "s": "e", "t": 1793431992.7979677}
+{"l": "    | ^^^^^^^^", "s": "e", "t": 1793431992.7979686}
+{"l": "    |", "s": "e", "t": 1793431992.797969}
+{"l": "help: consider removing the workspace dependency `oorandom`", "s": "e", "t": 1793431992.7979698}
+{"l": "warning: unused workspace dependency `proc-macro-srv`", "s": "e", "t": 1793431992.7979765}
+{"l": "   --> Cargo.toml:121:1", "s": "e", "t": 1793431992.7979772}
+{"l": "    |", "s": "e", "t": 1793431992.7979777}
+{"l": "121 | proc-macro-srv = { path = \"vendor/rust-analyzer/crates/proc-macro-srv\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7979782}
+{"l": "    | ^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.797983}
+{"l": "    |", "s": "e", "t": 1793431992.7979834}
+{"l": "help: consider removing the workspace dependency `proc-macro-srv`", "s": "e", "t": 1793431992.797984}
+{"l": "warning: unused workspace dependency `process-wrap`", "s": "e", "t": 1793431992.797998}
+{"l": "   --> Cargo.toml:169:1", "s": "e", "t": 1793431992.798002}
+{"l": "    |", "s": "e", "t": 1793431992.7980022}
+{"l": "169 | process-wrap = { version = \"9.1.0\", features = [\"std\"] }", "s": "e", "t": 1793431992.7980027}
+{"l": "    | ^^^^^^^^^^^^", "s": "e", "t": 1793431992.7980034}
+{"l": "    |", "s": "e", "t": 1793431992.798004}
+{"l": "help: consider removing the workspace dependency `process-wrap`", "s": "e", "t": 1793431992.798007}
+{"l": "warning: unused workspace dependency `profile`", "s": "e", "t": 1793431992.7980425}
+{"l": "   --> Cargo.toml:122:1", "s": "e", "t": 1793431992.7980437}
+{"l": "    |", "s": "e", "t": 1793431992.7980444}
+{"l": "122 | profile = { path = \"vendor/rust-analyzer/crates/profile\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7980452}
+{"l": "    | ^^^^^^^", "s": "e", "t": 1793431992.798046}
+{"l": "    |", "s": "e", "t": 1793431992.7980466}
+{"l": "help: consider removing the workspace dependency `profile`", "s": "e", "t": 1793431992.798047}
+{"l": "warning: unused workspace dependency `pulldown-cmark-to-cmark`", "s": "e", "t": 1793431992.7980535}
+{"l": "   --> Cargo.toml:170:1", "s": "e", "t": 1793431992.7980542}
+{"l": "    |", "s": "e", "t": 1793431992.7980547}
+{"l": "170 | pulldown-cmark-to-cmark = \"10.0.4\"", "s": "e", "t": 1793431992.7980552}
+{"l": "    | ^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.79806}
+{"l": "    |", "s": "e", "t": 1793431992.7980604}
+{"l": "help: consider removing the workspace dependency `pulldown-cmark-to-cmark`", "s": "e", "t": 1793431992.7980611}
+{"l": "warning: unused workspace dependency `ra-ap-rustc_next_trait_solver`", "s": "e", "t": 1793431992.7980778}
+{"l": "   --> Cargo.toml:143:1", "s": "e", "t": 1793431992.798083}
+{"l": "    |", "s": "e", "t": 1793431992.7980833}
+{"l": "143 | ra-ap-rustc_next_trait_solver = { version = \"0.166\", default-features = false }", "s": "e", "t": 1793431992.7980838}
+{"l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7980845}
+{"l": "    |", "s": "e", "t": 1793431992.798085}
+{"l": "help: consider removing the workspace dependency `ra-ap-rustc_next_trait_solver`", "s": "e", "t": 1793431992.798088}
+{"l": "warning: unused workspace dependency `ra-ap-rustc_parse_format`", "s": "e", "t": 1793431992.7981064}
+{"l": "   --> Cargo.toml:137:1", "s": "e", "t": 1793431992.798107}
+{"l": "    |", "s": "e", "t": 1793431992.7981124}
+{"l": "137 | ra-ap-rustc_parse_format = { version = \"0.166\", default-features = false }", "s": "e", "t": 1793431992.798113}
+{"l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7981138}
+{"l": "    |", "s": "e", "t": 1793431992.798118}
+{"l": "help: consider removing the workspace dependency `ra-ap-rustc_parse_format`", "s": "e", "t": 1793431992.7981188}
+{"l": "warning: unused workspace dependency `ra-ap-rustc_pattern_analysis`", "s": "e", "t": 1793431992.7981331}
+{"l": "   --> Cargo.toml:140:1", "s": "e", "t": 1793431992.7981386}
+{"l": "    |", "s": "e", "t": 1793431992.7981389}
+{"l": "140 | ra-ap-rustc_pattern_analysis = { version = \"0.166\", default-features = false }", "s": "e", "t": 1793431992.7981393}
+{"l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7981398}
+{"l": "    |", "s": "e", "t": 1793431992.7981405}
+{"l": "help: consider removing the workspace dependency `ra-ap-rustc_pattern_analysis`", "s": "e", "t": 1793431992.798141}
+{"l": "warning: unused workspace dependency `rowan`", "s": "e", "t": 1793431992.7981572}
+{"l": "   --> Cargo.toml:173:1", "s": "e", "t": 1793431992.7981625}
+{"l": "    |", "s": "e", "t": 1793431992.798163}
+{"l": "173 | rowan = \"0.17.0\"", "s": "e", "t": 1793431992.7981634}
+{"l": "    | ^^^^^", "s": "e", "t": 1793431992.798164}
+{"l": "    |", "s": "e", "t": 1793431992.7981644}
+{"l": "help: consider removing the workspace dependency `rowan`", "s": "e", "t": 1793431992.7981648}
+{"l": "warning: unused workspace dependency `rustc-literal-escaper`", "s": "e", "t": 1793431992.798182}
+{"l": "   --> Cargo.toml:188:1", "s": "e", "t": 1793431992.7981865}
+{"l": "    |", "s": "e", "t": 1793431992.7981868}
+{"l": "188 | rustc-literal-escaper = \"0.0.7\"", "s": "e", "t": 1793431992.7981873}
+{"l": "    | ^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7981877}
+{"l": "    |", "s": "e", "t": 1793431992.7981882}
+{"l": "help: consider removing the workspace dependency `rustc-literal-escaper`", "s": "e", "t": 1793431992.7981915}
+{"l": "warning: unused workspace dependency `smallvec`", "s": "e", "t": 1793431992.7982073}
+{"l": "   --> Cargo.toml:189:1", "s": "e", "t": 1793431992.7982118}
+{"l": "    |", "s": "e", "t": 1793431992.7982123}
+{"l": "189 | smallvec = { version = \"1.15.1\", features = [", "s": "e", "t": 1793431992.7982128}
+{"l": "    | ^^^^^^^^", "s": "e", "t": 1793431992.7982135}
+{"l": "    |", "s": "e", "t": 1793431992.798214}
+{"l": "help: consider removing the workspace dependency `smallvec`", "s": "e", "t": 1793431992.798217}
+{"l": "warning: unused workspace dependency `smol_str`", "s": "e", "t": 1793431992.798231}
+{"l": "   --> Cargo.toml:194:1", "s": "e", "t": 1793431992.7982354}
+{"l": "    |", "s": "e", "t": 1793431992.7982357}
+{"l": "194 | smol_str = \"0.3.2\"", "s": "e", "t": 1793431992.7982361}
+{"l": "    | ^^^^^^^^", "s": "e", "t": 1793431992.7982366}
+{"l": "    |", "s": "e", "t": 1793431992.798237}
+{"l": "help: consider removing the workspace dependency `smol_str`", "s": "e", "t": 1793431992.7982402}
+{"l": "warning: unused workspace dependency `syntax-bridge`", "s": "e", "t": 1793431992.7982576}
+{"l": "   --> Cargo.toml:127:1", "s": "e", "t": 1793431992.7982624}
+{"l": "    |", "s": "e", "t": 1793431992.7982628}
+{"l": "127 | syntax-bridge = { path = \"vendor/rust-analyzer/crates/syntax-bridge\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7982633}
+{"l": "    | ^^^^^^^^^^^^^", "s": "e", "t": 1793431992.798264}
+{"l": "    |", "s": "e", "t": 1793431992.7982645}
+{"l": "help: consider removing the workspace dependency `syntax-bridge`", "s": "e", "t": 1793431992.7982676}
+{"l": "warning: unused workspace dependency `test-utils`", "s": "e", "t": 1793431992.7982838}
+{"l": "   --> Cargo.toml:129:1", "s": "e", "t": 1793431992.798288}
+{"l": "    |", "s": "e", "t": 1793431992.7982886}
+{"l": "129 | test-utils = { path = \"vendor/rust-analyzer/crates/test-utils\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.798289}
+{"l": "    | ^^^^^^^^^^", "s": "e", "t": 1793431992.7982895}
+{"l": "    |", "s": "e", "t": 1793431992.79829}
+{"l": "help: consider removing the workspace dependency `test-utils`", "s": "e", "t": 1793431992.7982929}
+{"l": "warning: unused workspace dependency `text-size`", "s": "e", "t": 1793431992.7983077}
+{"l": "   --> Cargo.toml:195:1", "s": "e", "t": 1793431992.798312}
+{"l": "    |", "s": "e", "t": 1793431992.7983122}
+{"l": "195 | text-size = \"1.1.1\"", "s": "e", "t": 1793431992.7983127}
+{"l": "    | ^^^^^^^^^", "s": "e", "t": 1793431992.7983131}
+{"l": "    |", "s": "e", "t": 1793431992.7983134}
+{"l": "help: consider removing the workspace dependency `text-size`", "s": "e", "t": 1793431992.7983165}
+{"l": "warning: unused workspace dependency `thin-vec`", "s": "e", "t": 1793431992.798331}
+{"l": "   --> Cargo.toml:211:1", "s": "e", "t": 1793431992.7983356}
+{"l": "    |", "s": "e", "t": 1793431992.7983358}
+{"l": "211 | thin-vec = \"0.2.16\"", "s": "e", "t": 1793431992.7983363}
+{"l": "    | ^^^^^^^^", "s": "e", "t": 1793431992.7983367}
+{"l": "    |", "s": "e", "t": 1793431992.798337}
+{"l": "help: consider removing the workspace dependency `thin-vec`", "s": "e", "t": 1793431992.79834}
+{"l": "warning: unused workspace dependency `tracing-subscriber`", "s": "e", "t": 1793431992.7983584}
+{"l": "   --> Cargo.toml:199:1", "s": "e", "t": 1793431992.7983634}
+{"l": "    |", "s": "e", "t": 1793431992.7983637}
+{"l": "199 | tracing-subscriber = { version = \"0.3.20\", default-features = false, features = [", "s": "e", "t": 1793431992.7983642}
+{"l": "    | ^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7983656}
+{"l": "    |", "s": "e", "t": 1793431992.798366}
+{"l": "help: consider removing the workspace dependency `tracing-subscriber`", "s": "e", "t": 1793431992.798376}
+{"l": "warning: unused workspace dependency `tracing-tree`", "s": "e", "t": 1793431992.798388}
+{"l": "   --> Cargo.toml:198:1", "s": "e", "t": 1793431992.7983885}
+{"l": "    |", "s": "e", "t": 1793431992.798389}
+{"l": "198 | tracing-tree = \"0.4.0\"", "s": "e", "t": 1793431992.7983894}
+{"l": "    | ^^^^^^^^^^^^", "s": "e", "t": 1793431992.79839}
+{"l": "    |", "s": "e", "t": 1793431992.7983902}
+{"l": "help: consider removing the workspace dependency `tracing-tree`", "s": "e", "t": 1793431992.7983906}
+{"l": "warning: unused workspace dependency `unicode-width`", "s": "e", "t": 1793431992.798406}
+{"l": "   --> Cargo.toml:208:1", "s": "e", "t": 1793431992.7984107}
+{"l": "    |", "s": "e", "t": 1793431992.798411}
+{"l": "208 | unicode-width = \"0.2.2\"", "s": "e", "t": 1793431992.7984114}
+{"l": "    | ^^^^^^^^^^^^^", "s": "e", "t": 1793431992.7984118}
+{"l": "    |", "s": "e", "t": 1793431992.798412}
+{"l": "help: consider removing the workspace dependency `unicode-width`", "s": "e", "t": 1793431992.7984126}
+{"l": "warning: unused workspace dependency `vfs-notify`", "s": "e", "t": 1793431992.7984316}
+{"l": "   --> Cargo.toml:132:1", "s": "e", "t": 1793431992.7984366}
+{"l": "    |", "s": "e", "t": 1793431992.7984369}
+{"l": "132 | vfs-notify = { path = \"vendor/rust-analyzer/crates/vfs-notify\", version = \"0.0.0\" }", "s": "e", "t": 1793431992.7984374}
+{"l": "    | ^^^^^^^^^^", "s": "e", "t": 1793431992.798438}
+{"l": "    |", "s": "e", "t": 1793431992.7984385}
+{"l": "help: consider removing the workspace dependency `vfs-notify`", "s": "e", "t": 1793431992.798439}
+{"l": "warning: unused workspace dependency `xshell`", "s": "e", "t": 1793431992.7984545}
+{"l": "   --> Cargo.toml:210:1", "s": "e", "t": 1793431992.7984593}
+{"l": "    |", "s": "e", "t": 1793431992.7984598}
+{"l": "210 | xshell = \"0.2.7\"", "s": "e", "t": 1793431992.79846}
+{"l": "    | ^^^^^^", "s": "e", "t": 1793431992.7984605}
+{"l": "    |", "s": "e", "t": 1793431992.798461}
+{"l": "help: consider removing the workspace dependency `xshell`", "s": "e", "t": 1793431992.7984612}
+{"l": "warning: unused field `categories` in `workspace.package`", "s": "e", "t": 1793431992.7985153}
+{"l": "  --> Cargo.toml:24:1", "s": "e", "t": 1793431992.79852}
+{"l": "   |", "s": "e", "t": 1793431992.7985206}
+{"l": "24 | categories = [\"development-tools\", \"development-tools::build-utils\"]", "s": "e", "t": 1793431992.798521}
+{"l": "   | ^^^^^^^^^^", "s": "e", "t": 1793431992.7985218}
+{"l": "   |", "s": "e", "t": 1793431992.7985225}
+{"l": "   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default", "s": "e", "t": 1793431992.7985268}
+{"l": "help: consider removing the field `workspace.package.categories`", "s": "e", "t": 1793431992.7985275}
+{"l": "warning: workspace (manifest) generated 42 warnings", "s": "e", "t": 1793431992.7985287}
+{"l": "warning: missing `[lints]` to inherit `[workspace.lints]`", "s": "e", "t": 1793431992.7985754}
+{"l": "  --> crates/ra-jit-live/Cargo.toml", "s": "e", "t": 1793431992.7985806}
+{"l": "   = note: `cargo::missing_lints_inheritance` is set to `warn` by default", "s": "e", "t": 1793431992.7985814}
+{"l": "help: to inherit `workspace.lints, add:", "s": "e", "t": 1793431992.798582}
+{"l": "   |", "s": "e", "t": 1793431992.7985842}
+{"l": "14 ~ [dependencies]", "s": "e", "t": 1793431992.7985847}
+{"l": "15 + [lints]", "s": "e", "t": 1793431992.7985897}
+{"l": "16 + workspace = true", "s": "e", "t": 1793431992.7985902}
+{"l": "   |", "s": "e", "t": 1793431992.7985904}
+{"l": "help: to clarify your intent to not inherit, add:", "s": "e", "t": 1793431992.798591}
+{"l": "   |", "s": "e", "t": 1793431992.7985914}
+{"l": "14 ~ [dependencies]", "s": "e", "t": 1793431992.7985919}
+{"l": "15 + [lints]", "s": "e", "t": 1793431992.798592}
+{"l": "   |", "s": "e", "t": 1793431992.7985926}
+{"l": "warning: `ra-jit-live` (manifest) generated 1 warning", "s": "e", "t": 1793431992.798596}
+{"l": "warning: missing `[lints]` to inherit `[workspace.lints]`", "s": "e", "t": 1793431992.7986794}
+{"l": "  --> crates/ra-jit-cache/Cargo.toml", "s": "e", "t": 1793431992.7986848}
+{"l": "   = note: `cargo::missing_lints_inheritance` is set to `warn` by default", "s": "e", "t": 1793431992.7986853}
+{"l": "help: to inherit `workspace.lints, add:", "s": "e", "t": 1793431992.798686}
+{"l": "   |", "s": "e", "t": 1793431992.7986865}
+{"l": "24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }", "s": "e", "t": 1793431992.798687}
+{"l": "25 + [lints]", "s": "e", "t": 1793431992.7986922}
+{"l": "26 + workspace = true", "s": "e", "t": 1793431992.7986927}
+{"l": "   |", "s": "e", "t": 1793431992.7986932}
+{"l": "help: to clarify your intent to not inherit, add:", "s": "e", "t": 1793431992.7986937}
+{"l": "   |", "s": "e", "t": 1793431992.7986941}
+{"l": "24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }", "s": "e", "t": 1793431992.7986944}
+{"l": "25 + [lints]", "s": "e", "t": 1793431992.798695}
+{"l": "   |", "s": "e", "t": 1793431992.7986956}
+{"l": "warning: `ra-jit-cache` (manifest) generated 1 warning", "s": "e", "t": 1793431992.798699}
+{"l": "warning: missing `[lints]` to inherit `[workspace.lints]`", "s": "e", "t": 1793431992.7987766}
+{"l": "  --> crates/ra-jit-cache-macros/Cargo.toml", "s": "e", "t": 1793431992.7987816}
+{"l": "   = note: `cargo::missing_lints_inheritance` is set to `warn` by default", "s": "e", "t": 1793431992.7987823}
+{"l": "help: to inherit `workspace.lints, add:", "s": "e", "t": 1793431992.7987828}
+{"l": "   |", "s": "e", "t": 1793431992.7987833}
+{"l": "14 ~ proc-macro = true", "s": "e", "t": 1793431992.7987835}
+{"l": "15 + [lints]", "s": "e", "t": 1793431992.798788}
+{"l": "16 + workspace = true", "s": "e", "t": 1793431992.7987885}
+{"l": "   |", "s": "e", "t": 1793431992.7987888}
+{"l": "help: to clarify your intent to not inherit, add:", "s": "e", "t": 1793431992.7987893}
+{"l": "   |", "s": "e", "t": 1793431992.7987895}
+{"l": "14 ~ proc-macro = true", "s": "e", "t": 1793431992.79879}
+{"l": "15 + [lints]", "s": "e", "t": 1793431992.7987902}
+{"l": "   |", "s": "e", "t": 1793431992.7987907}
+{"l": "warning: `ra-jit-cache-macros` (manifest) generated 1 warning", "s": "e", "t": 1793431992.798794}
+{"l": "warning: crates/ra-jit/Cargo.toml: file `/home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs` found to be present in multiple build targets:", "s": "e", "t": 1793431992.798848}
+{"l": "  * `bin` target `jr-engine`", "s": "e", "t": 1793431992.7988486}
+{"l": "  * `bin` target `ra-jit`", "s": "e", "t": 1793431992.798849}
+{"l": "warning: `ra-jit` (manifest) generated 1 warning", "s": "e", "t": 1793431992.7988708}
+{"l": "       Fresh allocator-api2 v0.2.21", "s": "e", "t": 1793431993.0431287}
+{"l": "       Fresh proc-macro2 v1.0.106", "s": "e", "t": 1793431993.0432036}
+{"l": "       Fresh equivalent v1.0.2", "s": "e", "t": 1793431993.0432043}
+{"l": "       Fresh quote v1.0.45", "s": "e", "t": 1793431993.043205}
+{"l": "       Fresh serde_core v1.0.228", "s": "e", "t": 1793431993.0432055}
+{"l": "       Fresh cfg-if v1.0.4", "s": "e", "t": 1793431993.0432062}
+{"l": "       Fresh find-msvc-tools v0.1.11", "s": "e", "t": 1793431993.0432067}
+{"l": "       Fresh shlex v2.0.1", "s": "e", "t": 1793431993.0432072}
+{"l": "       Fresh syn v2.0.117", "s": "e", "t": 1793431993.043258}
+{"l": "       Fresh once_cell v1.21.4", "s": "e", "t": 1793431993.0432587}
+{"l": "       Fresh serde_derive v1.0.228", "s": "e", "t": 1793431993.0433056}
+{"l": "       Fresh tracing-core v0.1.36", "s": "e", "t": 1793431993.0433517}
+{"l": "       Fresh rustc-hash v2.1.2", "s": "e", "t": 1793431993.0433521}
+{"l": "       Fresh serde v1.0.228", "s": "e", "t": 1793431993.0433977}
+{"l": "       Fresh jobserver v0.1.35", "s": "e", "t": 1793431993.0434022}
+{"l": "       Fresh libc v0.2.186", "s": "e", "t": 1793431993.04345}
+{"l": "       Fresh crossbeam-utils v0.8.21", "s": "e", "t": 1793431993.0434508}
+{"l": "       Fresh indexmap v2.14.0", "s": "e", "t": 1793431993.0434968}
+{"l": "       Fresh cc v1.4.3", "s": "e", "t": 1793431993.0435426}
+{"l": "       Fresh smallvec v1.15.1", "s": "e", "t": 1793431993.0435433}
+{"l": "       Fresh tracing-attributes v0.1.31", "s": "e", "t": 1793431993.0435894}
+{"l": "       Fresh pin-project-lite v0.2.17", "s": "e", "t": 1793431993.04359}
+{"l": "       Fresh tracing v0.1.44", "s": "e", "t": 1793431993.0436358}
+{"l": "       Fresh memchr v2.8.1", "s": "e", "t": 1793431993.0436366}
+{"l": "       Fresh either v1.16.0", "s": "e", "t": 1793431993.0436816}
+{"l": "       Fresh autocfg v1.5.1", "s": "e", "t": 1793431993.043682}
+{"l": "       Fresh object v0.39.1", "s": "e", "t": 1793431993.0437276}
+{"l": "       Fresh crossbeam-epoch v0.9.18", "s": "e", "t": 1793431993.0437725}
+{"l": "       Fresh scopeguard v1.2.0", "s": "e", "t": 1793431993.0438178}
+{"l": "       Fresh ar_archive_writer v0.5.3", "s": "e", "t": 1793431993.0438185}
+{"l": "       Fresh crossbeam-deque v0.8.6", "s": "e", "t": 1793431993.0438633}
+{"l": "       Fresh parking_lot_core v0.9.12", "s": "e", "t": 1793431993.0439084}
+{"l": "       Fresh lock_api v0.4.14", "s": "e", "t": 1793431993.043909}
+{"l": "       Fresh memoffset v0.9.1", "s": "e", "t": 1793431993.0439613}
+{"l": "       Fresh stable_deref_trait v1.2.1", "s": "e", "t": 1793431993.0440075}
+{"l": "       Fresh unicode-ident v1.0.24", "s": "e", "t": 1793431993.0440083}
+{"l": "       Fresh hashbrown v0.14.5", "s": "e", "t": 1793431993.0440528}
+{"l": "       Fresh unicode-properties v0.1.4", "s": "e", "t": 1793431993.0440533}
+{"l": "       Fresh psm v0.1.32", "s": "e", "t": 1793431993.0441}
+{"l": "       Fresh ra-ap-rustc_lexer v0.166.0", "s": "e", "t": 1793431993.0441008}
+{"l": "       Fresh rayon-core v1.13.0", "s": "e", "t": 1793431993.0441456}
+{"l": "       Fresh triomphe v0.1.15", "s": "e", "t": 1793431993.044146}
+{"l": "       Fresh itertools v0.15.0", "s": "e", "t": 1793431993.0441916}
+{"l": "       Fresh crossbeam-channel v0.5.15", "s": "e", "t": 1793431993.044192}
+{"l": "       Fresh stacker v0.1.25", "s": "e", "t": 1793431993.0442364}
+{"l": "       Fresh thin-vec v0.2.18", "s": "e", "t": 1793431993.0442827}
+{"l": "       Fresh jod-thread v1.0.0", "s": "e", "t": 1793431993.0442832}
+{"l": "       Fresh rustc-literal-escaper v0.0.7", "s": "e", "t": 1793431993.0442839}
+{"l": "       Fresh version_check v0.9.5", "s": "e", "t": 1793431993.044328}
+{"l": "       Fresh stdx v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/stdx)", "s": "e", "t": 1793431993.044374}
+{"l": "       Fresh rayon v1.12.0", "s": "e", "t": 1793431993.0443747}
+{"l": "       Fresh camino v1.2.2", "s": "e", "t": 1793431993.0444205}
+{"l": "       Fresh syn v3.0.3", "s": "e", "t": 1793431993.0444655}
+{"l": "       Fresh winnow v0.7.15", "s": "e", "t": 1793431993.0444663}
+{"l": "       Fresh drop_bomb v0.1.5", "s": "e", "t": 1793431993.0445116}
+{"l": "       Fresh cranelift-srcgen v0.136.2", "s": "e", "t": 1793431993.0445123}
+{"l": "       Fresh rustc-hash v1.1.0", "s": "e", "t": 1793431993.0445127}
+{"l": "       Fresh arrayvec v0.7.6", "s": "e", "t": 1793431993.0445576}
+{"l": "       Fresh countme v3.0.1", "s": "e", "t": 1793431993.044558}
+{"l": "       Fresh foldhash v0.2.0", "s": "e", "t": 1793431993.0446036}
+{"l": "       Fresh edition v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/edition)", "s": "e", "t": 1793431993.044604}
+{"l": "       Fresh text-size v1.1.1", "s": "e", "t": 1793431993.0446503}
+{"l": "       Fresh hashbrown v0.17.1", "s": "e", "t": 1793431993.0446508}
+{"l": "       Fresh cranelift-assembler-x64-meta v0.136.2", "s": "e", "t": 1793431993.0446975}
+{"l": "       Fresh paths v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/paths)", "s": "e", "t": 1793431993.0446982}
+{"l": "       Fresh rowan v0.17.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/lib/rowan)", "s": "e", "t": 1793431993.044744}
+{"l": "       Fresh parser v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/parser)", "s": "e", "t": 1793431993.044745}
+{"l": "       Fresh salsa-macros v0.28.5 (/home/jeremy/justrust/toolchain/resident/vendor/salsa-macros)", "s": "e", "t": 1793431993.0447955}
+{"l": "       Fresh portable-atomic v1.13.1", "s": "e", "t": 1793431993.0447962}
+{"l": "       Fresh fst v0.4.7", "s": "e", "t": 1793431993.0448427}
+{"l": "       Fresh typeid v1.0.3", "s": "e", "t": 1793431993.0448434}
+{"l": "       Fresh intrusive-collections v0.10.1", "s": "e", "t": 1793431993.044844}
+{"l": "       Fresh parking_lot v0.12.5", "s": "e", "t": 1793431993.044889}
+{"l": "       Fresh crossbeam-queue v0.3.12", "s": "e", "t": 1793431993.0448895}
+{"l": "       Fresh hashlink v0.12.0", "s": "e", "t": 1793431993.04489}
+{"l": "       Fresh bitflags v2.12.1", "s": "e", "t": 1793431993.0449386}
+{"l": "       Fresh inventory v0.3.24", "s": "e", "t": 1793431993.0449393}
+{"l": "       Fresh salsa-macro-rules v0.28.5 (/home/jeremy/justrust/toolchain/resident/vendor/salsa-macro-rules)", "s": "e", "t": 1793431993.0449862}
+{"l": "       Fresh boxcar v0.2.14", "s": "e", "t": 1793431993.044987}
+{"l": "       Fresh smol_str v0.3.6", "s": "e", "t": 1793431993.0449874}
+{"l": "       Fresh typenum v1.20.1", "s": "e", "t": 1793431993.0450332}
+{"l": "       Fresh nohash-hasher v0.2.0", "s": "e", "t": 1793431993.0450337}
+{"l": "       Fresh salsa v0.28.5 (/home/jeremy/justrust/toolchain/resident/vendor/salsa)", "s": "e", "t": 1793431993.045081}
+{"l": "       Fresh libm v0.2.16", "s": "e", "t": 1793431993.0450816}
+{"l": "       Fresh vfs v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/vfs)", "s": "e", "t": 1793431993.0451305}
+{"l": "       Fresh generic-array v0.14.7", "s": "e", "t": 1793431993.045131}
+{"l": "       Fresh syntax v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/syntax)", "s": "e", "t": 1793431993.045181}
+{"l": "warning: function `is_range_pat_op` is never used", "s": "e", "t": 1793431993.0451825}
+{"l": "    --> vendor/rust-analyzer/crates/syntax/src/ast/node_ext.rs:1066:4", "s": "e", "t": 1793431993.045183}
+{"l": "     |", "s": "e", "t": 1793431993.045184}
+{"l": "1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {", "s": "e", "t": 1793431993.0451844}
+{"l": "     |    ^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.0451849}
+{"l": "     |", "s": "e", "t": 1793431993.0451853}
+{"l": "     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0451858}
+{"l": "       Fresh dashmap v6.2.1", "s": "e", "t": 1793431993.0452342}
+{"l": "warning: `syntax` (lib) generated 1 warning", "s": "e", "t": 1793431993.0452354}
+{"l": "       Fresh pulley-macros v49.0.2", "s": "e", "t": 1793431993.0452359}
+{"l": "       Fresh la-arena v0.3.1", "s": "e", "t": 1793431993.045283}
+{"l": "       Fresh intern v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/intern)", "s": "e", "t": 1793431993.0452838}
+{"l": "       Fresh wasmtime-internal-core v49.0.2", "s": "e", "t": 1793431993.0453327}
+{"l": "       Fresh log v0.4.31", "s": "e", "t": 1793431993.0453331}
+{"l": "       Fresh span v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/span)", "s": "e", "t": 1793431993.045381}
+{"l": "       Fresh cranelift-bitset v0.136.2", "s": "e", "t": 1793431993.0454292}
+{"l": "       Fresh block-buffer v0.10.4", "s": "e", "t": 1793431993.0454767}
+{"l": "       Fresh tt v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/tt)", "s": "e", "t": 1793431993.0454776}
+{"l": "       Fresh crypto-common v0.1.7", "s": "e", "t": 1793431993.0455236}
+{"l": "       Fresh thiserror-impl v2.0.18", "s": "e", "t": 1793431993.0455244}
+{"l": "       Fresh heck v0.5.0", "s": "e", "t": 1793431993.0455704}
+{"l": "       Fresh pkg-config v0.3.34", "s": "e", "t": 1793431993.045616}
+{"l": "       Fresh digest v0.10.7", "s": "e", "t": 1793431993.0456164}
+{"l": "       Fresh thiserror v2.0.18", "s": "e", "t": 1793431993.0456169}
+{"l": "       Fresh cranelift-isle v0.136.2", "s": "e", "t": 1793431993.0456626}
+{"l": "       Fresh cranelift-codegen-meta v0.136.2", "s": "e", "t": 1793431993.0457082}
+{"l": "       Fresh ra-ap-rustc_index_macros v0.166.0", "s": "e", "t": 1793431993.045754}
+{"l": "       Fresh cpufeatures v0.2.17", "s": "e", "t": 1793431993.045755}
+{"l": "       Fresh rustc-stable-hash v0.1.2", "s": "e", "t": 1793431993.0457578}
+{"l": "       Fresh ra-ap-rustc_index v0.166.0", "s": "e", "t": 1793431993.0458906}
+{"l": "       Fresh sha2 v0.10.9", "s": "e", "t": 1793431993.0459602}
+{"l": "       Fresh ra-ap-rustc_hashes v0.166.0", "s": "e", "t": 1793431993.0459611}
+{"l": "       Fresh cobs v0.3.0", "s": "e", "t": 1793431993.045962}
+{"l": "       Fresh cranelift-entity v0.136.2", "s": "e", "t": 1793431993.0460148}
+{"l": "       Fresh synstructure v0.13.2", "s": "e", "t": 1793431993.0460155}
+{"l": "       Fresh hashbrown v0.16.1", "s": "e", "t": 1793431993.046016}
+{"l": "       Fresh bumpalo v3.20.3", "s": "e", "t": 1793431993.0460167}
+{"l": "       Fresh powerfmt v0.2.0", "s": "e", "t": 1793431993.0460658}
+{"l": "       Fresh arbitrary v1.4.2", "s": "e", "t": 1793431993.0460665}
+{"l": "       Fresh fnv v1.0.7", "s": "e", "t": 1793431993.046067}
+{"l": "       Fresh postcard v1.1.3", "s": "e", "t": 1793431993.0461137}
+{"l": "       Fresh deranged v0.5.8", "s": "e", "t": 1793431993.0461142}
+{"l": "       Fresh gimli v0.33.0", "s": "e", "t": 1793431993.046162}
+{"l": "       Fresh cranelift-control v0.136.2", "s": "e", "t": 1793431993.0461626}
+{"l": "       Fresh regalloc2 v0.15.2", "s": "e", "t": 1793431993.0461633}
+{"l": "       Fresh cranelift-bforest v0.136.2", "s": "e", "t": 1793431993.0462105}
+{"l": "       Fresh ra-ap-rustc_abi v0.166.0 (/home/jeremy/justrust/toolchain/resident/vendor/rustc_abi)", "s": "e", "t": 1793431993.0462115}
+{"l": "       Fresh cranelift-assembler-x64 v0.136.2", "s": "e", "t": 1793431993.046258}
+{"l": "       Fresh crc32fast v1.5.0", "s": "e", "t": 1793431993.0462587}
+{"l": "       Fresh target-lexicon v0.13.5", "s": "e", "t": 1793431993.0462592}
+{"l": "       Fresh syntax-bridge v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/syntax-bridge)", "s": "e", "t": 1793431993.0463057}
+{"l": "       Fresh cfg v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/cfg)", "s": "e", "t": 1793431993.0463066}
+{"l": "       Fresh pulley-interpreter v49.0.2", "s": "e", "t": 1793431993.0463533}
+{"l": "       Fresh semver v1.0.28", "s": "e", "t": 1793431993.046354}
+{"l": "       Fresh cranelift-codegen-shared v0.136.2", "s": "e", "t": 1793431993.0464003}
+{"l": "       Fresh time-core v0.1.8", "s": "e", "t": 1793431993.046401}
+{"l": "       Fresh num-conv v0.2.2", "s": "e", "t": 1793431993.0464478}
+{"l": "       Fresh num_threads v0.1.7", "s": "e", "t": 1793431993.0464935}
+{"l": "       Fresh itoa v1.0.18", "s": "e", "t": 1793431993.0464942}
+{"l": "       Fresh cov-mark v2.2.0", "s": "e", "t": 1793431993.0464947}
+{"l": "       Fresh lazy_static v1.5.0", "s": "e", "t": 1793431993.04654}
+{"l": "       Fresh mbe v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/mbe)", "s": "e", "t": 1793431993.0465872}
+{"l": "       Fresh time v0.3.47", "s": "e", "t": 1793431993.046588}
+{"l": "       Fresh sharded-slab v0.1.7", "s": "e", "t": 1793431993.0465887}
+{"l": "       Fresh cranelift-codegen v0.136.2", "s": "e", "t": 1793431993.0466359}
+{"l": "       Fresh base-db v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/base-db)", "s": "e", "t": 1793431993.0466366}
+{"l": "       Fresh ra-ap-rustc_type_ir_macros v0.166.0", "s": "e", "t": 1793431993.0466828}
+{"l": "       Fresh zstd-sys v2.1.1+zstd.1.5.7", "s": "e", "t": 1793431993.0466835}
+{"l": "       Fresh tracing-log v0.2.0", "s": "e", "t": 1793431993.046731}
+{"l": "       Fresh ena v0.14.4", "s": "e", "t": 1793431993.0467315}
+{"l": "       Fresh derive-where v1.6.1", "s": "e", "t": 1793431993.0467322}
+{"l": "       Fresh thread_local v1.1.9", "s": "e", "t": 1793431993.0467782}
+{"l": "       Fresh ra-ap-rustc_ast_ir v0.166.0", "s": "e", "t": 1793431993.0467787}
+{"l": "       Fresh anyhow v1.0.104", "s": "e", "t": 1793431993.0468256}
+{"l": "       Fresh hir-expand v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/hir-expand)", "s": "e", "t": 1793431993.0468266}
+{"l": "warning: unused variable: `span`", "s": "e", "t": 1793431993.046834}
+{"l": "   --> vendor/rust-analyzer/crates/hir-expand/src/builtin/derive_macro.rs:134:27", "s": "e", "t": 1793431993.046835}
+{"l": "    |", "s": "e", "t": 1793431993.0468354}
+{"l": "134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {", "s": "e", "t": 1793431993.046836}
+{"l": "    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`", "s": "e", "t": 1793431993.046841}
+{"l": "    |", "s": "e", "t": 1793431993.0468419}
+{"l": "    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0468423}
+{"l": "warning: `hir-expand` (lib) generated 1 warning (run `cargo fix --lib -p hir-expand` to apply 1 suggestion)", "s": "e", "t": 1793431993.0468438}
+{"l": "       Fresh tracing-subscriber v0.3.23", "s": "e", "t": 1793431993.0469074}
+{"l": "       Fresh ra-ap-rustc_type_ir v0.166.0 (/home/jeremy/justrust/toolchain/resident/vendor/rustc_type_ir)", "s": "e", "t": 1793431993.0469081}
+{"l": "       Fresh zstd-safe v7.3.0", "s": "e", "t": 1793431993.0469923}
+{"l": "       Fresh rustc_apfloat v0.2.3+llvm-462a31f5a5ab", "s": "e", "t": 1793431993.0469933}
+{"l": "       Fresh ra-ap-rustc_parse_format v0.166.0", "s": "e", "t": 1793431993.0469937}
+{"l": "       Fresh foldhash v0.1.5", "s": "e", "t": 1793431993.0470672}
+{"l": "       Fresh nu-ansi-term v0.50.3", "s": "e", "t": 1793431993.0470679}
+{"l": "       Fresh zstd v0.13.3", "s": "e", "t": 1793431993.0470684}
+{"l": "       Fresh ra-ap-rustc_next_trait_solver v0.166.0 (/home/jeremy/justrust/toolchain/resident/vendor/rustc_next_trait_solver)", "s": "e", "t": 1793431993.0470688}
+{"l": "warning: unreachable statement", "s": "e", "t": 1793431993.0470808}
+{"l": "   --> vendor/rustc_next_trait_solver/src/solve/normalizes_to/mod.rs:342:21", "s": "e", "t": 1793431993.0470815}
+{"l": "    |", "s": "e", "t": 1793431993.047082}
+{"l": "341 |                     ecx.opaque_accesses.rerun_always(RerunReason::FetchEligibleAssocItem)?;", "s": "e", "t": 1793431993.0470827}
+{"l": "    |                                                                                          - any code following this expression is unreachable", "s": "e", "t": 1793431993.0470834}
+{"l": "342 |                     return Err(NoSolution.into());", "s": "e", "t": 1793431993.047084}
+{"l": "    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement", "s": "e", "t": 1793431993.0470846}
+{"l": "    |", "s": "e", "t": 1793431993.047085}
+{"l": "    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0470855}
+{"l": "warning: unreachable statement", "s": "e", "t": 1793431993.0470865}
+{"l": "   --> vendor/rustc_next_trait_solver/src/solve/trait_goals.rs:242:17", "s": "e", "t": 1793431993.047087}
+{"l": "    |", "s": "e", "t": 1793431993.0470874}
+{"l": "241 |                 ecx.opaque_accesses.rerun_always(RerunReason::AutoTraitLeakage)?;", "s": "e", "t": 1793431993.047088}
+{"l": "    |                                                                                - any code following this expression is unreachable", "s": "e", "t": 1793431993.0470886}
+{"l": "242 |                 return Err(NoSolution.into());", "s": "e", "t": 1793431993.0470893}
+{"l": "    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement", "s": "e", "t": 1793431993.0470898}
+{"l": "       Fresh wasmparser v0.236.1", "s": "e", "t": 1793431993.047142}
+{"l": "warning: `ra-ap-rustc_next_trait_solver` (lib) generated 2 warnings", "s": "e", "t": 1793431993.0471942}
+{"l": "       Fresh tracing-tree v0.4.1", "s": "e", "t": 1793431993.047195}
+{"l": "       Fresh hashbrown v0.15.5", "s": "e", "t": 1793431993.0471954}
+{"l": "       Fresh hir-def v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/hir-def)", "s": "e", "t": 1793431993.0471961}
+{"l": "       Fresh cranelift-module v0.136.2", "s": "e", "t": 1793431993.0472465}
+{"l": "       Fresh object v0.40.0", "s": "e", "t": 1793431993.047247}
+{"l": "       Fresh macros v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/macros)", "s": "e", "t": 1793431993.0472972}
+{"l": "       Fresh memmap2 v0.9.11", "s": "e", "t": 1793431993.047298}
+{"l": "       Fresh oorandom v11.1.5", "s": "e", "t": 1793431993.0473473}
+{"l": "       Fresh leb128fmt v0.1.0", "s": "e", "t": 1793431993.047348}
+{"l": "       Fresh unicode-width v0.2.2", "s": "e", "t": 1793431993.047399}
+{"l": "       Fresh hir-ty v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/hir-ty)", "s": "e", "t": 1793431993.0473998}
+{"l": "warning: unused import: `StoredTy`", "s": "e", "t": 1793431993.0474136}
+{"l": "  --> vendor/rust-analyzer/crates/hir-ty/src/mir/lower.rs:65:9", "s": "e", "t": 1793431993.047414}
+{"l": "   |", "s": "e", "t": 1793431993.0474148}
+{"l": "65 |         StoredTy, TyKind, TypingMode, UnevaluatedConst,", "s": "e", "t": 1793431993.0474153}
+{"l": "   |         ^^^^^^^^", "s": "e", "t": 1793431993.047416}
+{"l": "   |", "s": "e", "t": 1793431993.0474162}
+{"l": "   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.047417}
+{"l": "warning: unnecessary parentheses around pattern", "s": "e", "t": 1793431993.0474176}
+{"l": "    --> vendor/rust-analyzer/crates/hir-ty/src/mir/lower.rs:2558:20", "s": "e", "t": 1793431993.047418}
+{"l": "     |", "s": "e", "t": 1793431993.0474188}
+{"l": "2558 |             if let (OperandKind::Copy(place) | OperandKind::Move(place)) = &operand.kind", "s": "e", "t": 1793431993.0474193}
+{"l": "     |                    ^                                                   ^", "s": "e", "t": 1793431993.04742}
+{"l": "     |", "s": "e", "t": 1793431993.0474205}
+{"l": "     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.047421}
+{"l": "help: remove these parentheses", "s": "e", "t": 1793431993.0474215}
+{"l": "     |", "s": "e", "t": 1793431993.047422}
+{"l": "2558 -             if let (OperandKind::Copy(place) | OperandKind::Move(place)) = &operand.kind", "s": "e", "t": 1793431993.0474224}
+{"l": "2558 +             if let OperandKind::Copy(place) | OperandKind::Move(place) = &operand.kind", "s": "e", "t": 1793431993.0474231}
+{"l": "     |", "s": "e", "t": 1793431993.0474236}
+{"l": "warning: hidden lifetime parameters in types are deprecated", "s": "e", "t": 1793431993.047424}
+{"l": "    --> vendor/rust-analyzer/crates/hir-ty/src/mir/lower.rs:5158:33", "s": "e", "t": 1793431993.0474246}
+{"l": "     |", "s": "e", "t": 1793431993.0474253}
+{"l": "5158 | pub fn is_builtin_index(infer: &InferenceResult, base: ExprId, index: ExprId) -> bool {", "s": "e", "t": 1793431993.0474312}
+{"l": "     |                                 ^^^^^^^^^^^^^^^ expected lifetime parameter", "s": "e", "t": 1793431993.047432}
+{"l": "     |", "s": "e", "t": 1793431993.0474324}
+{"l": "     = note: requested on the command line with `-W elided-lifetimes-in-paths`", "s": "e", "t": 1793431993.047433}
+{"l": "help: indicate the anonymous lifetime", "s": "e", "t": 1793431993.0474336}
+{"l": "     |", "s": "e", "t": 1793431993.0474339}
+{"l": "5158 | pub fn is_builtin_index(infer: &InferenceResult<'_>, base: ExprId, index: ExprId) -> bool {", "s": "e", "t": 1793431993.0474343}
+{"l": "     |                                                ++++", "s": "e", "t": 1793431993.047435}
+{"l": "warning: a method with this name may be added to the standard library in the future", "s": "e", "t": 1793431993.0474405}
+{"l": "   --> vendor/rust-analyzer/crates/hir-ty/src/solver_errors.rs:130:66", "s": "e", "t": 1793431993.0474412}
+{"l": "    |", "s": "e", "t": 1793431993.0474415}
+{"l": "130 |             args.as_closure().sig().map_bound(|sig| sig.inputs().as_slice()[0])", "s": "e", "t": 1793431993.047442}
+{"l": "    |                                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0474427}
+{"l": "    |", "s": "e", "t": 1793431993.0474432}
+{"l": "    = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method", "s": "e", "t": 1793431993.04745}
+{"l": "    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!", "s": "e", "t": 1793431993.0474508}
+{"l": "    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>", "s": "e", "t": 1793431993.0474515}
+{"l": "    = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default", "s": "e", "t": 1793431993.0474522}
+{"l": "help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`", "s": "e", "t": 1793431993.047453}
+{"l": "   --> vendor/rust-analyzer/crates/hir-ty/src/lib.rs:14:1", "s": "e", "t": 1793431993.047455}
+{"l": "    |", "s": "e", "t": 1793431993.0474558}
+{"l": " 14 + #![feature(str_as_str)]", "s": "e", "t": 1793431993.047456}
+{"l": "    |", "s": "e", "t": 1793431993.0474565}
+{"l": "warning: variable does not need to be mutable", "s": "e", "t": 1793431993.0474608}
+{"l": "   --> vendor/rust-analyzer/crates/hir-ty/src/next_solver/solver.rs:140:13", "s": "e", "t": 1793431993.0474613}
+{"l": "    |", "s": "e", "t": 1793431993.0474617}
+{"l": "140 |         let mut constraints = inner.unwrap_region_constraints();", "s": "e", "t": 1793431993.0474622}
+{"l": "    |             ----^^^^^^^^^^^", "s": "e", "t": 1793431993.0474665}
+{"l": "    |             |", "s": "e", "t": 1793431993.047467}
+{"l": "    |             help: remove this `mut`", "s": "e", "t": 1793431993.0474675}
+{"l": "    |", "s": "e", "t": 1793431993.047468}
+{"l": "    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0474682}
+{"l": "warning: method `resolve_mir_span` is never used", "s": "e", "t": 1793431993.0474944}
+{"l": "   --> vendor/rust-analyzer/crates/hir-ty/src/mir/eval.rs:678:8", "s": "e", "t": 1793431993.0474951}
+{"l": "    |", "s": "e", "t": 1793431993.0474956}
+{"l": "589 | impl<'db> Evaluator<'db> {", "s": "e", "t": 1793431993.0474958}
+{"l": "    | ------------------------ method in this implementation", "s": "e", "t": 1793431993.0474963}
+{"l": "...", "s": "e", "t": 1793431993.0474968}
+{"l": "678 |     fn resolve_mir_span(", "s": "e", "t": 1793431993.0474973}
+{"l": "    |        ^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.0474977}
+{"l": "    |", "s": "e", "t": 1793431993.0475016}
+{"l": "    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.047502}
+{"l": "       Fresh ra-jit-store v0.20261027.0 (/home/jeremy/justrust/toolchain/resident/crates/ra-jit-store)", "s": "e", "t": 1793431993.0476365}
+{"l": "warning: function `open_pack` is never used", "s": "e", "t": 1793431993.0477054}
+{"l": "   --> crates/ra-jit-store/src/lib.rs:782:4", "s": "e", "t": 1793431993.0477064}
+{"l": "    |", "s": "e", "t": 1793431993.047707}
+{"l": "782 | fn open_pack(path: &Path) -> io::Result<File> {", "s": "e", "t": 1793431993.0477078}
+{"l": "    |    ^^^^^^^^^", "s": "e", "t": 1793431993.0477085}
+{"l": "    |", "s": "e", "t": 1793431993.047709}
+{"l": "    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0477095}
+{"l": "       Fresh wasm-encoder v0.244.0", "s": "e", "t": 1793431993.0477107}
+{"l": "       Fresh cranelift-object v0.136.2 (/home/jeremy/justrust/toolchain/resident/vendor/cranelift-object)", "s": "e", "t": 1793431993.0477114}
+{"l": "       Fresh object v0.37.3", "s": "e", "t": 1793431993.0477118}
+{"l": "warning: `hir-ty` (lib) generated 6 warnings (run `cargo fix --lib -p hir-ty` to apply 3 suggestions)", "s": "e", "t": 1793431993.0477128}
+{"l": "warning: `ra-jit-store` (lib) generated 1 warning", "s": "e", "t": 1793431993.0477135}
+{"l": "       Fresh cranelift-frontend v0.136.2", "s": "e", "t": 1793431993.0477142}
+{"l": "       Fresh rustc-demangle v0.1.28", "s": "e", "t": 1793431993.0477695}
+{"l": "       Fresh ra-jit-fuzz v0.20261027.0 (/home/jeremy/justrust/toolchain/resident/crates/ra-jit-fuzz)", "s": "e", "t": 1793431993.0477705}
+{"l": "       Fresh hir-ty-codegen v0.20261027.0 (/home/jeremy/justrust/toolchain/resident/crates/hir-ty-codegen)", "s": "e", "t": 1793431993.0477712}
+{"l": "warning: unnecessary parentheses around pattern", "s": "e", "t": 1793431993.047772}
+{"l": "   --> crates/hir-ty-codegen/avx512.rs:125:15", "s": "e", "t": 1793431993.0477726}
+{"l": "    |", "s": "e", "t": 1793431993.0477731}
+{"l": "125 |         Some(&(last @ (\"128\" | \"256\" | \"512\"))) => {", "s": "e", "t": 1793431993.0477736}
+{"l": "    |               ^                              ^", "s": "e", "t": 1793431993.0477743}
+{"l": "    |", "s": "e", "t": 1793431993.047775}
+{"l": "    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0477755}
+{"l": "help: remove these parentheses", "s": "e", "t": 1793431993.0477896}
+{"l": "    |", "s": "e", "t": 1793431993.04779}
+{"l": "125 -         Some(&(last @ (\"128\" | \"256\" | \"512\"))) => {", "s": "e", "t": 1793431993.0477905}
+{"l": "125 +         Some(&last @ (\"128\" | \"256\" | \"512\")) => {", "s": "e", "t": 1793431993.0477946}
+{"l": "    |", "s": "e", "t": 1793431993.047795}
+{"l": "warning: unused import: `GenericArgs as _`", "s": "e", "t": 1793431993.0477958}
+{"l": "  --> crates/hir-ty-codegen/sve.rs:31:31", "s": "e", "t": 1793431993.0477962}
+{"l": "   |", "s": "e", "t": 1793431993.0477967}
+{"l": "31 | use rustc_type_ir::inherent::{GenericArgs as _, IntoKind, SliceLike as _};", "s": "e", "t": 1793431993.0477972}
+{"l": "   |                               ^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.047798}
+{"l": "   |", "s": "e", "t": 1793431993.0477986}
+{"l": "   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.047799}
+{"l": "warning: hidden lifetime parameters in types are deprecated", "s": "e", "t": 1793431993.0477998}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:11634:28", "s": "e", "t": 1793431993.0478003}
+{"l": "      |", "s": "e", "t": 1793431993.047801}
+{"l": "11634 |         let rva = |b: &mut FunctionBuilder, address: Value| {", "s": "e", "t": 1793431993.0478015}
+{"l": "      |                            ^^^^^^^^^^^^^^^ expected lifetime parameter", "s": "e", "t": 1793431993.0478022}
+{"l": "      |", "s": "e", "t": 1793431993.047803}
+{"l": "      = note: requested on the command line with `-W elided-lifetimes-in-paths`", "s": "e", "t": 1793431993.0478034}
+{"l": "help: indicate the anonymous lifetime", "s": "e", "t": 1793431993.047804}
+{"l": "      |", "s": "e", "t": 1793431993.0478046}
+{"l": "11634 |         let rva = |b: &mut FunctionBuilder<'_>, address: Value| {", "s": "e", "t": 1793431993.047805}
+{"l": "      |                                           ++++", "s": "e", "t": 1793431993.0478055}
+{"l": "warning: hidden lifetime parameters in types are deprecated", "s": "e", "t": 1793431993.0478063}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13099:33", "s": "e", "t": 1793431993.0478067}
+{"l": "      |", "s": "e", "t": 1793431993.0478072}
+{"l": "13099 |     fn names_are_written(body: &MirBody) -> bool {", "s": "e", "t": 1793431993.0478075}
+{"l": "      |                                 ^^^^^^^ expected lifetime parameter", "s": "e", "t": 1793431993.0478082}
+{"l": "      |", "s": "e", "t": 1793431993.0478086}
+{"l": "help: indicate the anonymous lifetime", "s": "e", "t": 1793431993.0478091}
+{"l": "      |", "s": "e", "t": 1793431993.0478094}
+{"l": "13099 |     fn names_are_written(body: &MirBody<'_>) -> bool {", "s": "e", "t": 1793431993.0478098}
+{"l": "      |                                        ++++", "s": "e", "t": 1793431993.0478103}
+{"l": "warning: hidden lifetime parameters in types are deprecated", "s": "e", "t": 1793431993.0478199}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13106:48", "s": "e", "t": 1793431993.0478203}
+{"l": "      |", "s": "e", "t": 1793431993.0478208}
+{"l": "13106 |     fn note_passed_in_memory(&mut self, body: &MirBody, local: LocalId, addr: Value) {", "s": "e", "t": 1793431993.0478213}
+{"l": "      |                                                ^^^^^^^ expected lifetime parameter", "s": "e", "t": 1793431993.047822}
+{"l": "      |", "s": "e", "t": 1793431993.0478225}
+{"l": "help: indicate the anonymous lifetime", "s": "e", "t": 1793431993.0478227}
+{"l": "      |", "s": "e", "t": 1793431993.0478232}
+{"l": "13106 |     fn note_passed_in_memory(&mut self, body: &MirBody<'_>, local: LocalId, addr: Value) {", "s": "e", "t": 1793431993.0478234}
+{"l": "      |                                                       ++++", "s": "e", "t": 1793431993.0478241}
+{"l": "warning: hidden lifetime parameters in types are deprecated", "s": "e", "t": 1793431993.0478249}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16628:32", "s": "e", "t": 1793431993.047825}
+{"l": "      |", "s": "e", "t": 1793431993.0478256}
+{"l": "16628 |         let combine = |b: &mut FunctionBuilder, l: Value, r: Value| match &op[..op.len() - 1] {", "s": "e", "t": 1793431993.047826}
+{"l": "      |                                ^^^^^^^^^^^^^^^ expected lifetime parameter", "s": "e", "t": 1793431993.0478265}
+{"l": "      |", "s": "e", "t": 1793431993.047827}
+{"l": "help: indicate the anonymous lifetime", "s": "e", "t": 1793431993.0478275}
+{"l": "      |", "s": "e", "t": 1793431993.0478277}
+{"l": "16628 |         let combine = |b: &mut FunctionBuilder<'_>, l: Value, r: Value| match &op[..op.len() - 1] {", "s": "e", "t": 1793431993.04783}
+{"l": "      |                                               ++++", "s": "e", "t": 1793431993.0478363}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0478375}
+{"l": "   --> crates/hir-ty-codegen/f16_f128.rs:477:39", "s": "e", "t": 1793431993.0478382}
+{"l": "    |", "s": "e", "t": 1793431993.0478387}
+{"l": "477 |         let wide = self.builder.ins().ishl_imm(wide, 16);", "s": "e", "t": 1793431993.0478392}
+{"l": "    |                                       ^^^^^^^^", "s": "e", "t": 1793431993.0478396}
+{"l": "    |", "s": "e", "t": 1793431993.0478399}
+{"l": "    = note: `#[warn(deprecated)]` on by default", "s": "e", "t": 1793431993.0478404}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0478456}
+{"l": "    --> crates/hir-ty-codegen/sve.rs:1460:52", "s": "e", "t": 1793431993.0478463}
+{"l": "     |", "s": "e", "t": 1793431993.0478468}
+{"l": "1460 |                     let place = self.builder.ins().iadd_imm(dst, at as i64 * DATA_MAX as i64);", "s": "e", "t": 1793431993.0478473}
+{"l": "     |                                                    ^^^^^^^^", "s": "e", "t": 1793431993.047851}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0478559}
+{"l": "    --> crates/hir-ty-codegen/sve.rs:1477:48", "s": "e", "t": 1793431993.0478566}
+{"l": "     |", "s": "e", "t": 1793431993.047857}
+{"l": "1477 | ...                   self.builder.ins().iadd_imm(*tuple, index as i64 * DATA_MAX as i64);", "s": "e", "t": 1793431993.0478575}
+{"l": "     |                                          ^^^^^^^^", "s": "e", "t": 1793431993.0478606}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0478654}
+{"l": "    --> crates/hir-ty-codegen/sve.rs:1487:48", "s": "e", "t": 1793431993.047866}
+{"l": "     |", "s": "e", "t": 1793431993.0478663}
+{"l": "1487 | ...                   self.builder.ins().iadd_imm(dst, index as i64 * DATA_MAX as i64);", "s": "e", "t": 1793431993.0478668}
+{"l": "     |                                          ^^^^^^^^", "s": "e", "t": 1793431993.04787}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0478737}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:8464:47", "s": "e", "t": 1793431993.0478745}
+{"l": "     |", "s": "e", "t": 1793431993.047875}
+{"l": "8464 |                 let size = self.builder.ins().imul_imm(meta, elem.size.bytes() as i64);", "s": "e", "t": 1793431993.0478783}
+{"l": "     |                                               ^^^^^^^^", "s": "e", "t": 1793431993.047879}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0478828}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:8511:39", "s": "e", "t": 1793431993.0478835}
+{"l": "     |", "s": "e", "t": 1793431993.0478876}
+{"l": "8511 |         let mask = self.builder.ins().iadd_imm(align, -1);", "s": "e", "t": 1793431993.047888}
+{"l": "     |                                       ^^^^^^^^", "s": "e", "t": 1793431993.0478885}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.047892}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:8532:42", "s": "e", "t": 1793431993.0478964}
+{"l": "     |", "s": "e", "t": 1793431993.047898}
+{"l": "8532 |             return Ok(self.builder.ins().iadd_imm(addr, offset.bytes() as i64));", "s": "e", "t": 1793431993.0478985}
+{"l": "     |                                          ^^^^^^^^", "s": "e", "t": 1793431993.0478992}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.047903}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9534:47", "s": "e", "t": 1793431993.0479038}
+{"l": "     |", "s": "e", "t": 1793431993.0479074}
+{"l": "9534 |                 let rest = self.builder.ins().iadd_imm(addr, 8);", "s": "e", "t": 1793431993.0479078}
+{"l": "     |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0479083}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0479329}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9543:51", "s": "e", "t": 1793431993.0479336}
+{"l": "     |", "s": "e", "t": 1793431993.047934}
+{"l": "9543 |                     let part = self.builder.ins().iadd_imm(addr, (index * step) as i64);", "s": "e", "t": 1793431993.0479345}
+{"l": "     |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.047935}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0479393}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9578:60", "s": "e", "t": 1793431993.04794}
+{"l": "     |", "s": "e", "t": 1793431993.0479403}
+{"l": "9578 | ...                   values.push(self.builder.ins().iadd_imm(addr, at as i64));", "s": "e", "t": 1793431993.0479438}
+{"l": "     |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0479443}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0479488}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9635:47", "s": "e", "t": 1793431993.0479493}
+{"l": "     |", "s": "e", "t": 1793431993.0479498}
+{"l": "9635 |                 let rest = self.builder.ins().iadd_imm(addr, 8);", "s": "e", "t": 1793431993.04795}
+{"l": "     |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0479534}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0479572}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9645:51", "s": "e", "t": 1793431993.047958}
+{"l": "     |", "s": "e", "t": 1793431993.0479581}
+{"l": "9645 |                     let part = self.builder.ins().iadd_imm(addr, (index * step) as i64);", "s": "e", "t": 1793431993.0479617}
+{"l": "     |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0479622}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.047966}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9897:41", "s": "e", "t": 1793431993.0479667}
+{"l": "     |", "s": "e", "t": 1793431993.047967}
+{"l": "9897 |         let bumped = self.builder.ins().iadd_imm(base, align as i64 - 1);", "s": "e", "t": 1793431993.0479703}
+{"l": "     |                                         ^^^^^^^^", "s": "e", "t": 1793431993.0479708}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0479746}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:9898:28", "s": "e", "t": 1793431993.0479753}
+{"l": "     |", "s": "e", "t": 1793431993.0479789}
+{"l": "9898 |         self.builder.ins().band_imm(bumped, -(align as i64))", "s": "e", "t": 1793431993.0479794}
+{"l": "     |                            ^^^^^^^^", "s": "e", "t": 1793431993.0479798}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0480075}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10023:44", "s": "e", "t": 1793431993.048009}
+{"l": "      |", "s": "e", "t": 1793431993.0480096}
+{"l": "10023 |             let first = self.builder.ins().iadd_imm(stack, first);", "s": "e", "t": 1793431993.0480103}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.048011}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0480123}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10063:48", "s": "e", "t": 1793431993.0480132}
+{"l": "      |", "s": "e", "t": 1793431993.0480137}
+{"l": "10063 |                 let stack = self.builder.ins().iadd_imm(frame, 16 + i64::from(named.stack));", "s": "e", "t": 1793431993.048027}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0480278}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048029}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10064:51", "s": "e", "t": 1793431993.0480297}
+{"l": "      |", "s": "e", "t": 1793431993.0480304}
+{"l": "10064 |                 let ints_end = self.builder.ins().iadd_imm(saved, i64::from(int_count * 8));", "s": "e", "t": 1793431993.0480309}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0480313}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0480323}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10066:40", "s": "e", "t": 1793431993.048033}
+{"l": "      |", "s": "e", "t": 1793431993.0480337}
+{"l": "10066 |                     self.builder.ins().iadd_imm(saved, i64::from(int_count * 8 + floats_bytes));", "s": "e", "t": 1793431993.048034}
+{"l": "      |                                        ^^^^^^^^", "s": "e", "t": 1793431993.0480423}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0480433}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10099:44", "s": "e", "t": 1793431993.048044}
+{"l": "      |", "s": "e", "t": 1793431993.0480444}
+{"l": "10099 |             let stack = self.builder.ins().iadd_imm(frame, 16 + i64::from(named));", "s": "e", "t": 1793431993.0480447}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0480802}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0480812}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10137:32", "s": "e", "t": 1793431993.0480819}
+{"l": "      |", "s": "e", "t": 1793431993.0480824}
+{"l": "10137 |             this.builder.ins().iadd_imm(*addr, layout.fields.offset(field).bytes() as i64)", "s": "e", "t": 1793431993.0480828}
+{"l": "      |                                ^^^^^^^^", "s": "e", "t": 1793431993.0480835}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481007}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10203:47", "s": "e", "t": 1793431993.0481017}
+{"l": "      |", "s": "e", "t": 1793431993.0481021}
+{"l": "10203 |                 let addr = self.builder.ins().iadd_imm(*frame_addr, offset as i64);", "s": "e", "t": 1793431993.0481029}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0481033}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481043}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10213:47", "s": "e", "t": 1793431993.048105}
+{"l": "      |", "s": "e", "t": 1793431993.0481052}
+{"l": "10213 |                 let addr = self.builder.ins().iadd_imm(*frame_addr, offset.bytes() as i64);", "s": "e", "t": 1793431993.0481057}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0481064}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481071}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10702:44", "s": "e", "t": 1793431993.0481079}
+{"l": "      |", "s": "e", "t": 1793431993.0481083}
+{"l": "10702 |                         self.builder.ins().iadd_imm(len, -(*offset as i64))", "s": "e", "t": 1793431993.0481088}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0481093}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.04811}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10712:47", "s": "e", "t": 1793431993.048111}
+{"l": "      |", "s": "e", "t": 1793431993.0481112}
+{"l": "10712 |                     addr = self.builder.ins().iadd_imm(addr, (*from * size) as i64);", "s": "e", "t": 1793431993.0481117}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0481124}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048113}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10715:53", "s": "e", "t": 1793431993.048114}
+{"l": "      |", "s": "e", "t": 1793431993.0481143}
+{"l": "10715 | ...                   Some(self.builder.ins().iadd_imm(len, -((*from + *to) as i64)))", "s": "e", "t": 1793431993.0481148}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0481155}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481238}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:10749:41", "s": "e", "t": 1793431993.0481246}
+{"l": "      |", "s": "e", "t": 1793431993.048125}
+{"l": "10749 |         let offset = self.builder.ins().imul_imm(index, size as i64);", "s": "e", "t": 1793431993.0481255}
+{"l": "      |                                         ^^^^^^^^", "s": "e", "t": 1793431993.048126}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481267}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:11638:43", "s": "e", "t": 1793431993.0481277}
+{"l": "      |", "s": "e", "t": 1793431993.048128}
+{"l": "11638 |         let (array, catchable) = (b.ins().iadd_imm(info, 16), b.ins().iadd_imm(info, 24));", "s": "e", "t": 1793431993.0481284}
+{"l": "      |                                           ^^^^^^^^", "s": "e", "t": 1793431993.0481288}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481298}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:11638:71", "s": "e", "t": 1793431993.0481305}
+{"l": "      |", "s": "e", "t": 1793431993.0481308}
+{"l": "11638 |         let (array, catchable) = (b.ins().iadd_imm(info, 16), b.ins().iadd_imm(info, 24));", "s": "e", "t": 1793431993.0481312}
+{"l": "      |                                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0481393}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481403}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:11785:45", "s": "e", "t": 1793431993.048141}
+{"l": "      |", "s": "e", "t": 1793431993.0481412}
+{"l": "11785 |                 let to = self.builder.ins().iadd_imm(slot, *offset as i64);", "s": "e", "t": 1793431993.0481417}
+{"l": "      |                                             ^^^^^^^^", "s": "e", "t": 1793431993.0481422}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048143}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:11807:47", "s": "e", "t": 1793431993.0481436}
+{"l": "      |", "s": "e", "t": 1793431993.0481498}
+{"l": "11807 |                 let from = self.builder.ins().iadd_imm(slot, *offset as i64);", "s": "e", "t": 1793431993.0481503}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0481508}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481515}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12042:48", "s": "e", "t": 1793431993.0481522}
+{"l": "      |", "s": "e", "t": 1793431993.0481527}
+{"l": "12042 |                     value = self.builder.ins().ishl_imm(value, (i * bits) as i64);", "s": "e", "t": 1793431993.048153}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0481536}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481586}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12182:58", "s": "e", "t": 1793431993.0481594}
+{"l": "      |", "s": "e", "t": 1793431993.0481598}
+{"l": "12182 |                         let element = self.builder.ins().iadd_imm(dst, (i * size.bytes()) as i64);", "s": "e", "t": 1793431993.04816}
+{"l": "      |                                                          ^^^^^^^^", "s": "e", "t": 1793431993.0481608}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048165}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12195:44", "s": "e", "t": 1793431993.0481658}
+{"l": "      |", "s": "e", "t": 1793431993.048166}
+{"l": "12195 |                         self.builder.ins().icmp_imm(IntCC::UnsignedLessThan, index, len as i64);", "s": "e", "t": 1793431993.0481696}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.04817}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481763}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12198:53", "s": "e", "t": 1793431993.048177}
+{"l": "      |", "s": "e", "t": 1793431993.0481772}
+{"l": "12198 |                     let offset = self.builder.ins().imul_imm(index, size.bytes() as i64);", "s": "e", "t": 1793431993.0481777}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.0481822}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481832}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12201:51", "s": "e", "t": 1793431993.048184}
+{"l": "      |", "s": "e", "t": 1793431993.0481877}
+{"l": "12201 |                     let next = self.builder.ins().iadd_imm(index, 1);", "s": "e", "t": 1793431993.0481882}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0481887}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::bxor_imm`: use `bxor_imm_s` (sign-extends the immediate) or `bxor_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0481932}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12227:64", "s": "e", "t": 1793431993.048194}
+{"l": "      |", "s": "e", "t": 1793431993.0481942}
+{"l": "12227 |                     UnOp::Not if is_bool => self.builder.ins().bxor_imm(value, 1),", "s": "e", "t": 1793431993.0481946}
+{"l": "      |                                                                ^^^^^^^^", "s": "e", "t": 1793431993.0481977}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482018}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12281:48", "s": "e", "t": 1793431993.0482025}
+{"l": "      |", "s": "e", "t": 1793431993.048203}
+{"l": "12281 | ...                   self.builder.ins().iadd_imm(dst, (i as u64 * size.bytes()) as i64);", "s": "e", "t": 1793431993.0482063}
+{"l": "      |                                          ^^^^^^^^", "s": "e", "t": 1793431993.0482068}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482109}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12452:59", "s": "e", "t": 1793431993.0482116}
+{"l": "      |", "s": "e", "t": 1793431993.0482118}
+{"l": "12452 |                         let is_niche = self.builder.ins().icmp_imm(", "s": "e", "t": 1793431993.0482152}
+{"l": "      |                                                           ^^^^^^^^", "s": "e", "t": 1793431993.0482159}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482523}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12467:56", "s": "e", "t": 1793431993.0482538}
+{"l": "      |", "s": "e", "t": 1793431993.0482545}
+{"l": "12467 |                         let niche = self.builder.ins().iadd_imm(relative, first as i64);", "s": "e", "t": 1793431993.0482552}
+{"l": "      |                                                        ^^^^^^^^", "s": "e", "t": 1793431993.048256}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482574}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12547:44", "s": "e", "t": 1793431993.048258}
+{"l": "      |", "s": "e", "t": 1793431993.0482585}
+{"l": "12547 |             let field = self.builder.ins().iadd_imm(dst, layout.fields.offset(i).bytes() as i64);", "s": "e", "t": 1793431993.0482593}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0482597}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482786}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:12728:41", "s": "e", "t": 1793431993.0482793}
+{"l": "      |", "s": "e", "t": 1793431993.0482798}
+{"l": "12728 |         let beyond = self.builder.ins().icmp_imm(IntCC::NotEqual, high, 0);", "s": "e", "t": 1793431993.0482805}
+{"l": "      |                                         ^^^^^^^^", "s": "e", "t": 1793431993.0482812}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482821}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13269:53", "s": "e", "t": 1793431993.0482829}
+{"l": "      |", "s": "e", "t": 1793431993.0482833}
+{"l": "13269 |                     let failed = self.builder.ins().icmp_imm(cc, holds, 0);", "s": "e", "t": 1793431993.0482838}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.0482843}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0482938}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13404:49", "s": "e", "t": 1793431993.0482948}
+{"l": "      |", "s": "e", "t": 1793431993.048295}
+{"l": "13404 |                 values.push((self.builder.ins().iadd_imm(tuple_addr, offset), ty));", "s": "e", "t": 1793431993.0482957}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0482962}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048297}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13519:49", "s": "e", "t": 1793431993.048298}
+{"l": "      |", "s": "e", "t": 1793431993.0482981}
+{"l": "13519 | ...                   (self.builder.ins().iadd_imm(tuple, offset), field)", "s": "e", "t": 1793431993.0482986}
+{"l": "      |                                           ^^^^^^^^", "s": "e", "t": 1793431993.048299}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13542:41", "s": "e", "t": 1793431993.0483007}
+{"l": "      |", "s": "e", "t": 1793431993.0483012}
+{"l": "13542 |                     (self.builder.ins().iadd_imm(tuple, offset), field)", "s": "e", "t": 1793431993.0483015}
+{"l": "      |                                         ^^^^^^^^", "s": "e", "t": 1793431993.0483022}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483124}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13582:60", "s": "e", "t": 1793431993.0483131}
+{"l": "      |", "s": "e", "t": 1793431993.0483136}
+{"l": "13582 | ...                   let field = self.builder.ins().iadd_imm(dst, offset);", "s": "e", "t": 1793431993.048314}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0483146}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483155}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13655:52", "s": "e", "t": 1793431993.0483162}
+{"l": "      |", "s": "e", "t": 1793431993.0483167}
+{"l": "13655 |                     let field = self.builder.ins().iadd_imm(tuple, offset);", "s": "e", "t": 1793431993.0483172}
+{"l": "      |                                                    ^^^^^^^^", "s": "e", "t": 1793431993.0483177}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483441}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13693:45", "s": "e", "t": 1793431993.0483449}
+{"l": "      |", "s": "e", "t": 1793431993.048345}
+{"l": "13693 |             fields.push((self.builder.ins().iadd_imm(closure, offset), ty));", "s": "e", "t": 1793431993.0483456}
+{"l": "      |                                             ^^^^^^^^", "s": "e", "t": 1793431993.048346}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483468}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13697:44", "s": "e", "t": 1793431993.0483477}
+{"l": "      |", "s": "e", "t": 1793431993.048348}
+{"l": "13697 |             let field = self.builder.ins().iadd_imm(dst, layout.fields.offset(i).bytes() as i64);", "s": "e", "t": 1793431993.0483484}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.048349}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483499}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13711:40", "s": "e", "t": 1793431993.0483506}
+{"l": "      |", "s": "e", "t": 1793431993.0483508}
+{"l": "13711 |         let state = self.builder.ins().iadd_imm(dst, state as i64);", "s": "e", "t": 1793431993.0483513}
+{"l": "      |                                        ^^^^^^^^", "s": "e", "t": 1793431993.0483518}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483592}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13862:44", "s": "e", "t": 1793431993.0483599}
+{"l": "      |", "s": "e", "t": 1793431993.04836}
+{"l": "13862 |                         self.builder.ins().iadd_imm(src, from.fields.offset(i).bytes() as i64);", "s": "e", "t": 1793431993.0483606}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0483613}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048362}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:13863:50", "s": "e", "t": 1793431993.0483627}
+{"l": "      |", "s": "e", "t": 1793431993.0483632}
+{"l": "13863 |                     let dst = self.builder.ins().iadd_imm(dst, to.fields.offset(i).bytes() as i64);", "s": "e", "t": 1793431993.0483637}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0483642}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0483694}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14231:60", "s": "e", "t": 1793431993.0483701}
+{"l": "      |", "s": "e", "t": 1793431993.0483704}
+{"l": "14231 | ...                   let field = self.builder.ins().iadd_imm(dst, offset);", "s": "e", "t": 1793431993.0483708}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0483713}
+{"l": "warning: a method with this name may be added to the standard library in the future", "s": "e", "t": 1793431993.048385}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14289:78", "s": "e", "t": 1793431993.0483856}
+{"l": "      |", "s": "e", "t": 1793431993.0483859}
+{"l": "14289 |         let &[main_param, argc_ty, argv_ty, sigpipe_ty] = start_sig.inputs().as_slice() else {", "s": "e", "t": 1793431993.0483918}
+{"l": "      |                                                                              ^^^^^^^^", "s": "e", "t": 1793431993.0483925}
+{"l": "      |", "s": "e", "t": 1793431993.048393}
+{"l": "      = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method", "s": "e", "t": 1793431993.0483935}
+{"l": "      = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!", "s": "e", "t": 1793431993.0483944}
+{"l": "      = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>", "s": "e", "t": 1793431993.0483952}
+{"l": "      = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default", "s": "e", "t": 1793431993.0483997}
+{"l": "help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`", "s": "e", "t": 1793431993.0484004}
+{"l": "      |", "s": "e", "t": 1793431993.0484009}
+{"l": "    6 + #![feature(str_as_str)]", "s": "e", "t": 1793431993.0484014}
+{"l": "      |", "s": "e", "t": 1793431993.0484016}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484066}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14482:49", "s": "e", "t": 1793431993.0484073}
+{"l": "      |", "s": "e", "t": 1793431993.0484076}
+{"l": "14482 |                     let at = self.builder.ins().iadd_imm(tuple, offset);", "s": "e", "t": 1793431993.0484078}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0484085}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484128}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14682:50", "s": "e", "t": 1793431993.0484135}
+{"l": "      |", "s": "e", "t": 1793431993.048414}
+{"l": "14682 |                     let src = self.builder.ins().iadd_imm(src, offset);", "s": "e", "t": 1793431993.0484173}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0484178}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484216}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14683:51", "s": "e", "t": 1793431993.0484262}
+{"l": "      |", "s": "e", "t": 1793431993.0484264}
+{"l": "14683 |                     let part = self.builder.ins().iadd_imm(dst, offset);", "s": "e", "t": 1793431993.0484269}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0484276}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484316}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14689:63", "s": "e", "t": 1793431993.0484324}
+{"l": "      |", "s": "e", "t": 1793431993.0484362}
+{"l": "14689 | ...                   let done = this.builder.ins().iadd_imm(dst, offset);", "s": "e", "t": 1793431993.0484366}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.0484374}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484462}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14711:49", "s": "e", "t": 1793431993.0484507}
+{"l": "      |", "s": "e", "t": 1793431993.0484512}
+{"l": "14711 |                 let offset = self.builder.ins().imul_imm(index, size);", "s": "e", "t": 1793431993.0484514}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0484521}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484562}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:14718:47", "s": "e", "t": 1793431993.048457}
+{"l": "      |", "s": "e", "t": 1793431993.0484574}
+{"l": "14718 |                 let next = self.builder.ins().iadd_imm(index, 1);", "s": "e", "t": 1793431993.0484607}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0484612}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484653}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15251:47", "s": "e", "t": 1793431993.048466}
+{"l": "      |", "s": "e", "t": 1793431993.0484662}
+{"l": "15251 |                 let slot = self.builder.ins().iadd_imm(after, bytes - 1);", "s": "e", "t": 1793431993.0484695}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0484703}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484784}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15252:47", "s": "e", "t": 1793431993.0484793}
+{"l": "      |", "s": "e", "t": 1793431993.048483}
+{"l": "15252 |                 let slot = self.builder.ins().band_imm(slot, -bytes);", "s": "e", "t": 1793431993.0484834}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.048484}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048488}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15253:47", "s": "e", "t": 1793431993.0484886}
+{"l": "      |", "s": "e", "t": 1793431993.0484922}
+{"l": "15253 |                 let next = self.builder.ins().iadd_imm(slot, bytes);", "s": "e", "t": 1793431993.0484927}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0484931}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0484972}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15279:47", "s": "e", "t": 1793431993.048498}
+{"l": "      |", "s": "e", "t": 1793431993.0484982}
+{"l": "15279 |                     slot = self.builder.ins().iadd_imm(slot, bytes - 1);", "s": "e", "t": 1793431993.0485015}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0485084}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485163}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15280:47", "s": "e", "t": 1793431993.048517}
+{"l": "      |", "s": "e", "t": 1793431993.0485172}
+{"l": "15280 |                     slot = self.builder.ins().band_imm(slot, -bytes);", "s": "e", "t": 1793431993.0485177}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0485182}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485191}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15283:47", "s": "e", "t": 1793431993.0485501}
+{"l": "      |", "s": "e", "t": 1793431993.0485504}
+{"l": "15283 |                 let next = self.builder.ins().iadd_imm(slot, step);", "s": "e", "t": 1793431993.048551}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0485516}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485523}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15323:44", "s": "e", "t": 1793431993.048553}
+{"l": "      |", "s": "e", "t": 1793431993.0485535}
+{"l": "15323 |                         self.builder.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, offset, 0);", "s": "e", "t": 1793431993.048554}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0485547}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485554}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15330:57", "s": "e", "t": 1793431993.0485563}
+{"l": "      |", "s": "e", "t": 1793431993.0485568}
+{"l": "15330 | ...                   let up = self.builder.ins().iadd_imm(offset, 15);", "s": "e", "t": 1793431993.0485573}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0485578}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485587}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15331:48", "s": "e", "t": 1793431993.0485594}
+{"l": "      |", "s": "e", "t": 1793431993.0485663}
+{"l": "15331 | ...                   self.builder.ins().band_imm(up, -16)", "s": "e", "t": 1793431993.0485668}
+{"l": "      |                                          ^^^^^^^^", "s": "e", "t": 1793431993.0485673}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048568}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15335:51", "s": "e", "t": 1793431993.0485687}
+{"l": "      |", "s": "e", "t": 1793431993.0485692}
+{"l": "15335 |                     let next = self.builder.ins().iadd_imm(offset, i64::from(step));", "s": "e", "t": 1793431993.0485697}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0485704}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048571}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15337:51", "s": "e", "t": 1793431993.0485718}
+{"l": "      |", "s": "e", "t": 1793431993.0485723}
+{"l": "15337 |                     let fits = self.builder.ins().icmp_imm(IntCC::SignedLessThanOrEqual, next, 0);", "s": "e", "t": 1793431993.0485778}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0485783}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485792}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15355:51", "s": "e", "t": 1793431993.04858}
+{"l": "      |", "s": "e", "t": 1793431993.0485802}
+{"l": "15355 |                     let fits = self.builder.ins().icmp_imm(", "s": "e", "t": 1793431993.0485806}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0485811}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048586}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15366:51", "s": "e", "t": 1793431993.0485866}
+{"l": "      |", "s": "e", "t": 1793431993.0485868}
+{"l": "15366 |                     let next = self.builder.ins().iadd_imm(offset, i64::from(step));", "s": "e", "t": 1793431993.0485873}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0485916}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0485923}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15376:53", "s": "e", "t": 1793431993.0485966}
+{"l": "      |", "s": "e", "t": 1793431993.048597}
+{"l": "15376 |                         let up = self.builder.ins().iadd_imm(from, 15);", "s": "e", "t": 1793431993.0485973}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.0485978}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486023}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15377:44", "s": "e", "t": 1793431993.0486066}
+{"l": "      |", "s": "e", "t": 1793431993.0486069}
+{"l": "15377 |                         self.builder.ins().band_imm(up, -16)", "s": "e", "t": 1793431993.0486073}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0486078}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486124}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15381:47", "s": "e", "t": 1793431993.048613}
+{"l": "      |", "s": "e", "t": 1793431993.0486166}
+{"l": "15381 |                 let next = self.builder.ins().iadd_imm(from, if wide { 16 } else { 8 });", "s": "e", "t": 1793431993.0486171}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0486178}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486217}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15514:48", "s": "e", "t": 1793431993.0486224}
+{"l": "      |", "s": "e", "t": 1793431993.0486226}
+{"l": "15514 |                 let bytes = self.builder.ins().imul_imm(count, size);", "s": "e", "t": 1793431993.0486262}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0486267}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048631}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15543:48", "s": "e", "t": 1793431993.0486317}
+{"l": "      |", "s": "e", "t": 1793431993.048632}
+{"l": "15543 |                 let bytes = self.builder.ins().imul_imm(count, size);", "s": "e", "t": 1793431993.0486352}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0486357}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486398}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15578:48", "s": "e", "t": 1793431993.0486403}
+{"l": "      |", "s": "e", "t": 1793431993.0486407}
+{"l": "15578 |                     value = self.builder.ins().icmp_imm(IntCC::Equal, value, 0);", "s": "e", "t": 1793431993.0486438}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0486445}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486486}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15721:53", "s": "e", "t": 1793431993.0486493}
+{"l": "      |", "s": "e", "t": 1793431993.0486495}
+{"l": "15721 |                     let chosen = self.builder.ins().icmp_imm(IntCC::SignedLessThan, chosen, 0);", "s": "e", "t": 1793431993.048653}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.0486534}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486622}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15738:54", "s": "e", "t": 1793431993.048667}
+{"l": "      |", "s": "e", "t": 1793431993.0486672}
+{"l": "15738 |                         let bit = self.builder.ins().ushr_imm(byte, (i % 8) as i64);", "s": "e", "t": 1793431993.048668}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0486684}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486724}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15739:54", "s": "e", "t": 1793431993.0486732}
+{"l": "      |", "s": "e", "t": 1793431993.0486767}
+{"l": "15739 |                         let bit = self.builder.ins().band_imm(bit, 1);", "s": "e", "t": 1793431993.0486772}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0486777}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486815}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15788:49", "s": "e", "t": 1793431993.0486822}
+{"l": "      |", "s": "e", "t": 1793431993.0486827}
+{"l": "15788 |                 let offset = self.builder.ins().imul_imm(index, lane.ty.bytes() as i64);", "s": "e", "t": 1793431993.048686}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0486865}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486906}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15801:49", "s": "e", "t": 1793431993.048691}
+{"l": "      |", "s": "e", "t": 1793431993.0486948}
+{"l": "15801 |                 let offset = self.builder.ins().imul_imm(index, lane.ty.bytes() as i64);", "s": "e", "t": 1793431993.0486953}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0486958}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0486996}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15821:48", "s": "e", "t": 1793431993.0487003}
+{"l": "      |", "s": "e", "t": 1793431993.048704}
+{"l": "15821 |                 let upper = self.builder.ins().iadd_imm(both, layout.size.bytes() as i64);", "s": "e", "t": 1793431993.0487044}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0487049}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048709}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15827:53", "s": "e", "t": 1793431993.0487096}
+{"l": "      |", "s": "e", "t": 1793431993.0487099}
+{"l": "15827 |                     let offset = self.builder.ins().imul_imm(index, lane_size as i64);", "s": "e", "t": 1793431993.0487132}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.048714}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0487187}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15885:26", "s": "e", "t": 1793431993.048723}
+{"l": "      |", "s": "e", "t": 1793431993.0487235}
+{"l": "15885 |                         .ishl_imm(top, i64::from(chunk) * i64::from(vector.lane_count()));", "s": "e", "t": 1793431993.048724}
+{"l": "      |                          ^^^^^^^^", "s": "e", "t": 1793431993.0487244}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048728}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15891:50", "s": "e", "t": 1793431993.0487323}
+{"l": "      |", "s": "e", "t": 1793431993.0487325}
+{"l": "15891 |                     let top = self.builder.ins().ushr_imm(value, lane.ty.bits() as i64 - 1);", "s": "e", "t": 1793431993.048733}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0487335}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048742}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:15897:50", "s": "e", "t": 1793431993.0487463}
+{"l": "      |", "s": "e", "t": 1793431993.0487468}
+{"l": "15897 |                     let top = self.builder.ins().ishl_imm(top, i as i64);", "s": "e", "t": 1793431993.048747}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0487478}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0487514}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16050:41", "s": "e", "t": 1793431993.0487556}
+{"l": "      |", "s": "e", "t": 1793431993.0487561}
+{"l": "16050 |                         let s = b.ins().band_imm(s, bits - 1);", "s": "e", "t": 1793431993.0487566}
+{"l": "      |                                         ^^^^^^^^", "s": "e", "t": 1793431993.048757}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::bxor_imm`: use `bxor_imm_s` (sign-extends the immediate) or `bxor_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0487607}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16051:44", "s": "e", "t": 1793431993.0487647}
+{"l": "      |", "s": "e", "t": 1793431993.048765}
+{"l": "16051 |                         let rest = b.ins().bxor_imm(s, bits - 1);", "s": "e", "t": 1793431993.0487654}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.048766}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0487695}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16053:45", "s": "e", "t": 1793431993.0487738}
+{"l": "      |", "s": "e", "t": 1793431993.048774}
+{"l": "16053 | ...                   let l = b.ins().ushr_imm(l, 1);", "s": "e", "t": 1793431993.0487745}
+{"l": "      |                                       ^^^^^^^^", "s": "e", "t": 1793431993.048775}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0487838}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16056:45", "s": "e", "t": 1793431993.048788}
+{"l": "      |", "s": "e", "t": 1793431993.0487885}
+{"l": "16056 | ...                   let h = b.ins().ishl_imm(h, 1);", "s": "e", "t": 1793431993.0487888}
+{"l": "      |                                       ^^^^^^^^", "s": "e", "t": 1793431993.0487893}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0487933}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16074:50", "s": "e", "t": 1793431993.0487976}
+{"l": "      |", "s": "e", "t": 1793431993.048798}
+{"l": "16074 |                     let set = self.builder.ins().icmp_imm(IntCC::NotEqual, value, 0);", "s": "e", "t": 1793431993.0487986}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0487993}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048806}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16125:44", "s": "e", "t": 1793431993.0488067}
+{"l": "      |", "s": "e", "t": 1793431993.048807}
+{"l": "16125 |                         self.builder.ins().icmp_imm(IntCC::SignedLessThan, chosen, 0)", "s": "e", "t": 1793431993.0488074}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0488107}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048815}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16330:49", "s": "e", "t": 1793431993.0488155}
+{"l": "      |", "s": "e", "t": 1793431993.048816}
+{"l": "16330 |                 let offset = self.builder.ins().imul_imm(index, size);", "s": "e", "t": 1793431993.0488195}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.04882}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048824}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16407:53", "s": "e", "t": 1793431993.0488248}
+{"l": "      |", "s": "e", "t": 1793431993.048825}
+{"l": "16407 |                     let object = self.builder.ins().iadd_imm(exception, unwind::seh::OBJECT);", "s": "e", "t": 1793431993.0488284}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.048829}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048833}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16554:50", "s": "e", "t": 1793431993.0488336}
+{"l": "      |", "s": "e", "t": 1793431993.0488338}
+{"l": "16554 |                     let sum = self.builder.ins().iadd_imm(sum, 1);", "s": "e", "t": 1793431993.0488374}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.048838}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0488458}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16555:51", "s": "e", "t": 1793431993.04885}
+{"l": "      |", "s": "e", "t": 1793431993.0488505}
+{"l": "16555 |                     let half = self.builder.ins().ushr_imm(sum, 1);", "s": "e", "t": 1793431993.048851}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0488517}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0488553}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16567:51", "s": "e", "t": 1793431993.0488594}
+{"l": "      |", "s": "e", "t": 1793431993.0488598}
+{"l": "16567 |                     let high = self.builder.ins().ushr_imm(product, bits);", "s": "e", "t": 1793431993.0488603}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0488608}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0488646}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16579:44", "s": "e", "t": 1793431993.0488687}
+{"l": "      |", "s": "e", "t": 1793431993.048869}
+{"l": "16579 |                         self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, r, bits);", "s": "e", "t": 1793431993.0488694}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.04887}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::sshr_imm`: use `sshr_imm_s` (sign-extends the immediate) or `sshr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0488744}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16677:55", "s": "e", "t": 1793431993.0488784}
+{"l": "      |", "s": "e", "t": 1793431993.0488787}
+{"l": "16677 |                         let high = self.builder.ins().sshr_imm(product, bits - 1);", "s": "e", "t": 1793431993.0488791}
+{"l": "      |                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0488796}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048884}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16749:58", "s": "e", "t": 1793431993.0488882}
+{"l": "      |", "s": "e", "t": 1793431993.0488884}
+{"l": "16749 |                         let l_least = self.builder.ins().icmp_imm(IntCC::Equal, l, least);", "s": "e", "t": 1793431993.048889}
+{"l": "      |                                                          ^^^^^^^^", "s": "e", "t": 1793431993.0488894}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0488935}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16750:58", "s": "e", "t": 1793431993.0488942}
+{"l": "      |", "s": "e", "t": 1793431993.0488977}
+{"l": "16750 |                         let r_least = self.builder.ins().icmp_imm(IntCC::Equal, r, least);", "s": "e", "t": 1793431993.0488982}
+{"l": "      |                                                          ^^^^^^^^", "s": "e", "t": 1793431993.0488987}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489073}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16755:56", "s": "e", "t": 1793431993.048916}
+{"l": "      |", "s": "e", "t": 1793431993.0489166}
+{"l": "16755 |                         let twice = self.builder.ins().ishl_imm(product, 1);", "s": "e", "t": 1793431993.048917}
+{"l": "      |                                                        ^^^^^^^^", "s": "e", "t": 1793431993.0489175}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489218}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16781:55", "s": "e", "t": 1793431993.0489225}
+{"l": "      |", "s": "e", "t": 1793431993.0489228}
+{"l": "16781 |                         let slot = self.builder.ins().band_imm(index, 0x0f);", "s": "e", "t": 1793431993.048926}
+{"l": "      |                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0489268}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489304}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16790:48", "s": "e", "t": 1793431993.0489311}
+{"l": "      |", "s": "e", "t": 1793431993.0489347}
+{"l": "16790 | ...                   self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, index, 15);", "s": "e", "t": 1793431993.0489352}
+{"l": "      |                                          ^^^^^^^^", "s": "e", "t": 1793431993.0489357}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489395}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17133:41", "s": "e", "t": 1793431993.0489438}
+{"l": "      |", "s": "e", "t": 1793431993.0489442}
+{"l": "17133 |             let to = self.builder.ins().iadd_imm(slot, i64::from(at));", "s": "e", "t": 1793431993.0489447}
+{"l": "      |                                         ^^^^^^^^", "s": "e", "t": 1793431993.0489452}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048949}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17198:51", "s": "e", "t": 1793431993.0489497}
+{"l": "      |", "s": "e", "t": 1793431993.0489533}
+{"l": "17198 |                     let slot = self.builder.ins().band_imm(index, 0x0f);", "s": "e", "t": 1793431993.0489554}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.048956}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489607}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17203:54", "s": "e", "t": 1793431993.0489614}
+{"l": "      |", "s": "e", "t": 1793431993.0489616}
+{"l": "17203 |                     let cleared = self.builder.ins().icmp_imm(IntCC::SignedLessThan, index, 0);", "s": "e", "t": 1793431993.048962}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0489655}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.048969}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17225:55", "s": "e", "t": 1793431993.0489733}
+{"l": "      |", "s": "e", "t": 1793431993.0489736}
+{"l": "17225 |                         let slot = self.builder.ins().band_imm(index, lanes - 1);", "s": "e", "t": 1793431993.048974}
+{"l": "      |                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0489748}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489783}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17230:57", "s": "e", "t": 1793431993.0489824}
+{"l": "      |", "s": "e", "t": 1793431993.0489826}
+{"l": "17230 |                         let offset = self.builder.ins().imul_imm(slot, bytes);", "s": "e", "t": 1793431993.048983}
+{"l": "      |                                                         ^^^^^^^^", "s": "e", "t": 1793431993.0489836}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489872}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17246:55", "s": "e", "t": 1793431993.048991}
+{"l": "      |", "s": "e", "t": 1793431993.0489914}
+{"l": "17246 |                         let slot = self.builder.ins().band_imm(index, 7);", "s": "e", "t": 1793431993.0489917}
+{"l": "      |                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0489924}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0489962}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17248:57", "s": "e", "t": 1793431993.0490003}
+{"l": "      |", "s": "e", "t": 1793431993.0490005}
+{"l": "17248 |                         let offset = self.builder.ins().ishl_imm(slot, 2);", "s": "e", "t": 1793431993.049001}
+{"l": "      |                                                         ^^^^^^^^", "s": "e", "t": 1793431993.0490015}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490055}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17395:47", "s": "e", "t": 1793431993.0490096}
+{"l": "      |", "s": "e", "t": 1793431993.0490098}
+{"l": "17395 |                 let over = self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, count, 15);", "s": "e", "t": 1793431993.0490103}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.049011}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490146}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17542:57", "s": "e", "t": 1793431993.0490186}
+{"l": "      |", "s": "e", "t": 1793431993.0490189}
+{"l": "17542 |                         let chosen = self.builder.ins().ushr_imm(table, minterm);", "s": "e", "t": 1793431993.0490193}
+{"l": "      |                                                         ^^^^^^^^", "s": "e", "t": 1793431993.0490198}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490236}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17543:57", "s": "e", "t": 1793431993.049028}
+{"l": "      |", "s": "e", "t": 1793431993.0490282}
+{"l": "17543 |                         let chosen = self.builder.ins().band_imm(chosen, 1);", "s": "e", "t": 1793431993.0490286}
+{"l": "      |                                                         ^^^^^^^^", "s": "e", "t": 1793431993.049029}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490377}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17566:48", "s": "e", "t": 1793431993.0490417}
+{"l": "      |", "s": "e", "t": 1793431993.0490422}
+{"l": "17566 |                     let x = self.builder.ins().band_imm(x, LOW_52);", "s": "e", "t": 1793431993.0490427}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0490432}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490468}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17567:48", "s": "e", "t": 1793431993.0490508}
+{"l": "      |", "s": "e", "t": 1793431993.0490513}
+{"l": "17567 |                     let y = self.builder.ins().band_imm(y, LOW_52);", "s": "e", "t": 1793431993.0490515}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.049052}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490568}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17571:56", "s": "e", "t": 1793431993.0490606}
+{"l": "      |", "s": "e", "t": 1793431993.049061}
+{"l": "17571 |                         let upper = self.builder.ins().ishl_imm(upper, 12);", "s": "e", "t": 1793431993.0490613}
+{"l": "      |                                                        ^^^^^^^^", "s": "e", "t": 1793431993.0490618}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0490694}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17572:56", "s": "e", "t": 1793431993.0490735}
+{"l": "      |", "s": "e", "t": 1793431993.049074}
+{"l": "17572 |                         let lower = self.builder.ins().ushr_imm(low, 52);", "s": "e", "t": 1793431993.0490742}
+{"l": "      |                                                        ^^^^^^^^", "s": "e", "t": 1793431993.0490746}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.049079}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17575:44", "s": "e", "t": 1793431993.049083}
+{"l": "      |", "s": "e", "t": 1793431993.0490835}
+{"l": "17575 |                         self.builder.ins().band_imm(low, LOW_52)", "s": "e", "t": 1793431993.0490837}
+{"l": "      |                                            ^^^^^^^^", "s": "e", "t": 1793431993.0490842}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.049092}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17639:51", "s": "e", "t": 1793431993.0490963}
+{"l": "      |", "s": "e", "t": 1793431993.0490966}
+{"l": "17639 |                     let chosen = fx.builder.ins().ushr_imm(halves, bit);", "s": "e", "t": 1793431993.049097}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0490975}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0491054}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17640:51", "s": "e", "t": 1793431993.0491076}
+{"l": "      |", "s": "e", "t": 1793431993.0491111}
+{"l": "17640 |                     let chosen = fx.builder.ins().band_imm(chosen, 1);", "s": "e", "t": 1793431993.0491114}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.049112}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.049116}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17642:38", "s": "e", "t": 1793431993.0491166}
+{"l": "      |", "s": "e", "t": 1793431993.0491168}
+{"l": "17642 |                     fx.builder.ins().ishl_imm(chosen, 3)", "s": "e", "t": 1793431993.0491202}
+{"l": "      |                                      ^^^^^^^^", "s": "e", "t": 1793431993.0491207}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0491247}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17654:54", "s": "e", "t": 1793431993.0491254}
+{"l": "      |", "s": "e", "t": 1793431993.0491257}
+{"l": "17654 |                         let set = self.builder.ins().ushr_imm(r, bit);", "s": "e", "t": 1793431993.0491292}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0491297}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0491338}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17655:54", "s": "e", "t": 1793431993.0491345}
+{"l": "      |", "s": "e", "t": 1793431993.0491347}
+{"l": "17655 |                         let set = self.builder.ins().band_imm(set, 1);", "s": "e", "t": 1793431993.049138}
+{"l": "      |                                                      ^^^^^^^^", "s": "e", "t": 1793431993.0491385}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0491424}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17657:55", "s": "e", "t": 1793431993.049143}
+{"l": "      |", "s": "e", "t": 1793431993.0491433}
+{"l": "17657 |                         let part = self.builder.ins().ishl_imm(l, bit);", "s": "e", "t": 1793431993.0491467}
+{"l": "      |                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0491474}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.049151}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17661:59", "s": "e", "t": 1793431993.0491517}
+{"l": "      |", "s": "e", "t": 1793431993.0491555}
+{"l": "17661 | ...                   let part = self.builder.ins().ushr_imm(l, 64 - bit);", "s": "e", "t": 1793431993.049156}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.0491567}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0491657}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17688:56", "s": "e", "t": 1793431993.04917}
+{"l": "      |", "s": "e", "t": 1793431993.0491703}
+{"l": "17688 |                         let index = self.builder.ins().band_imm(index, 2 * lanes - 1);", "s": "e", "t": 1793431993.0491707}
+{"l": "      |                                                        ^^^^^^^^", "s": "e", "t": 1793431993.049194}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492039}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17694:57", "s": "e", "t": 1793431993.0492046}
+{"l": "      |", "s": "e", "t": 1793431993.049205}
+{"l": "17694 |                         let second = self.builder.ins().icmp_imm(", "s": "e", "t": 1793431993.0492053}
+{"l": "      |                                                         ^^^^^^^^", "s": "e", "t": 1793431993.0492058}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492067}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17700:55", "s": "e", "t": 1793431993.0492074}
+{"l": "      |", "s": "e", "t": 1793431993.0492077}
+{"l": "17700 |                         let slot = self.builder.ins().band_imm(index, lanes - 1);", "s": "e", "t": 1793431993.0492082}
+{"l": "      |                                                       ^^^^^^^^", "s": "e", "t": 1793431993.0492089}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492096}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17701:57", "s": "e", "t": 1793431993.0492103}
+{"l": "      |", "s": "e", "t": 1793431993.0492108}
+{"l": "17701 |                         let offset = self.builder.ins().imul_imm(slot, width);", "s": "e", "t": 1793431993.0492113}
+{"l": "      |                                                         ^^^^^^^^", "s": "e", "t": 1793431993.0492177}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::bxor_imm`: use `bxor_imm_s` (sign-extends the immediate) or `bxor_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492184}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:17856:50", "s": "e", "t": 1793431993.0492191}
+{"l": "      |", "s": "e", "t": 1793431993.0492194}
+{"l": "17856 |                 let flipped = self.builder.ins().bxor_imm(bits, 0x8000);", "s": "e", "t": 1793431993.0492198}
+{"l": "      |                                                  ^^^^^^^^", "s": "e", "t": 1793431993.0492203}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492213}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18015:43", "s": "e", "t": 1793431993.0492256}
+{"l": "      |", "s": "e", "t": 1793431993.049226}
+{"l": "18015 |         let overflow = self.builder.ins().icmp_imm(IntCC::NotEqual, overflow, 0);", "s": "e", "t": 1793431993.0492263}
+{"l": "      |                                           ^^^^^^^^", "s": "e", "t": 1793431993.049227}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.049232}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18084:47", "s": "e", "t": 1793431993.0492327}
+{"l": "      |", "s": "e", "t": 1793431993.049233}
+{"l": "18084 |             let negative = self.builder.ins().icmp_imm(IntCC::SignedLessThan, l, 0);", "s": "e", "t": 1793431993.0492332}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.049234}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.049238}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18319:36", "s": "e", "t": 1793431993.0492387}
+{"l": "      |", "s": "e", "t": 1793431993.0492425}
+{"l": "18319 |                 self.builder.ins().iadd_imm(addr, layout.fields.offset(i).bytes() as i64);", "s": "e", "t": 1793431993.049243}
+{"l": "      |                                    ^^^^^^^^", "s": "e", "t": 1793431993.0492437}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492477}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18527:52", "s": "e", "t": 1793431993.0492485}
+{"l": "      |", "s": "e", "t": 1793431993.049249}
+{"l": "18527 |                     let bytes = self.builder.ins().imul_imm(len, size);", "s": "e", "t": 1793431993.049252}
+{"l": "      |                                                    ^^^^^^^^", "s": "e", "t": 1793431993.0492544}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.04926}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18529:51", "s": "e", "t": 1793431993.0492606}
+{"l": "      |", "s": "e", "t": 1793431993.0492609}
+{"l": "18529 |                     let same = self.builder.ins().icmp_imm(IntCC::Equal, order, 0);", "s": "e", "t": 1793431993.0492613}
+{"l": "      |                                                   ^^^^^^^^", "s": "e", "t": 1793431993.0492647}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492694}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18544:49", "s": "e", "t": 1793431993.0492702}
+{"l": "      |", "s": "e", "t": 1793431993.0492704}
+{"l": "18544 |                 let offset = self.builder.ins().imul_imm(index, size);", "s": "e", "t": 1793431993.0492709}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0492713}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492756}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18548:47", "s": "e", "t": 1793431993.0492764}
+{"l": "      |", "s": "e", "t": 1793431993.0492797}
+{"l": "18548 |                 let next = self.builder.ins().iadd_imm(index, 1);", "s": "e", "t": 1793431993.0492802}
+{"l": "      |                                               ^^^^^^^^", "s": "e", "t": 1793431993.0492806}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492854}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18557:48", "s": "e", "t": 1793431993.0492892}
+{"l": "      |", "s": "e", "t": 1793431993.0492897}
+{"l": "18557 |                     let l = self.builder.ins().iadd_imm(l, offset);", "s": "e", "t": 1793431993.04929}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0492904}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0492942}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18558:48", "s": "e", "t": 1793431993.049298}
+{"l": "      |", "s": "e", "t": 1793431993.0492985}
+{"l": "18558 |                     let r = self.builder.ins().iadd_imm(r, offset);", "s": "e", "t": 1793431993.0492988}
+{"l": "      |                                                ^^^^^^^^", "s": "e", "t": 1793431993.0492992}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0493033}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18721:40", "s": "e", "t": 1793431993.049307}
+{"l": "      |", "s": "e", "t": 1793431993.0493073}
+{"l": "18721 |             let l = self.builder.ins().iadd_imm(l, offset);", "s": "e", "t": 1793431993.0493078}
+{"l": "      |                                        ^^^^^^^^", "s": "e", "t": 1793431993.0493083}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0493126}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18722:40", "s": "e", "t": 1793431993.0493166}
+{"l": "      |", "s": "e", "t": 1793431993.049317}
+{"l": "18722 |             let r = self.builder.ins().iadd_imm(r, offset);", "s": "e", "t": 1793431993.0493174}
+{"l": "      |                                        ^^^^^^^^", "s": "e", "t": 1793431993.0493176}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0493214}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18886:53", "s": "e", "t": 1793431993.0493255}
+{"l": "      |", "s": "e", "t": 1793431993.049326}
+{"l": "18886 |                 let field_addr = this.builder.ins().iadd_imm(addr, offset.bytes() as i64);", "s": "e", "t": 1793431993.0493264}
+{"l": "      |                                                     ^^^^^^^^", "s": "e", "t": 1793431993.049327}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0493305}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18900:49", "s": "e", "t": 1793431993.0493345}
+{"l": "      |", "s": "e", "t": 1793431993.0493348}
+{"l": "18900 |             let field_addr = this.builder.ins().iadd_imm(addr, offset);", "s": "e", "t": 1793431993.0493352}
+{"l": "      |                                                 ^^^^^^^^", "s": "e", "t": 1793431993.0493357}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.04934}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:18984:43", "s": "e", "t": 1793431993.049344}
+{"l": "      |", "s": "e", "t": 1793431993.0493443}
+{"l": "18984 |             let rest = self.builder.ins().iadd_imm(index, 1);", "s": "e", "t": 1793431993.0493445}
+{"l": "      |                                           ^^^^^^^^", "s": "e", "t": 1793431993.0493453}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0493631}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:19025:41", "s": "e", "t": 1793431993.0493639}
+{"l": "      |", "s": "e", "t": 1793431993.049364}
+{"l": "19025 |         let offset = self.builder.ins().imul_imm(index, size);", "s": "e", "t": 1793431993.0493646}
+{"l": "      |                                         ^^^^^^^^", "s": "e", "t": 1793431993.049365}
+{"l": "warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead", "s": "e", "t": 1793431993.0493698}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:19034:39", "s": "e", "t": 1793431993.0493705}
+{"l": "      |", "s": "e", "t": 1793431993.0493708}
+{"l": "19034 |         let next = self.builder.ins().iadd_imm(index, 1);", "s": "e", "t": 1793431993.049374}
+{"l": "      |                                       ^^^^^^^^", "s": "e", "t": 1793431993.0493748}
+{"l": "warning: unused import: `SliceLike`", "s": "e", "t": 1793431993.0493782}
+{"l": "  --> crates/hir-ty-codegen/sve.rs:31:59", "s": "e", "t": 1793431993.0493786}
+{"l": "   |", "s": "e", "t": 1793431993.0493827}
+{"l": "31 | use rustc_type_ir::inherent::{GenericArgs as _, IntoKind, SliceLike as _};", "s": "e", "t": 1793431993.0493834}
+{"l": "   |                                                           ^^^^^^^^^", "s": "e", "t": 1793431993.0493839}
+{"l": "warning: variable does not need to be mutable", "s": "e", "t": 1793431993.049397}
+{"l": "    --> crates/hir-ty-codegen/wasm.rs:1098:13", "s": "e", "t": 1793431993.0494013}
+{"l": "     |", "s": "e", "t": 1793431993.0494018}
+{"l": "1098 |         let mut local_of = |this: &mut Self, class: Class| {", "s": "e", "t": 1793431993.0494022}
+{"l": "     |             ----^^^^^^^^", "s": "e", "t": 1793431993.0494027}
+{"l": "     |             |", "s": "e", "t": 1793431993.049407}
+{"l": "     |             help: remove this `mut`", "s": "e", "t": 1793431993.0494075}
+{"l": "     |", "s": "e", "t": 1793431993.04941}
+{"l": "     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0494106}
+{"l": "warning: variable does not need to be mutable", "s": "e", "t": 1793431993.0494146}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:11601:13", "s": "e", "t": 1793431993.0494182}
+{"l": "      |", "s": "e", "t": 1793431993.0494187}
+{"l": "11601 |         let mut function = |this: &mut Self, operand: &Operand| -> Result<Value> {", "s": "e", "t": 1793431993.0494192}
+{"l": "      |             ----^^^^^^^^", "s": "e", "t": 1793431993.0494227}
+{"l": "      |             |", "s": "e", "t": 1793431993.0494232}
+{"l": "      |             help: remove this `mut`", "s": "e", "t": 1793431993.0494237}
+{"l": "warning: unreachable pattern", "s": "e", "t": 1793431993.049448}
+{"l": "     --> crates/hir-ty-codegen/mod.rs:16269:13", "s": "e", "t": 1793431993.0494497}
+{"l": "      |", "s": "e", "t": 1793431993.0494502}
+{"l": "16197 |             (\"powif32\" | \"powif64\" | \"powi\", [base, power]) => {", "s": "e", "t": 1793431993.049451}
+{"l": "      |             ----------------------------------------------- matches all the relevant values", "s": "e", "t": 1793431993.0494583}
+{"l": "...", "s": "e", "t": 1793431993.0494587}
+{"l": "16269 |             (\"powif32\" | \"powif64\", [base, power]) => {", "s": "e", "t": 1793431993.0494595}
+{"l": "      |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this", "s": "e", "t": 1793431993.0494602}
+{"l": "      |", "s": "e", "t": 1793431993.049461}
+{"l": "      = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0494616}
+{"l": "warning: type `codeview::CodeView` is more private than the item `DebugContext::CodeView::0`", "s": "e", "t": 1793431993.0494683}
+{"l": "   --> crates/hir-ty-codegen/debuginfo.rs:376:14", "s": "e", "t": 1793431993.049469}
+{"l": "    |", "s": "e", "t": 1793431993.0494695}
+{"l": "376 |     CodeView(CodeView),", "s": "e", "t": 1793431993.0494702}
+{"l": "    |              ^^^^^^^^ field `DebugContext::CodeView::0` is reachable at visibility `pub(crate)`", "s": "e", "t": 1793431993.0494707}
+{"l": "    |", "s": "e", "t": 1793431993.0494714}
+{"l": "note: but type `codeview::CodeView` is only usable at visibility `pub(in crate::debuginfo)`", "s": "e", "t": 1793431993.0494764}
+{"l": "   --> crates/hir-ty-codegen/debuginfo/codeview.rs:63:1", "s": "e", "t": 1793431993.0494769}
+{"l": "    |", "s": "e", "t": 1793431993.0494773}
+{"l": " 63 | pub(super) struct CodeView {", "s": "e", "t": 1793431993.0494778}
+{"l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.0494783}
+{"l": "    = note: `#[warn(private_interfaces)]` on by default", "s": "e", "t": 1793431993.049479}
+{"l": "warning: constant `LARGE` is never used", "s": "e", "t": 1793431993.049484}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:2658:7", "s": "e", "t": 1793431993.0494845}
+{"l": "     |", "s": "e", "t": 1793431993.049485}
+{"l": "2658 | const LARGE: usize = 50_000;", "s": "e", "t": 1793431993.0494857}
+{"l": "     |       ^^^^^", "s": "e", "t": 1793431993.0494862}
+{"l": "     |", "s": "e", "t": 1793431993.04949}
+{"l": "     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default", "s": "e", "t": 1793431993.0494905}
+{"l": "warning: function `inline_of` is never used", "s": "e", "t": 1793431993.049495}
+{"l": "   --> crates/hir-ty-codegen/asm.rs:966:15", "s": "e", "t": 1793431993.0494955}
+{"l": "    |", "s": "e", "t": 1793431993.049496}
+{"l": "966 | pub(super) fn inline_of(text: &str) -> Option<Arc<Inline>> {", "s": "e", "t": 1793431993.0494964}
+{"l": "    |               ^^^^^^^^^", "s": "e", "t": 1793431993.049497}
+{"l": "warning: field `builder_ctx` is never read", "s": "e", "t": 1793431993.0495074}
+{"l": "   --> crates/hir-ty-codegen/fragment.rs:350:16", "s": "e", "t": 1793431993.0495121}
+{"l": "    |", "s": "e", "t": 1793431993.0495126}
+{"l": "335 | pub(super) struct Recorder<'db> {", "s": "e", "t": 1793431993.049513}
+{"l": "    |                   -------- field in this struct", "s": "e", "t": 1793431993.0495136}
+{"l": "...", "s": "e", "t": 1793431993.049514}
+{"l": "350 |     pub(super) builder_ctx: FunctionBuilderContext,", "s": "e", "t": 1793431993.0495174}
+{"l": "    |                ^^^^^^^^^^^", "s": "e", "t": 1793431993.0495179}
+{"l": "warning: function `share_escaping` is never used", "s": "e", "t": 1793431993.049525}
+{"l": "  --> crates/hir-ty-codegen/overlap.rs:43:15", "s": "e", "t": 1793431993.0495296}
+{"l": "   |", "s": "e", "t": 1793431993.04953}
+{"l": "43 | pub(super) fn share_escaping(", "s": "e", "t": 1793431993.0495305}
+{"l": "   |               ^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.049531}
+{"l": "warning: function `escaping` is never used", "s": "e", "t": 1793431993.049534}
+{"l": "  --> crates/hir-ty-codegen/overlap.rs:56:4", "s": "e", "t": 1793431993.049538}
+{"l": "   |", "s": "e", "t": 1793431993.0495384}
+{"l": "56 | fn escaping(func: &ir::Function) -> rustc_hash::FxHashSet<ir::StackSlot> {", "s": "e", "t": 1793431993.0495389}
+{"l": "   |    ^^^^^^^^", "s": "e", "t": 1793431993.0495393}
+{"l": "warning: calls to `std::mem::drop` with a value that implements `Copy` does nothing", "s": "e", "t": 1793431993.0495512}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:4318:52", "s": "e", "t": 1793431993.049556}
+{"l": "     |", "s": "e", "t": 1793431993.0495565}
+{"l": "4318 |                 body.walk_pats(arm.pat, &mut |pat| drop(tried.insert(pat, expr)));", "s": "e", "t": 1793431993.049557}
+{"l": "     |                                                    ^^^^^-----------------------^", "s": "e", "t": 1793431993.0495577}
+{"l": "     |                                                         |", "s": "e", "t": 1793431993.0495627}
+{"l": "     |                                                         argument has type `std::option::Option<la_arena::Idx<hir_def::hir::Expr>>`", "s": "e", "t": 1793431993.0495632}
+{"l": "     |", "s": "e", "t": 1793431993.049564}
+{"l": "     = note: use `let _ = ...` to ignore the expression or result", "s": "e", "t": 1793431993.0495644}
+{"l": "     = note: `#[warn(dropping_copy_types)]` on by default", "s": "e", "t": 1793431993.0495648}
+{"l": "warning: unreachable `pub` item", "s": "e", "t": 1793431993.0495746}
+{"l": "   --> crates/hir-ty-codegen/fragment.rs:153:1", "s": "e", "t": 1793431993.049579}
+{"l": "    |", "s": "e", "t": 1793431993.0495842}
+{"l": "153 | pub struct CompiledFunction {", "s": "e", "t": 1793431993.0495849}
+{"l": "    | ---^^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.049585}
+{"l": "    | |", "s": "e", "t": 1793431993.0495899}
+{"l": "    | help: consider restricting its visibility: `pub(crate)`", "s": "e", "t": 1793431993.0495903}
+{"l": "    |", "s": "e", "t": 1793431993.0495908}
+{"l": "    = help: or consider exporting it for use by other crates", "s": "e", "t": 1793431993.0495913}
+{"l": "    = note: requested on the command line with `-W unreachable-pub`", "s": "e", "t": 1793431993.049592}
+{"l": "warning: unreachable `pub` item", "s": "e", "t": 1793431993.0495958}
+{"l": "   --> crates/hir-ty-codegen/fragment.rs:239:1", "s": "e", "t": 1793431993.0495963}
+{"l": "    |", "s": "e", "t": 1793431993.0495968}
+{"l": "239 | pub struct CompiledStatic {", "s": "e", "t": 1793431993.049597}
+{"l": "    | ---^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.0496013}
+{"l": "    | |", "s": "e", "t": 1793431993.0496016}
+{"l": "    | help: consider restricting its visibility: `pub(crate)`", "s": "e", "t": 1793431993.049602}
+{"l": "    |", "s": "e", "t": 1793431993.0496025}
+{"l": "    = help: or consider exporting it for use by other crates", "s": "e", "t": 1793431993.049603}
+{"l": "warning: unreachable `pub` item", "s": "e", "t": 1793431993.049613}
+{"l": "   --> crates/hir-ty-codegen/home.rs:140:1", "s": "e", "t": 1793431993.0496173}
+{"l": "    |", "s": "e", "t": 1793431993.0496178}
+{"l": "140 | pub fn body_files(db: &dyn HirDatabase, instance: &Instance) -> Option<Box<[FileId]>> {", "s": "e", "t": 1793431993.0496182}
+{"l": "    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^", "s": "e", "t": 1793431993.049619}
+{"l": "    | |", "s": "e", "t": 1793431993.0496228}
+{"l": "    | help: consider restricting its visibility: `pub(crate)`", "s": "e", "t": 1793431993.0496233}
+{"l": "    |", "s": "e", "t": 1793431993.049624}
+{"l": "    = help: or consider exporting it for use by other crates", "s": "e", "t": 1793431993.0496242}
+{"l": "warning: this lint expectation is unfulfilled", "s": "e", "t": 1793431993.0496314}
+{"l": "    --> crates/hir-ty-codegen/mod.rs:3159:46", "s": "e", "t": 1793431993.049636}
+{"l": "     |", "s": "e", "t": 1793431993.0496364}
+{"l": "3159 |     #[cfg_attr(not(feature = \"llvm\"), expect(dead_code))]", "s": "e", "t": 1793431993.0496368}
+{"l": "     |                                              ^^^^^^^^^", "s": "e", "t": 1793431993.0496376}
+{"l": "     |", "s": "e", "t": 1793431993.049638}
+{"l": "     = note: `#[warn(unfulfilled_lint_expectations)]` on by default", "s": "e", "t": 1793431993.0496411}
+{"l": "warning: `hir-ty-codegen` (lib test) generated 171 warnings (run `cargo fix --lib -p hir-ty-codegen --tests` to apply 7 suggestions)", "s": "e", "t": 1793431993.0497005}
+{"l": "    Finished `release` profile [optimized] target(s) in 0.26s", "s": "e", "t": 1793431993.0503032}
+{"l": "     Running `/home/jeremy/.cargo/bin/justrust __test-runner /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-codegen/d85c581ce11daf8e/out/hir_ty_codegen-d85c581ce11daf8e`", "s": "e", "t": 1793431993.067097}
+{"l": "running 53 tests", "s": "o", "t": 1793431993.0833113}
+{"l": "test cached::tests::cache_miss_stats_gate_is_exact ... ok <0.000s>", "s": "o", "t": 1793431993.0842779}
+{"l": "test asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads ... ok <0.001s>", "s": "o", "t": 1793431993.0843713}
+{"l": "test asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture ... ok <0.001s>", "s": "o", "t": 1793431993.084373}
+{"l": "test asm::tests::a_dollar_is_nothing_in_intel_syntax ... ok <0.001s>", "s": "o", "t": 1793431993.0844862}
+{"l": "test avx512::tests::each_intrinsic_is_the_instruction_llvm_selects ... ok <0.001s>", "s": "o", "t": 1793431993.0846457}
+{"l": "test debuginfo::set::tests::a_type_in_a_set_twice_is_one ... ok <0.000s>", "s": "o", "t": 1793431993.0847554}
+{"l": "test debuginfo::set::tests::a_set_is_what_it_was_made_of ... ok <0.000s>", "s": "o", "t": 1793431993.0847573}
+{"l": "test cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home ... ok <0.001s>", "s": "o", "t": 1793431993.0849047}
+{"l": "test cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it ... ok <0.001s>", "s": "o", "t": 1793431993.0849457}
+{"l": "test cached::tests::an_entry_is_read_back_as_it_was_written ... ok <0.001s>", "s": "o", "t": 1793431993.0849698}
+{"l": "test debuginfo::set::tests::a_type_made_of_itself_through_a_parameter ... ok <0.000s>", "s": "o", "t": 1793431993.0849996}
+{"l": "test cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed ... ok <0.001s>", "s": "o", "t": 1793431993.0850222}
+{"l": "test cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory ... ok <0.001s>", "s": "o", "t": 1793431993.0850914}
+{"l": "test cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name ... ok <0.001s>", "s": "o", "t": 1793431993.0850928}
+{"l": "test f16_f128::tests::quad_bounds ... ok <0.000s>", "s": "o", "t": 1793431993.0850935}
+{"l": "test fncache::tests::code_moved_to_other_lines_has_the_same_hash_and_other_code_another ... ok <0.000s>", "s": "o", "t": 1793431993.0851493}
+{"l": "test fncache::tests::what_is_below_a_sealed_node_reads_back_as_it_was_written ... ok <0.000s>", "s": "o", "t": 1793431993.0851505}
+{"l": "test neon::tests::a_fused_multiply_add_is_the_instruction_of_its_factors ... ok <0.000s>", "s": "o", "t": 1793431993.0852108}
+{"l": "test fncache::tests::the_hash_of_code_is_the_same_in_every_run ... ok <0.000s>", "s": "o", "t": 1793431993.0852141}
+{"l": "test neon::tests::a_generic_intrinsic_on_halves_is_one_instruction ... ok <0.000s>", "s": "o", "t": 1793431993.0852168}
+{"l": "test cached::tests::an_entry_that_names_what_it_lacks_is_no_entry ... ok <0.001s>", "s": "o", "t": 1793431993.0852625}
+{"l": "test neon::tests::an_immediate_is_named_in_the_text_and_not_loaded ... ok <0.000s>", "s": "o", "t": 1793431993.0852892}
+{"l": "test neon::tests::the_bodies_that_splat_c_are_known ... ok <0.000s>", "s": "o", "t": 1793431993.0853405}
+{"l": "test neon::tests::the_lanes_a_name_says_are_the_registers_the_instruction_names ... ok <0.000s>", "s": "o", "t": 1793431993.0853434}
+{"l": "test neon::tests::fused_multiply_adds_keep_the_factors_llvm_keeps ... ok <0.000s>", "s": "o", "t": 1793431993.085344}
+{"l": "test patch::tests::a_probe_that_is_interrupted_goes_on_unwinding_and_one_that_panics_finds_nothing ... ok <0.000s>", "s": "o", "t": 1793431993.0853548}
+{"l": "test sve::tests::counts_take_their_pattern ... ok <0.000s>", "s": "o", "t": 1793431993.0853689}
+{"l": "test patch::tests::a_program_started_again_keeps_what_rustcs_copies_are_of ... ok <0.000s>", "s": "o", "t": 1793431993.0853958}
+{"l": "test sve::tests::images_of_full_vectors_are_one ... ok <0.000s>", "s": "o", "t": 1793431993.0853994}
+{"l": "test sve::tests::loads_and_stores_of_unpacked_vectors_take_the_lane_size ... ok <0.000s>", "s": "o", "t": 1793431993.0854268}
+{"l": "test sve::tests::insertion_of_a_neon_vector_loads_its_128_bits ... ok <0.000s>", "s": "o", "t": 1793431993.0855653}
+{"l": "test sve::tests::select_of_words ... ok <0.000s>", "s": "o", "t": 1793431993.0855772}
+{"l": "test sve::tests::predicate_conversion_clears_the_bits_between_lanes ... ok <0.000s>", "s": "o", "t": 1793431993.0856059}
+{"l": "test sve::tests::whilerw_takes_two_addresses ... ok <0.000s>", "s": "o", "t": 1793431993.085626}
+{"l": "test tests::a_link_name_written_as_the_symbol_is_not_prefixed_again ... ok <0.000s>", "s": "o", "t": 1793431993.08564}
+{"l": "test tests::demand_inventory_requires_the_exact_separate_opt_in ... ok <0.000s>", "s": "o", "t": 1793431993.0856588}
+{"l": "test tests::demand_inventory_data_capture_does_not_change_native_output_or_errors ... ok <0.000s>", "s": "o", "t": 1793431993.0856774}
+{"l": "test float_pair::tests::a_pair_of_floats_is_returned_and_read_as_two_integers_of_the_same_widths ... ok <0.001s>", "s": "o", "t": 1793431993.08572}
+{"l": "test wasm::v128::tests::pairs_pick_the_even_and_the_odd_lanes_of_both ... ok <0.000s>", "s": "o", "t": 1793431993.0857403}
+{"l": "test wasm_simd::tests::every_vector_intrinsic_of_core_arch ... ok <0.000s>", "s": "o", "t": 1793431993.085742}
+{"l": "test x86::tests::each_name_is_the_instruction_llvm_selects_for_it ... ok <0.000s>", "s": "o", "t": 1793431993.0858371}
+{"l": "test debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once ... ok <0.001s>", "s": "o", "t": 1793431993.0858984}
+{"l": "test cached::tests::native_miss_arrival_reasons_follow_real_decode_and_remap ... ok <0.002s>", "s": "o", "t": 1793431993.0860658}
+{"l": "test tests::emit_compiles_a_function_with_debug_assertions_on ... ok <0.000s>", "s": "o", "t": 1793431993.0860684}
+{"l": "test tests::a_slot_at_the_bottom_of_the_frame_has_its_place_from_the_cache_too ... ok <0.001s>", "s": "o", "t": 1793431993.0860977}
+{"l": "test tests::statics_of_one_section_share_it_in_a_mach_o_object ... ok <0.001s>", "s": "o", "t": 1793431993.0862372}
+{"l": "test tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone ... ok <0.002s>", "s": "o", "t": 1793431993.0878165}
+{"l": "test cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key ... ok <0.004s>", "s": "o", "t": 1793431993.0885928}
+{"l": "test sve::tests::stubs_are_what_llvm_selects ... ok <0.005s>", "s": "o", "t": 1793431993.090746}
+{"l": "test cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct ... ok <0.008s>", "s": "o", "t": 1793431993.092423}
+{"l": "test cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc ... ok <0.009s>", "s": "o", "t": 1793431993.0927474}
+{"l": "test cached::tests::no_bytes_break_the_reading_of_an_entry ... ok <0.019s>", "s": "o", "t": 1793431993.1039677}
+{"l": "test cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end ... ok <0.023s>", "s": "o", "t": 1793431993.108272}
+{"l": "test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s", "s": "o", "t": 1793431993.1083577}
