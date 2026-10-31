@@ -192,7 +192,20 @@ def summarize(rows, samples, unchanged):
     return result
 
 
+def receipt_environment(env):
+    """Keep the shared safe allowlist plus this exact validated startup control."""
+    receipt = workload.receipt_environment(env)
+    if 'RA_JIT_DEMAND_STD' in env:
+        if env['RA_JIT_DEMAND_STD'] != '1':
+            raise ValueError('demand-std startup receipt must be exact opt-in 1')
+        receipt['RA_JIT_DEMAND_STD'] = '1'
+    return receipt
+
+
 def execute(args):
+    engine_demand_std = getattr(args, 'engine_demand_std', False)
+    if not isinstance(engine_demand_std, bool):
+        raise ValueError('engine_demand_std must be a boolean opt-in')
     if not 5 <= args.samples <= 30 or not math.isfinite(args.timeout) or not 0 < args.timeout <= 3600:
         raise ValueError('5 to 30 samples and finite timeout in (0, 3600] required')
     if (args.source.name != 'source63' or args.output.exists()
@@ -210,6 +223,9 @@ def execute(args):
     identity = lambda: {name: dict(path=str(p), sha256=runtime.base.digest(p))
                         for name, p in tools.items()}
     metadata = dict(pin=shared.PIN, source=str(args.source), samples=args.samples, phases=list(PHASES), policy=POLICY,
+        engine_demand_std=engine_demand_std,
+        experimental_engine_policy='Explicit experimental candidate-only startup opt-in; no default promotion or performance claim',
+        startup_controls={'reference': {}, 'engine': {'RA_JIT_DEMAND_STD': '1'} if engine_demand_std else {}},
         proc_macro_policy='same frozen native server' if args.proc_macro_server else 'both server variables 0, rustc-built proc macros',
         source_before=shared.source_hashes(args.source), tools_before=identity(),
         toolchain_before=shared.toolchain_identity(args.toolchain), contracts={},
@@ -259,11 +275,13 @@ def execute(args):
             for stack in runtime.order(STACKS, rep):
                 key = f'{rep}:{stack}'
                 env = shared.environment(session, stack, args.toolchain, args.proc_macro_server)
+                if stack == 'engine' and engine_demand_std:
+                    env['RA_JIT_DEMAND_STD'] = '1'
                 envs[key] = env
-                metadata['environments'][key] = workload.receipt_environment(env)
+                metadata['environments'][key] = receipt_environment(env)
                 prefix = session / f'{stack}-version'
                 row = runtime.run_process([str(tools[stack]), '--version'], args.source, env, prefix, args.timeout)
-                row['environment'] = workload.receipt_environment(env)
+                row['environment'] = receipt_environment(env)
                 raw, text, raw_error = captured(prefix)
                 row.update(raw=raw, raw_error=raw_error)
                 pattern = re.escape(shared.REFERENCE_VERSION) + '$' if stack == 'reference' else r'jr-engine\s+\S+'
@@ -299,13 +317,13 @@ def execute(args):
                                previous_stack_inputs=previous_inputs.get(stack),
                                changed_inputs_since_stack_phase=[name for name in before
                                    if before[name] != previous_inputs.get(stack, {}).get(name)],
-                               environment=workload.receipt_environment(env))
+                               environment=receipt_environment(env))
                     # Persist the exact input receipt before launching the process.
                     rows.append(row)
                     save()
                     process = runtime.run_process(shared.command(tools[stack], stack,
                         arguments=arguments(phase)), args.source, env, prefix, args.timeout)
-                    process['environment'] = workload.receipt_environment(env)
+                    process['environment'] = receipt_environment(env)
                     row.update(process)
                     raw, text, raw_error = captured(prefix)
                     row.update(raw=raw, raw_error=raw_error, parsed=runtime.test_results(text),
@@ -388,6 +406,8 @@ def main():
     for name in ('reference-engine', 'engine', 'source', 'output', 'toolchain'):
         parser.add_argument('--' + name, type=shared.absolute, required=True)
     parser.add_argument('--proc-macro-server', type=shared.absolute)
+    parser.add_argument('--engine-demand-std', action='store_true',
+        help='Experimental candidate-only startup RA_JIT_DEMAND_STD=1; reference/default unchanged')
     parser.add_argument('--samples', type=int, default=5)
     parser.add_argument('--timeout', type=float, default=360)
     raise SystemExit(execute(parser.parse_args()))

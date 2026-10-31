@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -69,7 +70,8 @@ class Fixture:
         stack, phase = prefix.name.split('-', 1)
         rep = int(prefix.parent.name[1:])
         self.calls.append(dict(stack=stack, phase=phase, rep=rep, command=command,
-            nonce=env.get('JR_MATRIX_NONCE'), inputs=matrix.shared.source_hashes(cwd),
+            nonce=env.get('JR_MATRIX_NONCE'), demand_std=env.get('RA_JIT_DEMAND_STD'),
+            inputs=matrix.shared.source_hashes(cwd),
             mtimes={n: (cwd / n).stat().st_mtime_ns for n in matrix.FILES}))
         row = dict(status=0, error=None, timed_out=False, elapsed_seconds=rep + 0.25,
                    command=list(map(str, command)), environment={'SECRET_TOKEN': 'not-a-secret-fixture'},
@@ -165,6 +167,71 @@ class MatrixTests(unittest.TestCase):
         for r in rows:
             for receipt in r['raw'].values():
                 self.assertEqual(matrix.runtime.base.digest(Path(receipt['path'])), receipt['sha256'])
+
+    def test_demand_std_default_unchanged_even_with_ambient_opt_in(self):
+        f = self.fixture
+        with patch.dict(os.environ, {'RA_JIT_DEMAND_STD': '1'}):
+            self.assertEqual(f.run(), 0)
+        self.assertTrue(all(call['demand_std'] is None for call in f.calls))
+        meta = f.read('metadata.json')
+        self.assertIs(meta['engine_demand_std'], False)
+        self.assertEqual(meta['startup_controls'], {'reference': {}, 'engine': {}})
+        self.assertTrue(meta['source_restored'])
+
+    def test_demand_std_opt_in_only_engine_versions_and_all_phases(self):
+        f = self.fixture
+        f.args.engine_demand_std = True
+        with patch.dict(os.environ, {'RA_JIT_DEMAND_STD': 'ambient-not-one', 'API_TOKEN': 'fixture-secret'}):
+            self.assertEqual(f.run(), 0)
+        self.assertEqual(len(f.calls), 150)
+        for stack in matrix.STACKS:
+            calls = [call for call in f.calls if call['stack'] == stack]
+            self.assertEqual(len(calls), 75)
+            self.assertEqual({call['demand_std'] for call in calls}, {'1'} if stack == 'engine' else {None})
+            self.assertEqual(sum(call['phase'] == 'version' for call in calls), 5)
+        meta = f.read('metadata.json')
+        self.assertIs(meta['engine_demand_std'], True)
+        self.assertEqual(meta['startup_controls'], {'reference': {}, 'engine': {'RA_JIT_DEMAND_STD': '1'}})
+        self.assertIn('experimental', meta['experimental_engine_policy'])
+        self.assertIn('no default promotion', meta['experimental_engine_policy'])
+        rows = f.read('records.json')
+        self.assertTrue(all(row['accepted'] for row in rows))
+        for row in rows:
+            self.assertEqual(row['environment'].get('RA_JIT_DEMAND_STD'), '1' if row['stack'] == 'engine' else None)
+        for key, env in meta['environments'].items():
+            self.assertEqual(env.get('RA_JIT_DEMAND_STD'), '1' if key.endswith(':engine') else None)
+            self.assertEqual(meta['versions'][key]['process']['environment'], env)
+            self.assertNotIn('API_TOKEN', env)
+        self.assertTrue(meta['source_restored'])
+        for name in ('metadata.json', 'records.json', 'summary.json'):
+            self.assertNotIn('fixture-secret', (f.args.output / name).read_text())
+        # Keep the imported environment allowlist unchanged. This known single
+        # startup control is explicit metadata plus one validated local receipt key.
+        self.assertNotIn('RA_JIT_DEMAND_STD', matrix.workload.ENV_RECEIPT_ALLOWLIST)
+
+    def test_local_startup_receipt_is_exact_and_never_logs_api_token(self):
+        self.assertEqual(matrix.receipt_environment({'RA_JIT_DEMAND_STD': '1', 'API_TOKEN': 'secret'}),
+                         {'RA_JIT_DEMAND_STD': '1'})
+        self.assertEqual(matrix.receipt_environment({'API_TOKEN': 'secret'}), {})
+        with self.assertRaisesRegex(ValueError, 'exact opt-in 1'):
+            matrix.receipt_environment({'RA_JIT_DEMAND_STD': 'ambient-not-one', 'API_TOKEN': 'secret'})
+
+    def test_cli_demand_std_is_boolean_opt_in_default_false(self):
+        required = ['matrix', '--reference-engine', '/fixture/reference', '--engine', '/fixture/engine',
+                    '--source', '/fixture/source63', '--output', '/fixture/output', '--toolchain', '/fixture/tc']
+        for extra, expected in (([], False), (['--engine-demand-std'], True)):
+            with patch.object(sys, 'argv', required + extra), patch.object(matrix, 'execute', return_value=0) as execute:
+                with self.assertRaises(SystemExit) as exit_code:
+                    matrix.main()
+                self.assertEqual(exit_code.exception.code, 0)
+                self.assertIs(execute.call_args.args[0].engine_demand_std, expected)
+                self.assertEqual(execute.call_args.args[0].samples, 5)
+
+    def test_demand_std_nonboolean_rejected_before_any_process(self):
+        self.fixture.args.engine_demand_std = '1'
+        with self.assertRaisesRegex(ValueError, 'boolean opt-in'):
+            self.fixture.run()
+        self.assertFalse(self.fixture.calls)
 
     def test_stale_noop_output_is_excluded_not_silently_dropped(self):
         f = self.fixture

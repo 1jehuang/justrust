@@ -190,6 +190,33 @@ not `bench/suite.py run --synth 1 -n 1`, not a comprehensive session-weighted
 synthetic workload, not statistical significance, not a stock-versus-owned
 architectural proof, and not a default-promotion gate.
 
+## Experimental engine-only demand-std opt-in
+
+`--engine-demand-std` is an explicit boolean CLI opt-in, default false. When
+selected, the harness sets exactly `RA_JIT_DEMAND_STD=1` on the candidate engine's
+private helper environment before startup/version queries and keeps it for all
+ordered phases. The reference helper environment is untouched. Ambient
+`RA_JIT_DEMAND_STD` does not opt either stack in because the existing helper
+filters inherited native controls. Without the flag, candidate startup is unchanged.
+
+Metadata records `engine_demand_std`, the explicit `startup_controls` map for each
+stack, and an experimental/no-default-promotion policy. Every relevant version,
+workload-row and metadata environment receipt also logs the exact candidate
+`RA_JIT_DEMAND_STD=1` through a local validated single-key extension. Any other
+value is rejected by that receipt helper. The imported safe environment allowlist
+is unchanged, arbitrary ambient logging is not widened, and `API_TOKEN` and
+other credentials remain excluded. The flag does not alter any source recipe,
+current-nonce/runtime oracle, reference admission dependency, ignored-test
+contract, raw bound, timeout, five-sample
+default, tool/TC identity check, manifest backup or durable restoration.
+
+For a root-owned native experiment, append `--engine-demand-std` to the existing
+CLI while selecting the root's exact frozen demand-std-capable candidate and a
+fresh short output path. This source-only harness change has synthetic mock
+coverage only. The root owns native semantic/performance gating. Never compare
+opted-in timings as though startup controls were identical, silently relabel
+previous receipts, or claim comprehensive/default promotion from this flag.
+
 ## 2026-10-30 actual failed matrix and portable evidence
 
 The root subsequently ran the frozen5ec494e60 harness as `/home/jeremy/rsm01`
