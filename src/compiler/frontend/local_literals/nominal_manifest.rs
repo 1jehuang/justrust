@@ -20,6 +20,7 @@ pub(in crate::compiler) enum Shape {
     Leaf(ir::Ty),
     Nominal(ir::DeclId, Arc<[Shape]>),
     Tuple(Arc<[Shape]>),
+    FnPointer(Arc<[Shape]>, Arc<Shape>),
     Ref(ir::BorrowKind, Arc<Shape>),
     RawPtr(ir::BorrowKind, Arc<Shape>),
     Array(Arc<Shape>, usize),
@@ -51,6 +52,10 @@ impl Shape {
             }
             (Shape::Nominal(a, left), Shape::Nominal(b, right)) => {
                 a == b && same_children(left, right, depth + 1, meter)?
+            }
+            (Shape::FnPointer(left, lo), Shape::FnPointer(right, ro)) => {
+                same_children(left, right, depth + 1, meter)
+                    .and_then(|same| Ok(same && lo.same_with(ro, depth + 1, meter)?))?
             }
             (Shape::Tuple(left), Shape::Tuple(right)) => {
                 same_children(left, right, depth + 1, meter)?
@@ -738,6 +743,16 @@ impl<'s> Solver<'_, '_, 's> {
                 *declaration,
                 self.manifest_terms(arguments, params, depth + 1)?,
             ),
+            Shape::FnPointer(inputs, output) => {
+                let mut mapped = ir::FnPointerTy::storage(
+                    inputs.len(),
+                    &self.checker.signatures.plan()?.budget,
+                )?;
+                for input in inputs.iter() {
+                    mapped.push(self.manifest_term_in(input, params, depth + 1)?);
+                }
+                Domain::FnPointer(mapped, self.manifest_term_in(output, params, depth + 1)?)
+            }
             Shape::Tuple(fields) => {
                 Domain::Tuple(self.manifest_terms(fields, params, depth + 1)?)
             }
@@ -804,6 +819,14 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Domain::Integer | Domain::Float => numeric_defaults,
                 Domain::Fixed(_) => true,
+                Domain::FnPointer(inputs, output) => {
+                    self.manifest_ready_with_defaults(&inputs, depth + 1, numeric_defaults)?
+                        && self.manifest_ready_with_defaults(
+                            &[output],
+                            depth + 1,
+                            numeric_defaults,
+                        )?
+                }
                 Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                     self.manifest_ready_with_defaults(&terms, depth + 1, numeric_defaults)?
                 }
@@ -932,6 +955,18 @@ impl<'s> Solver<'_, '_, 's> {
             },
             Domain::Nominal(declaration, terms) => {
                 Shape::Nominal(declaration, self.manifest_children(&terms, depth + 1)?)
+            }
+            Domain::FnPointer(inputs, output) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                for input in inputs {
+                    mapped.push(self.manifest_shape(input, depth + 1)?);
+                }
+                let output = self.manifest_shape(output, depth + 1)?;
+                budget.retain_bytes(
+                    std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>(),
+                )?;
+                Shape::FnPointer(ir::FnPointerTy::slice(mapped, budget)?, Arc::new(output))
             }
             Domain::Tuple(terms) => Shape::Tuple(self.manifest_children(&terms, depth + 1)?),
             Domain::Ref(kind, term) => {

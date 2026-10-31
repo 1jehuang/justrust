@@ -167,6 +167,11 @@ fn ty(
             types(words, value.owner_args(), budget, depth + 1)?;
             17
         }
+        ir::Ty::FnPointer(value) => {
+            types(words, &value.inputs, budget, depth + 1)?;
+            ty(words, &value.output, budget, depth + 1)?;
+            19
+        }
         ir::Ty::FnItem(value) => {
             declaration(words, value.declaration);
             types(words, &value.type_args, budget, depth + 1)?;
@@ -541,6 +546,14 @@ impl Reader<'_> {
                     type_args: type_args.into(),
                 }))
             }
+            19 => {
+                let inputs = self.types(facts, depth + 1)?;
+                if inputs.len() > 32 {
+                    return Err("function pointer parameter limit exceeded".into());
+                }
+                let output = self.ty(facts, depth + 1)?;
+                ir::Ty::FnPointer(ir::FnPointerTy::new(inputs, output, self.budget)?)
+            }
             _ => return Err("unsupported instance graph type tag".into()),
         };
         if self.at != end {
@@ -585,6 +598,14 @@ mod tests {
             ir::Ty::Bool,
             ir::Ty::Int(ir::IntTy::I32),
             ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U8)])),
+            ir::Ty::FnPointer(Arc::new(ir::FnPointerTy {
+                inputs: Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U8)]),
+                output: ir::Ty::Unit,
+            })),
+            ir::Ty::FnPointer(Arc::new(ir::FnPointerTy {
+                inputs: Arc::from([]),
+                output: ir::Ty::Never,
+            })),
         ] {
             let target = ir::CallTarget {
                 declaration,
@@ -764,6 +785,24 @@ mod tests {
             ir::Ty::Bool,
         ]))]);
         assert_ne!(first, encode(&original, &budget).unwrap());
+        let pointer = |inputs: Vec<ir::Ty>, output| {
+            ir::Ty::FnPointer(Arc::new(ir::FnPointerTy {
+                inputs: inputs.into(),
+                output,
+            }))
+        };
+        let mut signature = original.clone();
+        signature.type_args = Arc::from([pointer(vec![ir::Ty::Bool], ir::Ty::Unit)]);
+        let first = encode(&signature, &budget).unwrap();
+        for changed in [
+            pointer(vec![ir::Ty::Unit], ir::Ty::Bool),
+            pointer(vec![], ir::Ty::Bool),
+            pointer(vec![ir::Ty::Bool], ir::Ty::Bool),
+            pointer(vec![ir::Ty::Bool, ir::Ty::Bool], ir::Ty::Unit),
+        ] {
+            signature.type_args = Arc::from([changed]);
+            assert_ne!(first, encode(&signature, &budget).unwrap());
+        }
         let mut other = original.clone();
         other.declaration.snapshot = ir::SnapshotId::standalone().unwrap();
         assert_ne!(

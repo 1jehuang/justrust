@@ -80,6 +80,7 @@ fn pointer_metadata_size_authorized(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     match referent {
+        ir::Ty::FnPointer(_) => Ok(Some(8)),
         ir::Ty::Param(_) => Ok(None),
         ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => Ok(Some(16)),
         ir::Ty::Unit
@@ -143,6 +144,9 @@ fn walk_size_authorized(
         return Ok(Some(size));
     }
     match ty {
+        // Function-pointer values are one Linux x86-64 pointer. This public
+        // size observation grants no native callable ABI or invocation support.
+        ir::Ty::FnPointer(_) => Ok(Some(8)),
         ir::Ty::Param(_) => Ok(None),
         ir::Ty::Char => Ok(Some(4)),
         ir::Ty::Array { element, len } => {
@@ -249,6 +253,7 @@ fn walk_alignment(
             Ok(alignment)
         }
         // Zero-sized fn items and capture-free closures own one dummy word.
+        ir::Ty::FnPointer(_) => Ok(Some(8)),
         ir::Ty::FnItem(_) if private => Ok(Some(8)),
         ir::Ty::Closure(closure) if private && closure.captures().is_empty() => Ok(Some(8)),
         ir::Ty::Enum(_) | ir::Ty::FnItem(_) | ir::Ty::Closure(_) | ir::Ty::Never => {

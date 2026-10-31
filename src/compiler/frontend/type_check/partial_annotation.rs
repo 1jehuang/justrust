@@ -16,6 +16,9 @@ pub(in crate::compiler::frontend) fn has_nested_infer(ty: &Type) -> bool {
         Type::Ref { referent, .. } => has_nested_infer(referent),
         Type::Array(element, _) | Type::Slice(element) => has_nested_infer(element),
         Type::RawPtr { pointee, .. } => has_nested_infer(pointee),
+        Type::FnPointer { inputs, output } => {
+            inputs.iter().any(has_nested_infer) || has_nested_infer(output)
+        }
         Type::Tuple(fields) => fields.iter().any(has_nested_infer),
         _ => false,
     }
@@ -56,6 +59,9 @@ pub(in crate::compiler::frontend) fn matches_partial(
                 pointee: p,
             },
         ) if kind == k => matches_partial(pointee, p, env),
+        (Type::FnPointer { .. }, ir::Ty::FnPointer(_)) => {
+            Err("unsupported: inferred function pointer annotations are not implemented".into())
+        }
         (Type::Tuple(fields), ir::Ty::Tuple(got)) if fields.len() == got.len() => {
             for (field, got) in fields.iter().zip(got.iter()) {
                 matches_partial(field, got, env)?;

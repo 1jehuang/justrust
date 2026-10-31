@@ -62,6 +62,47 @@ println!("{} {}",std::mem::size_of::<&Unknown>(),std::mem::size_of::<[&str;3]>()
 }
 
 #[test]
+fn semantic_function_pointer_metadata_matches_stock_without_callable_values() {
+    let source = r#"
+struct NotCopy{value:i32}
+fn size<T>()->usize{std::mem::size_of::<T>()}
+fn alignment<T>()->usize{std::mem::align_of::<T>()}
+fn main(){
+assert_eq!(std::mem::size_of::<fn(i32)->bool>(),8usize);
+assert_eq!(std::mem::align_of::<fn()->!>(),8usize);
+assert_eq!(size::<fn(NotCopy)->NotCopy>(),8usize);
+assert_eq!(alignment::<fn(NotCopy)->NotCopy>(),8usize);
+assert_eq!(size::<[fn(NotCopy)->!;3]>(),24usize);
+println!("function pointer metadata 8 8 8 8 24");
+}
+"#;
+    // Query signatures only, never materialize, coerce, or call a pointer value.
+    physical_matches_stock(source, "semantic_function_pointer_metadata");
+    let (root, built) = stock(source, "semantic_function_pointer_metadata_check");
+    assert!(built.status.success(), "{built:?}");
+    let checked = Command::new(stock_rustc::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args(["--edition=2024", "--emit=metadata"])
+        .arg(root.join("main.rs"))
+        .arg("-o")
+        .arg(root.join("stock.rmeta"))
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "stock CHECK: {checked:?}");
+    fs::remove_dir_all(root).unwrap();
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        for kind in [102, 103, 108, 137, 140, 142] {
+            assert!(
+                !checked.report.published_kind(kind),
+                "function-pointer metadata CHECK demanded backend/instance kind {kind}"
+            );
+        }
+    }
+}
+
+#[test]
 fn semantic_scalars_arrays_matches_stock() {
     physical_matches_stock(
         r#"

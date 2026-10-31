@@ -555,6 +555,11 @@ fn substitute(
             region(registry, lifetime, regions)?;
             **referent = substitute(registry, referent, types, regions, budget, depth + 1)?;
         }
+        Type::FnPointer { inputs, output } => {
+            for t in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
+                *t = substitute(registry, t, types, regions, budget, depth + 1)?;
+            }
+        }
         Type::Tuple(fields) => {
             for field in fields {
                 *field = substitute(registry, field, types, regions, budget, depth + 1)?;

@@ -155,6 +155,11 @@ impl ValidatedTraitWorld {
                     item: projection.item,
                 })?
             }
+            Ty::FnPointer(pointer) => Ty::FnPointer(pointer.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |child| self.map_universal_projection_type(child, env, depth + 1, reduce),
+            )?),
             Ty::Closure(closure) => Ty::Closure(Arc::new(closure.try_map(|child| {
                 self.map_universal_projection_type(child, env, depth + 1, reduce)
             })?)),

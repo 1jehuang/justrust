@@ -139,6 +139,11 @@ impl Resolver<'_> {
                     }
                 }
             }
+            Type::FnPointer { inputs, output } => {
+                for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                    found |= self.contains_projection(field, depth + 1)?;
+                }
+            }
             Type::Tuple(fields) => {
                 for field in fields {
                     found |= self.contains_projection(field, depth + 1)?;
@@ -657,6 +662,10 @@ impl Resolver<'_> {
                                 );
                             }
                         }
+                        Type::FnPointer { inputs, output } => {
+                            pending.extend(inputs);
+                            pending.push(output);
+                        }
                         Type::Tuple(fields) => pending.extend(fields),
                         Type::Ref { referent, .. }
                         | Type::Array(referent, _)
@@ -743,6 +752,11 @@ impl Resolver<'_> {
                     return Err("unsupported: trait object type aliases are unsupported".into());
                 }
                 Type::Array(t, _) => check_target(t)?,
+                Type::FnPointer { inputs, output } => {
+                    for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                        check_target(field)?;
+                    }
+                }
                 Type::Tuple(fields) => {
                     for field in fields {
                         check_target(field)?;
@@ -850,6 +864,11 @@ impl Resolver<'_> {
                     }
                 }
             }
+            Type::FnPointer { inputs, output } => {
+                for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                    self.collect_params(field, used, depth + 1)?;
+                }
+            }
             Type::Tuple(fields) => {
                 for field in fields {
                     self.collect_params(field, used, depth + 1)?;
@@ -936,6 +955,11 @@ impl Resolver<'_> {
                     }
                 }
             }
+            Type::FnPointer { inputs, output } => {
+                for field in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
+                    self.alias_use(field, source, depth + 1)?;
+                }
+            }
             Type::Tuple(fields) => {
                 for field in fields {
                     self.alias_use(field, source, depth + 1)?;
@@ -1004,6 +1028,11 @@ impl Resolver<'_> {
                     ) {
                         self.substitute(arg, params, args, depth + 1)?;
                     }
+                }
+            }
+            Type::FnPointer { inputs, output } => {
+                for field in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
+                    self.substitute(field, params, args, depth + 1)?;
                 }
             }
             Type::Tuple(fields) => {
@@ -2448,6 +2477,11 @@ impl Resolver<'_> {
                         "E0107: missing type arguments for {}",
                         self.display(name)?
                     ));
+                }
+            }
+            Type::FnPointer { inputs, output } => {
+                for ty in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
+                    self.ty(ty, module)?;
                 }
             }
             Type::Tuple(fields) => {
@@ -7225,6 +7259,11 @@ fn replace_self_type(
             replace_self_type(element, self_ty, budget, depth + 1)?
         }
         Type::RawPtr { pointee, .. } => replace_self_type(pointee, self_ty, budget, depth + 1)?,
+        Type::FnPointer { inputs, output } => {
+            for field in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
+                replace_self_type(field, self_ty, budget, depth + 1)?;
+            }
+        }
         Type::Tuple(fields) => {
             for field in fields {
                 replace_self_type(field, self_ty, budget, depth + 1)?;

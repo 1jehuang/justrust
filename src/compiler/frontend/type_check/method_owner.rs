@@ -17,7 +17,11 @@ impl Checker<'_> {
                 };
             }
             InferKind::Rigid(ty @ ir::Ty::AssociatedType(_)) => {
-                let bound = super::trait_method_hint::bind_owner(ty, bindings);
+                let bound = super::trait_method_hint::bind_owner(
+                    ty,
+                    bindings,
+                    &self.signatures.plan()?.budget,
+                )?;
                 if bound == *ty {
                     return Ok(term.clone());
                 }
@@ -30,6 +34,17 @@ impl Checker<'_> {
                     .normalize_substituted_projection_type(&bound, &plan.budget)
                     .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
                 return self.infer_type_term(&normal, None, depth + 1);
+            }
+            InferKind::FnPointer(inputs, output) => {
+                let budget = &self.signatures.plan()?.budget;
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                for t in inputs.iter() {
+                    mapped.push(self.method_owner_term(t, bindings, depth + 1)?);
+                }
+                InferKind::FnPointer(
+                    ir::FnPointerTy::slice(mapped, budget)?,
+                    self.method_owner_term(output, bindings, depth + 1)?,
+                )
             }
             InferKind::Tuple(fields) => {
                 self.infer_storage(fields.len())?;

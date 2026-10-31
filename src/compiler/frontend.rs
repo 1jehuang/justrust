@@ -2667,6 +2667,11 @@ fn compare_source_type_work(
         | Type::RawPtr {
             pointee: element, ..
         } => compare_source_type_work(element, budget, at + 1)?,
+        Type::FnPointer { inputs, output } => {
+            for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                compare_source_type_work(field, budget, at + 1)?;
+            }
+        }
         Type::Tuple(fields) => {
             for field in fields {
                 compare_source_type_work(field, budget, at + 1)?;
@@ -2851,6 +2856,20 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
             };
             Type::Projection(Box::new(projection))
         }
+        Type::FnPointer { inputs, output } => {
+            let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)
+                .map_err(|e| FactsError::from_message(budget, &e))?;
+            for input in inputs {
+                mapped.push(copy_source_type(input, budget, at + 1)?);
+            }
+            budget
+                .retain_bytes(std::mem::size_of::<Type>())
+                .map_err(|e| FactsError::resource(budget, &e))?;
+            Type::FnPointer {
+                inputs: mapped,
+                output: Box::new(copy_source_type(output, budget, at + 1)?),
+            }
+        }
         Type::Param(name) => Type::Param(*name),
         Type::Named(name) => Type::Named(name.clone()),
         Type::Ref {
@@ -2969,6 +2988,11 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
         | Type::RawPtr {
             pointee: element, ..
         } => retain_source_type(element, budget, depth + 1)?,
+        Type::FnPointer { inputs, output } => {
+            for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                retain_source_type(field, budget, depth + 1)?;
+            }
+        }
         Type::Tuple(fields) => {
             for field in fields {
                 retain_source_type(field, budget, depth + 1)?;
@@ -3021,6 +3045,13 @@ fn source_type_mentions_self(
         | Type::RawPtr {
             pointee: element, ..
         } => source_type_mentions_self(element, budget, depth + 1)?,
+        Type::FnPointer { inputs, output } => {
+            let mut found = false;
+            for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                found |= source_type_mentions_self(field, budget, depth + 1)?;
+            }
+            found
+        }
         Type::Tuple(fields) => {
             let mut found = false;
             for field in fields {
@@ -5240,6 +5271,11 @@ pub(super) fn replay_nominal_source_id(
             ir::Ty::AssociatedType(projection) => {
                 admit(&projection.trait_ref.self_ty, budget, depth + 1)?;
                 for ty in projection.trait_ref.args.iter() {
+                    admit(ty, budget, depth + 1)?;
+                }
+            }
+            ir::Ty::FnPointer(pointer) => {
+                for ty in pointer.types() {
                     admit(ty, budget, depth + 1)?;
                 }
             }
@@ -9173,6 +9209,11 @@ impl GenericPath {
 #[derive(Clone, Debug)]
 pub enum Type {
     Opaque(Box<SourceOpaqueType>),
+    /// Safe, nonvariadic Rust ABI function pointer source signature.
+    FnPointer {
+        inputs: Vec<Type>,
+        output: Box<Type>,
+    },
     SelfType,
     Apply(GenericPath),
     /// Exact written projection syntax, never a fabricated parameter or alias.
@@ -13138,6 +13179,15 @@ impl<'input, 'names> Parser<'input, 'names> {
                         push(referent.as_ref())?;
                         None
                     }
+                    Type::FnPointer { inputs, output } => {
+                        for field in inputs {
+                            push(field)?;
+                        }
+                        if !matches!(output.as_ref(), Type::Never) {
+                            push(output.as_ref())?;
+                        }
+                        None
+                    }
                     Type::Tuple(fields) => {
                         for field in fields {
                             push(field)?;
@@ -13187,8 +13237,58 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(result)
     }
     fn ty_inner(&mut self) -> Result<Type, ParseError> {
-        if self.is("fn") {
-            return Err(self.unsupported("function pointer types are unsupported"));
+        if self.is("unsafe") || self.is("extern") || self.is("for") {
+            return Err(self.unsupported(
+                "unsafe, extern and higher-ranked function pointer types are unsupported",
+            ));
+        }
+        if self.eat("fn") {
+            // A pointer signature is not an enclosing function parameter or
+            // return site. Restore both owners even when a child parse fails.
+            let opaque_context = self.opaque_return_sites.take();
+            let parameter_context = self.impl_trait_params.take();
+            let signature = (|| {
+                self.expect("(")?;
+                let mut inputs = Vec::new();
+                while !self.eat(")") {
+                    if self.is("...") || self.is(".") {
+                        return Err(
+                            self.unsupported("variadic function pointer types are unsupported")
+                        );
+                    }
+                    if inputs.len() >= 32 {
+                        return Err(self.limit("function pointer parameter limit exceeded"));
+                    }
+                    if self.cursor.peek(1).is_some_and(|t| t.matches(":")) {
+                        if !self.is_identifier() && !self.is("_") {
+                            return Err(self.error("expected function pointer parameter name"));
+                        }
+                        self.cursor.bump();
+                        self.expect(":")?;
+                    }
+                    self.reserve_parser_items(&mut inputs, 1)?;
+                    inputs.push(self.ty_at_position(false)?);
+                    if !self.eat(",") {
+                        self.expect(")")?;
+                        break;
+                    }
+                }
+                let output = if self.eat("->") {
+                    self.ty_at_return()?
+                } else {
+                    Type::Unit
+                };
+                self.names
+                    .retain_parser_storage(std::mem::size_of::<Type>())
+                    .map_err(native_adapter::name_error)?;
+                Ok(Type::FnPointer {
+                    inputs,
+                    output: Box::new(output),
+                })
+            })();
+            self.opaque_return_sites = opaque_context;
+            self.impl_trait_params = parameter_context;
+            return signature;
         }
         if self.token().string {
             return Err(self.error("quoted tokens are not types"));
@@ -20067,6 +20167,11 @@ fn walk_depth_inspecting<'source>(
                     pointee: element, ..
                 },
             ) => push(DepthNode::Type(element))?,
+            DepthNode::Type(Type::FnPointer { inputs, output }) => {
+                for t in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                    push(DepthNode::Type(t))?;
+                }
+            }
             DepthNode::Type(Type::Tuple(fields)) => {
                 for field in fields {
                     push(DepthNode::Type(field))?;
@@ -20574,6 +20679,26 @@ fn exact_source_type(
             }
             _ => false,
         },
+        (
+            Type::FnPointer {
+                inputs: a,
+                output: ao,
+            },
+            Type::FnPointer {
+                inputs: b,
+                output: bo,
+            },
+        ) => {
+            let mut equal = a.len() == b.len();
+            for (a, b) in a
+                .iter()
+                .chain(std::iter::once(ao.as_ref()))
+                .zip(b.iter().chain(std::iter::once(bo.as_ref())))
+            {
+                equal &= exact_source_type(names, a, b, budget, depth + 1)?;
+            }
+            equal
+        }
         (Type::Tuple(a), Type::Tuple(b)) => {
             let mut equal = a.len() == b.len();
             for (a, b) in a.iter().zip(b) {
@@ -21648,6 +21773,20 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                     add(std::mem::size_of::<AssociatedTypeBinding>())?;
                     add(source_type_storage(&binding.value, budget, depth + 1)?)?;
                 }
+            }
+        }
+        Type::FnPointer { inputs, output } => {
+            // Each child recursion pays its inline Type payload. Inputs own a
+            // Vec backing, so also admit its unused capacity, not a second
+            // copy of the live input payloads. Output recursion pays the Box.
+            let spare = inputs
+                .capacity()
+                .checked_sub(inputs.len())
+                .and_then(|n| n.checked_mul(std::mem::size_of::<Type>()))
+                .ok_or("generic schema allocation overflow")?;
+            add(spare)?;
+            for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                add(source_type_storage(field, budget, depth + 1)?)?;
             }
         }
         Type::Tuple(fields) => {
@@ -26778,6 +26917,11 @@ fn collect_source_params(
                 }
             }
         }
+        Type::FnPointer { inputs, output } => {
+            for f in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                collect_source_params(names, f, used, budget, depth + 1)?;
+            }
+        }
         Type::Tuple(fields) => {
             for f in fields {
                 collect_source_params(names, f, used, budget, depth + 1)?;
@@ -26817,6 +26961,30 @@ pub use type_check::{
 #[cfg(test)]
 mod registry_resource_tests {
     use super::*;
+
+    #[test]
+    fn function_pointer_source_storage_counts_vec_capacity_and_result_box() {
+        let mut inputs = Vec::new();
+        inputs.try_reserve_exact(7).unwrap();
+        inputs.push(Type::Unit);
+        let capacity = inputs.capacity();
+        let ty = Type::FnPointer {
+            inputs,
+            output: Box::new(Type::Unit),
+        };
+        assert_eq!(
+            source_type_storage(&ty, &ir::PlanBudget::default(), 0).unwrap(),
+            (capacity + 2) * std::mem::size_of::<Type>()
+        );
+        let empty = Type::FnPointer {
+            inputs: Vec::new(),
+            output: Box::new(Type::Unit),
+        };
+        assert_eq!(
+            source_type_storage(&empty, &ir::PlanBudget::default(), 0).unwrap(),
+            2 * std::mem::size_of::<Type>()
+        );
+    }
 
     #[test]
     fn empty_argument_type_segments_are_charged_before_traversal() {

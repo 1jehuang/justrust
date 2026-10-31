@@ -200,7 +200,8 @@ impl Checker<'_> {
                         let result = super::trait_method_hint::bind_owner(
                             &schema.signature.result,
                             &bindings,
-                        );
+                            &plan.budget,
+                        )?;
                         let matches = &result == expected
                             || self.nominal_input_types_equal(&result, expected)?;
                         if matches && fitting.replace(*app).is_some() {

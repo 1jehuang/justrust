@@ -133,6 +133,7 @@ pub(super) fn preflight_clone_node(
     match node {
         DepthNode::Type(ty) => match ty {
             Type::Named(path) => clone_ast_path(path, budget)?,
+            Type::FnPointer { inputs, .. } => clone_vector(inputs, budget)?,
             Type::Tuple(fields) => clone_vector(fields, budget)?,
             Type::Apply(path) => clone_path(path, budget)?,
             Type::Projection(projection) => {

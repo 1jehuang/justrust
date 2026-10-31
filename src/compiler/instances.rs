@@ -275,6 +275,14 @@ impl Encoder<'_> {
                 }
                 Ok(())
             }
+            ir::Ty::FnPointer(pointer) => {
+                self.append(b"P")?;
+                self.count(pointer.inputs.len())?;
+                for ty in pointer.types() {
+                    self.pattern(ty, env, depth + 1)?;
+                }
+                Ok(())
+            }
             ir::Ty::FnItem(item) => {
                 self.append(b"F")?;
                 self.declaration(item.declaration)?;
@@ -398,6 +406,14 @@ impl Encoder<'_> {
                 self.count(closure.captures().len())?;
                 self.append(&[closure.kind() as u8])?;
                 for ty in closure.types() {
+                    self.ty(ty, depth + 1)?;
+                }
+                Ok(())
+            }
+            ir::Ty::FnPointer(pointer) => {
+                self.append(b"P")?;
+                self.count(pointer.inputs.len())?;
+                for ty in pointer.types() {
                     self.ty(ty, depth + 1)?;
                 }
                 Ok(())
@@ -586,6 +602,11 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
             }
             ir::Ty::Closure(closure) => {
                 for ty in closure.types() {
+                    walk(ty, depth + 1, budget)?;
+                }
+            }
+            ir::Ty::FnPointer(pointer) => {
+                for ty in pointer.types() {
                     walk(ty, depth + 1, budget)?;
                 }
             }

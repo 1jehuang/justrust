@@ -176,6 +176,12 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                 work(names, 1)?;
                 pending.push(element.as_ref()).map_err(transport)?;
             }
+            Type::FnPointer { inputs, output } => {
+                work(names, inputs.len() + 1)?;
+                for ty in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                    pending.push(ty).map_err(transport)?;
+                }
+            }
             Type::Tuple(elements) => {
                 work(names, elements.len())?;
                 for element in elements {
@@ -368,6 +374,26 @@ impl Type {
                     }
                     _ => equal = false,
                 },
+                (
+                    Type::FnPointer {
+                        inputs: a,
+                        output: ao,
+                    },
+                    Type::FnPointer {
+                        inputs: b,
+                        output: bo,
+                    },
+                ) => {
+                    equal &= a.len() == b.len();
+                    for (a, b) in a
+                        .iter()
+                        .chain(std::iter::once(ao.as_ref()))
+                        .zip(b.iter().chain(std::iter::once(bo.as_ref())))
+                    {
+                        work(names, 1)?;
+                        pending.push((a, b)).map_err(transport)?;
+                    }
+                }
                 (Type::Tuple(a), Type::Tuple(b)) => {
                     equal &= a.len() == b.len();
                     for (a, b) in a.iter().zip(b) {

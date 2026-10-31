@@ -235,6 +235,9 @@ pub(super) fn same_input(left: &Ty, right: &Ty, budget: &PlanBudget, depth: usiz
                     && same_inputs(&a.trait_ref.args, &b.trait_ref.args, budget, depth + 1)?)
         }
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
+        (Ty::FnPointer(a), Ty::FnPointer(b)) => {
+            a.try_eq(b, |a, b| same_input(a, b, budget, depth + 1))?
+        }
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
         (Ty::Dyn(a), Ty::Dyn(b)) => Arc::ptr_eq(a, b),

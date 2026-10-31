@@ -98,6 +98,7 @@ impl Ty {
     pub(in crate::compiler) fn is_closed_shallow(&self) -> bool {
         match self {
             Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => false,
+            Ty::FnPointer(p) => p.types().all(Ty::is_closed_shallow),
             Ty::Closure(c) => c.types().all(Ty::is_closed_shallow),
             Ty::Struct(n) => {
                 n.is_back_edge() || n.def().type_args.iter().all(Ty::is_closed_shallow)
@@ -698,7 +699,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) | Ty::FnItem(_) => {}
+            Ty::Opaque(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -870,7 +871,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             "unsupported: opaque carrier requires its defining body fact".into(),
                         );
                     }
-                    Ty::FnItem(_) => {}
+                    Ty::FnItem(_) | Ty::FnPointer(_) => {}
                     Ty::Closure(closure) => {
                         for (index, ty) in closure.captures().iter().enumerate() {
                             child(CarrierStep::Field(index), ty)?;
@@ -1587,6 +1588,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         ) => an == bn && Arc::ptr_eq(a, b),
         (Ty::Slice { element: a }, Ty::Slice { element: b }) => Arc::ptr_eq(a, b),
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
+        (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| identical_type(a, b, budget))?,
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => {
             if a.declaration != b.declaration || a.type_args.len() != b.type_args.len() {
@@ -3416,6 +3418,11 @@ fn substitute_ty_walk(
                 Ty::Closure(Arc::new(mapped))
             }
         }
+        Ty::FnPointer(pointer) => Ty::FnPointer(pointer.try_map(
+            budget,
+            |e| e,
+            |ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1),
+        )?),
         Ty::FnItem(item) => {
             budget.retain_bytes(
                 std::mem::size_of::<CallTarget>()
@@ -4535,6 +4542,11 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
             }
             Ty::Closure(closure) => {
                 for ty in closure.types() {
+                    walk(ty, budget, depth + 1, seen)?;
+                }
+            }
+            Ty::FnPointer(pointer) => {
+                for ty in pointer.types() {
                     walk(ty, budget, depth + 1, seen)?;
                 }
             }
@@ -5921,6 +5933,8 @@ pub enum Ty {
     Closure(Arc<ClosureTy>),
     /// Zero-sized function item type: exact declaration and ordered actuals.
     FnItem(Arc<CallTarget>),
+    /// Safe, nonvariadic Rust ABI function pointer, distinct from an item.
+    FnPointer(Arc<FnPointerTy>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
@@ -5963,6 +5977,120 @@ pub enum Ty {
     Dyn(Arc<DynTy>),
     /// The semantic never type, distinct from runtime completion information.
     Never,
+}
+
+/// Canonical safe Rust ABI function pointer metadata. Unsupported ABI, safety,
+/// binders and variadics are not representable and cannot be forged as flags.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FnPointerTy {
+    pub inputs: Arc<[Ty]>,
+    pub output: Ty,
+}
+impl FnPointerTy {
+    /// Admit scratch independently from the immutable Arc backings below.
+    pub fn storage<T>(count: usize, budget: &PlanBudget) -> Result<Vec<T>, String> {
+        let bytes = count
+            .checked_mul(std::mem::size_of::<T>())
+            .ok_or_else(|| "resource limit: function pointer scratch size overflow".to_string())?;
+        budget.retain_bytes(bytes)?;
+        let mut values = Vec::new();
+        values.try_reserve_exact(count).map_err(|_| {
+            "infrastructure: function pointer scratch allocation failed".to_string()
+        })?;
+        Ok(values)
+    }
+    pub fn slice<T>(values: Vec<T>, budget: &PlanBudget) -> Result<Arc<[T]>, String> {
+        let bytes = values
+            .len()
+            .checked_mul(std::mem::size_of::<T>())
+            .and_then(|n| n.checked_add(2 * std::mem::size_of::<usize>()))
+            .ok_or_else(|| "resource limit: function pointer slice size overflow".to_string())?;
+        budget.retain_bytes(bytes)?;
+        Ok(values.into())
+    }
+    pub fn new(inputs: Vec<Ty>, output: Ty, budget: &PlanBudget) -> Result<Arc<Self>, String> {
+        let input_bytes = inputs
+            .len()
+            .checked_mul(std::mem::size_of::<Ty>())
+            .ok_or_else(|| {
+                "resource limit: function pointer signature size overflow".to_string()
+            })?;
+        let header = 2usize
+            .checked_mul(std::mem::size_of::<usize>())
+            .ok_or_else(|| {
+                "resource limit: function pointer Arc header size overflow".to_string()
+            })?;
+        let bytes = header
+            .checked_add(std::mem::size_of::<Self>())
+            .and_then(|n| n.checked_add(header))
+            .and_then(|n| n.checked_add(input_bytes))
+            .ok_or_else(|| "resource limit: function pointer backing size overflow".to_string())?;
+        budget.retain_bytes(bytes)?;
+        Ok(Arc::new(Self {
+            inputs: inputs.into(),
+            output,
+        }))
+    }
+
+    pub fn validate(&self, budget: &PlanBudget) -> Result<(), String> {
+        fn component(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)?;
+            match ty {
+                Ty::Ref { .. } => return Err("unsupported: function pointer reference lifetime signatures are not implemented".into()),
+                Ty::RawPtr { pointee, .. } | Ty::Array { element: pointee, .. } | Ty::Slice { element: pointee } => component(pointee, budget, depth + 1)?,
+                Ty::Tuple(fields) => { for t in fields.iter() { component(t, budget, depth + 1)?; } }
+                Ty::FnPointer(pointer) => { for t in pointer.types() { component(t, budget, depth + 1)?; } }
+                Ty::Struct(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
+                Ty::Enum(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
+                _ => {}
+            }
+            Ok(())
+        }
+        if self.inputs.len() > 32 {
+            return Err("invalid metadata: function pointer parameter limit exceeded".into());
+        }
+        for t in self.types() {
+            if matches!(t, Ty::Str | Ty::Slice { .. } | Ty::Dyn(_)) {
+                return Err(
+                    "invalid metadata: unsized function pointer parameter or result".into(),
+                );
+            }
+            component(t, budget, 0)?;
+        }
+        Ok(())
+    }
+    pub fn types(&self) -> impl Iterator<Item = &Ty> {
+        self.inputs.iter().chain(std::iter::once(&self.output))
+    }
+    pub fn try_map<E>(
+        &self,
+        budget: &PlanBudget,
+        mut error: impl FnMut(String) -> E,
+        mut f: impl FnMut(&Ty) -> Result<Ty, E>,
+    ) -> Result<Arc<Self>, E> {
+        let mut inputs = Self::storage(self.inputs.len(), budget).map_err(&mut error)?;
+        for input in self.inputs.iter() {
+            inputs.push(f(input)?);
+        }
+        let output = f(&self.output)?;
+        Self::new(inputs, output, budget).map_err(error)
+    }
+    pub fn try_eq<'a, 'b, E>(
+        &'a self,
+        other: &'b Self,
+        mut equal: impl FnMut(&'a Ty, &'b Ty) -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        if self.inputs.len() != other.inputs.len() {
+            return Ok(false);
+        }
+        for (a, b) in self.types().zip(other.types()) {
+            if !equal(a, b)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
 }
 
 /// Supported pointer-representation casts. All are one-word bit copies.
@@ -6191,6 +6319,7 @@ fn type_metadata_walk(
         }
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
+            Ty::FnPointer(pointer) => (11, Arc::as_ptr(pointer) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
             Ty::FnItem(item) => (10, Arc::as_ptr(item) as usize),
             Ty::AssociatedType(value) => {
@@ -6279,6 +6408,11 @@ fn type_metadata_walk(
         match ty {
             Ty::Opaque(opaque) => {
                 for ty in opaque.types() {
+                    child(ty)?;
+                }
+            }
+            Ty::FnPointer(pointer) => {
+                for ty in pointer.types() {
                     child(ty)?;
                 }
             }
@@ -6739,7 +6873,8 @@ impl Ty {
                         }
                     }
                 }
-                Self::FnItem(_)
+                Self::FnPointer(_)
+                | Self::FnItem(_)
                 | Self::Param(_)
                 | Self::Int(_)
                 | Self::Float(_)
@@ -6797,6 +6932,7 @@ impl Ty {
             | Self::Bool
             | Self::Unit
             | Self::Never
+            | Self::FnPointer(_)
             | Self::FnItem(_)
             | Self::RawPtr { .. } => true,
             Self::Opaque(_)
@@ -8080,7 +8216,7 @@ pub(in crate::compiler) fn reference_type_summary(
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) | Ty::FnItem(_) => {}
+            Ty::Opaque(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -8189,6 +8325,7 @@ fn ref_types_equal(
         };
         let equal = match (left, right) {
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
+            (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, &mut child)?,
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnItem(a), Ty::FnItem(b)) => {
                 let mut equal =
@@ -8762,6 +8899,14 @@ fn pattern_types_equal_with_facts(
         }
         match (a, b) {
             (Ty::Opaque(a), Ty::Opaque(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    pending.push((a, b, depth + 1));
+                    Ok::<bool, String>(true)
+                })? {
+                    return Ok(false);
+                }
+            }
+            (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 if !a.try_eq(b, |a, b| {
                     pending.push((a, b, depth + 1));
                     Ok::<bool, String>(true)

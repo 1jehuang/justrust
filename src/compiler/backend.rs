@@ -200,6 +200,9 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
         return Ok(true);
     }
     match ty {
+        ir::Ty::FnPointer(_) => {
+            Err("unsupported: function pointer native value ABI is not implemented".into())
+        }
         ir::Ty::Closure(_)
         | ir::Ty::FnItem(_)
         | ir::Ty::Tuple(_)
@@ -225,6 +228,9 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
 }
 
 pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    if matches!(ty, ir::Ty::FnPointer(_)) {
+        return Err("unsupported: function pointer native value ABI is not implemented".into());
+    }
     ir::reject_associated_types(ty, Some(budget))?;
     if wide_integer(ty) {
         // PRIVATE extent: low limb at 0, high limb at 8. Frame placement
@@ -329,6 +335,12 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
     budget.charge_work(1)?;
     match ty {
         ir::Ty::Array { element, len } => {
+            if *len == 0 {
+                // No element value is copied. Still replay its exact structural
+                // metadata, including pointer signatures and nested array caps.
+                zero_array_element_extent(element, budget, depth + 1)?;
+                return Ok(0);
+            }
             let stride = element_extent(element, budget, depth + 1)?;
             stride
                 .checked_mul(
@@ -345,6 +357,31 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
             Ok(scalar_memory_bytes(ty) as i32)
         }
         _ => value_size(ty, budget),
+    }
+}
+
+/// Metadata-only extent below an array known to contain no elements. This
+/// cannot admit a function pointer value, slice carrier, coercion or call ABI.
+fn zero_array_element_extent(
+    ty: &ir::Ty,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<i32, String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match ty {
+        ir::Ty::FnPointer(pointer) => {
+            ir::reject_associated_types(ty, Some(budget))?;
+            pointer.validate(budget)?;
+            Ok(8)
+        }
+        ir::Ty::Array { element, len } => zero_array_element_extent(element, budget, depth + 1)?
+            .checked_mul(
+                i32::try_from(*len).map_err(|_| "array extent exceeds native memory limit")?,
+            )
+            .filter(|bytes| *bytes <= MAX_FRAME_BYTES)
+            .ok_or_else(|| "unsupported: array element extent exceeds native memory limit".into()),
+        _ => element_extent(ty, budget, depth),
     }
 }
 
@@ -6150,6 +6187,90 @@ mod tests {
                 Ok((((6 * width) as usize).div_ceil(8) * 8).max(8) as i32)
             );
         }
+    }
+
+    #[test]
+    fn zero_function_pointer_arrays_copy_no_values_but_validate_signature_metadata() {
+        let budget = ir::PlanBudget::default();
+        let pointer = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(vec![ir::Ty::Bool], ir::Ty::Unit, &budget).unwrap(),
+        );
+        let array = |element, len| ir::Ty::Array {
+            element: std::sync::Arc::new(element),
+            len,
+        };
+        let empty = array(pointer.clone(), 0);
+        for ty in [
+            &empty,
+            &array(empty.clone(), 3),
+            &array(array(pointer.clone(), 3), 0),
+        ] {
+            assert_eq!(value_size(ty, &budget), Ok(8));
+            assert_eq!(array_element_stride(ty, &budget), Ok(0));
+            assert_eq!(copied_value_bytes(ty, &budget), Ok(0));
+        }
+        assert!(
+            value_size(&pointer, &budget)
+                .unwrap_err()
+                .contains("function pointer native value ABI")
+        );
+        assert!(indirect(&pointer, &budget).is_err());
+        assert!(array_element_stride(&pointer, &budget).is_err());
+        assert!(shared_slice_layout(&pointer, &budget).is_err());
+        assert!(value_size(&array(pointer.clone(), 1), &budget).is_err());
+        let invalid = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(vec![ir::Ty::Bool; 33], ir::Ty::Unit, &budget).unwrap(),
+        );
+        assert!(copied_value_bytes(&array(invalid, 0), &budget).is_err());
+        let many_zst = array(array(ir::Ty::Unit, ir::MAX_ARRAY_LEN + 1), 0);
+        assert_eq!(copied_value_bytes(&many_zst, &budget), Ok(0));
+        assert_eq!(array_element_stride(&many_zst, &budget), Ok(0));
+        let excessive_count = array(array(ir::Ty::Unit, i32::MAX as usize + 1), 0);
+        assert!(copied_value_bytes(&excessive_count, &budget).is_err());
+        let borrowed = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(
+                vec![ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: std::sync::Arc::new(ir::Ty::Bool),
+                }],
+                ir::Ty::Unit,
+                &budget,
+            )
+            .unwrap(),
+        );
+        assert!(
+            copied_value_bytes(&array(borrowed, 0), &budget)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        let empty_ref = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: std::sync::Arc::new(empty.clone()),
+        };
+        assert_eq!(value_size(&empty_ref, &budget), Ok(8));
+        assert_eq!(indirect(&empty_ref, &budget), Ok(false));
+        let program =
+            frontend::parse("struct Item{value:i32}fn marker(value:Item){}fn main(){}").unwrap();
+        let signatures = frontend::signature_table(&program).unwrap();
+        let nominal = signatures
+            .functions
+            .values()
+            .find(|s| !s.params.is_empty())
+            .unwrap()
+            .params[0]
+            .clone();
+        let nominal_pointer = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(vec![nominal.clone()], nominal, &budget).unwrap(),
+        );
+        assert_eq!(
+            copied_value_bytes(&array(nominal_pointer, 0), &budget),
+            Ok(0)
+        );
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(copied_value_bytes(&empty, &denied).is_err());
     }
 
     #[test]

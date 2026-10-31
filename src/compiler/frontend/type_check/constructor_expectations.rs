@@ -175,6 +175,17 @@ impl Checker<'_> {
             InferKind::Slice(inner) => {
                 InferKind::Slice(self.replace_constructor_slots(inner, arguments, depth + 1)?)
             }
+            InferKind::FnPointer(inputs, output) => {
+                let budget = &self.signatures.plan()?.budget;
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                for t in inputs.iter() {
+                    mapped.push(self.replace_constructor_slots(t, arguments, depth + 1)?);
+                }
+                InferKind::FnPointer(
+                    ir::FnPointerTy::slice(mapped, budget)?,
+                    self.replace_constructor_slots(output, arguments, depth + 1)?,
+                )
+            }
             InferKind::Tuple(fields) => {
                 self.infer_storage(fields.len())?;
                 InferKind::Tuple(

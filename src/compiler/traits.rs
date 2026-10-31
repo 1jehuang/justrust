@@ -1640,6 +1640,7 @@ fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
     }
     match (left, right) {
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
+        (Ty::FnPointer(a), Ty::FnPointer(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
         (Ty::Dyn(a), Ty::Dyn(b)) => Arc::ptr_eq(a, b),
@@ -2014,6 +2015,7 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
         | (Ty::Str, Ty::Str) => true,
         (Ty::Opaque(x), Ty::Opaque(y)) => Arc::ptr_eq(x, y),
         (Ty::Closure(x), Ty::Closure(y)) => Arc::ptr_eq(x, y),
+        (Ty::FnPointer(x), Ty::FnPointer(y)) => Arc::ptr_eq(x, y),
         (Ty::FnItem(x), Ty::FnItem(y)) => Arc::ptr_eq(x, y),
         (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
             Arc::ptr_eq(x, y)
@@ -2651,6 +2653,7 @@ enum TypeNode {
     Array(usize, usize),
     Reference(usize, ir::BorrowKind),
     Closure(usize),
+    FnPointer(usize),
 }
 #[derive(Default)]
 struct TypeWalk {
@@ -2686,6 +2689,7 @@ impl TypeWalk {
                 t.def().id,
                 t.def() as *const ir::EnumDef as usize,
             )),
+            Ty::FnPointer(pointer) => Some(TypeNode::FnPointer(Arc::as_ptr(pointer) as usize)),
             Ty::Closure(closure) => Some(TypeNode::Closure(Arc::as_ptr(closure) as usize)),
             Ty::Tuple(t) => Some(TypeNode::Tuple(t.as_ptr() as usize, t.len())),
             Ty::Array { element, len } => {
@@ -3773,6 +3777,28 @@ impl ValidatedTraitWorld {
                     child(ty, TypeUse::Root)?;
                 }
             }
+            Ty::FnPointer(pointer) => {
+                pointer
+                    .validate(&self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                if pointer.inputs.len() > 32 {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "function pointer parameter limit exceeded",
+                    ));
+                }
+                for ty in pointer.inputs.iter() {
+                    child(ty, TypeUse::Aggregate)?;
+                }
+                child(
+                    &pointer.output,
+                    if matches!(pointer.output, Ty::Never) {
+                        TypeUse::Root
+                    } else {
+                        TypeUse::Aggregate
+                    },
+                )?;
+            }
             Ty::FnItem(item) => {
                 self.info(item.declaration)?;
                 for ty in item.type_args.iter() {
@@ -4442,6 +4468,7 @@ impl ValidatedTraitWorld {
                         }
                     }
                 }
+                Ty::FnPointer(_) => {}
                 Ty::FnItem(item) => {
                     for actual in item.type_args.iter() {
                         enqueue(actual)?;
@@ -4563,6 +4590,7 @@ impl ValidatedTraitWorld {
                 && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
+            (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::FnItem(a), Ty::FnItem(b)) => Ok(a.declaration == b.declaration
                 && self.eq_types(&a.type_args, &b.type_args, depth + 1)?),
@@ -6222,7 +6250,9 @@ impl ValidatedTraitWorld {
                 Ty::Struct(n) => all(&n.def().type_args)?,
                 Ty::Enum(n) => all(&n.def().type_args)?,
                 // Opaque, closure, object and fn-item payloads: conservative.
-                Ty::Opaque(_) | Ty::Closure(_) | Ty::Dyn(_) | Ty::FnItem(_) => true,
+                Ty::Opaque(_) | Ty::Closure(_) | Ty::Dyn(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {
+                    true
+                }
                 _ => false,
             })
         }
@@ -6393,6 +6423,17 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
+            (Ty::FnPointer(a), Ty::FnPointer(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    Ok::<bool, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "function pointer signature arity changed during transport",
+                    ));
+                }
+            }
             (Ty::Param(_) | Ty::AssociatedType(_), _) => {}
             (Ty::Opaque(original), Ty::Opaque(instantiated)) => {
                 // Opaque identities retain their defining owner, return site,
@@ -7495,6 +7536,22 @@ impl ValidatedTraitWorld {
         if let Ty::Param(p) = term.ty {
             return Ok(term.side == side && *p == parameter);
         }
+        if let Ty::FnPointer(pointer) = term.ty {
+            for child in pointer.types() {
+                if self.occurs(
+                    side,
+                    parameter,
+                    Term {
+                        side: term.side,
+                        ty: child,
+                    },
+                    bindings,
+                    depth + 1,
+                )? {
+                    return Ok(true);
+                }
+            }
+        }
         for child in type_arguments(term.ty) {
             if self.occurs(
                 side,
@@ -7564,6 +7621,22 @@ impl ValidatedTraitWorld {
             return self.unify(right, left, bindings, depth + 1);
         }
         match (left.ty, right.ty) {
+            (Ty::FnPointer(a), Ty::FnPointer(b)) => {
+                return a.try_eq(b, |a, b| {
+                    self.unify(
+                        Term {
+                            side: left.side,
+                            ty: a,
+                        },
+                        Term {
+                            side: right.side,
+                            ty: b,
+                        },
+                        bindings,
+                        depth + 1,
+                    )
+                });
+            }
             (
                 Ty::Array {
                     element: a,
@@ -9216,6 +9289,14 @@ impl ValidatedTraitWorld {
         let Predicate::Implements(goal) = predicate else {
             return Ok(None);
         };
+        if matches!(goal.self_ty, Ty::FnPointer(_))
+            && self.closure_trait_kind(goal.declaration)?.is_some()
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: function pointer callable traits require a native indirect Rust ABI implementation",
+            ));
+        }
         if let Some(proof) = self.prove_closure(predicate, context, active)? {
             return Ok(Some(proof));
         }
@@ -9240,7 +9321,7 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
-            Ty::FnItem(_) => true,
+            Ty::FnPointer(_) | Ty::FnItem(_) => true,
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Struct(t) if item == CatalogItem::Sized => {
                 for f in nominal_fields(&t.def().fields, &self.budget)?.iter() {
@@ -9629,6 +9710,9 @@ impl ValidatedTraitWorld {
             };
         }
         match (pattern, actual) {
+            (Ty::FnPointer(a), Ty::FnPointer(b)) => {
+                return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
+            }
             (
                 Ty::Ref {
                     kind: a,
@@ -11594,6 +11678,111 @@ mod tests {
             caller_parameter,
             leaf,
             boxed,
+        }
+    }
+
+    #[test]
+    fn function_pointer_metadata_preserves_signature_and_rejects_forged_components() {
+        let allocation = ir::PlanBudget::default();
+        let signature = ir::FnPointerTy::new(Vec::new(), Ty::Unit, &allocation).unwrap();
+        let expected = std::mem::size_of::<ir::FnPointerTy>() + 4 * std::mem::size_of::<usize>();
+        assert_eq!(allocation.usage_for_tests(|usage| usage.bytes), expected);
+        let before = allocation.usage_for_tests(|usage| usage.bytes);
+        signature
+            .try_map(&allocation, |e| e, |ty| Ok::<_, String>(ty.clone()))
+            .unwrap();
+        assert_eq!(
+            allocation.usage_for_tests(|usage| usage.bytes) - before,
+            expected
+        );
+        assert!(
+            ir::FnPointerTy::storage::<Ty>(usize::MAX, &allocation)
+                .unwrap_err()
+                .contains("overflow")
+        );
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let pointer = |inputs: Vec<Ty>, output| {
+            Ty::FnPointer(Arc::new(ir::FnPointerTy {
+                inputs: inputs.into(),
+                output,
+            }))
+        };
+        let valid = pointer(
+            vec![c.caller_parameter.clone(), Ty::Bool],
+            c.caller_parameter.clone(),
+        );
+        facts.validate_ty(&valid).unwrap();
+        let equal = pointer(
+            vec![c.caller_parameter.clone(), Ty::Bool],
+            c.caller_parameter.clone(),
+        );
+        assert!(
+            world
+                .types_equal(std::slice::from_ref(&valid), std::slice::from_ref(&equal))
+                .unwrap()
+        );
+        for changed in [
+            pointer(
+                vec![Ty::Bool, c.caller_parameter.clone()],
+                c.caller_parameter.clone(),
+            ),
+            pointer(vec![c.caller_parameter.clone()], c.caller_parameter.clone()),
+            pointer(vec![c.caller_parameter.clone(), Ty::Bool], Ty::Bool),
+        ] {
+            assert!(
+                !world
+                    .types_equal(std::slice::from_ref(&valid), std::slice::from_ref(&changed))
+                    .unwrap()
+            );
+        }
+        let closed = world.callable_facts(c.body).unwrap();
+        assert!(
+            closed.validate_ty(&valid).is_err(),
+            "foreign signature parameter accepted"
+        );
+        let Ty::Struct(leaf) = &c.leaf else {
+            panic!("nominal fixture");
+        };
+        let mut altered = leaf.def().clone();
+        altered.type_args = Arc::from([Ty::Bool]);
+        let forged = pointer(vec![Ty::Struct(StructTy::new(altered))], Ty::Unit);
+        assert!(
+            facts.validate_ty(&forged).is_err(),
+            "forged nominal signature component accepted"
+        );
+        for invalid in [
+            pointer(vec![Ty::Bool; 33], Ty::Unit),
+            pointer(vec![Ty::Str], Ty::Unit),
+            pointer(vec![Ty::Bool], Ty::Str),
+        ] {
+            assert!(facts.validate_ty(&invalid).is_err());
+        }
+        let borrowed = pointer(
+            vec![Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(Ty::Bool),
+            }],
+            Ty::Unit,
+        );
+        let error = facts.validate_ty(&borrowed).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+        let nested = pointer(vec![borrowed], Ty::Unit);
+        assert_eq!(
+            facts.validate_ty(&nested).unwrap_err().kind(),
+            FactsErrorKind::Unsupported
+        );
+        for item in [CatalogItem::Copy, CatalogItem::Sized] {
+            let goal = Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(item),
+                self_ty: valid.clone(),
+                args: Arc::from([]),
+            });
+            assert!(matches!(
+                world.prove_goal(&goal, &facts).unwrap(),
+                ProofOutcome::Proved(_)
+            ));
         }
     }
 

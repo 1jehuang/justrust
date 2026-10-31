@@ -43,6 +43,44 @@ async fn all<'a, T: Send + 'a>(mut pending: Vec<Pending<'a, T>>) -> Result<Vec<T
     .await
 }
 
+/// Function signature branches retain independently admitted scratch throughout suspension.
+async fn all_pointer<'a, T: Send + 'a>(
+    mut pending: Vec<Pending<'a, T>>,
+    b: &ir::PlanBudget,
+) -> Result<Vec<T>, Error> {
+    let mut results = ir::FnPointerTy::storage(pending.len(), b).map_err(Error::new)?;
+    results.resize_with(pending.len(), || None);
+    let mut values = ir::FnPointerTy::storage(pending.len(), b).map_err(Error::new)?;
+    std::future::poll_fn(move |cx| {
+        let mut error = None;
+        for (future, result) in pending.iter_mut().zip(results.iter_mut()) {
+            if result.is_none() {
+                match future.as_mut().poll(cx) {
+                    Poll::Ready(Ok(value)) => *result = Some(value),
+                    Poll::Ready(Err(e)) => {
+                        if error.is_none() {
+                            error = Some(e);
+                        }
+                    }
+                    Poll::Pending => {}
+                }
+            }
+        }
+        if let Some(error) = error {
+            return Poll::Ready(Err(error));
+        }
+        if results.iter().all(Option::is_some) {
+            for result in &mut results {
+                values.push(result.take().expect("complete signature branch"));
+            }
+            Poll::Ready(Ok(std::mem::take(&mut values)))
+        } else {
+            Poll::Pending
+        }
+    })
+    .await
+}
+
 pub(super) fn key(
     world: u64,
     declaration: ir::DeclId,
@@ -259,6 +297,20 @@ fn resolve<'a>(
                 element: Arc::new(resolve(cx, *t, world, b, depth + 1).await?),
                 len,
             },
+            Term::FnPointer(inputs, output) => {
+                let count = inputs.len().checked_add(1).ok_or_else(|| {
+                    Error::new("resource limit: function pointer branch count overflow")
+                })?;
+                let mut pending = ir::FnPointerTy::storage(count, b).map_err(Error::new)?;
+                for t in inputs.into_iter().chain(std::iter::once(*output)) {
+                    pending.push(resolve(cx, t, world, b, depth + 1));
+                }
+                let mut values = all_pointer(pending, b).await?;
+                let output = values
+                    .pop()
+                    .ok_or_else(|| Error::new("missing function pointer result"))?;
+                ir::Ty::FnPointer(ir::FnPointerTy::new(values, output, b).map_err(Error::new)?)
+            }
             Term::Tuple(ts) => ir::Ty::Tuple(
                 all(ts
                     .into_iter()
@@ -317,6 +369,31 @@ fn field<'a>(
             ir::Ty::Param(p) => world
                 .nominal_realization_parameter(input, &p)
                 .map_err(error)?,
+            ir::Ty::FnPointer(pointer) => {
+                let count = pointer.inputs.len().checked_add(1).ok_or_else(|| {
+                    Error::new("resource limit: function pointer field branch count overflow")
+                })?;
+                let mut pending = ir::FnPointerTy::storage(count, b).map_err(Error::new)?;
+                for component in pointer.types() {
+                    pending.push(field(cx, component.clone(), input, world, depth + 1));
+                }
+                let values = all_pointer(pending, b).await?;
+                let proof_count = values.iter().try_fold(0usize, |count, (_, proofs)| {
+                    count.checked_add(proofs.len()).ok_or_else(|| {
+                        Error::new("resource limit: function pointer field proof count overflow")
+                    })
+                })?;
+                dependencies = ir::FnPointerTy::storage(proof_count, b).map_err(Error::new)?;
+                let mut signature = ir::FnPointerTy::storage(count, b).map_err(Error::new)?;
+                for (component, proofs) in values {
+                    signature.push(component);
+                    dependencies.extend(proofs);
+                }
+                let output = signature
+                    .pop()
+                    .ok_or_else(|| Error::new("missing function pointer field result"))?;
+                ir::Ty::FnPointer(ir::FnPointerTy::new(signature, output, b).map_err(Error::new)?)
+            }
             ir::Ty::AssociatedType(p) => {
                 let (t, proofs) = world
                     .normalize_nominal_field_projection(input, &p)

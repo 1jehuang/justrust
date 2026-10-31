@@ -168,6 +168,20 @@ impl PlanCtx {
             Type::RawPtr { kind, pointee } => Shape::RawPtr(*kind, Arc::new(child(pointee)?)),
             Type::Array(element, len) => Shape::Array(Arc::new(child(element)?), *len),
             Type::Slice(element) => Shape::Slice(Arc::new(child(element)?)),
+            Type::FnPointer { inputs, output } => {
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), &self.budget)?;
+                for input in inputs {
+                    mapped.push(child(input)?);
+                }
+                let output = child(output)?;
+                self.budget.retain_bytes(
+                    std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>(),
+                )?;
+                Shape::FnPointer(
+                    ir::FnPointerTy::slice(mapped, &self.budget)?,
+                    Arc::new(output),
+                )
+            }
             Type::Tuple(types) => {
                 let mut fields = Vec::new();
                 fields
@@ -326,33 +340,86 @@ fn reject_default_recipe_carriers(
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<(), String> {
-    budget.check_depth(depth)?;
-    budget.charge_work(1)?;
-    match shape {
-        Shape::Leaf(ty) => {
-            if !ir::carrier_locations(ty, budget)?.is_empty() {
-                return Err("unsupported: nominal default recipe requires original carrier-family source transport".into());
+    fn visit(
+        shape: &Shape,
+        budget: &ir::PlanBudget,
+        depth: usize,
+        owning: bool,
+    ) -> Result<(), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        match shape {
+            Shape::Leaf(ty) => {
+                if owning && !ir::carrier_locations(ty, budget)?.is_empty() {
+                    return Err("unsupported: nominal default recipe requires original carrier-family source transport".into());
+                }
+            }
+            Shape::Nominal(_, arguments) | Shape::Tuple(arguments) => {
+                for argument in arguments.iter() {
+                    visit(argument, budget, depth + 1, owning)?;
+                }
+            }
+            Shape::FnPointer(inputs, output) => {
+                // Signature types are metadata, not stored values owned by the
+                // pointer. Still visit every occurrence for bounded traversal.
+                // Actual ingress and pointer validation remain mandatory.
+                for input in inputs.iter() {
+                    visit(input, budget, depth + 1, false)?;
+                }
+                visit(output, budget, depth + 1, false)?;
+            }
+            Shape::Array(element, _) => visit(element, budget, depth + 1, owning)?,
+            Shape::Ref(_, inner) | Shape::RawPtr(_, inner) | Shape::Slice(inner) if !owning => {
+                visit(inner, budget, depth + 1, false)?;
+            }
+            Shape::Projection {
+                receiver,
+                arguments,
+                ..
+            } if !owning => {
+                visit(receiver, budget, depth + 1, false)?;
+                for argument in arguments.iter() {
+                    visit(argument, budget, depth + 1, false)?;
+                }
+            }
+            Shape::Ref(..) | Shape::RawPtr(..) | Shape::Slice(_) | Shape::Projection { .. } => {
+                return Err("unsupported: nominal default recipe requires broader original source transport".into());
             }
         }
-        Shape::Nominal(_, arguments) | Shape::Tuple(arguments) => {
-            for argument in arguments.iter() {
-                reject_default_recipe_carriers(argument, budget, depth + 1)?;
-            }
-        }
-        Shape::Array(element, _) => reject_default_recipe_carriers(element, budget, depth + 1)?,
-        Shape::Ref(..) | Shape::RawPtr(..) | Shape::Slice(_) | Shape::Projection { .. } => {
-            return Err(
-                "unsupported: nominal default recipe requires broader original source transport"
-                    .into(),
-            );
-        }
+        Ok(())
     }
-    Ok(())
+    visit(shape, budget, depth, true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_pointer_signature_walk_is_nonowning_but_visits_inputs_and_output() {
+        let raw = Shape::RawPtr(ir::BorrowKind::Shared, Arc::new(Shape::Leaf(ir::Ty::Bool)));
+        let shape = Shape::FnPointer(Arc::from([raw.clone()]), Arc::new(raw.clone()));
+        let budget = ir::PlanBudget::default();
+        reject_default_recipe_carriers(&shape, &budget, 0).unwrap();
+        assert!(
+            reject_default_recipe_carriers(&raw, &budget, 0)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+        // Root=0, raw input=1, its primitive=2, raw output=1 and
+        // its primitive=2. Neither signature side may skip the meter.
+        let shallow = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 1,
+            ..Default::default()
+        });
+        assert!(reject_default_recipe_carriers(&shape, &shallow, 0).is_err());
+        let output_only = Shape::FnPointer(Arc::from([]), Arc::new(raw));
+        let shallow = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 1,
+            ..Default::default()
+        });
+        assert!(reject_default_recipe_carriers(&output_only, &shallow, 0).is_err());
+    }
 
     #[test]
     fn source_recipe_arc_backing_is_admitted_independently_even_when_empty() {

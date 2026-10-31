@@ -116,6 +116,22 @@ impl Inference<'_, '_> {
                     .infer_type_term(&normal, None, depth + 1)
                     .map(Some);
             }
+            InferKind::FnPointer(inputs, output) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                for t in inputs.iter() {
+                    let Some(t) = self.normalize_schema_projections(t, depth + 1, defaults)? else {
+                        return Ok(None);
+                    };
+                    mapped.push(t);
+                }
+                let Some(output) =
+                    self.normalize_schema_projections(output, depth + 1, defaults)?
+                else {
+                    return Ok(None);
+                };
+                InferKind::FnPointer(ir::FnPointerTy::slice(mapped, budget)?, output)
+            }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
             | InferKind::Opaque(_, fields) => {
@@ -190,6 +206,20 @@ impl Inference<'_, '_> {
                     return Ok(None);
                 };
                 return self.resolve(&normal, defaults, depth + 1);
+            }
+            InferKind::FnPointer(inputs, output) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                for t in inputs.iter() {
+                    let Some(t) = map(t)? else {
+                        return Ok(None);
+                    };
+                    mapped.push(t);
+                }
+                let Some(output) = map(output)? else {
+                    return Ok(None);
+                };
+                ir::Ty::FnPointer(ir::FnPointerTy::new(mapped, output, budget)?)
             }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
@@ -347,6 +377,22 @@ impl Inference<'_, '_> {
     ) -> Result<(), String> {
         self.checker.infer_work(depth)?;
         match (formal.as_ref(), actual.as_ref()) {
+            (InferKind::FnPointer(left, lo), InferKind::FnPointer(right, ro))
+                if left.len() == right.len() =>
+            {
+                for (left, right) in left
+                    .iter()
+                    .chain(std::iter::once(lo))
+                    .zip(right.iter().chain(std::iter::once(ro)))
+                {
+                    self.split_projected_constraint(
+                        left.clone(),
+                        right.clone(),
+                        output,
+                        depth + 1,
+                    )?;
+                }
+            }
             (InferKind::Tuple(left), InferKind::Tuple(right)) if left.len() == right.len() => {
                 for (left, right) in left.iter().zip(right.iter()) {
                     self.split_projected_constraint(

@@ -29,6 +29,7 @@ pub(super) enum Term {
     Ref(ir::BorrowKind, Box<Term>),
     RawPtr(ir::BorrowKind, Box<Term>),
     Tuple(Vec<Term>),
+    FnPointer(Vec<Term>, Box<Term>),
     Array(Box<Term>, usize),
     Slice(Box<Term>),
     Nominal(ir::DeclId, Vec<Term>),
@@ -41,6 +42,9 @@ impl Term {
             Self::Nominal(..) => true,
             Self::Ref(_, t) | Self::RawPtr(_, t) | Self::Array(t, _) | Self::Slice(t) => {
                 t.contains_nominal()
+            }
+            Self::FnPointer(inputs, output) => {
+                inputs.iter().any(Self::contains_nominal) || output.contains_nominal()
             }
             Self::Tuple(ts) => ts.iter().any(Self::contains_nominal),
             _ => false,
@@ -69,6 +73,14 @@ impl Term {
             }
             ir::Ty::Array { element, len } => {
                 Self::Array(Box::new(Self::from_ty(element, b, depth + 1)?), *len)
+            }
+            ir::Ty::FnPointer(pointer) => {
+                b.retain_bytes(std::mem::size_of::<Self>())
+                    .map_err(Error::new)?;
+                Self::FnPointer(
+                    Self::from_types(&pointer.inputs, b, depth + 1)?,
+                    Box::new(Self::from_ty(&pointer.output, b, depth + 1)?),
+                )
             }
             ir::Ty::Tuple(values) => Self::Tuple(Self::from_types(values, b, depth + 1)?),
             ir::Ty::Struct(n) => Self::Nominal(
@@ -170,6 +182,13 @@ impl Term {
                     if *k == ir::BorrowKind::Shared { 0 } else { 1 },
                 ]);
                 t.write(out, b, d + 1)?;
+            }
+            Self::FnPointer(inputs, output) => {
+                out.extend([15, inputs.len() as u64]);
+                for t in inputs {
+                    t.write(out, b, d + 1)?;
+                }
+                output.write(out, b, d + 1)?;
             }
             Self::Tuple(ts) => {
                 if ts.is_empty() {
@@ -327,6 +346,16 @@ impl Reader<'_> {
                     ));
                 }
                 Term::Dyn(ir::DeclId { snapshot, index }, args, assigned)
+            }
+            15 => {
+                let inputs = self.terms(d + 1)?;
+                if inputs.len() > 32 {
+                    return Err(Error::new("function pointer parameter limit exceeded"));
+                }
+                self.b
+                    .retain_bytes(std::mem::size_of::<Term>())
+                    .map_err(Error::new)?;
+                Term::FnPointer(inputs, Box::new(self.term(d + 1)?))
             }
             _ => return Err(Error::new("unknown nominal type coordinate tag")),
         })

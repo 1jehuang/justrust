@@ -5,6 +5,71 @@ use super::*;
 
 #[cfg(test)]
 mod authority_tests;
+
+#[cfg(test)]
+mod fn_pointer_shape_tests {
+    use super::*;
+
+    #[test]
+    fn nominal_pointer_recipe_roundtrips_signature_and_collects_both_sides() {
+        let source = parse("struct Ingress;struct Other;fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let main = plan.function_decl(0).unwrap();
+        let signatures = plan.environment(Some(main)).unwrap();
+        let function = plan.callable_body(&plan.program, main).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let declaration_schema = |_| Ok(None);
+        let source_type = |_: &Type| Ok(None);
+        let nominal_type = |_: &NominalDemand| Ok(None);
+        let inputs =
+            NominalPreparationInputs::new(&declaration_schema, &source_type, &nominal_type);
+        let nested =
+            ir::Ty::FnPointer(ir::FnPointerTy::new(Vec::new(), ir::Ty::Bool, &budget).unwrap());
+        let ty = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(vec![ir::Ty::Int(ir::IntTy::I32)], nested, &budget).unwrap(),
+        );
+        let shape = type_shape(&checker, &ty, 0).unwrap();
+        assert!(matches!(shape, NominalShape::FnPointer(..)));
+        let mut missing = Vec::new();
+        let realized = recipe_type(&checker, &inputs, &shape, &mut missing, 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(realized, ty);
+        assert!(missing.is_empty());
+        assert!(recipe_type(&checker, &inputs, &NominalShape::Leaf(ty), &mut missing, 0).is_err());
+
+        let first = plan.nominal_declaration(0).unwrap();
+        let second = plan.nominal_declaration(1).unwrap();
+        let demand = NominalShape::FnPointer(
+            Arc::from([NominalShape::Nominal(first, Arc::from([]))]),
+            Arc::new(NominalShape::Nominal(second, Arc::from([]))),
+        );
+        assert!(
+            recipe_type(&checker, &inputs, &demand, &mut missing, 0)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(missing.len(), 2);
+        assert_eq!(
+            (missing[0].declaration, missing[1].declaration),
+            (first, second)
+        );
+        let invalid = NominalShape::FnPointer(
+            Arc::from([]),
+            Arc::new(NominalShape::Ref(
+                ir::BorrowKind::Shared,
+                Arc::new(NominalShape::Leaf(ir::Ty::Bool)),
+            )),
+        );
+        assert!(
+            recipe_type(&checker, &inputs, &invalid, &mut missing, 0)
+                .unwrap_err()
+                .contains("unsupported")
+        );
+    }
+}
+
 pub(in crate::compiler::frontend) mod parent_local;
 
 impl Checker<'_> {
@@ -301,6 +366,17 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
         ir::Ty::Struct(n) => NominalShape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Enum(n) => NominalShape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Tuple(fields) => NominalShape::Tuple(children(fields)?),
+        ir::Ty::FnPointer(pointer) => {
+            let budget = &checker.signatures.plan()?.budget;
+            pointer.validate(budget)?;
+            let mut inputs = ir::FnPointerTy::storage(pointer.inputs.len(), budget)?;
+            for input in pointer.inputs.iter() {
+                inputs.push(type_shape(checker, input, depth + 1)?);
+            }
+            let output = type_shape(checker, &pointer.output, depth + 1)?;
+            budget.retain_bytes(std::mem::size_of::<NominalShape>() + 2 * std::mem::size_of::<usize>())?;
+            NominalShape::FnPointer(ir::FnPointerTy::slice(inputs, budget)?, Arc::new(output))
+        }
         ir::Ty::Ref { kind, referent } => NominalShape::Ref(*kind, Arc::new(type_shape(checker, referent, depth + 1)?)),
         ir::Ty::RawPtr { kind, pointee } => NominalShape::RawPtr(*kind, Arc::new(type_shape(checker, pointee, depth + 1)?)),
         ir::Ty::Array { element, len } => NominalShape::Array(Arc::new(type_shape(checker, element, depth + 1)?), *len),
@@ -363,6 +439,28 @@ fn recipe_type(
                 missing.push(demand);
             }
             return Ok(None);
+        }
+        NominalShape::FnPointer(signature_inputs, output) => {
+            let budget = &checker.signatures.plan()?.budget;
+            let mut parameters = ir::FnPointerTy::storage(signature_inputs.len(), budget)?;
+            let mut complete = true;
+            for input in signature_inputs.iter() {
+                match recipe_type(checker, inputs, input, missing, depth + 1)? {
+                    Some(ty) => parameters.push(ty),
+                    None => complete = false,
+                }
+            }
+            let output = recipe_type(checker, inputs, output, missing, depth + 1)?;
+            if !complete || output.is_none() {
+                return Ok(None);
+            }
+            let pointer = ir::FnPointerTy::new(
+                parameters,
+                output.ok_or("missing function pointer result")?,
+                budget,
+            )?;
+            pointer.validate(budget)?;
+            ir::Ty::FnPointer(pointer)
         }
         NominalShape::Tuple(fields) => {
             checker.infer_storage(fields.len())?;

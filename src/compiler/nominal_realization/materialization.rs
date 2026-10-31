@@ -210,6 +210,15 @@ impl ReadComponent {
                 element: Arc::new(child(t)?),
                 len: *len,
             },
+            Term::FnPointer(inputs, output) => {
+                let mut types = ir::FnPointerTy::storage(inputs.len(), b).map_err(Error::new)?;
+                for t in inputs {
+                    types.push(child(t)?);
+                }
+                ir::Ty::FnPointer(
+                    ir::FnPointerTy::new(types, child(output)?, b).map_err(Error::new)?,
+                )
+            }
             Term::Tuple(types) => {
                 let mut values = super::topology::storage(types.len(), b)?;
                 for t in types {

@@ -115,6 +115,8 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         if !matches!(
             self.domain(receiver),
             Domain::Callable(_)
+                | Domain::FnPointer(..)
+                | Domain::Fixed(ir::Ty::FnPointer(_))
                 | Domain::Opaque(_, _)
                 | Domain::Fixed(ir::Ty::Closure(_) | ir::Ty::FnItem(_))
         ) {
@@ -147,6 +149,12 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         if !canonical {
             return Ok(None);
         }
+        if matches!(
+            self.domain(receiver),
+            Domain::FnPointer(..) | Domain::Fixed(ir::Ty::FnPointer(_))
+        ) {
+            return Err("unsupported: function pointer indirect calls require a native Rust ABI implementation".into());
+        }
         if let Domain::Opaque(descriptor, _) = self.domain(receiver)
             && self.opaque_excludes_callable_bounds(&descriptor)?
         {
@@ -170,6 +178,7 @@ impl<'a: 's, 'b: 's, 's> Solver<'a, 'b, 's> {
         args: &[Term],
     ) -> Result<Option<Term>, String> {
         match self.domain(term) {
+            Domain::FnPointer(..) | Domain::Fixed(ir::Ty::FnPointer(_)) => Err("unsupported: function pointer indirect calls require a native Rust ABI implementation".into()),
             Domain::Opaque(descriptor, children) => {
                 self.opaque_callable_application(&descriptor, &children, args)
             }

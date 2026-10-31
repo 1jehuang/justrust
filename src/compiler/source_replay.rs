@@ -15,6 +15,7 @@ pub(super) enum InferKind {
     UnknownFloat,
     Unknown(bool),
     Tuple(Arc<[InferTerm]>),
+    FnPointer(Arc<[InferTerm]>, InferTerm),
     Array(InferTerm, usize),
     Slice(InferTerm),
     Ref(ir::BorrowKind, InferTerm),
@@ -125,6 +126,23 @@ impl CallInferenceState {
                     &self.budget,
                     "unresolved schema slot escaped inference binding",
                 ));
+            }
+            InferKind::FnPointer(inputs, output) => {
+                let mut types = ir::FnPointerTy::storage(inputs.len(), &self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                for t in inputs.iter() {
+                    let Some(ty) = self.resolve(t, fallback, depth + 1, materialize)? else {
+                        return Ok(None);
+                    };
+                    types.push(ty);
+                }
+                let Some(output) = self.resolve(output, fallback, depth + 1, materialize)? else {
+                    return Ok(None);
+                };
+                Some(ir::Ty::FnPointer(
+                    ir::FnPointerTy::new(types, output, &self.budget)
+                        .map_err(|e| FactsError::from_message(&self.budget, &e))?,
+                ))
             }
             InferKind::Tuple(fields) => {
                 self.storage(fields.len())?;
@@ -258,6 +276,13 @@ impl CallInferenceState {
                 }
                 return Ok(bound.clone());
             }
+            InferKind::FnPointer(inputs, output) => InferKind::FnPointer(
+                self.collect_pointer_terms(
+                    inputs.len(),
+                    inputs.iter().map(|t| self.bind_schema(t, slots, depth + 1)),
+                )?,
+                self.bind_schema(output, slots, depth + 1)?,
+            ),
             InferKind::Tuple(fields) => {
                 self.storage(fields.len())?;
                 InferKind::Tuple(
@@ -377,6 +402,24 @@ impl CallInferenceState {
             .map_err(|e| FactsError::resource(&self.budget, &e))?;
         Ok(Arc::new(kind))
     }
+    fn collect_pointer_terms(
+        &self,
+        count: usize,
+        terms: impl ExactSizeIterator<Item = Result<InferTerm, FactsError>>,
+    ) -> Result<Arc<[InferTerm]>, FactsError> {
+        let error = |e: String| FactsError::from_message(&self.budget, &e);
+        let mut values = ir::FnPointerTy::storage(count, &self.budget).map_err(error)?;
+        if terms.len() != count {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "function pointer inference count mismatch",
+            ));
+        }
+        for term in terms {
+            values.push(term?);
+        }
+        ir::FnPointerTy::slice(values, &self.budget).map_err(error)
+    }
     fn collect_terms(
         &self,
         count: usize,
@@ -405,6 +448,13 @@ impl CallInferenceState {
             InferKind::Integer => InferKind::Unknown(true),
             InferKind::Float | InferKind::UnknownFloat => InferKind::UnknownFloat,
             InferKind::Unknown(numeric) => InferKind::Unknown(*numeric),
+            InferKind::FnPointer(inputs, output) => InferKind::FnPointer(
+                self.collect_pointer_terms(
+                    inputs.len(),
+                    inputs.iter().map(|t| self.taint(t, depth + 1)),
+                )?,
+                self.taint(output, depth + 1)?,
+            ),
             InferKind::Tuple(fields) => {
                 self.storage(fields.len())?;
                 InferKind::Tuple(self.collect_terms(
@@ -500,6 +550,17 @@ impl CallInferenceState {
             {
                 Ok(a.clone())
             }
+            (InferKind::FnPointer(x, xo), InferKind::FnPointer(y, yo)) if x.len() == y.len() => {
+                self.node(InferKind::FnPointer(
+                    self.collect_pointer_terms(
+                        x.len(),
+                        x.iter()
+                            .zip(y.iter())
+                            .map(|(x, y)| self.merge(x, y, depth + 1)),
+                    )?,
+                    self.merge(xo, yo, depth + 1)?,
+                ))
+            }
             (InferKind::Tuple(x), InferKind::Tuple(y)) if x.len() == y.len() => {
                 self.storage(x.len())?;
                 self.node(InferKind::Tuple(
@@ -581,6 +642,11 @@ impl CallInferenceState {
                     "cyclic generic inference constraint",
                 ));
             }
+            InferKind::FnPointer(inputs, output) => {
+                for t in inputs.iter().chain(std::iter::once(output)) {
+                    self.occurs(slot, t, depth + 1)?;
+                }
+            }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
             | InferKind::Projection(_, _, fields)
@@ -623,6 +689,24 @@ impl CallInferenceState {
                 self.slots[*slot] = Some(value);
                 Ok(())
             }
+            InferKind::FnPointer(inputs, output) => match evidence.as_ref() {
+                InferKind::FnPointer(actual, result) if inputs.len() == actual.len() => {
+                    for (t, a) in inputs.iter().zip(actual.iter()) {
+                        self.constrain(t, a, depth + 1)?;
+                    }
+                    self.constrain(output, result, depth + 1)
+                }
+                InferKind::Unknown(_) => {
+                    for t in inputs.iter().chain(std::iter::once(output)) {
+                        self.constrain(t, evidence, depth + 1)?;
+                    }
+                    Ok(())
+                }
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic function pointer inference shape mismatch",
+                )),
+            },
             InferKind::Tuple(fields) => match evidence.as_ref() {
                 InferKind::Tuple(actual) if fields.len() == actual.len() => {
                     for (f, a) in fields.iter().zip(actual.iter()) {
@@ -796,6 +880,16 @@ impl CallInferenceState {
                 }
                 InferKind::Slot(param.index as usize)
             }
+            ir::Ty::FnPointer(pointer) => InferKind::FnPointer(
+                self.collect_pointer_terms(
+                    pointer.inputs.len(),
+                    pointer
+                        .inputs
+                        .iter()
+                        .map(|t| self.type_term(t, schema, depth + 1)),
+                )?,
+                self.type_term(&pointer.output, schema, depth + 1)?,
+            ),
             ir::Ty::Tuple(fields) => {
                 self.storage(fields.len())?;
                 InferKind::Tuple(self.collect_terms(
@@ -1097,6 +1191,9 @@ fn replay_types_equal_at(
         }
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             replay_types_equal_at(a, b, budget, at + 1)
+        }
+        (ir::Ty::FnPointer(a), ir::Ty::FnPointer(b)) => {
+            a.try_eq(b, |a, b| replay_types_equal_at(a, b, budget, at + 1))
         }
         (ir::Ty::FnItem(a), ir::Ty::FnItem(b)) => Ok(a.declaration == b.declaration
             && replay_type_lists_equal(&a.type_args, &b.type_args, budget, at + 1)?),
@@ -1816,6 +1913,16 @@ fn terms_equal(
                 }
             }
             true
+        }
+        (InferKind::FnPointer(x, xo), InferKind::FnPointer(y, yo)) => {
+            if x.len() != y.len() {
+                return Ok(false);
+            }
+            let mut equal = terms_equal(xo, yo, budget, at + 1)?;
+            for (x, y) in x.iter().zip(y.iter()) {
+                equal &= terms_equal(x, y, budget, at + 1)?;
+            }
+            equal
         }
         (InferKind::Tuple(x), InferKind::Tuple(y))
         | (InferKind::Nominal(_, x), InferKind::Nominal(_, y)) => {

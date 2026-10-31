@@ -325,6 +325,12 @@ impl ValidatedTraitWorld {
             .charge_work(1)
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let valid = match (source, realized) {
+            (Ty::FnPointer(source), Ty::FnPointer(realized)) => {
+                source.try_eq(realized, |source, realized| {
+                    self.replay_nominal_field_term(replays, input, source, realized, depth + 1)?;
+                    Ok::<_, FactsError>(true)
+                })?
+            }
             (Ty::Param(parameter), _) => {
                 let expected =
                     self.nominal_realization_parameter_with(replays, input, parameter)?;
@@ -503,6 +509,19 @@ impl ValidatedTraitWorld {
                             replays,
                             input,
                             argument,
+                            dependencies,
+                            cursor,
+                            depth + 1,
+                        )?;
+                    }
+                }
+                Ty::FnPointer(pointer) => {
+                    for component in pointer.types() {
+                        walk(
+                            world,
+                            replays,
+                            input,
+                            component,
                             dependencies,
                             cursor,
                             depth + 1,
@@ -738,6 +757,13 @@ impl ValidatedTraitWorld {
             .charge_work(1)
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let result = match ty {
+            Ty::FnPointer(pointer) => Ty::FnPointer(pointer.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |component| {
+                    self.close_nominal_bound_term(replays, component, env, actuals, depth + 1)
+                },
+            )?),
             Ty::Param(parameter) => {
                 let mut selected = None;
                 for (ordinal, declared) in env.ordered_params().enumerate() {
@@ -1047,6 +1073,102 @@ mod tests {
             .unwrap();
         crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
             .unwrap()
+    }
+
+    #[test]
+    fn nominal_pointer_field_replay_substitutes_only_its_declared_binder() {
+        let program = crate::compiler::frontend::parse(
+            "struct Marker<T>{field:[fn(T,bool)->T;0]}struct Other<T>{field:T}fn main(){}",
+        )
+        .unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let source = world.nominal_declaration_wellformed(declaration).unwrap();
+        let actual = Ty::Int(ir::IntTy::I32);
+        let input = world
+            .close_nominal_input(declaration, &source, std::slice::from_ref(&actual))
+            .unwrap();
+        let template = plan.nominal_realization_template(declaration).unwrap();
+        let field = template.field_ty(0, &budget).unwrap().unwrap();
+        let pointer = |inputs: Vec<Ty>, output| Ty::Array {
+            element: Arc::new(Ty::FnPointer(
+                ir::FnPointerTy::new(inputs, output, &budget).unwrap(),
+            )),
+            len: 0,
+        };
+        let realized = pointer(vec![actual.clone(), Ty::Bool], actual.clone());
+        world
+            .replay_nominal_field_term(&mut NominalReplays::default(), &input, &field, &realized, 0)
+            .unwrap();
+        let closed = world
+            .close_nominal_bound_term(
+                &mut NominalReplays::default(),
+                &field,
+                &source.schema().env,
+                std::slice::from_ref(&actual),
+                0,
+            )
+            .unwrap();
+        assert!(world.eq_ty(&closed, &realized, 0).unwrap());
+        for changed in [
+            pointer(vec![Ty::Bool, actual.clone()], actual.clone()),
+            pointer(vec![actual.clone()], actual.clone()),
+            pointer(vec![actual.clone(), Ty::Bool], Ty::Bool),
+        ] {
+            assert!(
+                world
+                    .replay_nominal_field_term(
+                        &mut NominalReplays::default(),
+                        &input,
+                        &field,
+                        &changed,
+                        0
+                    )
+                    .is_err()
+            );
+        }
+        let foreign = world
+            .nominal_declaration_wellformed(plan.nominal_declaration(1).unwrap())
+            .unwrap();
+        let foreign_parameter = Ty::Param(foreign.schema().env.ordered_params().next().unwrap());
+        let forged = pointer(vec![foreign_parameter.clone(), Ty::Bool], foreign_parameter);
+        assert!(
+            world
+                .replay_nominal_field_term(
+                    &mut NominalReplays::default(),
+                    &input,
+                    &forged,
+                    &realized,
+                    0
+                )
+                .is_err()
+        );
+        assert!(
+            world
+                .close_nominal_bound_term(
+                    &mut NominalReplays::default(),
+                    &forged,
+                    &source.schema().env,
+                    std::slice::from_ref(&actual),
+                    0
+                )
+                .is_err()
+        );
+        let mut wrong_input = input.clone();
+        wrong_input.declaration = foreign.schema().declaration;
+        assert!(
+            world
+                .replay_nominal_field_term(
+                    &mut NominalReplays::default(),
+                    &wrong_input,
+                    &field,
+                    &realized,
+                    0
+                )
+                .is_err()
+        );
     }
 
     #[test]

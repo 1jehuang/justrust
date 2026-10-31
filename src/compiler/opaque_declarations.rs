@@ -114,6 +114,11 @@ fn collect(
                 collect(child, output, budget, facts, depth + 1)?;
             }
         }
+        ir::Ty::FnPointer(value) => {
+            for child in value.types() {
+                collect(child, output, budget, facts, depth + 1)?;
+            }
+        }
         ir::Ty::Closure(value) => {
             for child in value.types() {
                 collect(child, output, budget, facts, depth + 1)?;

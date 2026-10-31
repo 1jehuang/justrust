@@ -2029,6 +2029,7 @@ impl<'a> MoveShape<'a> {
             | Ty::Bool
             | Ty::Unit
             | Ty::Ref { .. }
+            | Ty::FnPointer(_)
             | Ty::RawPtr { .. } => Self::Scalar,
         })
     }

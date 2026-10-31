@@ -272,6 +272,11 @@ impl Representations {
                 let hidden = self.get(opaque, budget)?.hidden().clone();
                 self.prepare_type(&hidden, budget, depth + 1)?;
             }
+            ir::Ty::FnPointer(pointer) => {
+                for t in pointer.types() {
+                    self.prepare_type(t, budget, depth + 1)?;
+                }
+            }
             ir::Ty::Closure(closure) => self.prepare_closure(closure, budget, depth + 1)?,
             ir::Ty::Ref { referent, .. } => self.prepare_type(referent, budget, depth + 1)?,
             ir::Ty::RawPtr { pointee, .. } => self.prepare_type(pointee, budget, depth + 1)?,
@@ -633,6 +638,14 @@ pub(super) fn contains(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Err
                 }
                 Ok(false)
             }
+            ir::Ty::FnPointer(value) => {
+                for component in value.types() {
+                    if visit(component, budget, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
             ir::Ty::Closure(value) => {
                 for component in value.types() {
                     if visit(component, budget, depth + 1)? {
@@ -762,6 +775,11 @@ fn collect(
         ir::Ty::Enum(value) => {
             for actual in value.def().type_args.iter() {
                 collect(actual, output, budget, depth + 1)?;
+            }
+        }
+        ir::Ty::FnPointer(value) => {
+            for component in value.types() {
+                collect(component, output, budget, depth + 1)?;
             }
         }
         ir::Ty::Closure(value) => {

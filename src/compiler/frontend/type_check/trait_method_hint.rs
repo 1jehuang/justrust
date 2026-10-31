@@ -96,8 +96,9 @@ impl Checker<'_> {
                 let projection = bind_owner(
                     &ir::Ty::AssociatedType(Arc::new(projection.clone())),
                     &bindings,
-                );
-                let ty = bind_owner(ty, &bindings);
+                    &self.signatures.plan()?.budget,
+                )?;
+                let ty = bind_owner(ty, &bindings, &self.signatures.plan()?.budget)?;
                 solver.constrain_projection_equality(&projection, &ty, Some(&bindings), true)?;
             }
         }
@@ -107,26 +108,48 @@ impl Checker<'_> {
 
 /// Replace enclosing trait-owner parameters (Self and trait arguments) with
 /// the selected application's actuals. Method-own parameters stay slots.
-pub(super) fn bind_owner(ty: &ir::Ty, bindings: &HashMap<ir::ParamId, ir::Ty>) -> ir::Ty {
-    let child = |t: &ir::Ty| Arc::new(bind_owner(t, bindings));
-    match ty {
+pub(super) fn bind_owner(
+    ty: &ir::Ty,
+    bindings: &HashMap<ir::ParamId, ir::Ty>,
+    budget: &ir::PlanBudget,
+) -> Result<ir::Ty, String> {
+    budget.charge_work(1)?;
+    Ok(match ty {
         ir::Ty::Param(p) => bindings.get(p).cloned().unwrap_or_else(|| ty.clone()),
-        ir::Ty::Ref { kind, referent } => ir::Ty::Ref {
-            kind: *kind,
-            referent: child(referent),
-        },
-        ir::Ty::Tuple(ts) => ir::Ty::Tuple(ts.iter().map(|t| bind_owner(t, bindings)).collect()),
+        ir::Ty::Ref { kind, referent } => {
+            budget
+                .retain_bytes(std::mem::size_of::<ir::Ty>() + 2 * std::mem::size_of::<usize>())?;
+            ir::Ty::Ref {
+                kind: *kind,
+                referent: Arc::new(bind_owner(referent, bindings, budget)?),
+            }
+        }
+        ir::Ty::FnPointer(pointer) => ir::Ty::FnPointer(pointer.try_map(
+            budget,
+            |e| e,
+            |t| bind_owner(t, bindings, budget),
+        )?),
+        ir::Ty::Tuple(ts) => {
+            let mut mapped = ir::FnPointerTy::storage(ts.len(), budget)?;
+            for t in ts.iter() {
+                mapped.push(bind_owner(t, bindings, budget)?);
+            }
+            ir::Ty::Tuple(ir::FnPointerTy::slice(mapped, budget)?)
+        }
         ir::Ty::AssociatedType(p) => {
+            let mut args = ir::FnPointerTy::storage(p.trait_ref.args.len(), budget)?;
+            for t in p.trait_ref.args.iter() {
+                args.push(bind_owner(t, bindings, budget)?);
+            }
+            budget.retain_bytes(
+                std::mem::size_of::<ir::AssociatedTypeProjection>()
+                    + 2 * std::mem::size_of::<usize>(),
+            )?;
             let mut p = p.as_ref().clone();
-            p.trait_ref.self_ty = bind_owner(&p.trait_ref.self_ty, bindings);
-            p.trait_ref.args = p
-                .trait_ref
-                .args
-                .iter()
-                .map(|t| bind_owner(t, bindings))
-                .collect();
+            p.trait_ref.self_ty = bind_owner(&p.trait_ref.self_ty, bindings, budget)?;
+            p.trait_ref.args = ir::FnPointerTy::slice(args, budget)?;
             ir::Ty::AssociatedType(Arc::new(p))
         }
         other => other.clone(),
-    }
+    })
 }

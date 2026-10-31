@@ -87,6 +87,7 @@ pub fn def(id: ir::DeclId) -> DefId {
 /// Maps `ir::Ty` (over a declaration's GenericEnv) to `sema` types, with
 /// parameters numbered by their position in the env's ordered list.
 pub struct TyMap<'a> {
+    pub budget: &'a ir::PlanBudget,
     pub env: &'a ir::GenericEnv,
     /// Extra mapping for parameters of another binder (for example trait
     /// `Self` seen from an impl), position in the target list.
@@ -163,6 +164,23 @@ impl TyMap<'_> {
             }
             ir::Ty::Opaque(_) => un("opaque type in the semantic core"),
             ir::Ty::Closure(_) => un("closure type in a declaration"),
+            ir::Ty::FnPointer(pointer) => {
+                let Ok(mut inputs) = ir::FnPointerTy::storage(pointer.inputs.len(), self.budget)
+                else {
+                    return un("function pointer semantic scratch allocation failed");
+                };
+                if self
+                    .budget
+                    .retain_bytes(std::mem::size_of::<TyKind>() + 2 * std::mem::size_of::<usize>())
+                    .is_err()
+                {
+                    return un("function pointer semantic backing resource limit");
+                }
+                for t in pointer.inputs.iter() {
+                    inputs.push(self.ty(t, unsupported));
+                }
+                ty::mk(TyKind::FnPtr(inputs, self.ty(&pointer.output, unsupported)))
+            }
             ir::Ty::FnItem(_) => un("function item type in a declaration"),
             ir::Ty::Dyn(_) => un("trait object type in the semantic core"),
         }
@@ -224,6 +242,7 @@ impl WorldDb {
                 item_owner.insert(def(*it), id);
             }
             let map = TyMap {
+                budget: &plan.budget,
                 env: &h.env,
                 extra: &[],
             };
@@ -250,6 +269,7 @@ impl WorldDb {
         for h in headers.impls.iter() {
             let id = def(h.declaration);
             let map = TyMap {
+                budget: &plan.budget,
                 env: &h.schema_env,
                 extra: &[],
             };
@@ -288,6 +308,7 @@ impl WorldDb {
             let id = def(h.declaration);
             let s = &h.schema;
             let map = TyMap {
+                budget: &plan.budget,
                 env: &s.env,
                 extra: &[],
             };
@@ -336,7 +357,11 @@ impl WorldDb {
             };
             let id = def(info.id);
             let env = &schema.env;
-            let map = TyMap { env, extra: &[] };
+            let map = TyMap {
+                budget: &plan.budget,
+                env,
+                extra: &[],
+            };
             let mut u = None;
             let inputs = schema
                 .signature
@@ -426,6 +451,7 @@ impl WorldDb {
                 continue;
             }
             let map = TyMap {
+                budget: &plan.budget,
                 env: &h.env,
                 extra: &[],
             };
@@ -500,7 +526,7 @@ impl WorldDb {
                     .collect::<Result<Vec<_>, String>>()?,
                 _ => continue,
             };
-            db.add_adt(info.id, &env, variants);
+            db.add_adt(info.id, &env, variants, &plan.budget);
         }
         Ok(db)
     }
@@ -595,8 +621,13 @@ impl WorldDb {
         decl: ir::DeclId,
         env: &ir::GenericEnv,
         variants: Vec<Vec<(String, ir::Ty)>>,
+        budget: &ir::PlanBudget,
     ) {
-        let map = TyMap { env, extra: &[] };
+        let map = TyMap {
+            budget,
+            env,
+            extra: &[],
+        };
         let mut u = None;
         let variants = variants
             .into_iter()
@@ -734,6 +765,7 @@ mod tests {
                     .sema_schema(info.id)
                     .map(|s| {
                         let map = TyMap {
+                            budget: &plan.budget,
                             env: &s.env,
                             extra: &[],
                         };

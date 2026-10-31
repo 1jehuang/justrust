@@ -239,6 +239,67 @@ fn semantic_size_domain_bounds_and_source_transfer_shapes_are_sealed() {
 }
 
 #[test]
+fn semantic_size_function_pointer_signature_is_an_exact_metadata_leaf() {
+    use super::super::{Requirement, SizeArgument};
+    for (source, bytes) in [
+        (
+            "fn size<S>()->usize{std::mem::size_of::<fn(S)->S>()}fn main(){}",
+            8usize,
+        ),
+        (
+            "fn size<S>()->usize{std::mem::size_of::<[fn(S)->!;3]>()}fn main(){}",
+            24usize,
+        ),
+    ] {
+        let (locals, root, budget, plan) = fixture_plan(source, "size");
+        let local = locals.iter().find(|local| local.owner == root).unwrap();
+        let summary = source_summary(&plan, root, &budget);
+        let required = summary.requirement(root).unwrap();
+        assert_eq!(required.parameters, [false]);
+        assert_eq!(required.semantic_limits, [None]);
+        assert!(!required.deferred_dispatch);
+        required.admit().unwrap();
+        // The wrapper retains a direct source call to canonical size_of; its
+        // exact ordered actual is the signature whose size shape is transferred.
+        let size_call = &local.edges.first().unwrap().target;
+        let ty = &size_call.type_args[0];
+        let shape = SizeArgument::capture(ty, &local.parameters, &budget).unwrap();
+        let mut exact = Requirement::empty(1, &budget).unwrap();
+        shape.apply(bytes, &mut exact, &budget).unwrap();
+        exact.admit().unwrap();
+        let mut too_small = Requirement::empty(1, &budget).unwrap();
+        shape.apply(bytes - 1, &mut too_small, &budget).unwrap();
+        assert!(too_small.admit().is_err());
+        let mut forged = local.clone();
+        forged.direct.semantic_limits[0] = Some(8);
+        assert!(forged.validate(&budget).is_err());
+        // Compact byte shapes deliberately do not authenticate signature
+        // components. The same genuine caller-facts gate used by query.validate
+        // must reject a rigid parameter owned by the size_of declaration.
+        let foreign = plan
+            .sema_schema(size_call.declaration)
+            .unwrap()
+            .env
+            .ordered_params()
+            .next()
+            .unwrap();
+        let forged_signature = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(vec![ir::Ty::Param(foreign)], ir::Ty::Unit, &budget).unwrap(),
+        );
+        assert!(
+            ir::FactsCtx::Validated(&local.facts)
+                .validate_ty_with_budget(&forged_signature, &budget)
+                .is_err()
+        );
+        let no_work = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(SizeArgument::capture(ty, &local.parameters, &no_work).is_err());
+    }
+}
+
+#[test]
 fn semantic_size_generic_reference_retains_metadata_shape_requirement() {
     let (locals, root, budget, plan) = fixture_plan(
         "fn width<T:?Sized>()->usize{std::mem::size_of::<&T>()}fn main(){}",

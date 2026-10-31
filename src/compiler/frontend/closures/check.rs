@@ -179,6 +179,18 @@ impl PlanCtx {
         caller: ir::FactsCtx<'_>,
     ) -> Result<Option<MethodSelection>, String> {
         let (kind, params) = match receiver {
+            ir::Ty::FnPointer(_) => {
+                if self
+                    .program
+                    .names
+                    .spelling(*name)
+                    .map_err(native_adapter::name_diagnostic)?
+                    != "call"
+                {
+                    return Ok(None);
+                }
+                return Err("unsupported: function pointer indirect calls require a native Rust ABI implementation".into());
+            }
             ir::Ty::Closure(closure) => (closure.kind(), closure.params().to_vec()),
             // `f(x)` on a function item value selects builtin `Fn` dispatch
             // through a shared autoref; it resolves to `Callee::Untupled`.

@@ -297,6 +297,14 @@ fn metadata(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<(), Error> 
             }
             metadata(t, b, depth + 1)?;
         }
+        Term::FnPointer(inputs, output) => {
+            if inputs.len() > 32 {
+                return Err(Error::new("function pointer parameter limit exceeded"));
+            }
+            for t in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                metadata(t, b, depth + 1)?;
+            }
+        }
         Term::Tuple(types) if types.is_empty() => {
             return Err(Error::new("empty tuple must have canonical Unit type"));
         }
@@ -387,6 +395,13 @@ fn term_height(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<usize, E
     Ok(match term {
         Term::Ref(_, t) | Term::RawPtr(_, t) | Term::Array(t, _) | Term::Slice(t) => {
             term_height(t, b, depth + 1)?.saturating_add(1)
+        }
+        Term::FnPointer(inputs, output) => {
+            let mut height = 0;
+            for t in inputs.iter().chain(std::iter::once(output.as_ref())) {
+                height = height.max(term_height(t, b, depth + 1)?.saturating_add(1));
+            }
+            height
         }
         Term::Tuple(types) | Term::Nominal(_, types) => {
             let mut height = 0;
@@ -624,7 +639,13 @@ impl SliceInventory<'_> {
                     "unsupported: recursive component unsized metadata equations",
                 ));
             }
-            Term::Int(_) | Term::Float(_) | Term::Bool | Term::Unit | Term::Never | Term::Char => {}
+            Term::FnPointer(..)
+            | Term::Int(_)
+            | Term::Float(_)
+            | Term::Bool
+            | Term::Unit
+            | Term::Never
+            | Term::Char => {}
         }
         Ok(height)
     }
@@ -782,7 +803,13 @@ impl ReferenceInventory<'_> {
                     "unsupported: recursive component unsized metadata equations",
                 ));
             }
-            Term::Int(_) | Term::Float(_) | Term::Bool | Term::Unit | Term::Never | Term::Char => {}
+            Term::FnPointer(..)
+            | Term::Int(_)
+            | Term::Float(_)
+            | Term::Bool
+            | Term::Unit
+            | Term::Never
+            | Term::Char => {}
         }
         Ok(height)
     }
@@ -985,7 +1012,13 @@ impl<F: FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>> DropPresence
                     "unsupported recursive drop presence unsized equation",
                 ));
             }
-            Term::Int(_) | Term::Float(_) | Term::Bool | Term::Unit | Term::Never | Term::Char => {}
+            Term::FnPointer(..)
+            | Term::Int(_)
+            | Term::Float(_)
+            | Term::Bool
+            | Term::Unit
+            | Term::Never
+            | Term::Char => {}
         }
         Ok(())
     }
@@ -1132,7 +1165,13 @@ impl<F: FnMut(usize, Option<(&ir::Ty, usize)>) -> Result<(), Error>> OwnershipIn
                     "unsupported recursive ownership unsized equation",
                 ));
             }
-            Term::Int(_) | Term::Float(_) | Term::Bool | Term::Unit | Term::Never | Term::Char => {}
+            Term::FnPointer(..)
+            | Term::Int(_)
+            | Term::Float(_)
+            | Term::Bool
+            | Term::Unit
+            | Term::Never
+            | Term::Char => {}
         }
         Ok(())
     }

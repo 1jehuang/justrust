@@ -45,6 +45,7 @@ enum Domain {
     Opaque(Arc<ir::OpaqueTy>, Vec<Term>),
     Nominal(ir::DeclId, Vec<Term>),
     Tuple(Vec<Term>),
+    FnPointer(Vec<Term>, Term),
     Ref(ir::BorrowKind, Term),
     RawPtr(ir::BorrowKind, Term),
     Array(Term, usize),
@@ -406,6 +407,16 @@ impl<'s> Solver<'_, '_, 's> {
                 Domain::Array(self.schema(element, params, depth + 1)?, *len)
             }
             ir::Ty::Slice { element } => Domain::Slice(self.schema(element, params, depth + 1)?),
+            ir::Ty::FnPointer(pointer) => {
+                let mut inputs = ir::FnPointerTy::storage(
+                    pointer.inputs.len(),
+                    &self.checker.signatures.plan()?.budget,
+                )?;
+                for t in pointer.inputs.iter() {
+                    inputs.push(self.schema(t, params, depth + 1)?);
+                }
+                Domain::FnPointer(inputs, self.schema(&pointer.output, params, depth + 1)?)
+            }
             ir::Ty::Tuple(fields) => Domain::Tuple(
                 fields
                     .iter()
@@ -426,6 +437,13 @@ impl<'s> Solver<'_, '_, 's> {
                     for argument in &segment.args {
                         found |= self.source_has_inference(argument, depth + 1)?;
                     }
+                }
+                found
+            }
+            Type::FnPointer { inputs, output } => {
+                let mut found = self.source_has_inference(output, depth + 1)?;
+                for t in inputs {
+                    found |= self.source_has_inference(t, depth + 1)?;
                 }
                 found
             }
@@ -530,6 +548,18 @@ impl<'s> Solver<'_, '_, 's> {
                 let inner = self.source_ty(element)?;
                 self.node(Domain::Slice(inner))
             }
+            Type::FnPointer { inputs, output } => {
+                let mut mapped = ir::FnPointerTy::storage(
+                    inputs.len(),
+                    &self.checker.signatures.plan()?.budget,
+                )?;
+                for t in inputs {
+                    mapped.push(self.source_ty(t)?);
+                }
+                let inputs = mapped;
+                let output = self.source_ty(output)?;
+                self.node(Domain::FnPointer(inputs, output))
+            }
             Type::Tuple(fields) => {
                 let fields = fields
                     .iter()
@@ -556,6 +586,14 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(true);
         }
         match &self.variables[term].domain {
+            Domain::FnPointer(inputs, output) => {
+                for t in inputs.iter().chain(std::iter::once(output)) {
+                    if self.occurs(needle, *t, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
             Domain::Nominal(_, args) | Domain::Tuple(args) | Domain::Opaque(_, args) => {
                 for arg in args {
                     if self.occurs(needle, *arg, depth + 1)? {
@@ -618,6 +656,18 @@ impl<'s> Solver<'_, '_, 's> {
         if matches!(x, Domain::Fixed(ir::Ty::Never)) || matches!(y, Domain::Fixed(ir::Ty::Never)) {
             return Ok(());
         }
+        if matches!(
+            (&x, &y),
+            (
+                Domain::FnPointer(..),
+                Domain::Callable(_) | Domain::Fixed(ir::Ty::FnItem(_) | ir::Ty::Closure(_))
+            ) | (
+                Domain::Callable(_) | Domain::Fixed(ir::Ty::FnItem(_) | ir::Ty::Closure(_)),
+                Domain::FnPointer(..)
+            )
+        ) {
+            return Err("unsupported: function item and closure coercions to function pointers are not implemented".into());
+        }
         let domain = match (&x, &y) {
             (Domain::Unknown, _) => {
                 if self.occurs(a, b, depth + 1)? {
@@ -651,6 +701,13 @@ impl<'s> Solver<'_, '_, 's> {
                     self.unify_at(*x, *y, depth + 1)?;
                 }
                 Domain::Nominal(*d, x.clone())
+            }
+            (Domain::FnPointer(x, xo), Domain::FnPointer(y, yo)) if x.len() == y.len() => {
+                for (x, y) in x.iter().zip(y) {
+                    self.unify_at(*x, *y, depth + 1)?;
+                }
+                self.unify_at(*xo, *yo, depth + 1)?;
+                Domain::FnPointer(x.clone(), *xo)
             }
             (Domain::Tuple(x), Domain::Tuple(y)) if x.len() == y.len() => {
                 for (x, y) in x.iter().zip(y) {
@@ -704,6 +761,13 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Callable(_) => true,
+            Domain::FnPointer(inputs, output) => {
+                let mut found = self.contains_callable(output, depth + 1)?;
+                for t in inputs {
+                    found |= self.contains_callable(t, depth + 1)?;
+                }
+                found
+            }
             Domain::Nominal(_, args) | Domain::Tuple(args) | Domain::Opaque(_, args) => {
                 for arg in args {
                     if self.contains_callable(arg, depth + 1)? {
@@ -784,6 +848,20 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 let plan = self.checker.signatures.plan()?;
                 plan.intern_nominal(decl, &actuals, self.checker.facts(), &plan.budget)?
+            }
+            Domain::FnPointer(inputs, output) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                let mut types = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                for t in inputs {
+                    let Some(ty) = self.resolve(t, depth + 1)? else {
+                        return Ok(None);
+                    };
+                    types.push(ty);
+                }
+                let Some(output) = self.resolve(output, depth + 1)? else {
+                    return Ok(None);
+                };
+                ir::Ty::FnPointer(ir::FnPointerTy::new(types, output, budget)?)
             }
             Domain::Tuple(fields) => {
                 let mut types = Vec::new();
@@ -1154,6 +1232,14 @@ impl<'s> Solver<'_, '_, 's> {
             // reveal a Deref or array carrier for a lazy coercion.
             Domain::Integer | Domain::Float => true,
             Domain::Callable(_) => false,
+            Domain::FnPointer(inputs, output) => {
+                for t in inputs.into_iter().chain(std::iter::once(output)) {
+                    if !self.lazy_input_frontier(t, targets, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
             Domain::Nominal(_, children)
             | Domain::Tuple(children)
             | Domain::Opaque(_, children) => {
@@ -3058,6 +3144,11 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
                 "const"
             },
             diagnostic_ty(pointee, plan)
+        ),
+        ir::Ty::FnPointer(pointer) => format!(
+            "fn({})->{}",
+            list(&pointer.inputs),
+            diagnostic_ty(&pointer.output, plan)
         ),
         ir::Ty::Tuple(items) => format!("({})", list(items)),
         ir::Ty::Array { element, len } => format!("[{}; {len}]", diagnostic_ty(element, plan)),

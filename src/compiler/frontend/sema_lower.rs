@@ -68,7 +68,11 @@ impl PlanCtx {
             tparams.push(names.key(*p, LookupClass::TypeParameter).ok());
         }
         let env = &schema.env;
-        let map = TyMap { env, extra: &[] };
+        let map = TyMap {
+            env,
+            extra: &[],
+            budget: &self.budget,
+        };
         let self_ty = info.path.associated.as_ref().map(|a| {
             let mut u = None;
             map.ty(&a.self_pattern, &mut u)
@@ -187,6 +191,20 @@ impl<'a> Lower<'a> {
 
     fn ty(&mut self, t: &Type) -> R<st::Ty> {
         Ok(match t {
+            Type::FnPointer { inputs, output } => {
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), &self.plan.budget)
+                    .map_err(Unsupported)?;
+                self.plan
+                    .budget
+                    .retain_bytes(
+                        std::mem::size_of::<st::TyKind>() + 2 * std::mem::size_of::<usize>(),
+                    )
+                    .map_err(Unsupported)?;
+                for t in inputs {
+                    mapped.push(self.ty(t)?);
+                }
+                st::mk(st::TyKind::FnPtr(mapped, self.ty(output)?))
+            }
             Type::Infer => st::hole(),
             Type::Bool => st::bool_ty(),
             Type::Char => st::mk(st::TyKind::Char),

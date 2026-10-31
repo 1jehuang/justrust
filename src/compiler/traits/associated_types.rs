@@ -394,6 +394,14 @@ impl ValidatedTraitWorld {
                     child(ty, replays)?;
                 }
             }
+            Ty::FnPointer(pointer) => {
+                pointer
+                    .validate(&self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                for ty in pointer.types() {
+                    child(ty, replays)?;
+                }
+            }
             Ty::FnItem(item) => {
                 self.info(item.declaration)?;
                 for ty in item.type_args.iter() {
@@ -942,6 +950,13 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::FnPointer(closure) => {
+                for value in closure.types() {
+                    if !self.raw_associated_ty_is_closed(value, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+            }
             Ty::Closure(closure) => {
                 for value in closure.types() {
                     if !self.raw_associated_ty_is_closed(value, depth + 1)? {
@@ -1314,6 +1329,11 @@ impl ValidatedTraitWorld {
                 push(&self.budget, dependencies, evidence)?;
                 Ok(normal)
             }
+            Ty::FnPointer(pointer) => Ok(Ty::FnPointer(pointer.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |t| self.normalize_type_in(t, context, stack, dependencies, depth + 1),
+            )?)),
             Ty::Tuple(parts) => {
                 let mut normal = Vec::new();
                 for part in parts.iter() {
@@ -1865,6 +1885,18 @@ impl ValidatedTraitWorld {
             self.validate_rhs_substitution(left, right, env, arguments, depth + 1)
         };
         match (raw, actual) {
+            (Ty::FnPointer(left), Ty::FnPointer(right)) => {
+                if !left.try_eq(right, |left, right| {
+                    child(left, right)?;
+                    Ok::<_, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "function pointer RHS substitution changed signature arity",
+                    ));
+                }
+                return Ok(());
+            }
             (Ty::Opaque(left), Ty::Opaque(right)) => {
                 if !left.try_eq(right, |left, right| {
                     child(left, right)?;
@@ -2462,6 +2494,92 @@ pub(super) fn nominal_application_self(ty: &Ty) -> bool {
 mod tests {
     use super::*;
     use crate::compiler::frontend::{self, PlanCtx};
+
+    #[test]
+    fn function_pointer_rhs_replay_preserves_signature_and_binder_authority() {
+        let program = frontend::parse("struct Marker<T>{value:T}fn witness<S>(value:S)->S{value}fn carrier(value:Marker<i32>){}fn other(value:Marker<bool>){}fn main(){}").unwrap();
+        let budget = PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let schema = world
+            .schema
+            .declaration_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let nominal = world
+            .schema
+            .declaration_schema(plan.function_decl(1).unwrap())
+            .unwrap()
+            .signature
+            .params[0]
+            .clone();
+        let changed_nominal = world
+            .schema
+            .declaration_schema(plan.function_decl(2).unwrap())
+            .unwrap()
+            .signature
+            .params[0]
+            .clone();
+        let closed = world
+            .schema
+            .declaration_schema(plan.function_decl(3).unwrap())
+            .unwrap();
+        let pointer = |inputs: Vec<Ty>, output| {
+            Ty::FnPointer(ir::FnPointerTy::new(inputs, output, &budget).unwrap())
+        };
+        let raw = pointer(
+            vec![schema.signature.params[0].clone(), Ty::Bool],
+            schema.signature.params[0].clone(),
+        );
+        let actual = pointer(vec![nominal.clone(), Ty::Bool], nominal.clone());
+        world
+            .validate_rhs_substitution(
+                &raw,
+                &actual,
+                &schema.env,
+                std::slice::from_ref(&nominal),
+                0,
+            )
+            .unwrap();
+        for changed in [
+            pointer(vec![Ty::Bool, nominal.clone()], nominal.clone()),
+            pointer(vec![nominal.clone()], nominal.clone()),
+            pointer(vec![nominal.clone(), Ty::Bool], changed_nominal),
+        ] {
+            assert!(
+                world
+                    .validate_rhs_substitution(
+                        &raw,
+                        &changed,
+                        &schema.env,
+                        std::slice::from_ref(&nominal),
+                        0
+                    )
+                    .is_err()
+            );
+        }
+        assert!(
+            world
+                .validate_rhs_substitution(
+                    &raw,
+                    &actual,
+                    &closed.env,
+                    std::slice::from_ref(&nominal),
+                    0
+                )
+                .is_err()
+        );
+        let nested_raw = pointer(vec![raw.clone()], raw);
+        let nested_actual = pointer(vec![actual.clone()], actual);
+        world
+            .validate_rhs_substitution(
+                &nested_raw,
+                &nested_actual,
+                &schema.env,
+                std::slice::from_ref(&nominal),
+                0,
+            )
+            .unwrap();
+    }
 
     #[test]
     fn open_nominal_normalization_retains_caller_authority() {

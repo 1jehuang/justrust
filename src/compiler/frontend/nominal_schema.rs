@@ -849,6 +849,26 @@ impl PlanState {
             Type::Slice(_) => {
                 return Err(BARE_SLICE_UNSUPPORTED.into());
             }
+            Type::FnPointer { inputs, output } => {
+                let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
+                let mut lower = |ty: &Type| {
+                    self.source_ty_with_transport(
+                        registry,
+                        ty,
+                        bindings,
+                        caller,
+                        budget,
+                        depth + 1,
+                        false,
+                        transport,
+                    )
+                };
+                for input in inputs {
+                    mapped.push(lower(input)?);
+                }
+                let output = lower(output)?;
+                ir::Ty::FnPointer(ir::FnPointerTy::new(mapped, output, budget)?)
+            }
             Type::RawPtr { kind, pointee }
                 if matches!(
                     pointee.as_ref(),

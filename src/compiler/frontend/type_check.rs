@@ -1876,6 +1876,11 @@ impl<'s> Checker<'s> {
             InferKind::Slot(_) => {
                 return Err("contract: constructor schema slot escaped into evidence".into());
             }
+            InferKind::FnPointer(inputs, output) => {
+                for t in inputs.iter().chain(std::iter::once(output)) {
+                    self.check_slot_free_evidence(t, depth + 1)?;
+                }
+            }
             InferKind::Tuple(fields)
             | InferKind::Nominal(_, fields)
             | InferKind::Projection(_, _, fields)
@@ -2742,6 +2747,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         return plan.source_ty(ty, &env.params, caller, &plan.budget);
     }
     match ty {
+        Type::FnPointer { .. } => Err("unsupported: function pointer signatures require authoritative planning".into()),
         Type::SelfType => env
             .self_ty
             .clone()
@@ -10230,6 +10236,13 @@ impl<'a> Checker<'a> {
         target: &Type,
     ) -> Result<ir::ExprId, String> {
         let target = self.source_local_ty(target)?;
+        if matches!(target, ir::Ty::FnPointer(_))
+            || matches!(self.scalar_hint(value)?, Some(ir::Ty::FnPointer(_)))
+        {
+            return Err(
+                "unsupported: function pointer casts and coercions are not implemented".into(),
+            );
+        }
         if matches!(target, ir::Ty::RawPtr { .. })
             || matches!(self.scalar_hint(value)?, Some(ir::Ty::RawPtr { .. }))
         {

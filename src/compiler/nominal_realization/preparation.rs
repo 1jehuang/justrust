@@ -236,6 +236,30 @@ impl Capabilities {
                     element: Arc::new(ty),
                 }
             }
+            Shape::FnPointer(inputs, output) => {
+                let mut types =
+                    ir::FnPointerTy::storage(inputs.len(), budget).map_err(Error::new)?;
+                let mut ready = true;
+                for value in inputs.iter() {
+                    if let Some(ty) = child(value)? {
+                        types.push(ty);
+                    } else {
+                        ready = false;
+                    }
+                }
+                let output = child(output)?;
+                if !ready || output.is_none() {
+                    return Ok(None);
+                }
+                ir::Ty::FnPointer(
+                    ir::FnPointerTy::new(
+                        types,
+                        output.ok_or_else(|| Error::new("missing function pointer result"))?,
+                        budget,
+                    )
+                    .map_err(Error::new)?,
+                )
+            }
             Shape::Tuple(values) => {
                 let mut types = Vec::new();
                 types
@@ -437,6 +461,10 @@ pub(in crate::compiler) fn shape(
     Ok(match ty {
         ir::Ty::Struct(n) => Shape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Enum(n) => Shape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
+        ir::Ty::FnPointer(pointer) => Shape::FnPointer(
+            children(&pointer.inputs)?,
+            Arc::new(shape(&pointer.output, budget, depth + 1)?),
+        ),
         ir::Ty::Tuple(types) => Shape::Tuple(children(types)?),
         ir::Ty::Ref { kind, referent } => {
             Shape::Ref(*kind, Arc::new(shape(referent, budget, depth + 1)?))

@@ -64,6 +64,22 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(Some(realized));
         }
         Ok(Some(match ty {
+            ir::Ty::FnPointer(pointer) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                let mut mapped = ir::FnPointerTy::storage(pointer.inputs.len(), budget)?;
+                for t in pointer.inputs.iter() {
+                    let Some(t) = self.resolve_projection_representation(t, depth + 1)? else {
+                        return Ok(None);
+                    };
+                    mapped.push(t);
+                }
+                let Some(output) =
+                    self.resolve_projection_representation(&pointer.output, depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                ir::Ty::FnPointer(ir::FnPointerTy::new(mapped, output, budget)?)
+            }
             ir::Ty::Tuple(fields) => {
                 self.checker.infer_storage(fields.len())?;
                 let mut mapped = Vec::new();
@@ -154,6 +170,14 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(match self.domain(term) {
             Domain::Unknown | Domain::Callable(_) => false,
             Domain::Integer | Domain::Float => self.projection_defaults,
+            Domain::FnPointer(inputs, output) => {
+                for t in inputs.into_iter().chain(std::iter::once(output)) {
+                    if !self.projection_input_ready(t, depth + 1)? {
+                        return Ok(false);
+                    }
+                }
+                true
+            }
             Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                 for term in terms {
                     if !self.projection_input_ready(term, depth + 1)? {
@@ -185,6 +209,14 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Fixed(ir::Ty::Param(_) | ir::Ty::AssociatedType(_)) => true,
+            Domain::FnPointer(inputs, output) => {
+                for t in inputs.into_iter().chain(std::iter::once(output)) {
+                    if self.projection_input_symbolic(t, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                false
+            }
             Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                 for term in terms {
                     if self.projection_input_symbolic(term, depth + 1)? {

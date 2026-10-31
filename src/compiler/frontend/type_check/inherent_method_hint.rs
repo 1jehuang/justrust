@@ -139,8 +139,11 @@ impl Checker<'_> {
                 && application.args.len() == 1
                 && let ir::Ty::Param(slot) = &application.args[0]
             {
-                let self_ty =
-                    super::trait_method_hint::bind_owner(&application.self_ty, &owner_bindings);
+                let self_ty = super::trait_method_hint::bind_owner(
+                    &application.self_ty,
+                    &owner_bindings,
+                    &plan.budget,
+                )?;
                 let open = match solver
                     .core
                     .slots()
@@ -167,8 +170,9 @@ impl Checker<'_> {
                 let projection = super::trait_method_hint::bind_owner(
                     &ir::Ty::AssociatedType(Arc::new(projection.clone())),
                     &owner_bindings,
-                );
-                let ty = super::trait_method_hint::bind_owner(ty, &owner_bindings);
+                    &plan.budget,
+                )?;
+                let ty = super::trait_method_hint::bind_owner(ty, &owner_bindings, &plan.budget)?;
                 solver.constrain_projection_equality(
                     &projection,
                     &ty,
