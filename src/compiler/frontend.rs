@@ -11567,6 +11567,9 @@ impl<'input, 'names> Parser<'input, 'names> {
                 return self.panic_expression(spelling);
             }
         }
+        if self.builtin_macro_ahead("stringify")? {
+            return self.stringify_expression();
+        }
         if self.builtin_macro_ahead("matches")? {
             return self.matches_expression();
         }
@@ -11681,6 +11684,104 @@ impl<'input, 'names> Parser<'input, 'names> {
             }
         }
         Ok(builtin)
+    }
+    /// Render only exact admitted identifier spelling, never a semantic name
+    /// recovered from printed text or an approximation to general token display.
+    fn stringify_expression(&mut self) -> Result<Expr, ParseError> {
+        let site = self.token().span;
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), site)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        self.ident()?;
+        self.expect("!")?;
+        let close = if self.eat("(") {
+            ")"
+        } else if self.eat("[") {
+            "]"
+        } else if self.eat("{") {
+            "}"
+        } else {
+            return Err(self.error("expected a stringify! delimiter"));
+        };
+        if self.eat(close) {
+            return Ok(Expr::Str(String::new()));
+        }
+        let token = self.token();
+        if !token.is_ident() {
+            return Err(self.unsupported(
+                "stringify! expression supports only empty or single admitted identifier payloads",
+            ));
+        }
+        // mint_name replays the immutable root/expansion admission, including
+        // exact logical token, source span, bytes, context and rawness. The
+        // minted identity is not used to synthesize or resolve output text.
+        let name = self.input.mint_name(&token, self.names)?;
+        let admitted = self.names.data(name).map_err(native_adapter::name_error)?;
+        let spelling = self
+            .names
+            .spelling(name)
+            .map_err(native_adapter::name_error)?;
+        let original_text = if admitted.raw {
+            token.text.strip_prefix("r#")
+        } else {
+            Some(token.text)
+        };
+        if admitted.span != token.span || original_text != Some(spelling) {
+            return Err(native_adapter::transport_error(
+                super::token_session::TokenError::ForeignHandle,
+            ));
+        }
+        let original = self
+            .names
+            .session()
+            .original(
+                panic_callsite(self.names.session(), token.span)
+                    .map_err(native_adapter::transport_error)?,
+                512,
+            )
+            .map_err(native_adapter::transport_error)?;
+        self.names
+            .session()
+            .sources()
+            .location(original)
+            .map_err(native_adapter::transport_error)?;
+        self.cursor.bump();
+        if !self.is(close) {
+            return Err(self.unsupported(
+                "stringify! expression supports only empty or single admitted identifier payloads",
+            ));
+        }
+        self.expect(close)?;
+        let text = token.text;
+        self.names
+            .budget()
+            .charge(super::expansion_budget::Counter::Work, text.len() as u64)
+            .map_err(|error| native_adapter::transport_error(error.into()))?;
+        self.names
+            .retain_parser_text(text.len())
+            .map_err(native_adapter::name_error)?;
+        let mut rendered = String::new();
+        rendered.try_reserve_exact(text.len()).map_err(|_| {
+            native_adapter::transport_error(self.names.budget().poison_allocation().into())
+        })?;
+        if rendered.capacity() > text.len() {
+            self.names
+                .retain_parser_text(rendered.capacity() - text.len())
+                .map_err(native_adapter::name_error)?;
+        }
+        rendered.push_str(text);
+        Ok(Expr::Str(rendered))
     }
     /// Lower through the existing bounded pattern grammar and source Match.
     fn matches_expression(&mut self) -> Result<Expr, ParseError> {

@@ -2462,6 +2462,42 @@ mod tests {
     }
 
     #[test]
+    fn builtin_stringify_rejects_forged_spelling_rawness_span_and_admission() {
+        for mutation in 0..4 {
+            let input = super::super::lex("stringify!(ScopeGuard)").unwrap();
+            let (mut buffer, session, cap) = input.into_parts();
+            let invocation_span = buffer[0].whole.span;
+            let invocation_name = buffer[0].name;
+            let eof = buffer.tokens.pop().unwrap();
+            let close = buffer.tokens.pop().unwrap();
+            let mut payload = buffer.tokens.pop().unwrap();
+            assert_eq!(payload.text, "ScopeGuard");
+            match mutation {
+                0 => payload.text = "Different".into(),
+                1 => payload.text = "r#ScopeGuard".into(),
+                2 => payload.whole.span = invocation_span,
+                3 => payload.name = invocation_name,
+                _ => unreachable!(),
+            }
+            buffer.tokens.push(payload).unwrap();
+            buffer.tokens.push(close).unwrap();
+            buffer.tokens.push(eof).unwrap();
+            let mut names = crate::compiler::semantic_name::NameStoreBuilder::new(
+                session,
+                cap,
+                crate::compiler::token::Edition::E2024,
+            )
+            .unwrap();
+            let mut parser = super::super::Parser::new(&buffer, &mut names).unwrap();
+            let error = parser.stringify_expression().unwrap_err();
+            assert!(
+                error.message.contains("foreign token/source handle"),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn macro_inventory_lowers_doc_comments_into_macro_source() {
         for text in [
             "/// audit\nmacro_rules! m {()=>{1};}",

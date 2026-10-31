@@ -6,6 +6,80 @@ mod file_oracle;
 mod oracle;
 
 #[test]
+fn builtin_stringify_expression_exact_tokens_shadowing_and_forwarding_match_stock() {
+    for source in [
+        r#"fn main(){println!("{}|{}|{}|{}|{}",stringify!(),stringify!(ScopeGuard),stringify![Undefined],stringify!{r#type},stringify!(Self));}"#,
+        r#"fn main(){println!("{}",stringify!(Before));{macro_rules! stringify{($($t:tt)*)=>{"local"};}println!("{}",stringify!(not + an identifier));}println!("{}",stringify!(After));}"#,
+        r#"macro_rules! stringify{($($t:tt)*)=>{"module"};}fn main(){println!("{}",stringify!(not + an identifier));}"#,
+        r#"macro_rules! label{($name:ident)=>{stringify!($name)};}fn main(){println!("{}",label!(r#type));}"#,
+        r#"macro_rules! label{()=>{stringify!(ScopeGuard)};}fn main(){println!("{}",label!());}"#,
+    ] {
+        let fixture = file_oracle::Fixture::new(source, &[], None);
+        let metadata = fixture.stock(true);
+        assert!(metadata.status.success(), "stock CHECK: {metadata:?}");
+        fixture.assert_positive();
+        for workers in [1, 8] {
+            let checked = fixture.native(workers, true).unwrap();
+            assert!(checked.executable.is_none());
+            for kind in [102, 103, 108, 137, 140, 142] {
+                assert!(
+                    !checked.report.published_kind(kind),
+                    "stringify CHECK demanded physical producer {kind}"
+                );
+            }
+        }
+    }
+    file_oracle::Fixture::new(
+        r#"mod child;fn main(){println!("{}",child::name());}"#,
+        &[(
+            "child.rs",
+            "pub fn name()->&'static str{stringify!(ScopeGuard)}",
+        )],
+        None,
+    )
+    .assert_positive();
+}
+
+#[test]
+fn builtin_stringify_expression_retains_explicit_rendering_boundaries() {
+    for source in [
+        r#"fn main(){let _name=stringify!(a+b);}"#,
+        r#"fn main(){let _name=stringify!("literal");}"#,
+        r#"fn main(){let _name=stringify!((ScopeGuard));}"#,
+        r#"fn main(){let _name=stringify!(水);}"#,
+        r#"fn main(){let _name=stringify!(r#水);}"#,
+    ] {
+        let fixture = file_oracle::Fixture::new(source, &[], None);
+        let metadata = fixture.stock(true);
+        assert!(
+            metadata.status.success(),
+            "valid unsupported stock source: {metadata:?}"
+        );
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = fixture
+                    .native(workers, check)
+                    .err()
+                    .expect("unimplemented token rendering must not be approximated")
+                    .to_string();
+                assert!(error.to_lowercase().contains("unsupported"), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn builtin_stringify_expression_does_not_hide_unused_invalid_sources_or_shadow_errors() {
+    for source in [
+        "fn bad()->i32{stringify!(ScopeGuard)}fn main(){}",
+        "fn bad(){let _name=stringify!(ScopeGuard];}fn main(){}",
+        "macro_rules! stringify{($name:ident)=>{missing};}fn bad(){let _name=stringify!(ScopeGuard);}fn main(){}",
+    ] {
+        file_oracle::Fixture::new(source, &[], None).assert_negative();
+    }
+}
+
+#[test]
 fn generated_free_function_docs_preserve_callable_receipts() {
     let source = "macro_rules! item{()=>{#[doc=\"first\"]fn first()->i32{7}#[doc=\"second\"]fn second()->i32{11}}}item!();fn main(){println!(\"{}\",first()+second());}";
     file_oracle::Fixture::new(source, &[], None).assert_positive();

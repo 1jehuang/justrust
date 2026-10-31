@@ -3041,6 +3041,76 @@ fn debug_assertions_preserve_expansion_profile_shadowing_and_message_bounds() {
 }
 
 #[test]
+fn builtin_stringify_preserves_exact_admitted_identifier_spelling_and_delimiters() {
+    for (invocation, expected) in [
+        ("stringify!()", ""),
+        ("stringify![]", ""),
+        ("stringify!{}", ""),
+        ("stringify!(ScopeGuard)", "ScopeGuard"),
+        ("stringify![Undefined]", "Undefined"),
+        ("stringify!{r#type}", "r#type"),
+        ("stringify!(Self)", "Self"),
+    ] {
+        let program = parse(&format!("fn f(){{{invocation}}}fn main(){{}}")).unwrap();
+        assert!(
+            matches!(program.functions[0].body.tail.as_deref(), Some(Expr::Str(text)) if text == expected)
+        );
+    }
+}
+
+#[test]
+fn builtin_stringify_output_storage_is_charged_and_denial_is_sticky() {
+    use super::super::expansion_budget::{BudgetResource, Storage};
+    for deny in [false, true] {
+        let (tokens, session, cap) = lex("stringify!(RetainedOriginalIdentifier)")
+            .unwrap()
+            .into_parts();
+        let mut names =
+            NameStoreBuilder::new(session, cap, super::super::token::Edition::E2024).unwrap();
+        let budget = names.budget().clone();
+        let mut parser = Parser::new(&tokens, &mut names).unwrap();
+        let before = budget.snapshot();
+        let blocker = if deny {
+            Some(
+                budget
+                    .reserve(
+                        Storage::Temporary,
+                        budget.limits().bytes - before.retained_bytes - before.temporary_bytes,
+                    )
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+        let value = parser.stringify_expression();
+        if deny {
+            let error = value.unwrap_err();
+            assert_eq!(error.kind, super::super::source::SourceErrorKind::Limit);
+            assert_eq!(
+                budget.snapshot().failure.unwrap().resource,
+                BudgetResource::Bytes
+            );
+            assert!(budget.check().is_err());
+            drop(error);
+        } else {
+            let Expr::Str(text) = value.unwrap() else {
+                panic!("missing original text")
+            };
+            assert_eq!(text, "RetainedOriginalIdentifier");
+            assert!(
+                budget.snapshot().retained_bytes - before.retained_bytes >= text.capacity() as u64
+            );
+        }
+        drop(blocker);
+        drop(parser);
+        drop(names);
+        drop(tokens);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        assert_eq!(budget.snapshot().temporary_bytes, 0);
+    }
+}
+
+#[test]
 fn disabled_debug_assertion_storage_denial_releases_all_parser_storage() {
     use super::super::expansion_budget::{BudgetResource, Storage};
     let (tokens, session, session_cap) = lex("debug_assert!(true)").unwrap().into_parts();
