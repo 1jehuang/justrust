@@ -15,6 +15,38 @@ fn declaration(plan: &PlanCtx, index: usize) -> ir::DeclId {
 }
 
 #[test]
+fn source_defaults_complete_ordered_actuals_but_raw_interning_stays_exact() {
+    let budget = ir::PlanBudget::default();
+    let source = parse("struct Pair<A=i32,B=A,C=B>{a:A,b:B,c:C}fn omitted(x:Pair<i32>)->Pair<i32,i32,i32>{x}fn main(){}").unwrap();
+    let plan = PlanCtx::from_program(&source, &budget).unwrap();
+    let signature = plan
+        .function_schema(plan.function_decl(0).unwrap())
+        .unwrap();
+    let ir::Ty::Struct(parameter) = &signature.signature.params[0] else {
+        panic!("missing source nominal parameter")
+    };
+    assert_eq!(
+        parameter.def().type_args.as_ref(),
+        &[
+            ir::Ty::Int(ir::IntTy::I32),
+            ir::Ty::Int(ir::IntTy::I32),
+            ir::Ty::Int(ir::IntTy::I32)
+        ]
+    );
+    assert_eq!(&signature.signature.params[0], &signature.signature.result);
+    let facts = plan.callable_facts(plan.function_decl(1).unwrap()).unwrap();
+    assert!(
+        plan.intern_nominal(
+            declaration(&plan, 0),
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Validated(&facts),
+            &budget
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn validated_nested_nominal_interning_replays_authority_after_unlock() {
     let budget = ir::PlanBudget::default();
     let plan = plan(&budget);

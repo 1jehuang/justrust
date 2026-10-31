@@ -72,10 +72,57 @@ impl Checker<'_> {
         self.infer_work(depth)?;
         let term = match expectation {
             Expectation::Application(application) => {
+                let plan = self.signatures.plan()?;
+                let arity = plan.param_env(declaration)?.arity();
+                if application.arguments.len() < arity {
+                    plan.registry
+                        .nominal_source_arity(declaration, application.arguments.len())?;
+                    if application
+                        .arguments
+                        .iter()
+                        .any(partial_annotation::has_nested_infer)
+                    {
+                        return Err("unsupported: omitted nominal defaults after explicit source placeholders require solved-source default substitution".into());
+                    }
+                    // An explicit partial application fixes omitted defaults.
+                    // Neither outer expectations nor field evidence may supply
+                    // replacement actuals for those declaration-owned slots.
+                    plan.budget.retain_bytes(
+                        application
+                            .arguments
+                            .len()
+                            .checked_mul(std::mem::size_of::<ir::Ty>())
+                            .ok_or("constructor source default actual storage overflow")?,
+                    )?;
+                    let mut actuals = Vec::new();
+                    actuals.try_reserve_exact(application.arguments.len())
+                        .map_err(|_| "infrastructure: constructor source default actual allocation failed")?;
+                    for source in application.arguments {
+                        actuals.push(self.checked_type_actual(source)?);
+                    }
+                    let actuals = plan.complete_nominal_source_arguments(
+                        declaration,
+                        actuals,
+                        self.facts(),
+                        &plan.budget,
+                    )?;
+                    self.infer_storage(actuals.len())?;
+                    let mut arguments = Vec::new();
+                    arguments.try_reserve_exact(actuals.len()).map_err(
+                        |_| "infrastructure: constructor source default term allocation failed",
+                    )?;
+                    for actual in &actuals {
+                        arguments.push(self.infer_type_term(actual, None, depth + 1)?);
+                    }
+                    return Ok(Some(arguments));
+                }
                 let inherited =
                     self.constructor_source_arguments(declaration, application.outer, depth + 1)?;
-                let mut arguments = Vec::with_capacity(application.arguments.len());
                 self.infer_storage(application.arguments.len())?;
+                let mut arguments = Vec::new();
+                arguments
+                    .try_reserve_exact(application.arguments.len())
+                    .map_err(|_| "infrastructure: constructor source term allocation failed")?;
                 for (index, source) in application.arguments.iter().enumerate() {
                     let written = self.partial_type_term(source, depth + 1)?;
                     arguments.push(self.merge_constructor_context(
@@ -204,5 +251,81 @@ impl Checker<'_> {
             // below the referent. No reference-value move occurs inside it.
             _ => Ok(written.clone()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_partial_constructor_defaults_use_source_slots_not_outer_or_field_inference() {
+        let source = parse("struct Pair<A=i32,B=A,C=B>{a:A,b:B,c:C}fn main(){let fixed=Pair::<i32>{a:1,b:2,c:4};let partial=Pair::<_>{a:1,b:2,c:4};let full=Pair::<_,_,_>{a:1,b:2,c:4};}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let main = plan.function_decl(0).unwrap();
+        let signatures = plan.environment(Some(main)).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, source.functions[0].module);
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let source_arguments = |index: usize| {
+            let Stmt::Let {
+                value: Expr::Apply { path, .. },
+                ..
+            } = &source.functions[0].body.statements[index]
+            else {
+                panic!("missing original explicit constructor source")
+            };
+            path.application().unwrap().1
+        };
+        let outer = plan
+            .intern_nominal(
+                declaration,
+                &[ir::Ty::Int(ir::IntTy::I32), ir::Ty::Bool, ir::Ty::Bool],
+                checker.facts(),
+                &budget,
+            )
+            .unwrap();
+        let application = ApplicationExpectation {
+            outer: Expectation::HasType(&outer),
+            arguments: source_arguments(0),
+        };
+        let arguments = checker
+            .constructor_source_arguments(declaration, Expectation::Application(&application), 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(arguments.len(), 3);
+        assert!(
+            arguments
+                .iter()
+                .all(|term| matches!(term.as_ref(), InferKind::Rigid(ir::Ty::Int(ir::IntTy::I32))))
+        );
+        assert!(
+            checker
+                .constructor_source_arguments(declaration, Expectation::None, 0)
+                .unwrap()
+                .is_none()
+        );
+        let partial = ApplicationExpectation {
+            outer: Expectation::None,
+            arguments: source_arguments(1),
+        };
+        let error = checker
+            .constructor_source_arguments(declaration, Expectation::Application(&partial), 0)
+            .unwrap_err();
+        assert!(error.contains("unsupported"), "{error}");
+        let full = ApplicationExpectation {
+            outer: Expectation::None,
+            arguments: source_arguments(2),
+        };
+        let arguments = checker
+            .constructor_source_arguments(declaration, Expectation::Application(&full), 0)
+            .unwrap()
+            .unwrap();
+        assert_eq!(arguments.len(), 3);
+        assert!(
+            arguments
+                .iter()
+                .all(|term| matches!(term.as_ref(), InferKind::Unknown(_)))
+        );
     }
 }

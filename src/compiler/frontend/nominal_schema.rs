@@ -9,7 +9,7 @@ pub(super) struct SourceMetadataCache {
     registry: Option<Arc<DeclRegistry>>,
     parameters: HashMap<ir::DeclId, Arc<[GenericBindingKey]>>,
     fields: HashMap<(ir::DeclId, usize), Arc<SourceMetadata>>,
-    active: Option<Arc<SourceMetadata>>,
+    pub(super) active: Option<Arc<SourceMetadata>>,
     validation: SourceMetadataValidation,
 }
 
@@ -25,7 +25,7 @@ impl std::fmt::Debug for SourceMetadataValidation {
 }
 
 #[derive(Debug)]
-struct SourceMetadata {
+pub(super) struct SourceMetadata {
     declaration: ir::DeclId,
     _schema: Arc<NominalSchema>,
     nodes: HashMap<usize, SourceNodeMetadata>,
@@ -151,7 +151,7 @@ fn schema_field_key(names: &NameStore, name: FieldName) -> Result<SchemaFieldKey
 }
 
 impl PlanState {
-    fn schema_param_bindings(
+    pub(super) fn schema_param_bindings(
         &mut self,
         registry: &DeclRegistry,
         info: &DeclInfo,
@@ -696,6 +696,15 @@ impl PlanState {
                         )
                     })
                     .collect::<Result<Vec<_>, _>>()?;
+                let args = self.nominal_source_arguments(
+                    registry,
+                    decl,
+                    args,
+                    caller,
+                    budget,
+                    depth + 1,
+                    transport,
+                )?;
                 self.intern_with_transport(
                     registry,
                     decl,
@@ -722,10 +731,19 @@ impl PlanState {
                         )?)
                         .ok_or_else(|| "unknown nominal type".to_owned())?,
                 };
+                let args = self.nominal_source_arguments(
+                    registry,
+                    decl,
+                    Vec::new(),
+                    caller,
+                    budget,
+                    depth + 1,
+                    transport,
+                )?;
                 self.intern_with_transport(
                     registry,
                     decl,
-                    &[],
+                    &args,
                     caller,
                     budget,
                     depth + 1,

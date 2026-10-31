@@ -719,6 +719,14 @@ impl<'a> Validator<'a> {
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
+                nominal_defaults::validate_declaration(
+                    self.program.names.as_ref(),
+                    &declaration.type_params,
+                    &declaration.type_defaults,
+                )?;
+                for default in declaration.type_defaults.iter().flatten() {
+                    self.push(Visit::Type(&default.ty))?;
+                }
                 self.identifiers(&declaration.region_params, LookupClass::LifetimeParameter)?;
                 self.many(&declaration.fields, |field| {
                     Visit::Field(field, declaration.module)
@@ -750,6 +758,14 @@ impl<'a> Validator<'a> {
                 self.visibility(&declaration.visibility, declaration.module)?;
                 self.declaration_path(&declaration.name, declaration.module)?;
                 self.identifiers(&declaration.type_params, LookupClass::TypeParameter)?;
+                nominal_defaults::validate_declaration(
+                    self.program.names.as_ref(),
+                    &declaration.type_params,
+                    &declaration.type_defaults,
+                )?;
+                for default in declaration.type_defaults.iter().flatten() {
+                    self.push(Visit::Type(&default.ty))?;
+                }
                 self.identifiers(&declaration.region_params, LookupClass::LifetimeParameter)?;
                 self.many(&declaration.variants, |variant| {
                     Visit::Variant(variant, declaration.module)
@@ -1993,6 +2009,7 @@ mod tests {
             module,
             shape: StructShape::Record,
             type_params: Vec::new(),
+            type_defaults: Vec::new(),
             bounds: Vec::new(),
             region_params: Vec::new(),
             name: path,
@@ -2014,6 +2031,7 @@ mod tests {
             module,
             shape: StructShape::Unit,
             type_params: Vec::new(),
+            type_defaults: Vec::new(),
             bounds: Vec::new(),
             region_params: Vec::new(),
             name,
@@ -2530,6 +2548,7 @@ mod tests {
             module,
             shape: StructShape::Tuple,
             type_params: Vec::new(),
+            type_defaults: Vec::new(),
             bounds: Vec::new(),
             region_params: Vec::new(),
             name,

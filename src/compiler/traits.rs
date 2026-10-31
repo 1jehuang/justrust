@@ -40,7 +40,9 @@ fn nominal_fields(fields: &ir::NominalFields, budget: &PlanBudget) -> Result<Arc
         .read(budget)
         .map_err(|error| FactsError::from_message(budget, &error))
 }
-pub use nominal_declarations::{NominalDeclarationProof, NominalDeclarationSchema};
+pub use nominal_declarations::{
+    NominalDeclarationProof, NominalDeclarationSchema, NominalDefaultSchema,
+};
 pub(in crate::compiler) use nominal_realization::ClosedNominalInput;
 mod nominal_carriers;
 pub(in crate::compiler) use nominal_carriers::NominalCarrierSource;

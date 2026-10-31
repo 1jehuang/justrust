@@ -10,7 +10,9 @@ impl PlanCtx {
     ) -> Result<Option<Shape>, String> {
         let info = self.registry.declaration(declaration)?;
         let bindings = generic_bindings(&self.registry, &info.env, &self.budget)?;
-        self.nominal_source_shape_inner(ty, &bindings, declaration, 0)
+        let parameters = HashMap::new();
+        let active = std::cell::RefCell::new(Vec::new());
+        self.nominal_source_shape_inner(ty, &bindings, &parameters, declaration, 0, &active)
             .map(Some)
             .map_err(|error| {
                 format!(
@@ -20,17 +22,121 @@ impl PlanCtx {
             })
     }
 
+    /// Complete demand arguments, not source syntax or type permissions. The
+    /// existing declaration proof and realization reads remain mandatory.
+    fn nominal_source_recipe_arguments(
+        &self,
+        declaration: ir::DeclId,
+        mut args: Vec<Shape>,
+        bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        depth: usize,
+        active: &std::cell::RefCell<Vec<(ir::DeclId, usize)>>,
+    ) -> Result<Vec<Shape>, String> {
+        self.budget.check_depth(depth)?;
+        self.registry
+            .nominal_source_arity(declaration, args.len())?;
+        let info = self.registry.declaration(declaration)?;
+        if args.len() == info.type_params.len() {
+            return Ok(args);
+        }
+        let schema = self
+            .nominal_schemas
+            .get(&declaration)
+            .ok_or("missing authenticated source recipe declaration")?;
+        let defaults = schema.defaults();
+        nominal_defaults::validate_declaration(
+            self.registry.names.as_ref(),
+            &info.type_params,
+            defaults,
+        )?;
+        self.budget.retain_bytes(
+            info.type_params
+                .len()
+                .checked_mul(std::mem::size_of::<Shape>())
+                .ok_or("nominal default recipe actual size overflow")?,
+        )?;
+        args.try_reserve_exact(info.type_params.len() - args.len())
+            .map_err(|_| "infrastructure: nominal default recipe actual allocation failed")?;
+        self.budget.retain_bytes(
+            info.type_params
+                .len()
+                .checked_mul(4 * std::mem::size_of::<(GenericBindingKey, Shape)>())
+                .ok_or("nominal default recipe binding size overflow")?,
+        )?;
+        let mut parameters = HashMap::new();
+        parameters
+            .try_reserve(info.type_params.len())
+            .map_err(|_| "infrastructure: nominal default recipe binding allocation failed")?;
+        for (parameter, actual) in info.type_params.iter().zip(&args) {
+            self.budget.charge_work(1)?;
+            parameters.insert(self.registry.parameter_key(*parameter)?, actual.clone());
+        }
+        while args.len() < info.type_params.len() {
+            self.budget.charge_work(1)?;
+            let index = args.len();
+            let default = defaults[index]
+                .as_ref()
+                .ok_or("missing original source recipe default slot")?;
+            default.syntax(self.registry.names.as_ref())?;
+            {
+                let previous = active.borrow();
+                for slot in previous.iter() {
+                    self.budget.charge_work(1)?;
+                    if *slot == (declaration, index) {
+                        return Err("cyclic nominal generic default source recipe".into());
+                    }
+                }
+            }
+            self.budget
+                .retain_bytes(std::mem::size_of::<(ir::DeclId, usize)>())?;
+            {
+                let mut stack = active.borrow_mut();
+                stack.try_reserve_exact(1).map_err(
+                    |_| "infrastructure: nominal default recipe cycle allocation failed",
+                )?;
+                stack.push((declaration, index));
+            }
+            let actual = self.nominal_source_shape_inner(
+                &default.ty,
+                bindings,
+                &parameters,
+                declaration,
+                depth + 1,
+                active,
+            );
+            active.borrow_mut().pop();
+            let actual = actual?;
+            reject_default_recipe_carriers(&actual, &self.budget, depth + 1)?;
+            parameters.insert(
+                self.registry.parameter_key(info.type_params[index])?,
+                actual.clone(),
+            );
+            args.push(actual);
+        }
+        Ok(args)
+    }
+
     fn nominal_source_shape_inner(
         &self,
         ty: &Type,
         bindings: &HashMap<GenericBindingKey, ir::Ty>,
+        parameters: &HashMap<GenericBindingKey, Shape>,
         declaration: ir::DeclId,
         depth: usize,
+        active: &std::cell::RefCell<Vec<(ir::DeclId, usize)>>,
     ) -> Result<Shape, String> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
-        let child =
-            |ty: &Type| self.nominal_source_shape_inner(ty, bindings, declaration, depth + 1);
+        let child = |ty: &Type| {
+            self.nominal_source_shape_inner(
+                ty,
+                bindings,
+                parameters,
+                declaration,
+                depth + 1,
+                active,
+            )
+        };
         Ok(match ty {
             Type::Int(n) => Shape::Leaf(ir::Ty::Int(*n)),
             Type::Float(n) => Shape::Leaf(ir::Ty::Float(*n)),
@@ -39,12 +145,19 @@ impl PlanCtx {
             Type::Never => Shape::Leaf(ir::Ty::Never),
             Type::Char => Shape::Leaf(ir::Ty::Char),
             Type::Str => Shape::Leaf(ir::Ty::Str),
-            Type::Param(name) => Shape::Leaf(
-                bindings
-                    .get(&self.registry.parameter_key(*name)?)
-                    .cloned()
-                    .ok_or("source nominal recipe has a foreign generic parameter")?,
-            ),
+            Type::Param(name) => {
+                let key = self.registry.parameter_key(*name)?;
+                if let Some(actual) = parameters.get(&key) {
+                    actual.clone()
+                } else {
+                    Shape::Leaf(
+                        bindings
+                            .get(&key)
+                            .cloned()
+                            .ok_or("source nominal recipe has a foreign generic parameter")?,
+                    )
+                }
+            }
             Type::SelfType => Shape::Leaf(
                 bindings
                     .get(&GenericBindingKey::SelfType)
@@ -74,11 +187,17 @@ impl PlanCtx {
             Type::Named(path) => {
                 let declaration=*self.registry.nominals.get(&name_scope::path_key(self.registry.names.as_ref(),path,Namespace::Type)?)
                     .ok_or("unsupported: source recipe path is not an authenticated nominal declaration")?;
-                let info = self.registry.declaration(declaration)?;
-                if info.param_env.arity() != 0 {
-                    return Err("source nominal recipe omitted generic arguments".into());
-                }
-                Shape::Nominal(declaration, Arc::from([]))
+                let args = self.nominal_source_recipe_arguments(
+                    declaration,
+                    Vec::new(),
+                    bindings,
+                    depth + 1,
+                    active,
+                )?;
+                Shape::Nominal(
+                    declaration,
+                    source_recipe_argument_backing(args, &self.budget)?,
+                )
             }
             Type::Apply(path) => {
                 if path.segments.iter().any(|s| !s.associated_types.is_empty()) {
@@ -106,13 +225,8 @@ impl PlanCtx {
                     .ok_or(
                         "unsupported: source recipe generic path is not a nominal declaration",
                     )?;
-                let info = self.registry.declaration(declaration)?;
-                if info.param_env.arity() != segment.args.len() {
-                    return Err("nominal source recipe argument arity changed".into());
-                }
-                let mut args = Vec::new();
-                args.try_reserve_exact(segment.args.len())
-                    .map_err(|_| "nominal recipe actual allocation failed")?;
+                self.registry
+                    .nominal_source_arity(declaration, segment.args.len())?;
                 self.budget.retain_bytes(
                     segment
                         .args
@@ -120,12 +234,25 @@ impl PlanCtx {
                         .checked_mul(std::mem::size_of::<Shape>())
                         .ok_or("nominal recipe actual size overflow")?,
                 )?;
+                let mut args = Vec::new();
+                args.try_reserve_exact(segment.args.len())
+                    .map_err(|_| "infrastructure: nominal recipe actual allocation failed")?;
                 for (index, ty) in segment.args.iter().enumerate() {
                     args.push(child(ty).map_err(|error| {
                         format!("{error}; nominal={declaration:?} argument={index}")
                     })?);
                 }
-                Shape::Nominal(declaration, args.into())
+                let args = self.nominal_source_recipe_arguments(
+                    declaration,
+                    args,
+                    bindings,
+                    depth + 1,
+                    active,
+                )?;
+                Shape::Nominal(
+                    declaration,
+                    source_recipe_argument_backing(args, &self.budget)?,
+                )
             }
             Type::Projection(_) => {
                 // Reuse retained-occurrence authentication. The resulting shape
@@ -174,5 +301,169 @@ impl PlanCtx {
                 );
             }
         })
+    }
+}
+
+// Vec storage and its immutable transfer coexist. Even an empty slice pays
+// the Arc header, rather than assuming zero-element means zero allocation.
+fn source_recipe_argument_backing(
+    args: Vec<Shape>,
+    budget: &ir::PlanBudget,
+) -> Result<Arc<[Shape]>, String> {
+    let bytes = args
+        .len()
+        .checked_mul(std::mem::size_of::<Shape>())
+        .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
+        .ok_or("nominal source recipe Arc storage overflow")?;
+    budget.retain_bytes(bytes)?;
+    Ok(args.into())
+}
+
+/// This rejects visible default carrier demands only. Nominal field carriers
+/// still require the unchanged source-region and realization proof services.
+fn reject_default_recipe_carriers(
+    shape: &Shape,
+    budget: &ir::PlanBudget,
+    depth: usize,
+) -> Result<(), String> {
+    budget.check_depth(depth)?;
+    budget.charge_work(1)?;
+    match shape {
+        Shape::Leaf(ty) => {
+            if !ir::carrier_locations(ty, budget)?.is_empty() {
+                return Err("unsupported: nominal default recipe requires original carrier-family source transport".into());
+            }
+        }
+        Shape::Nominal(_, arguments) | Shape::Tuple(arguments) => {
+            for argument in arguments.iter() {
+                reject_default_recipe_carriers(argument, budget, depth + 1)?;
+            }
+        }
+        Shape::Array(element, _) => reject_default_recipe_carriers(element, budget, depth + 1)?,
+        Shape::Ref(..) | Shape::RawPtr(..) | Shape::Slice(_) | Shape::Projection { .. } => {
+            return Err(
+                "unsupported: nominal default recipe requires broader original source transport"
+                    .into(),
+            );
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_recipe_arc_backing_is_admitted_independently_even_when_empty() {
+        for count in [0, 2] {
+            let bytes = count * std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>();
+            let budget = ir::PlanBudget::new(ir::PlanLimits {
+                bytes: bytes - 1,
+                ..Default::default()
+            });
+            let args = vec![Shape::Leaf(ir::Ty::Bool); count];
+            assert!(source_recipe_argument_backing(args, &budget).is_err());
+            let failure = budget.first_resource_failure().unwrap();
+            assert_eq!(failure.kind, ir::ResourceBudgetKind::Bytes);
+            assert_eq!((failure.used, failure.requested), (0, bytes));
+        }
+    }
+
+    #[test]
+    fn source_default_recipes_preserve_nominal_identity_and_order_without_raw_arity_relaxation() {
+        let source = parse("struct Pair<A=i32,B=A,C=B>{a:A,b:B,c:C}struct Required<T,U=i32>{a:T,b:U}fn inputs(a:Pair,b:Pair<i32>,c:Pair<i32,i32,i32>){}fn context<T>(x:T){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let recipes = source.functions[0]
+            .params
+            .iter()
+            .map(|(_, ty)| plan.nominal_source_shape(owner, ty).unwrap().unwrap())
+            .collect::<Vec<_>>();
+        let mut meter = |depth| {
+            budget.check_depth(depth)?;
+            budget.charge_work(1)
+        };
+        assert!(recipes[0].same_with(&recipes[1], 0, &mut meter).unwrap());
+        assert!(recipes[1].same_with(&recipes[2], 0, &mut meter).unwrap());
+        let pair = plan.nominal_declaration(0).unwrap();
+        let Shape::Nominal(actual, arguments) = &recipes[0] else {
+            panic!("lost nominal recipe")
+        };
+        assert_eq!(*actual, pair);
+        assert_eq!(arguments.len(), 3);
+        assert!(
+            arguments
+                .iter()
+                .all(|argument| matches!(argument, Shape::Leaf(ir::Ty::Int(ir::IntTy::I32))))
+        );
+        let bindings = HashMap::new();
+        let active = std::cell::RefCell::new(Vec::new());
+        assert!(
+            plan.nominal_source_recipe_arguments(
+                pair,
+                vec![Shape::Leaf(ir::Ty::Bool); 4],
+                &bindings,
+                0,
+                &active
+            )
+            .is_err()
+        );
+        let required = plan.nominal_declaration(1).unwrap();
+        assert!(
+            plan.nominal_source_recipe_arguments(required, Vec::new(), &bindings, 0, &active)
+                .is_err()
+        );
+        let facts = plan.callable_facts(plan.function_decl(2).unwrap()).unwrap();
+        assert!(
+            plan.intern_nominal(
+                pair,
+                &[ir::Ty::Int(ir::IntTy::I32)],
+                ir::FactsCtx::Validated(&facts),
+                &budget
+            )
+            .is_err()
+        );
+        let generic = plan
+            .function_schema(plan.function_decl(1).unwrap())
+            .unwrap();
+        let rigid = Shape::Leaf(generic.signature.params[0].clone());
+        let error = plan
+            .nominal_source_recipe_arguments(pair, vec![rigid], &bindings, 0, &active)
+            .unwrap_err();
+        assert!(error.contains("unsupported"), "{error}");
+        let foreign = parse("struct Pair<A=i32>{a:A}fn input(x:Pair){}fn main(){}").unwrap();
+        assert!(
+            plan.nominal_source_shape(owner, &foreign.functions[0].params[0].1)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn source_default_recipe_does_not_grant_hidden_nominal_carrier_permissions() {
+        let source = parse("struct Borrowed<'a>{value:&'a i32}struct Cell<T=Borrowed<'static>>{value:T}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let declaration = plan.nominal_declaration(1).unwrap();
+        let bindings = HashMap::new();
+        let active = std::cell::RefCell::new(Vec::new());
+        let demand = plan
+            .nominal_source_recipe_arguments(declaration, Vec::new(), &bindings, 0, &active)
+            .unwrap();
+        assert!(matches!(demand.as_slice(), [Shape::Nominal(_, _)]));
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let error = plan
+            .complete_nominal_source_arguments(
+                declaration,
+                Vec::new(),
+                ir::FactsCtx::Validated(&facts),
+                &budget,
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("unsupported") && error.contains("carrier"),
+            "{error}"
+        );
     }
 }

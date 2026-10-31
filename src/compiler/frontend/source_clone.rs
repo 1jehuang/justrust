@@ -379,6 +379,7 @@ pub(super) fn preflight_program_clone(
         clone_visibility(&declaration.visibility, budget)?;
         clone_ast_path(&declaration.name, budget)?;
         clone_names(&declaration.type_params, budget)?;
+        nominal_defaults::preflight_clone(&declaration.type_defaults, budget)?;
         clone_fields(&declaration.fields, budget)?;
     }
     clone_vector(&program.enums, budget)?;
@@ -386,6 +387,7 @@ pub(super) fn preflight_program_clone(
         clone_visibility(&declaration.visibility, budget)?;
         clone_ast_path(&declaration.name, budget)?;
         clone_names(&declaration.type_params, budget)?;
+        nominal_defaults::preflight_clone(&declaration.type_defaults, budget)?;
         clone_vector(&declaration.variants, budget)?;
         for variant in &declaration.variants {
             clone_fields(&variant.fields, budget)?;

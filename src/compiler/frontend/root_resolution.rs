@@ -368,6 +368,33 @@ impl Resolver<'_> {
         }
         Ok(Some(declaration.type_params.len()))
     }
+    fn nominal_accepts(&self, path: &AstPath, written: usize) -> Result<bool, String> {
+        let Some(total) = self.nominal_arity(path)? else {
+            return Ok(false);
+        };
+        let defaults = if let Some(index) = self.declaration_index(path, |kind| match kind {
+            ItemKind::Struct(index) => Some(*index),
+            _ => None,
+        })? {
+            &self.struct_decl(index, path)?.type_defaults
+        } else {
+            let index = self
+                .declaration_index(path, |kind| match kind {
+                    ItemKind::Enum(index) => Some(*index),
+                    _ => None,
+                })?
+                .ok_or("missing nominal declaration")?;
+            &self
+                .program
+                .enums
+                .get(index)
+                .ok_or("missing enum declaration")?
+                .type_defaults
+        };
+        Ok(defaults.len() == total
+            && written <= total
+            && defaults[written..].iter().all(Option::is_some))
+    }
     /// The declaration index bound at the source path `path`, by kind.
     fn declaration_index(
         &self,
@@ -2352,7 +2379,7 @@ impl Resolver<'_> {
                 }) {
                     *ty = self.expand_alias(&name, args, &name)?;
                 } else if let Some(expected) = self.nominal_arity(&name)? {
-                    if expected != args.len() {
+                    if !self.nominal_accepts(&name, args.len())? {
                         return Err(format!(
                             "E0107: {} expects {expected} type arguments, got {}",
                             self.display(&name)?,
@@ -2414,7 +2441,9 @@ impl Resolver<'_> {
                     ));
                 }
                 *name = self.resolved_use(item.source()?, name)?;
-                if self.nominal_arity(name)?.is_some_and(|arity| arity != 0) {
+                if self.nominal_arity(name)?.is_some_and(|arity| arity != 0)
+                    && !self.nominal_accepts(name, 0)?
+                {
                     return Err(format!(
                         "E0107: missing type arguments for {}",
                         self.display(name)?
@@ -4275,8 +4304,15 @@ fn resolve_nominal(
 ) -> Result<ResolvedNominal, String> {
     match source {
         NominalSource::Enum(index) => {
+            nominal_defaults::preflight_clone(
+                &program.enums[index].type_defaults,
+                &resolver.alias_budget,
+            )?;
             let mut enumeration = program.enums[index].clone();
             resolver.type_params = enumeration.type_params.clone();
+            for default in enumeration.type_defaults.iter_mut().flatten() {
+                resolver.ty(&mut default.ty, enumeration.module)?;
+            }
             resolver.bounds(&mut enumeration.bounds, enumeration.module)?;
             for variant in &mut enumeration.variants {
                 for field in &mut variant.fields {
@@ -4287,8 +4323,15 @@ fn resolve_nominal(
             Ok(ResolvedNominal::Enum(index, enumeration))
         }
         NominalSource::Struct(index) => {
+            nominal_defaults::preflight_clone(
+                &program.structs[index].type_defaults,
+                &resolver.alias_budget,
+            )?;
             let mut structure = program.structs[index].clone();
             resolver.type_params = structure.type_params.clone();
+            for default in structure.type_defaults.iter_mut().flatten() {
+                resolver.ty(&mut default.ty, structure.module)?;
+            }
             resolver.bounds(&mut structure.bounds, structure.module)?;
             for field in &mut structure.fields {
                 validate_depth(DepthNode::Type(&field.ty))?;

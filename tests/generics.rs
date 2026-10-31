@@ -11,6 +11,224 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/stock_rustc.rs"]
+mod defaults_stock;
+
+const NOMINAL_DEFAULT_VALID: &[(&str, &str, &str)] = &[
+    (
+        "struct_annotation",
+        r#"struct Cell<T=i32>{value:T}fn get(x:Cell)->i32{x.value}fn main(){println!("{}",get(Cell::<i32>{value:7}));}"#,
+        "7
+",
+    ),
+    (
+        "explicit_override_and_inference",
+        r#"struct Cell<T=i32>{value:T}fn get(x:Cell<bool>)->bool{x.value}fn main(){let x=Cell{value:true};if get(x){println!("defaults ok");}}"#,
+        "defaults ok
+",
+    ),
+    (
+        "ordered_partial_arguments",
+        r#"struct Pair<A=i32,B=A,C=B>{a:A,b:B,c:C}fn get(x:Pair<i32>)->i32{x.a+x.b+x.c}fn main(){println!("{}",get(Pair::<i32>{a:1,b:2,c:4}));}"#,
+        "7
+",
+    ),
+    (
+        "tuple_default",
+        r#"struct Cell<T=i32>(T);fn get(x:Cell)->i32{x.0}fn main(){println!("{}",get(Cell::<i32>(7)));}"#,
+        "7
+",
+    ),
+    (
+        "enum_default",
+        r#"enum Cell<T=i32>{Value(T),Empty}fn get(x:Cell)->i32{match x{Cell::Value(v)=>v,Cell::Empty=>0}}fn main(){println!("{}",get(Cell::<i32>::Value(7)));}"#,
+        "7
+",
+    ),
+    (
+        "declaration_module_default",
+        r#"mod origin{pub struct Value{pub n:i32}pub struct Cell<T=Value>{pub value:T}}struct Value{n:bool}fn get(x:origin::Cell)->i32{x.value.n}fn main(){println!("{}",get(origin::Cell::<origin::Value>{value:origin::Value{n:7}}));}"#,
+        "7
+",
+    ),
+    (
+        "closed_bound",
+        r#"trait Strategy{}enum Always{}impl Strategy for Always{}struct Guard<T,S:Strategy=Always>{value:T,strategy:S}fn take(x:Guard<i32>)->i32{match x.strategy{}}fn main(){println!("defaults ok");}"#,
+        "defaults ok
+",
+    ),
+    (
+        "earlier_parameter_declared_proof",
+        r#"struct Pair<T:Copy,U:Copy=T>{a:T,b:U}fn get(x:Pair<i32>)->i32{x.a+x.b}fn main(){println!("{}",get(Pair::<i32>{a:3,b:4}));}"#,
+        "7
+",
+    ),
+];
+
+const NOMINAL_DEFAULT_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "borrowed_default",
+        "struct Cell<T=&'static i32>{value:T}fn main(){}",
+    ),
+    (
+        "pointer_default",
+        "struct Cell<T=*const i32>{value:T}fn main(){}",
+    ),
+    (
+        "trait_nonself_default",
+        "trait Strategy<T=i32>{}fn main(){}",
+    ),
+    ("alias_default", "type Cell<T=i32>=T;fn main(){}"),
+    (
+        "conditional_nominal_default",
+        "struct Wrap<T>{value:T}struct Cell<T,U=Wrap<T>>{a:T,b:U}fn main(){}",
+    ),
+];
+
+const NOMINAL_DEFAULT_INVALID: &[(&str, &str)] = &[
+    (
+        "unused_recursive_default",
+        "struct Bad<T=Bad>{value:T}fn main(){}",
+    ),
+    (
+        "unused_mutually_recursive_defaults",
+        "struct First<T=Second>{value:T}struct Second<T=First>{value:T}fn main(){}",
+    ),
+    (
+        "nominal_self_default",
+        "struct Bad<T=Self>{value:T}fn main(){}",
+    ),
+    (
+        "unused_unknown_default",
+        "struct Bad<T=Missing>{value:T}fn main(){}",
+    ),
+    (
+        "unused_forward_default",
+        "struct Bad<T=U,U=i32>{a:T,b:U}fn main(){}",
+    ),
+    (
+        "unused_self_parameter_default",
+        "struct Bad<T=T>{value:T}fn main(){}",
+    ),
+    (
+        "nontrailing_default",
+        "struct Bad<T=i32,U>{a:T,b:U}fn main(){}",
+    ),
+    (
+        "unused_closed_bound_failure",
+        "trait Mark{}struct Other{n:i32}struct Bad<T:Mark=Other>{value:T}fn main(){}",
+    ),
+    (
+        "unused_nested_bound_failure",
+        "trait Mark{}struct Inner<T:Mark>{value:T}struct Bad<T=Inner<i32>>{value:T}fn main(){}",
+    ),
+    (
+        "missing_required_argument",
+        "struct Pair<T,U=i32>{a:T,b:U}fn bad(x:Pair){}fn main(){}",
+    ),
+    (
+        "extra_argument",
+        "struct Cell<T=i32>{value:T}fn bad(x:Cell<i32,bool>){}fn main(){}",
+    ),
+    (
+        "fixed_default_not_field_evidence",
+        "struct Pair<T,U=i32>{a:T,b:U}fn main(){let _=Pair::<bool>{a:true,b:false};}",
+    ),
+];
+
+#[test]
+fn nominal_defaults_exact_stock_baseline() {
+    let rustc = defaults_stock::stock_rustc();
+    for (label, source, expected) in NOMINAL_DEFAULT_VALID.iter().copied().chain(
+        NOMINAL_DEFAULT_UNSUPPORTED
+            .iter()
+            .map(|(label, source)| (*label, *source, "")),
+    ) {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "check.rmeta"
+            } else {
+                "stock-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=nominal_defaults"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            command.arg("-o").arg(&output);
+            let result = capture(&mut command, &scratch, 20);
+            assert!(
+                result.status.success(),
+                "{label}: stock check={check}: {}\n{source}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            if !check {
+                let result = capture(&mut Command::new(&output), &scratch, 5);
+                assert!(
+                    result.status.success(),
+                    "{label}: stock runtime: {result:?}"
+                );
+                assert_eq!(result.stdout, expected.as_bytes(), "{label}: stock output");
+            }
+        }
+    }
+    for (label, source) in NOMINAL_DEFAULT_INVALID {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "invalid.rmeta"
+            } else {
+                "invalid-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=nominal_defaults"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(
+                !result.status.success(),
+                "{label}: stock accepted check={check}\n{source}"
+            );
+            assert!(!output.exists(), "{label}: stock published invalid output");
+        }
+    }
+}
+
+#[test]
+fn nominal_defaults_native_check_build_run_workers_1_8() {
+    for (label, source, expected) in NOMINAL_DEFAULT_VALID {
+        eprintln!("nominal default valid: {label}");
+        runs(source, expected);
+    }
+    for (label, source) in NOMINAL_DEFAULT_INVALID {
+        rejects(label, source);
+    }
+    for (label, source) in NOMINAL_DEFAULT_UNSUPPORTED {
+        rejects(label, source);
+        for workers in [1, 8] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path("unsupported-output");
+            for check in [true, false] {
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                let diagnostic = String::from_utf8_lossy(&result.stderr).to_lowercase();
+                assert!(
+                    diagnostic.contains("unsupported"),
+                    "{label}: lost explicit frontier: {diagnostic}"
+                );
+            }
+        }
+    }
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
 impl Scratch {

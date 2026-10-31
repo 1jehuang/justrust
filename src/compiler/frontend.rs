@@ -59,6 +59,7 @@ mod literal_call_inputs;
 mod method_argument_selection;
 mod name_scope;
 mod name_validation;
+mod nominal_defaults;
 mod validation_snapshot;
 pub(in crate::compiler) use validation_snapshot::ValidatedProgram;
 mod pattern_usefulness;
@@ -9060,6 +9061,8 @@ pub struct StructDecl {
     pub shape: StructShape,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
+    /// Original declaration-owned trailing defaults, never caller-spliced syntax.
+    type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
     /// Declared bounds, as for [`StructDecl::bounds`].
     pub bounds: Vec<TypeBound>,
     pub region_params: Vec<AstIdent>,
@@ -9077,6 +9080,7 @@ pub enum StructShape {
 pub struct EnumDecl {
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
+    type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
     /// Declared bounds (`struct S<T: Ord>` / `where T: Ord`), proven for
     /// every concrete application built by a constructor.
     pub bounds: Vec<TypeBound>,
@@ -10893,6 +10897,7 @@ struct Parser<'input, 'names> {
     visible_bounds: Vec<TypeBound>,
     /// Indices of type parameters written `= Self` by the last parameter list.
     pending_self_defaults: Vec<usize>,
+    pending_type_defaults: Vec<Option<Box<nominal_defaults::SourceDefault>>>,
     /// Lifetime parameters written by the last nominal/impl parameter list.
     pending_regions: RegionDecls,
     /// Lifetime parameters of the enclosing impl, inherited by its methods.
@@ -11084,6 +11089,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             alias_target: false,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
+            pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
             visible_bounds: Vec::new(),
@@ -12494,6 +12500,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             alias_target: false,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
+            pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
             visible_bounds: Vec::new(),
@@ -12916,6 +12923,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             alias_target: false,
             pending_bounds: Vec::new(),
             pending_self_defaults: Vec::new(),
+            pending_type_defaults: Vec::new(),
             pending_regions: RegionDecls::default(),
             impl_regions: RegionDecls::default(),
             visible_bounds: Vec::new(),
@@ -13579,9 +13587,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(path)
     }
     #[inline(never)]
-    fn type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
+    fn type_parameters(
+        &mut self,
+        defaults: nominal_defaults::Owner,
+    ) -> Result<Vec<AstIdent>, ParseError> {
         self.pending_bounds.clear();
         self.pending_self_defaults.clear();
+        self.pending_type_defaults.clear();
         self.pending_regions = RegionDecls::default();
         let declarations = self.predeclare_type_parameters()?;
         if !self.eat("<") {
@@ -13650,15 +13662,46 @@ impl<'input, 'names> Parser<'input, 'names> {
                 });
                 self.pending_bounds = bounds;
             }
-            if self.eat("=") {
-                // `Rhs = Self` style defaults (trait declarations only).
-                if !self.eat("Self") {
-                    return Err(
-                        self.unsupported("generic defaults other than `Self` are unsupported")
-                    );
+            let default = if self.eat("=") {
+                match defaults {
+                    nominal_defaults::Owner::TraitSelf => {
+                        if !self.eat("Self") {
+                            return Err(self.unsupported(
+                                "generic trait defaults other than `Self` are unsupported",
+                            ));
+                        }
+                        self.pending_self_defaults.push(params.len() - 1);
+                        None
+                    }
+                    nominal_defaults::Owner::Nominal => {
+                        let start = self.token().span;
+                        let ty = self.ty()?;
+                        let default =
+                            nominal_defaults::SourceDefault::parsed(ty, start, self.token().span);
+                        Some(
+                            self.names
+                                .try_parser_box(default)
+                                .map_err(native_adapter::name_error)?,
+                        )
+                    }
+                    nominal_defaults::Owner::Forbidden => {
+                        return Err(self.unsupported(
+                            "generic defaults on this declaration kind are unsupported",
+                        ));
+                    }
                 }
-                self.pending_self_defaults.push(params.len() - 1);
-            }
+            } else {
+                if self.pending_type_defaults.iter().any(Option::is_some)
+                    || !self.pending_self_defaults.is_empty()
+                {
+                    return Err(self.error("generic parameters with a default must be trailing"));
+                }
+                None
+            };
+            let mut rows = std::mem::take(&mut self.pending_type_defaults);
+            self.reserve_parser_items(&mut rows, 1)?;
+            rows.push(default);
+            self.pending_type_defaults = rows;
             if !self.eat(",") || self.token().text.starts_with('>') {
                 break;
             }
@@ -14419,7 +14462,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Ok(());
         } else if self.eat("trait") {
             let name = self.ident()?;
-            let type_params = self.type_parameters()?;
+            let type_params = self.type_parameters(nominal_defaults::Owner::TraitSelf)?;
             let self_defaults = std::mem::take(&mut self.pending_self_defaults);
             if type_params.len() >= 32 {
                 return Err(self.limit("trait binder resource limit 32 includes Self"));
@@ -14581,7 +14624,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             (name, ItemKind::Trait(declaration))
         } else if self.eat("enum") {
             let name = self.ident()?;
-            let type_params = self.type_parameters()?;
+            let type_params = self.type_parameters(nominal_defaults::Owner::Nominal)?;
+            let type_defaults = std::mem::take(&mut self.pending_type_defaults);
             let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
             let bounds = self.nominal_bounds()?;
@@ -14705,6 +14749,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             parsed.program.enums.push(EnumDecl {
                 module,
                 type_params,
+                type_defaults,
                 bounds,
                 region_params,
                 name: module_path
@@ -14730,7 +14775,8 @@ impl<'input, 'names> Parser<'input, 'names> {
                     .map_err(native_adapter::name_error)?;
                 self.c_abi.repr_c.insert((module, key));
             }
-            let type_params = self.type_parameters()?;
+            let type_params = self.type_parameters(nominal_defaults::Owner::Nominal)?;
+            let type_defaults = std::mem::take(&mut self.pending_type_defaults);
             let region_params = self.pending_regions.params.clone();
             self.type_params = type_params.clone();
             let mut bounds = self.nominal_bounds()?;
@@ -14784,6 +14830,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                 shape,
                 module,
                 type_params,
+                type_defaults,
                 bounds,
                 region_params,
                 name: module_path
@@ -14799,7 +14846,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if explicit_visibility {
                 return Err(self.error("pub impl is invalid"));
             }
-            let type_params = self.type_parameters()?;
+            let type_params = self.type_parameters(nominal_defaults::Owner::Forbidden)?;
             self.impl_regions = std::mem::take(&mut self.pending_regions);
             self.type_params = type_params.clone();
             let mut bounds = std::mem::take(&mut self.pending_bounds);
@@ -14979,7 +15026,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.is("<") && self.cursor.peek(1).is_some_and(|t| t.text == "const") {
                 return Err(self.unsupported("const type alias parameters are unsupported"));
             }
-            let params = self.type_parameters()?;
+            let params = self.type_parameters(nominal_defaults::Owner::Forbidden)?;
             if !self.pending_bounds.is_empty() || self.is("where") || self.is(":") {
                 return Err(self.unsupported("type alias bounds and where clauses are unsupported"));
             }
@@ -21462,6 +21509,7 @@ struct CanonicalNominals {
 #[derive(Debug)]
 struct PlanState {
     source_context: Option<SourceTypeContext>,
+    default_expansions: Vec<(ir::DeclId, usize)>,
     source_metadata: nominal_schema::SourceMetadataCache,
     schemas: Arc<HashMap<ir::DeclId, Arc<NominalSchema>>>,
     nominals: NominalInterner,
@@ -21474,6 +21522,7 @@ impl PlanState {
     ) -> Self {
         Self {
             source_context: None,
+            default_expansions: Vec::new(),
             source_metadata: nominal_schema::SourceMetadataCache::default(),
             schemas: schemas.clone(),
             nominals: NominalInterner {
@@ -24121,11 +24170,16 @@ impl PlanCtx {
             .semantic_slice(self.program.names.as_ref(), 0..at + 1, full.anchor())
             .map_err(native_adapter::name_diagnostic)?;
         let name = name_scope::path_key(self.program.names.as_ref(), &base, namespace)?;
-        let args = segment
+        let mut args = segment
             .args
             .iter()
             .map(|t| self.source_ty(t, bindings, caller, budget))
             .collect::<Result<Vec<_>, _>>()?;
+        if namespace == Namespace::Type
+            && let Some(declaration) = self.registry.nominals.get(&name)
+        {
+            args = self.complete_nominal_source_arguments(*declaration, args, caller, budget)?;
+        }
         Ok((name, args))
     }
     pub fn intern_nominal(
@@ -24441,9 +24495,7 @@ impl PlanState {
                         let key =
                             name_scope::path_key(registry.names.as_ref(), path, Namespace::Type)?;
                         let id = registry.nominals.get(&key).ok_or("unknown nominal type")?;
-                        if registry.declaration(*id)?.param_env.arity() != 0 {
-                            return Err("nominal type argument arity mismatch".into());
-                        }
+                        registry.nominal_source_arity(*id, 0)?;
                     }
                     Type::Apply(path) => {
                         let key = name_scope::path_key(
@@ -24457,9 +24509,7 @@ impl PlanState {
                                 .checked_add(segment.args.len())
                                 .ok_or("nominal argument count overflow")
                         })?;
-                        if registry.declaration(*id)?.param_env.arity() != count {
-                            return Err("nominal type argument arity mismatch".into());
-                        }
+                        registry.nominal_source_arity(*id, count)?;
                     }
                     Type::Projection(projection) => {
                         registry.validate_source_projection(

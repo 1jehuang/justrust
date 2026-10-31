@@ -91,6 +91,94 @@ impl SchemaAdapter {
                 ir::FactsCtx::Universal(&env),
                 &self.budget,
             )?;
+            let source_defaults = match info.kind {
+                ir::DeclKind::Struct => &self.program.structs[info.source_index].type_defaults,
+                ir::DeclKind::Enum => &self.program.enums[info.source_index].type_defaults,
+                _ => unreachable!(),
+            };
+            let sized = *self
+                .registry
+                .traits
+                .get(&TraitLookupKey::Builtin(BuiltinTrait::Sized))
+                .ok_or("missing canonical Sized identity")?;
+            let mut defaults = Vec::new();
+            for (index, source) in source_defaults.iter().enumerate() {
+                self.budget.charge_work(1)?;
+                let Some(source) = source else { continue };
+                let syntax = source.syntax(self.registry.names.as_ref())?;
+                let ty = state.source_ty(
+                    &self.registry,
+                    &source.ty,
+                    &bindings,
+                    ir::FactsCtx::Universal(&env),
+                    &self.budget,
+                    0,
+                    false,
+                )?;
+                let parameter = ir::ParamId {
+                    owner: info.param_env.binder(),
+                    index: u16::try_from(index).map_err(|_| "default parameter index overflow")?,
+                };
+                self.budget.retain_bytes(
+                    bindings
+                        .len()
+                        .checked_mul(4 * std::mem::size_of::<(GenericBindingKey, ir::Ty)>())
+                        .ok_or("default substitution binding overflow")?,
+                )?;
+                let mut substituted = HashMap::new();
+                substituted.try_reserve(bindings.len()).map_err(
+                    |_| "infrastructure: default substitution binding allocation failed",
+                )?;
+                for (parameter, actual) in &bindings {
+                    self.budget.charge_work(1)?;
+                    substituted.insert(*parameter, actual.clone());
+                }
+                substituted.insert(
+                    self.registry.parameter_key(info.type_params[index])?,
+                    ty.clone(),
+                );
+                let mut obligations = Vec::new();
+                if !info.param_env.relaxed_sized(parameter) {
+                    self.budget
+                        .retain_bytes(std::mem::size_of::<ir::Predicate>())?;
+                    obligations
+                        .try_reserve_exact(1)
+                        .map_err(|_| "infrastructure: default predicate allocation failed")?;
+                    obligations.push(ir::Predicate::Implements(ir::TraitRef {
+                        declaration: sized,
+                        self_ty: ty.clone(),
+                        args: Arc::from([]),
+                    }));
+                }
+                append_source_bounds(
+                    &mut state,
+                    &self.registry,
+                    &substituted,
+                    bounds,
+                    &mut obligations,
+                    ir::FactsCtx::Universal(&env),
+                    &self.budget,
+                )?;
+                state.default_type_obligations(
+                    &self.registry,
+                    &ty,
+                    ir::FactsCtx::Universal(&env),
+                    &self.budget,
+                    &mut obligations,
+                    0,
+                )?;
+                self.budget
+                    .retain_bytes(std::mem::size_of::<tr::NominalDefaultSchema>())?;
+                defaults
+                    .try_reserve_exact(1)
+                    .map_err(|_| "infrastructure: nominal default source row allocation failed")?;
+                defaults.push(tr::NominalDefaultSchema {
+                    parameter,
+                    syntax,
+                    ty,
+                    obligations: obligations.into(),
+                });
+            }
             let mut projections = Vec::new();
             for field in fields {
                 // This walk only inspects field types and never clones them, so
@@ -127,6 +215,7 @@ impl SchemaAdapter {
                 env,
                 predicates: predicates.into(),
                 projections: projections.into(),
+                defaults: defaults.into(),
             })
         })();
         state.source_context = previous;

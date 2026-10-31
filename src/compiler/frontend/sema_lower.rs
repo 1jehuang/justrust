@@ -259,6 +259,15 @@ impl<'a> Lower<'a> {
             .param_env
             .arity();
         let mut a: Vec<st::Ty> = args.iter().map(|t| self.ty(t)).collect::<R<_>>()?;
+        if a.len() < arity
+            && self
+                .plan
+                .registry
+                .nominal_source_arity(decl, a.len())
+                .is_ok()
+        {
+            return un("nominal defaults require declaration-authenticated semantic lowering");
+        }
         if a.is_empty() {
             a = (0..arity).map(|_| st::hole()).collect();
         }
