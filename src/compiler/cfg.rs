@@ -6,6 +6,9 @@
 use super::frontend::{BinaryOp, UnaryOp};
 use super::ir::{self, ExprId, IntTy, IntValue, LocalId, LoopId, Place, Projection, Ty};
 use super::traits::TraitScratch;
+mod cell;
+pub use cell::CellOperationProof;
+use cell::{CellOperands, CellOperation};
 mod closure_template;
 mod drop_normal;
 pub(super) use closure_template::lower_closure_template;
@@ -94,6 +97,7 @@ pub struct GeneratedCfgShape {
     body_proof: Option<std::sync::Arc<ir::BodySubstitutionProof>>,
     original_publication: Option<std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
     closure_authority: Option<(std::sync::Arc<ir::ClosureTy>, ir::ClosureKind)>,
+    closure_origin: Option<super::source_replay::OriginalBodyId>,
     budget: ir::PlanBudget,
 }
 impl GeneratedCfgShape {
@@ -135,6 +139,11 @@ impl GeneratedCfgShape {
             body_proof: f.body_substitution.clone(),
             original_publication: publication.cloned(),
             closure_authority: facts.closure_lowering_identity(),
+            closure_origin: f
+                .body_substitution
+                .as_ref()
+                .and_then(|body| body.template().function().lowering_proof.as_ref())
+                .and_then(|shape| shape.closure_origin.clone()),
             budget: budget.clone(),
             world: facts.world().clone(),
             declaration: facts.declaration(),
@@ -186,6 +195,63 @@ impl GeneratedCfgShape {
             || !facts.budget().same_authority(budget)
         {
             return Err("lowering proof facts authority changed".into());
+        }
+        if self.closure_origin.is_some() && self.closure_authority.is_none() {
+            let body = f
+                .body_substitution
+                .as_ref()
+                .ok_or("closure origin token lacks exact closure lowering authority")?;
+            let template = body.template();
+            let original = template
+                .function()
+                .lowering_proof
+                .as_ref()
+                .ok_or("closed closure origin lacks original template lowering authority")?;
+            let (closure, mode) = original
+                .closure_authority
+                .as_ref()
+                .ok_or("closed closure origin lacks canonical original provider and mode")?;
+            let (original_closure, original_mode) = template
+                .facts()
+                .closure_lowering_identity()
+                .ok_or("closed closure template lacks original provider authority")?;
+            let target = facts
+                .target()
+                .ok_or("closed closure origin lacks current target")?;
+            if facts.phase() != super::traits::FactsPhase::Closed
+                || self.closure_origin != original.closure_origin
+                || *mode != original_mode
+                || target.declaration != closure.provider()
+                || target.declaration != body.target().declaration
+                || template.facts().declaration() != closure.provider()
+                || !std::sync::Arc::ptr_eq(facts.world(), template.facts().world())
+                || !facts
+                    .world()
+                    .types_equal(
+                        &[Ty::Closure(closure.clone())],
+                        &[Ty::Closure(original_closure)],
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                || !facts
+                    .world()
+                    .types_equal(&target.type_args, &body.target().type_args)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+            {
+                return Err(
+                    "closed closure origin changed exact provider, mode, token or target".into(),
+                );
+            }
+        }
+        if let Some(body) = &f.body_substitution {
+            let original = body
+                .template()
+                .function()
+                .lowering_proof
+                .as_ref()
+                .and_then(|shape| shape.closure_origin.as_ref());
+            if self.closure_origin.as_ref() != original {
+                return Err("closure origin token changed exact original template".into());
+            }
         }
         match (&self.closure_authority, facts.closure_lowering_identity()) {
             (Some((original, mode)), Some((current, current_mode)))
@@ -382,6 +448,41 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
                 proof: bb,
             },
         ) => Ok(ManuallyDropIntoInnerProof::same_value(a, b, budget)?
+            && aa.same_original(bb, budget)?),
+        (
+            Rvalue::CellNew {
+                value: a,
+                proof: aa,
+            },
+            Rvalue::CellNew {
+                value: b,
+                proof: bb,
+            },
+        ) => Ok(ManuallyDropIntoInnerProof::same_value(a, b, budget)?
+            && aa.same_original(bb, budget)?),
+        (
+            Rvalue::CellGet {
+                reference: a,
+                proof: aa,
+            },
+            Rvalue::CellGet {
+                reference: b,
+                proof: bb,
+            },
+        ) => Ok(ManuallyDropTakeProof::same_place(a, b, budget)? && aa.same_original(bb, budget)?),
+        (
+            Rvalue::CellSet {
+                reference: a,
+                value: av,
+                proof: aa,
+            },
+            Rvalue::CellSet {
+                reference: b,
+                value: bv,
+                proof: bb,
+            },
+        ) => Ok(ManuallyDropTakeProof::same_place(a, b, budget)?
+            && ManuallyDropIntoInnerProof::same_value(av, bv, budget)?
             && aa.same_original(bb, budget)?),
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
@@ -1006,6 +1107,19 @@ impl ManuallyDropIntoInnerProof {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    CellNew {
+        value: Operand,
+        proof: std::sync::Arc<CellOperationProof>,
+    },
+    CellGet {
+        reference: Place,
+        proof: std::sync::Arc<CellOperationProof>,
+    },
+    CellSet {
+        reference: Place,
+        value: Operand,
+        proof: std::sync::Arc<CellOperationProof>,
+    },
     ManuallyDropIntoInner {
         value: Operand,
         proof: std::sync::Arc<ManuallyDropIntoInnerProof>,
@@ -1194,7 +1308,8 @@ impl Rvalue {
         visit: &mut impl FnMut(&Operand) -> Result<(), String>,
     ) -> Result<(), String> {
         match self {
-            Self::ManuallyDropTake { .. } => {}
+            Self::CellGet { .. } | Self::ManuallyDropTake { .. } => {}
+            Self::CellNew { value, .. } | Self::CellSet { value, .. } => visit(value)?,
             Self::ManuallyDropIntoInner { value, .. }
             | Self::OpaquePack { value, .. }
             | Self::Use(value)
@@ -1725,6 +1840,17 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(&mut bytes, destination, budget)?;
                         match value {
+                            Rvalue::CellGet { reference, .. } => {
+                                path(&mut bytes, reference, budget)?
+                            }
+                            Rvalue::CellSet {
+                                reference, value, ..
+                            } => {
+                                path(&mut bytes, reference, budget)?;
+                                if let Operand::Copy(place) | Operand::Move(place) = value {
+                                    path(&mut bytes, place, budget)?;
+                                }
+                            }
                             Rvalue::ManuallyDropTake {
                                 reference, payload, ..
                             } => {
@@ -1897,6 +2023,50 @@ impl Function {
         }
         for block in &self.blocks {
             for statement in &block.statements {
+                if let Statement::Assign { value, .. } = &statement.value {
+                    let request = match value {
+                        Rvalue::CellNew { value, proof } => Some((
+                            CellOperands {
+                                operation: CellOperation::New,
+                                reference: None,
+                                value: Some(value),
+                                origin: statement.origin,
+                            },
+                            proof,
+                        )),
+                        Rvalue::CellGet { reference, proof } => Some((
+                            CellOperands {
+                                operation: CellOperation::Get,
+                                reference: Some(reference),
+                                value: None,
+                                origin: statement.origin,
+                            },
+                            proof,
+                        )),
+                        Rvalue::CellSet {
+                            reference,
+                            value,
+                            proof,
+                        } => Some((
+                            CellOperands {
+                                operation: CellOperation::Set,
+                                reference: Some(reference),
+                                value: Some(value),
+                                origin: statement.origin,
+                            },
+                            proof,
+                        )),
+                        _ => None,
+                    };
+                    if let Some((request, proof)) = request {
+                        self.cell_operation_type(
+                            request,
+                            proof,
+                            ir::FactsCtx::from_validated(facts),
+                            &mut TraitScratch::default(),
+                        )?;
+                    }
+                }
                 if let Statement::Assign {
                     value: Rvalue::ManuallyDropIntoInner { value, proof },
                     ..
@@ -2198,6 +2368,8 @@ impl Function {
                                 Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                     check_place(array)?
                                 }
+                                Rvalue::CellGet { reference, .. }
+                                | Rvalue::CellSet { reference, .. } => check_place(reference)?,
                                 Rvalue::ManuallyDropTake {
                                     reference, payload, ..
                                 } => {
@@ -2416,13 +2588,21 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(destination, budget)?;
                         match value {
+                            Rvalue::CellGet { reference, .. } => path(reference, budget)?,
+                            Rvalue::CellSet {
+                                reference, value, ..
+                            } => {
+                                path(reference, budget)?;
+                                operand(value, budget, facts)?;
+                            }
                             Rvalue::ManuallyDropTake {
                                 reference, payload, ..
                             } => {
                                 path(reference, budget)?;
                                 path(payload, budget)?;
                             }
-                            Rvalue::ManuallyDropIntoInner { value, .. }
+                            Rvalue::CellNew { value, .. }
+                            | Rvalue::ManuallyDropIntoInner { value, .. }
                             | Rvalue::OpaquePack { value, .. }
                             | Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
@@ -2977,6 +3157,43 @@ impl Function {
     ) -> Result<Ty, String> {
         let budget = self.query_budget(facts);
         match value {
+            Rvalue::CellNew { value, proof } => self.cell_operation_type(
+                CellOperands {
+                    operation: CellOperation::New,
+                    reference: None,
+                    value: Some(value),
+                    origin: current_origin,
+                },
+                proof,
+                facts,
+                scratch,
+            ),
+            Rvalue::CellGet { reference, proof } => self.cell_operation_type(
+                CellOperands {
+                    operation: CellOperation::Get,
+                    reference: Some(reference),
+                    value: None,
+                    origin: current_origin,
+                },
+                proof,
+                facts,
+                scratch,
+            ),
+            Rvalue::CellSet {
+                reference,
+                value,
+                proof,
+            } => self.cell_operation_type(
+                CellOperands {
+                    operation: CellOperation::Set,
+                    reference: Some(reference),
+                    value: Some(value),
+                    origin: current_origin,
+                },
+                proof,
+                facts,
+                scratch,
+            ),
             Rvalue::ManuallyDropIntoInner { value, proof } => {
                 let authority = facts
                     .validated()
@@ -3875,6 +4092,7 @@ struct LoopTarget {
 }
 
 struct Lowerer<'a> {
+    closure_origin: Option<&'a super::source_replay::OriginalBodyId>,
     publication: Option<&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
     facts: ir::FactsCtx<'a>,
     // Proof/type memo for this lowering computation only; never published.
@@ -5786,6 +6004,51 @@ impl Lowerer<'_> {
                     origin,
                 );
             }
+            ir::ExprKind::CellNew { value, .. } => {
+                let value = self.expression(*value)?;
+                let budget = self.budget.ok_or("Cell new requires node budget")?;
+                let proof = self.seal_cell_operation(id, None, Some(&value), budget)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::CellNew { value, proof },
+                    origin,
+                );
+            }
+            ir::ExprKind::CellGet { receiver, .. } => {
+                let reference = self.expression(*receiver)?;
+                let reference = match reference {
+                    Operand::Copy(place) | Operand::Move(place) => place,
+                    _ => return Err("Cell receiver requires evaluated reference storage".into()),
+                };
+                let budget = self.budget.ok_or("Cell get requires node budget")?;
+                let proof = self.seal_cell_operation(id, Some(&reference), None, budget)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::CellGet { reference, proof },
+                    origin,
+                );
+            }
+            ir::ExprKind::CellSet {
+                receiver, value, ..
+            } => {
+                let reference = self.expression(*receiver)?;
+                let reference = match reference {
+                    Operand::Copy(place) | Operand::Move(place) => place,
+                    _ => return Err("Cell receiver requires evaluated reference storage".into()),
+                };
+                let value = self.expression(*value)?;
+                let budget = self.budget.ok_or("Cell set requires node budget")?;
+                let proof = self.seal_cell_operation(id, Some(&reference), Some(&value), budget)?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::CellSet {
+                        reference,
+                        value,
+                        proof,
+                    },
+                    origin,
+                );
+            }
             ir::ExprKind::ManuallyDropIntoInner {
                 ty: _,
                 value,
@@ -6380,6 +6643,7 @@ fn lower_internal(
 #[derive(Clone, Copy)]
 enum SourceLowering<'a> {
     Legacy,
+    Closure(&'a super::source_replay::OriginalBodyId),
     Original(&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>),
 }
 
@@ -6439,6 +6703,22 @@ fn lower_internal_with_source(
     }
     match authority {
         SourceLowering::Legacy => source.validate_with_facts(facts)?,
+        SourceLowering::Closure(_) => {
+            if source.body_substitution.is_some() {
+                return Err(
+                    "original closure lowering cannot carry generated body authority".into(),
+                );
+            }
+            let authority = facts
+                .validated()
+                .ok_or("closure lowering requires validated facts")?;
+            let (closure, mode) = authority
+                .closure_lowering_identity()
+                .ok_or("closure lowering lacks exact original closure identity")?;
+            authority
+                .validate_closure_body_source(&closure, mode, source)
+                .map_err(|error| error.to_string())?;
+        }
         SourceLowering::Original(publication) => {
             let budget = budget.ok_or("original source lowering requires planning authority")?;
             let facts = facts
@@ -6540,9 +6820,13 @@ fn lower_internal_with_source(
         mutable: true,
     });
     let mut lowerer = Lowerer {
+        closure_origin: match authority {
+            SourceLowering::Closure(identity) => Some(identity),
+            _ => None,
+        },
         publication: match authority {
             SourceLowering::Original(publication) => Some(publication),
-            SourceLowering::Legacy => None,
+            SourceLowering::Legacy | SourceLowering::Closure(_) => None,
         },
         facts,
         scratch: std::cell::RefCell::new(TraitScratch::default()),
@@ -6923,6 +7207,7 @@ mod panic_terminal_tests {
             + payload.location.len();
         let statement_bytes = std::mem::size_of::<Located<Statement>>();
         let mut lowerer = Lowerer {
+            closure_origin: None,
             publication: Some(&publication),
             facts: ir::FactsCtx::from_validated(publication.facts()),
             scratch: std::cell::RefCell::new(TraitScratch::default()),
@@ -10746,6 +11031,7 @@ mod tests {
                 .contains("lowering depth resource")
         );
         let mut budget = Lowerer {
+            closure_origin: None,
             publication: None,
             facts: ir::FactsCtx::Concrete,
             scratch: std::cell::RefCell::new(TraitScratch::default()),
@@ -12032,6 +12318,7 @@ mod tests {
         terminators: Vec<Option<Terminator>>,
     ) -> Lowerer<'a> {
         Lowerer {
+            closure_origin: None,
             publication: None,
             facts: ir::FactsCtx::Concrete,
             scratch: std::cell::RefCell::new(TraitScratch::default()),
@@ -13828,6 +14115,15 @@ mod tests {
                     Statement::Assign { destination, value } => {
                         assert!(live[destination.local.0], "destination local is not live");
                         match value {
+                            Rvalue::CellGet { reference, .. } => {
+                                assert!(live[reference.local.0], "Cell get reads dead reference")
+                            }
+                            Rvalue::CellSet {
+                                reference, value, ..
+                            } => {
+                                assert!(live[reference.local.0], "Cell set reads dead reference");
+                                live_operand(value, &live);
+                            }
                             Rvalue::ManuallyDropTake {
                                 reference, payload, ..
                             } => {
@@ -13850,7 +14146,8 @@ mod tests {
                                 live_operand(index, &live);
                                 assert!(live[array.local.0], "dynamic index reads dead array");
                             }
-                            Rvalue::ManuallyDropIntoInner { value, .. }
+                            Rvalue::CellNew { value, .. }
+                            | Rvalue::ManuallyDropIntoInner { value, .. }
                             | Rvalue::OpaquePack { value, .. }
                             | Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }

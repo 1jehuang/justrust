@@ -5,9 +5,9 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 10;
+pub const CATALOG_VERSION: u32 = 11;
 
-const BASE_COUNT: u32 = 13;
+const BASE_COUNT: u32 = 17;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
@@ -75,11 +75,16 @@ pub enum CatalogItem {
     ManuallyDropNew,
     ManuallyDropIntoInner,
     ManuallyDropDrop,
+    Cell,
+    CellNew,
+    CellGet,
+    CellSet,
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
     pub fn module(self) -> CatalogModule {
         match self {
+            Self::Cell | Self::CellNew | Self::CellGet | Self::CellSet => CatalogModule::Cell,
             Self::Sized | Self::Copy | Self::PhantomData => CatalogModule::Marker,
             Self::ManuallyDrop
             | Self::ManuallyDropNew
@@ -100,6 +105,10 @@ impl CatalogItem {
             Self::Copy => Some(BuiltinAtom::Copy),
             Self::Drop => Some(BuiltinAtom::Drop),
             Self::PhantomData => Some(BuiltinAtom::PhantomData),
+            Self::Cell => Some(BuiltinAtom::Cell),
+            Self::CellNew => Some(BuiltinAtom::CellNew),
+            Self::CellGet => Some(BuiltinAtom::CellGet),
+            Self::CellSet => Some(BuiltinAtom::CellSet),
             Self::ManuallyDrop => Some(BuiltinAtom::ManuallyDrop),
             Self::ManuallyDropNew => Some(BuiltinAtom::ManuallyDropNew),
             Self::ManuallyDropIntoInner => Some(BuiltinAtom::ManuallyDropIntoInner),
@@ -122,6 +131,10 @@ impl CatalogItem {
             Self::ManuallyDropNew => 10,
             Self::ManuallyDropIntoInner => 11,
             Self::ManuallyDropDrop => 12,
+            Self::Cell => 13,
+            Self::CellNew => 14,
+            Self::CellGet => 15,
+            Self::CellSet => 16,
             Self::Recipe(_) => return None,
         })
     }
@@ -392,6 +405,10 @@ impl CoreCatalogBuilder {
                 CatalogItem::ManuallyDropNew
                 | CatalogItem::ManuallyDropIntoInner
                 | CatalogItem::ManuallyDropDrop => unreachable!(),
+                CatalogItem::Cell
+                | CatalogItem::CellNew
+                | CatalogItem::CellGet
+                | CatalogItem::CellSet => unreachable!(),
                 CatalogItem::Recipe(_) => unreachable!(),
             };
             let info = SchemaDecl {
@@ -556,6 +573,21 @@ impl CoreCatalogBuilder {
                 args: Arc::from([]),
             }),
         )?;
+        retain::<Ty>(budget, 0)?;
+        push(
+            budget,
+            &mut declared_bounds,
+            Predicate::Implements(TraitRef {
+                declaration: id(snapshot, CatalogItem::Sized),
+                self_ty: Ty::Param(ParamId {
+                    owner: BinderId {
+                        declaration: id(snapshot, CatalogItem::Cell),
+                    },
+                    index: 0,
+                }),
+                args: Arc::from([]),
+            }),
+        )?;
         retain::<Predicate>(budget, declared_bounds.len())?;
         let mut builder = Self {
             snapshot,
@@ -573,7 +605,153 @@ impl CoreCatalogBuilder {
             },
         };
         builder.add_manually_drop_operations(budget)?;
+        builder.add_cell_operations(budget)?;
         Ok(builder)
+    }
+    fn add_cell_operations(&mut self, budget: &PlanBudget) -> Result<()> {
+        let owner = id(self.snapshot, CatalogItem::Cell);
+        let own = scope(owner, 1, budget)?;
+        let mut owner_scopes = Vec::new();
+        push(budget, &mut owner_scopes, own.clone())?;
+        let owner_env = environment(&owner_scopes, budget)?;
+        push(
+            budget,
+            &mut self.declarations,
+            CatalogDecl {
+                declaration: owner,
+                name: "Cell",
+                info: SchemaDecl {
+                    declaration: owner,
+                    kind: DeclKind::Struct,
+                    own_env: own,
+                    env: owner_env,
+                    owner: None,
+                    module: self.modules.catalog_module(CatalogModule::Cell),
+                    visibility: ir::Visibility::Public,
+                    receiver: ReceiverMode::None,
+                    region_contract_mode: RegionContractMode::Positioned,
+                },
+                schema: None,
+                origin: DeclOrigin::CoreCatalog {
+                    version: CATALOG_VERSION,
+                    item: CatalogItem::Cell,
+                },
+                callable_provider: None,
+            },
+        )?;
+        let mut callables = Vec::new();
+        for header in self.headers.callables.iter() {
+            push(
+                budget,
+                &mut callables,
+                CallableHeader {
+                    declaration: header.declaration,
+                    schema: clone_schema(&header.schema, budget)?,
+                },
+            )?;
+        }
+        for (item, name) in [
+            (CatalogItem::CellNew, "new"),
+            (CatalogItem::CellGet, "get"),
+            (CatalogItem::CellSet, "set"),
+        ] {
+            let declaration = id(self.snapshot, item);
+            let own = scope(declaration, 0, budget)?;
+            let mut scopes = Vec::new();
+            push(budget, &mut scopes, scope(owner, 1, budget)?)?;
+            push(budget, &mut scopes, own.clone())?;
+            let env = environment(&scopes, budget)?;
+            let argument = Ty::Param(ParamId {
+                owner: BinderId { declaration: owner },
+                index: 0,
+            });
+            let wrapper = Ty::Cell(charged(budget, ir::CellTy::catalog_schema(self, budget))?);
+            let mut params = Vec::new();
+            let result = match item {
+                CatalogItem::CellNew => {
+                    push(budget, &mut params, argument.clone())?;
+                    wrapper
+                }
+                CatalogItem::CellGet => {
+                    push(
+                        budget,
+                        &mut params,
+                        reference(wrapper, BorrowKind::Shared, budget)?,
+                    )?;
+                    argument.clone()
+                }
+                CatalogItem::CellSet => {
+                    push(
+                        budget,
+                        &mut params,
+                        reference(wrapper, BorrowKind::Shared, budget)?,
+                    )?;
+                    push(budget, &mut params, argument.clone())?;
+                    Ty::Unit
+                }
+                _ => unreachable!(),
+            };
+            let mut predicates = Vec::new();
+            for bound in [CatalogItem::Sized, CatalogItem::Copy] {
+                retain::<Ty>(budget, 0)?;
+                push(
+                    budget,
+                    &mut predicates,
+                    Predicate::Implements(TraitRef {
+                        declaration: id(self.snapshot, bound),
+                        self_ty: argument.clone(),
+                        args: Arc::from([]),
+                    }),
+                )?;
+            }
+            retain::<Predicate>(budget, predicates.len())?;
+            retain::<ir::InputRegion>(budget, usize::from(item != CatalogItem::CellNew))?;
+            retain::<ir::ResultReference>(budget, 0)?;
+            retain::<(ir::RegionParamId, ir::RegionParamId)>(budget, 0)?;
+            let signature = schema(env.clone(), params, result, predicates, budget)?;
+            push(
+                budget,
+                &mut callables,
+                CallableHeader {
+                    declaration,
+                    schema: clone_schema(&signature, budget)?,
+                },
+            )?;
+            push(
+                budget,
+                &mut self.declarations,
+                CatalogDecl {
+                    declaration,
+                    name,
+                    info: SchemaDecl {
+                        declaration,
+                        kind: DeclKind::AssociatedFunction,
+                        own_env: own,
+                        env,
+                        owner: Some(owner),
+                        module: self.modules.catalog_module(CatalogModule::Cell),
+                        visibility: ir::Visibility::Public,
+                        receiver: if item == CatalogItem::CellNew {
+                            ReceiverMode::None
+                        } else {
+                            ReceiverMode::Borrowed {
+                                kind: BorrowKind::Shared,
+                            }
+                        },
+                        region_contract_mode: RegionContractMode::Positioned,
+                    },
+                    schema: Some(signature),
+                    origin: DeclOrigin::CoreCatalog {
+                        version: CATALOG_VERSION,
+                        item,
+                    },
+                    callable_provider: None,
+                },
+            )?;
+        }
+        retain::<CallableHeader>(budget, callables.len())?;
+        self.headers.callables = callables.into();
+        Ok(())
     }
     fn add_manually_drop_operations(&mut self, budget: &PlanBudget) -> Result<()> {
         let factory = charged(budget, ir::ManuallyDropFactory::from_builder(self, budget))?;
@@ -985,15 +1163,18 @@ impl CoreCatalog {
         let Some(owner) = self.declaration(parameter.owner.declaration) else {
             return Ok(None);
         };
-        if owner.origin
-            != (DeclOrigin::CoreCatalog {
+        let item = match owner.origin {
+            DeclOrigin::CoreCatalog {
                 version: CATALOG_VERSION,
                 item: CatalogItem::ManuallyDrop,
-            })
-        {
-            return Ok(None);
-        }
-        if owner.declaration != self.id(CatalogItem::ManuallyDrop)
+            } => CatalogItem::ManuallyDrop,
+            DeclOrigin::CoreCatalog {
+                version: CATALOG_VERSION,
+                item: CatalogItem::Cell,
+            } => CatalogItem::Cell,
+            _ => return Ok(None),
+        };
+        if owner.declaration != self.id(item)
             || owner.info.kind != DeclKind::Struct
             || owner.info.owner.is_some()
             || owner.info.own_env.binder().declaration != owner.declaration
@@ -1017,6 +1198,54 @@ impl CoreCatalog {
             }
         }
         Ok(Some(false))
+    }
+    /// A schema-only Cell payload is confined to its authentic catalog callable environment.
+    pub(super) fn validate_cell_schema_environment(
+        &self,
+        env: &GenericEnv,
+        caller: Option<DeclId>,
+    ) -> Result<()> {
+        charged(&self.budget, self.budget.charge_work(1))?;
+        let scopes = env.scopes();
+        if scopes.len() != 2
+            || env.total_arity() != 1
+            || scopes[0].binder().declaration != self.id(CatalogItem::Cell)
+            || scopes[0].arity() != 1
+            || scopes[1].arity() != 0
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: catalog-only Cell payload parameter outside canonical schema environment",
+            ));
+        }
+        let operation = scopes[1].binder().declaration;
+        if ![
+            CatalogItem::CellNew,
+            CatalogItem::CellGet,
+            CatalogItem::CellSet,
+        ]
+        .into_iter()
+        .any(|item| self.id(item) == operation)
+            || caller.is_some_and(|caller| caller != operation)
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: catalog-only Cell payload parameter transplanted into source callable",
+            ));
+        }
+        let info = self
+            .declaration(operation)
+            .ok_or_else(|| FactsError::invalid(&self.budget, "missing canonical Cell operation"))?;
+        if info.info.owner != Some(self.id(CatalogItem::Cell))
+            || info.info.kind != DeclKind::AssociatedFunction
+            || info.info.own_env.binder() != scopes[1].binder()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "Cell schema changed canonical callable owner",
+            ));
+        }
+        Ok(())
     }
     pub fn recipe(&self, descriptor: RecipeDescriptor) -> Result<&CatalogDecl> {
         if descriptor == RecipeDescriptor::CloneNever {

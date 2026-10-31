@@ -167,6 +167,11 @@ fn ty(
             types(words, value.owner_args(), budget, depth + 1)?;
             17
         }
+        ir::Ty::Cell(value) => {
+            declaration(words, value.declaration());
+            ty(words, value.argument(), budget, depth + 1)?;
+            22
+        }
         ir::Ty::ManuallyDrop(value) => {
             declaration(words, value.declaration());
             ty(words, value.argument(), budget, depth + 1)?;
@@ -556,6 +561,16 @@ impl Reader<'_> {
                     type_args: type_args.into(),
                 }))
             }
+            22 => {
+                let declaration = self.declaration()?;
+                let argument = self.ty(facts, depth + 1)?;
+                let world = self.context.trait_world()?;
+                let marker = ir::CellTy::new(world.canonical_catalog(), argument, self.budget)?;
+                if marker.declaration() != declaration {
+                    return Err("instance graph marker changed canonical catalog authority".into());
+                }
+                ir::Ty::Cell(marker)
+            }
             21 => {
                 let declaration = self.declaration()?;
                 let argument = self.ty(facts, depth + 1)?;
@@ -811,6 +826,34 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn cell_graph_keys_replay_catalog_owner_and_exact_scalar_argument() {
+        let (context, budget, declaration) = fixture();
+        let world = context.trait_world().unwrap();
+        let target = |argument| ir::CallTarget {
+            declaration,
+            type_args: Arc::from([ir::Ty::Cell(
+                ir::CellTy::new(world.canonical_catalog(), argument, &budget).unwrap(),
+            )]),
+        };
+        let original = target(ir::Ty::Bool);
+        let words = encode(&original, &budget).unwrap();
+        assert_eq!(decode(&words, &context, &budget).unwrap(), original);
+        assert_ne!(encode(&target(ir::Ty::Char), &budget).unwrap(), words);
+        let mut wrong_owner = words.clone();
+        wrong_owner[7] = world
+            .canonical_catalog()
+            .id(traits::CatalogItem::ManuallyDrop)
+            .index;
+        assert!(decode(&wrong_owner, &context, &budget).is_err());
+        let mut foreign = words.clone();
+        foreign[6] = ir::SnapshotId::standalone().unwrap().graph_word();
+        assert!(decode(&foreign, &context, &budget).is_err());
+        let mut unsupported_argument = words;
+        unsupported_argument[8] = 4;
+        assert!(decode(&unsupported_argument, &context, &budget).is_err());
     }
 
     #[test]

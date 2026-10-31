@@ -157,6 +157,9 @@ impl Representations {
             ir::Ty::Opaque(opaque) => {
                 self.normalize_at(self.get(opaque, budget)?.hidden(), budget, depth + 1)?
             }
+            ir::Ty::Cell(cell) => ir::Ty::Cell(cell.try_map(budget, Error::new, |argument| {
+                self.normalize_at(argument, budget, depth + 1)
+            })?),
             ir::Ty::ManuallyDrop(wrapper) => {
                 ir::Ty::ManuallyDrop(wrapper.try_map(budget, Error::new, |argument| {
                     self.normalize_at(argument, budget, depth + 1)
@@ -279,6 +282,9 @@ impl Representations {
             }
             // Marker arguments are authenticated metadata, not stored values.
             ir::Ty::PhantomData(_) => {}
+            ir::Ty::Cell(cell) => {
+                self.prepare_type(cell.argument(), budget, depth + 1)?;
+            }
             ir::Ty::ManuallyDrop(wrapper) => {
                 self.prepare_type(wrapper.argument(), budget, depth + 1)?;
             }
@@ -649,6 +655,7 @@ pub(super) fn contains(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Err
                 Ok(false)
             }
             ir::Ty::PhantomData(_) => Ok(false),
+            ir::Ty::Cell(cell) => visit(cell.argument(), budget, depth + 1),
             ir::Ty::ManuallyDrop(wrapper) => visit(wrapper.argument(), budget, depth + 1),
             ir::Ty::FnPointer(value) => {
                 for component in value.types() {
@@ -711,6 +718,7 @@ fn collect_closures(
             }
         }
         ir::Ty::PhantomData(_) => {}
+        ir::Ty::Cell(cell) => visit(cell.argument())?,
         ir::Ty::ManuallyDrop(wrapper) => visit(wrapper.argument())?,
         ir::Ty::FnItem(value) => {
             for arg in value.type_args.iter() {
@@ -792,6 +800,9 @@ fn collect(
             }
         }
         ir::Ty::PhantomData(_) => {}
+        ir::Ty::Cell(cell) => {
+            collect(cell.argument(), output, budget, depth + 1)?;
+        }
         ir::Ty::ManuallyDrop(wrapper) => {
             collect(wrapper.argument(), output, budget, depth + 1)?;
         }

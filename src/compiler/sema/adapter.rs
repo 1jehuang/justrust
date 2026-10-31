@@ -162,6 +162,7 @@ impl TyMap<'_> {
                     item: def(p.item),
                 })))
             }
+            ir::Ty::Cell(_) => un("Cell type in the semantic core"),
             ir::Ty::ManuallyDrop(_) => un("ManuallyDrop type in the semantic core"),
             ir::Ty::PhantomData(_) => un("PhantomData type in the semantic core"),
             ir::Ty::Opaque(_) => un("opaque type in the semantic core"),

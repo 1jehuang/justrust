@@ -202,6 +202,23 @@ impl PlanCtx {
                     Arc::new(child(argument)?),
                 )
             }
+            Type::Cell(source) => {
+                source
+                    .original
+                    .checked_path(self.registry.names.as_ref())
+                    .map_err(native_adapter::name_diagnostic)?;
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or("missing Cell source argument")?;
+                self.budget.retain_bytes(
+                    std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>(),
+                )?;
+                Shape::Cell(
+                    self.catalog.id(tr::CatalogItem::Cell),
+                    Arc::new(child(argument)?),
+                )
+            }
             Type::FnPointer { inputs, output } => {
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), &self.budget)?;
                 for input in inputs {
@@ -394,7 +411,9 @@ fn reject_default_recipe_carriers(
                 }
             }
             Shape::PhantomData(_, argument) => visit(argument, budget, depth + 1, false)?,
-            Shape::ManuallyDrop(_, argument) => visit(argument, budget, depth + 1, owning)?,
+            Shape::ManuallyDrop(_, argument) | Shape::Cell(_, argument) => {
+                visit(argument, budget, depth + 1, owning)?
+            }
             Shape::FnPointer(inputs, output) => {
                 // Signature types are metadata, not stored values owned by the
                 // pointer. Still visit every occurrence for bounded traversal.

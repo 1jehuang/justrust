@@ -217,6 +217,19 @@ impl<'a> Lower<'a> {
                     arguments,
                 ))
             }
+            Type::Cell(source) => {
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or_else(|| Unsupported("missing Cell type argument".into()))?;
+                let mut arguments =
+                    ir::FnPointerTy::storage(1, &self.plan.budget).map_err(Unsupported)?;
+                arguments.push(self.ty(argument)?);
+                st::mk(st::TyKind::Adt(
+                    def(self.plan.catalog.id(tr::CatalogItem::Cell)),
+                    arguments,
+                ))
+            }
             Type::FnPointer { inputs, output } => {
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), &self.plan.budget)
                     .map_err(Unsupported)?;
@@ -1248,6 +1261,7 @@ impl<'a> Lower<'a> {
                 })
             }
             Expr::PhantomData(_) => return un("canonical PhantomData constructor semantic HIR"),
+            Expr::Cell(_) => return un("canonical Cell operation semantic HIR"),
             Expr::ManuallyDrop(_) => return un("canonical ManuallyDrop operation semantic HIR"),
             Expr::Invoke { .. } => return un("callee expression invocation"),
             Expr::ByteStr(_) => return un("byte string"),

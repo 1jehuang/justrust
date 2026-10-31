@@ -114,7 +114,7 @@ impl Encoder<'_, '_> {
                 self.n(11)?;
                 self.ty(element, depth + 1)
             }
-            PhantomData(_) | ManuallyDrop(_) | Opaque(_) | Closure(_) | FnPointer(_)
+            Cell(_) | PhantomData(_) | ManuallyDrop(_) | Opaque(_) | Closure(_) | FnPointer(_)
             | FnItem(_) | AssociatedType(_) | Param(_) | Struct(_) | Enum(_) | Dyn(_) => {
                 Err(Failure::Unsupported)
             }
@@ -228,6 +228,9 @@ impl Encoder<'_, '_> {
         use cfg::Rvalue::*;
         match v {
             TypeAlignment(_)
+            | CellNew { .. }
+            | CellGet { .. }
+            | CellSet { .. }
             | ManuallyDropTake { .. }
             | ManuallyDropIntoInner { .. }
             | OpaquePack { .. }

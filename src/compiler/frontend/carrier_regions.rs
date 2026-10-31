@@ -565,7 +565,7 @@ fn substitute(
             region(registry, lifetime, regions)?;
             **referent = substitute(registry, referent, types, regions, budget, depth + 1)?;
         }
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
             if let Some(argument) = &mut source.argument {
                 **argument = substitute(registry, argument, types, regions, budget, depth + 1)?;
             }

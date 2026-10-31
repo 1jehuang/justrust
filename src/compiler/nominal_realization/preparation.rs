@@ -236,6 +236,19 @@ impl Capabilities {
                     element: Arc::new(ty),
                 }
             }
+            Shape::Cell(declaration, argument) => {
+                let Some(argument) = child(argument)? else {
+                    return Ok(None);
+                };
+                let marker = ir::CellTy::new(world.canonical_catalog(), argument, budget)
+                    .map_err(Error::new)?;
+                if marker.declaration() != *declaration {
+                    return Err(Error::new(
+                        "nominal marker source shape changed canonical catalog authority",
+                    ));
+                }
+                ir::Ty::Cell(marker)
+            }
             Shape::ManuallyDrop(declaration, argument) => {
                 let Some(argument) = child(argument)? else {
                     return Ok(None);
@@ -487,6 +500,15 @@ pub(in crate::compiler) fn shape(
     Ok(match ty {
         ir::Ty::Struct(n) => Shape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Enum(n) => Shape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
+        ir::Ty::Cell(marker) => {
+            budget
+                .retain_bytes(std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>())
+                .map_err(Error::new)?;
+            Shape::Cell(
+                marker.declaration(),
+                Arc::new(shape(marker.argument(), budget, depth + 1)?),
+            )
+        }
         ir::Ty::ManuallyDrop(marker) => {
             budget
                 .retain_bytes(std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>())

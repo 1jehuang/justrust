@@ -1139,3 +1139,181 @@ fn main(){let _=twice::<i32>(1);let _=twice::<String>(String::new());}"#;
         );
     }
 }
+
+const CELL_VALID: &[(&str, &str)] = &[
+    (
+        "canonical_core_std",
+        r#"fn main(){let x:core::cell::Cell<usize>=std::cell::Cell::new(1usize);core::cell::Cell::set(&x,7usize);if std::cell::Cell::get(&x)==7usize{println!("7");}}"#,
+    ),
+    (
+        "imported_alias",
+        r#"use core::cell::Cell as Renamed;fn main(){let x:Renamed<usize>=Renamed::new(1usize);x.set(7usize);if x.get()==7usize{println!("7");}}"#,
+    ),
+    (
+        "shared_aliases",
+        r#"use std::cell::Cell;fn main(){let x=Cell::new(1usize);let a=&x;let b=&x;a.set(7usize);if b.get()==7usize{println!("7");}}"#,
+    ),
+    (
+        "shared_receiver",
+        r#"use std::cell::Cell;fn bump(x:&Cell<usize>){x.set(x.get()+1usize);}fn main(){let x=Cell::new(6usize);bump(&x);if x.get()==7usize{println!("7");}}"#,
+    ),
+    (
+        "closure_capture",
+        r#"use std::cell::Cell;fn main(){let x=Cell::new(6usize);let f=||{x.set(x.get()+1usize);};f();if x.get()==7usize{println!("7");}}"#,
+    ),
+    (
+        "field_storage",
+        r#"use std::cell::Cell;struct Holder{x:Cell<usize>}fn main(){let h=Holder{x:Cell::new(1usize)};let a=&h.x;h.x.set(7usize);if a.get()==7usize{println!("7");}}"#,
+    ),
+    (
+        "bool_char_float",
+        r#"use std::cell::Cell;fn main(){let b=Cell::new(false);let c=Cell::new('a');let f=Cell::new(1.0f64);b.set(true);c.set('z');f.set(7.0f64);if b.get()&&c.get()=='z'&&f.get()==7.0f64{println!("7");}}"#,
+    ),
+    (
+        "wide_scalars",
+        r#"use std::cell::Cell;fn main(){let a=Cell::new(-1i128);let b=Cell::new(1u128);a.set(7i128);b.set(7u128);if a.get()==7i128&&b.get()==7u128{println!("7");}}"#,
+    ),
+    (
+        "local_shadow",
+        r#"struct Cell{value:i32}impl Cell{fn new(value:i32)->Self{Self{value}}fn get(&self)->i32{self.value}}fn main(){let x=Cell::new(7);if x.get()==7{println!("7");}}"#,
+    ),
+];
+const CELL_INVALID: &[(&str, &str)] = &[
+    (
+        "not_copy",
+        "use std::cell::Cell;fn main(){let x=Cell::new(1usize);let y=x;let a=x.get();let b=y.get();}",
+    ),
+    (
+        "exclusive_conflict",
+        "use std::cell::Cell;fn main(){let mut x=Cell::new(1usize);let a=&mut x;x.set(7usize);a.set(8usize);}",
+    ),
+    (
+        "dangling_receiver",
+        "use std::cell::Cell;fn main(){let a;{let x=Cell::new(1usize);a=&x;}let y=a.get();}",
+    ),
+    (
+        "wrong_set_type",
+        "use std::cell::Cell;fn main(){let x=Cell::new(1usize);x.set(true);}",
+    ),
+    (
+        "wrong_get_arity",
+        "use std::cell::Cell;fn main(){let x=Cell::new(1usize);x.get(2usize);}",
+    ),
+    ("unimported_type", "fn main(){let x=Cell::new(1usize);}"),
+    (
+        "missing_type_argument",
+        "fn unused(x:core::cell::Cell){}fn main(){}",
+    ),
+];
+const CELL_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "generic_payload",
+        r#"fn unused<T>(x:core::cell::Cell<T>){}fn main(){println!("7");}"#,
+    ),
+    (
+        "reference_payload",
+        r#"fn main(){let n=1;let x=core::cell::Cell::new(&n);println!("7");}"#,
+    ),
+    (
+        "aggregate_payload",
+        r#"fn main(){let x=core::cell::Cell::new((1,2));println!("7");}"#,
+    ),
+    (
+        "unit_payload",
+        r#"fn main(){let x=core::cell::Cell::new(());println!("7");}"#,
+    ),
+    (
+        "get_mut",
+        r#"fn main(){let mut x=core::cell::Cell::new(1usize);let a=x.get_mut();*a=7usize;println!("7");}"#,
+    ),
+    (
+        "as_ptr",
+        r#"fn main(){let x=core::cell::Cell::new(1usize);let p=x.as_ptr();println!("7");}"#,
+    ),
+    (
+        "replace",
+        r#"fn main(){let x=core::cell::Cell::new(1usize);let old=x.replace(7usize);println!("7");}"#,
+    ),
+    (
+        "first_class_new",
+        r#"fn main(){let f=core::cell::Cell::<usize>::new;let x=f(7usize);println!("7");}"#,
+    ),
+];
+#[test]
+fn cell_exact_stock_baseline() {
+    let rustc = defaults_stock::stock_rustc();
+    for (label, source) in CELL_VALID.iter().chain(CELL_UNSUPPORTED) {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "stock.rmeta"
+            } else {
+                "stock-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=cell"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(result.status.success(), "{label} check{check}: {result:?}");
+            if !check {
+                let result = capture(&mut Command::new(&output), &scratch, 5);
+                assert!(result.status.success(), "{label}: {result:?}");
+                assert_eq!(result.stdout, b"7\n", "{label}");
+            }
+        }
+    }
+    for (label, source) in CELL_INVALID {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "invalid.rmeta"
+            } else {
+                "invalid-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=cell"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(
+                !result.status.success(),
+                "{label}: stock accepted check{check}"
+            );
+            assert!(!output.exists(), "{label}: invalid stock output");
+        }
+    }
+}
+
+#[test]
+fn cell_native_check_build_run_workers_1_8() {
+    for (label, source) in CELL_VALID {
+        eprintln!("Cell valid: {label}");
+        runs(source, "7\n");
+    }
+    for (label, source) in CELL_INVALID {
+        rejects(label, source);
+    }
+    for (label, source) in CELL_UNSUPPORTED {
+        rejects(label, source);
+        for workers in [1, 8] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path("unsupported-output");
+            for check in [true, false] {
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(diagnostic.contains("unsupported:"), "{label}: {diagnostic}");
+                assert!(!output.exists(), "{label}: unsupported output");
+            }
+        }
+    }
+}

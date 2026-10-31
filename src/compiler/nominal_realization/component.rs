@@ -291,7 +291,7 @@ fn metadata(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<(), Error> 
             ));
         }
         Term::Ref(_, t) | Term::RawPtr(_, t) => metadata(t, b, depth + 1)?,
-        Term::ManuallyDrop(_, t) => {
+        Term::Cell(_, t) | Term::ManuallyDrop(_, t) => {
             metadata(t, b, depth + 1)?;
             return Err(Error::new(
                 "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
@@ -410,6 +410,7 @@ fn term_height(term: &Term, b: &ir::PlanBudget, depth: usize) -> Result<usize, E
         | Term::Array(t, _)
         | Term::Slice(t)
         | Term::PhantomData(_, t)
+        | Term::Cell(_, t)
         | Term::ManuallyDrop(_, t) => term_height(t, b, depth + 1)?.saturating_add(1),
         Term::FnPointer(inputs, output) => {
             let mut height = 0;
@@ -654,7 +655,7 @@ impl SliceInventory<'_> {
                     "unsupported: recursive component unsized metadata equations",
                 ));
             }
-            Term::ManuallyDrop(..) => {
+            Term::Cell(..) | Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));
@@ -824,7 +825,7 @@ impl ReferenceInventory<'_> {
                     "unsupported: recursive component unsized metadata equations",
                 ));
             }
-            Term::ManuallyDrop(..) => {
+            Term::Cell(..) | Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));
@@ -1039,7 +1040,7 @@ impl<F: FnMut(&ir::Ty, bool, usize) -> Result<(bool, bool), Error>> DropPresence
                     "unsupported recursive drop presence unsized equation",
                 ));
             }
-            Term::ManuallyDrop(..) => {
+            Term::Cell(..) | Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));
@@ -1198,7 +1199,7 @@ impl<F: FnMut(usize, Option<(&ir::Ty, usize)>) -> Result<(), Error>> OwnershipIn
                     "unsupported recursive ownership unsized equation",
                 ));
             }
-            Term::ManuallyDrop(..) => {
+            Term::Cell(..) | Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive owned-wrapper components require sealed catalog construction authority",
                 ));

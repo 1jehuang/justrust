@@ -439,6 +439,12 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
             budget.retain_bytes(std::mem::size_of::<NominalShape>() + 2 * std::mem::size_of::<usize>())?;
             NominalShape::ManuallyDrop(marker.declaration(), Arc::new(type_shape(checker, marker.argument(), depth + 1)?))
         }
+        ir::Ty::Cell(marker) => {
+            let budget = &checker.signatures.plan()?.budget;
+            marker.validate(&checker.signatures.plan()?.catalog, budget)?;
+            budget.retain_bytes(std::mem::size_of::<NominalShape>() + 2 * std::mem::size_of::<usize>())?;
+            NominalShape::Cell(marker.declaration(), Arc::new(type_shape(checker, marker.argument(), depth + 1)?))
+        }
         ir::Ty::FnPointer(pointer) => {
             let budget = &checker.signatures.plan()?.budget;
             pointer.validate(budget)?;
@@ -544,6 +550,20 @@ fn recipe_type(
                 argument,
                 &plan.budget,
             )?);
+            checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+            ty
+        }
+        NominalShape::Cell(declaration, argument) => {
+            let plan = checker.signatures.plan()?;
+            if *declaration != plan.catalog.id(tr::CatalogItem::Cell) {
+                return Err("contract: foreign Cell recipe owner".into());
+            }
+            let Some(argument) = recipe_type(checker, inputs, argument, missing, depth + 1)? else {
+                return Ok(None);
+            };
+            let ty = ir::Ty::Cell(ir::CellTy::new(&plan.catalog, argument, &plan.budget)?);
             checker
                 .facts()
                 .validate_ty_metadata_with_budget(&ty, &plan.budget)?;

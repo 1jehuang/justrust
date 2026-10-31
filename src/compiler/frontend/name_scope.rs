@@ -143,7 +143,7 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                     .key(*name, LookupClass::TypeParameter)
                     .map_err(native_adapter::name_diagnostic)?;
             }
-            Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+            Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                 source
                     .original
                     .checked_path(names)
@@ -313,15 +313,14 @@ impl Type {
                     equal &= ident_eq(names, *a, *b, LookupClass::TypeParameter)?
                 }
                 (Type::PhantomData(a), Type::PhantomData(b))
-                | (Type::ManuallyDrop(a), Type::ManuallyDrop(b)) => {
-                    match (&a.argument, &b.argument) {
-                        (Some(a), Some(b)) => {
-                            pending.push((a.as_ref(), b.as_ref())).map_err(transport)?;
-                        }
-                        (None, None) => (),
-                        _ => equal = false,
+                | (Type::ManuallyDrop(a), Type::ManuallyDrop(b))
+                | (Type::Cell(a), Type::Cell(b)) => match (&a.argument, &b.argument) {
+                    (Some(a), Some(b)) => {
+                        pending.push((a.as_ref(), b.as_ref())).map_err(transport)?;
                     }
-                }
+                    (None, None) => (),
+                    _ => equal = false,
+                },
                 (Type::Named(a), Type::Named(b)) => {
                     equal &=
                         path_key(names, a, Namespace::Type)? == path_key(names, b, Namespace::Type)?

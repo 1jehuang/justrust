@@ -384,6 +384,11 @@ fn specialize_marker_constants(
     ) -> Result<(), Error> {
         use cfg::Rvalue::*;
         match value {
+            CellNew { .. } | CellGet { .. } | CellSet { .. } => {
+                return Err(Error::new(
+                    "unsupported: physical Cell effects require authenticated closed replay",
+                ));
+            }
             ManuallyDropTake { .. } | ManuallyDropIntoInner { .. } => {
                 return Err(Error::new(
                     "unsupported: physical ManuallyDrop payload effect requires authenticated closed replay",

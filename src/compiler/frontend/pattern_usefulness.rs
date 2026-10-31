@@ -195,7 +195,8 @@ impl<'facts> CoverageMatrix<'facts> {
             }
             let next = depth.checked_add(1).ok_or_else(overflow)?;
             match &ty {
-                Ty::ManuallyDrop(_)
+                Ty::Cell(_)
+                | Ty::ManuallyDrop(_)
                 | Ty::PhantomData(_)
                 | Ty::Opaque(_)
                 | Ty::Closure(_)

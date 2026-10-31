@@ -48,6 +48,7 @@ enum Domain {
     FnPointer(Vec<Term>, Term),
     PhantomData(ir::DeclId, Term),
     ManuallyDrop(ir::DeclId, Term),
+    Cell(ir::DeclId, Term),
     Ref(ir::BorrowKind, Term),
     RawPtr(ir::BorrowKind, Term),
     Array(Term, usize),
@@ -417,6 +418,10 @@ impl<'s> Solver<'_, '_, 's> {
                 marker.declaration(),
                 self.schema(marker.argument(), params, depth + 1)?,
             ),
+            ir::Ty::Cell(marker) => Domain::Cell(
+                marker.declaration(),
+                self.schema(marker.argument(), params, depth + 1)?,
+            ),
             ir::Ty::FnPointer(pointer) => {
                 let mut inputs = ir::FnPointerTy::storage(
                     pointer.inputs.len(),
@@ -440,10 +445,12 @@ impl<'s> Solver<'_, '_, 's> {
     fn source_has_inference(&self, ty: &Type, depth: usize) -> Result<bool, String> {
         self.checker.infer_work(depth)?;
         Ok(match ty {
-            Type::PhantomData(source) | Type::ManuallyDrop(source) => match &source.argument {
-                Some(argument) => self.source_has_inference(argument, depth + 1)?,
-                None => true,
-            },
+            Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
+                match &source.argument {
+                    Some(argument) => self.source_has_inference(argument, depth + 1)?,
+                    None => true,
+                }
+            }
             Type::Infer => true,
             Type::Apply(path) => {
                 let mut found = false;
@@ -530,6 +537,21 @@ impl<'s> Solver<'_, '_, 's> {
                         .plan()?
                         .catalog
                         .id(tr::CatalogItem::ManuallyDrop),
+                    argument,
+                ))
+            }
+            Type::Cell(source) => {
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or("missing Cell type argument")?;
+                let argument = self.source_ty(argument)?;
+                self.node(Domain::Cell(
+                    self.checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::Cell),
                     argument,
                 ))
             }
@@ -630,9 +652,9 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(true);
         }
         match &self.variables[term].domain {
-            Domain::PhantomData(_, argument) | Domain::ManuallyDrop(_, argument) => {
-                self.occurs(needle, *argument, depth + 1)
-            }
+            Domain::PhantomData(_, argument)
+            | Domain::ManuallyDrop(_, argument)
+            | Domain::Cell(_, argument) => self.occurs(needle, *argument, depth + 1),
             Domain::FnPointer(inputs, output) => {
                 for t in inputs.iter().chain(std::iter::once(output)) {
                     if self.occurs(needle, *t, depth + 1)? {
@@ -757,6 +779,10 @@ impl<'s> Solver<'_, '_, 's> {
                 self.unify_at(*x, *y, depth + 1)?;
                 Domain::ManuallyDrop(*a, *x)
             }
+            (Domain::Cell(a, x), Domain::Cell(b, y)) if a == b => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::Cell(*a, *x)
+            }
             (Domain::FnPointer(x, xo), Domain::FnPointer(y, yo)) if x.len() == y.len() => {
                 for (x, y) in x.iter().zip(y) {
                     self.unify_at(*x, *y, depth + 1)?;
@@ -816,9 +842,9 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Callable(_) => true,
-            Domain::PhantomData(_, argument) | Domain::ManuallyDrop(_, argument) => {
-                self.contains_callable(argument, depth + 1)?
-            }
+            Domain::PhantomData(_, argument)
+            | Domain::ManuallyDrop(_, argument)
+            | Domain::Cell(_, argument) => self.contains_callable(argument, depth + 1)?,
             Domain::FnPointer(inputs, output) => {
                 let mut found = self.contains_callable(output, depth + 1)?;
                 for t in inputs {
@@ -886,6 +912,20 @@ impl<'s> Solver<'_, '_, 's> {
                     argument,
                     &plan.budget,
                 )?);
+                self.checker
+                    .facts()
+                    .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+                ty
+            }
+            Domain::Cell(declaration, argument) => {
+                let plan = self.checker.signatures.plan()?;
+                if declaration != plan.catalog.id(tr::CatalogItem::Cell) {
+                    return Err("contract: foreign Cell inference owner".into());
+                }
+                let Some(argument) = self.resolve(argument, depth + 1)? else {
+                    return Ok(None);
+                };
+                let ty = ir::Ty::Cell(ir::CellTy::new(&plan.catalog, argument, &plan.budget)?);
                 self.checker
                     .facts()
                     .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
@@ -1326,7 +1366,9 @@ impl<'s> Solver<'_, '_, 's> {
             // reveal a Deref or array carrier for a lazy coercion.
             Domain::Integer | Domain::Float => true,
             Domain::Callable(_) => false,
-            Domain::PhantomData(_, argument) | Domain::ManuallyDrop(_, argument) => {
+            Domain::PhantomData(_, argument)
+            | Domain::ManuallyDrop(_, argument)
+            | Domain::Cell(_, argument) => {
                 self.lazy_input_frontier(argument, targets, depth + 1)?
             }
             Domain::FnPointer(inputs, output) => {
@@ -2674,6 +2716,33 @@ impl<'s> Solver<'_, '_, 's> {
                 let ty = self.checker.associated_fn_item(value)?;
                 self.fixed(ty)
             }
+            Expr::Cell(call) => {
+                let argument = match &call.source.argument {
+                    Some(ty) => self.source_ty(ty)?,
+                    None => self.fresh()?,
+                };
+                let owner = self
+                    .checker
+                    .signatures
+                    .plan()?
+                    .catalog
+                    .id(tr::CatalogItem::Cell);
+                let wrapper = self.node(Domain::Cell(owner, argument))?;
+                if let Some(receiver) = &call.receiver {
+                    let actual = self.expr(receiver, depth + 1)?;
+                    let borrowed = self.node(Domain::Ref(ir::BorrowKind::Shared, wrapper))?;
+                    self.unify_at(borrowed, actual, depth + 1)?;
+                }
+                if let Some(value) = &call.value {
+                    let actual = self.expr(value, depth + 1)?;
+                    self.unify_at(argument, actual, depth + 1)?;
+                }
+                match call.operation {
+                    CellOperation::New => Ok(wrapper),
+                    CellOperation::Get => Ok(argument),
+                    CellOperation::Set => self.fixed(ir::Ty::Unit),
+                }
+            }
             Expr::ManuallyDrop(call) => {
                 let argument = match &call.source.argument {
                     Some(ty) => self.source_ty(ty)?,
@@ -2913,6 +2982,30 @@ impl<'s> Solver<'_, '_, 's> {
                     return Ok(result);
                 }
                 let owner = self.peel_refs(receiver);
+                if let Domain::Cell(declaration, argument) = self.domain(owner).clone() {
+                    let plan = self.checker.signatures.plan()?;
+                    if declaration != plan.catalog.id(tr::CatalogItem::Cell) {
+                        return Err("contract: foreign Cell inference owner".into());
+                    }
+                    let operation = cell::method_operation(&plan.program, *name)?;
+                    if !actuals.is_empty() {
+                        return Err("E0107: Cell methods take no type arguments".into());
+                    }
+                    match operation {
+                        Some(CellOperation::Get) if args.is_empty() => return Ok(argument),
+                        Some(CellOperation::Set) if args.len() == 1 => {
+                            self.unify_at(argument, args[0], depth + 1)?;
+                            return self.fixed(ir::Ty::Unit);
+                        }
+                        Some(_) => return Err("E0061: Cell method argument count mismatch".into()),
+                        None => {
+                            return Err(
+                                "unsupported: canonical Cell method has no executable provider"
+                                    .into(),
+                            );
+                        }
+                    }
+                }
                 if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, Some(owner), None, &actuals);
                 }
@@ -3316,6 +3409,10 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
         ),
         ir::Ty::ManuallyDrop(marker) => format!(
             "core::mem::ManuallyDrop<{}>",
+            diagnostic_ty(marker.argument(), plan)
+        ),
+        ir::Ty::Cell(marker) => format!(
+            "core::cell::Cell<{}>",
             diagnostic_ty(marker.argument(), plan)
         ),
         ir::Ty::FnPointer(pointer) => format!(

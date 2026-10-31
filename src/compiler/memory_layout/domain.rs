@@ -140,6 +140,7 @@ fn normalize(
         ir::Ty::Char | ir::Ty::FnPointer(_) | ir::Ty::PhantomData(_) | ir::Ty::Ref { .. } => {}
         ir::Ty::RawPtr { pointee, .. } if matches!(pointee.as_ref(), ir::Ty::Dyn(_)) => {}
         ir::Ty::Array { element, .. } => normalize(element, parameters, out, budget, depth + 1)?,
+        ir::Ty::Cell(wrapper) => normalize(wrapper.argument(), parameters, out, budget, depth + 1)?,
         ir::Ty::ManuallyDrop(wrapper) => {
             normalize(wrapper.argument(), parameters, out, budget, depth + 1)?
         }
@@ -286,6 +287,7 @@ impl SizeArgument {
                     arrays.push(*len);
                     leaf_ty = element;
                 }
+                ir::Ty::Cell(wrapper) => leaf_ty = wrapper.argument(),
                 ir::Ty::ManuallyDrop(wrapper) => leaf_ty = wrapper.argument(),
                 _ => break,
             }
@@ -636,6 +638,7 @@ fn may_own_drop(ty: &ir::Ty) -> bool {
             | ir::Ty::Char
             | ir::Ty::Unit
             | ir::Ty::ManuallyDrop(_)
+            | ir::Ty::Cell(_)
             | ir::Ty::Never
             | ir::Ty::Ref { .. }
             | ir::Ty::RawPtr { .. }

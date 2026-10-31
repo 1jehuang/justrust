@@ -155,6 +155,11 @@ impl ValidatedTraitWorld {
                     item: projection.item,
                 })?
             }
+            Ty::Cell(wrapper) => Ty::Cell(wrapper.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |child| self.map_universal_projection_type(child, env, depth + 1, reduce),
+            )?),
             Ty::ManuallyDrop(wrapper) => Ty::ManuallyDrop(wrapper.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),

@@ -298,6 +298,16 @@ fn resolve<'a>(
                 element: Arc::new(resolve(cx, *t, world, catalog, b, depth + 1).await?),
                 len,
             },
+            Term::Cell(declaration, argument) => {
+                let argument = resolve(cx, *argument, world, catalog, b, depth + 1).await?;
+                let marker = ir::CellTy::new(catalog, argument, b).map_err(Error::new)?;
+                if marker.declaration() != declaration {
+                    return Err(Error::new(
+                        "nominal marker coordinate changed canonical catalog authority",
+                    ));
+                }
+                ir::Ty::Cell(marker)
+            }
             Term::ManuallyDrop(declaration, argument) => {
                 let argument = resolve(cx, *argument, world, catalog, b, depth + 1).await?;
                 let marker = ir::ManuallyDropTy::new(catalog, argument, b).map_err(Error::new)?;
@@ -391,6 +401,15 @@ fn field<'a>(
             ir::Ty::Param(p) => world
                 .nominal_realization_parameter(input, &p)
                 .map_err(error)?,
+            ir::Ty::Cell(marker) => {
+                marker
+                    .validate(world.canonical_catalog(), b)
+                    .map_err(Error::new)?;
+                let (argument, proofs) =
+                    field(cx, marker.argument().clone(), input, world, depth + 1).await?;
+                dependencies = proofs;
+                ir::Ty::Cell(marker.try_map(b, Error::new, |_| Ok(argument))?)
+            }
             ir::Ty::ManuallyDrop(marker) => {
                 marker
                     .validate(world.canonical_catalog(), b)

@@ -871,8 +871,10 @@ impl<'a> Validator<'a> {
                 Type::Param(name) => self.push(Visit::Ident(*name, LookupClass::TypeParameter))?,
                 Type::Named(path) => self.push(Visit::Path(path))?,
                 Type::Apply(path) => self.push(Visit::GenericPath(path))?,
-                Type::PhantomData(source) | Type::ManuallyDrop(source) => {
-                    source.require_kind(if matches!(ty, Type::ManuallyDrop(_)) {
+                Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
+                    source.require_kind(if matches!(ty, Type::Cell(_)) {
+                        SourceCatalogKind::Cell
+                    } else if matches!(ty, Type::ManuallyDrop(_)) {
                         SourceCatalogKind::ManuallyDrop
                     } else {
                         SourceCatalogKind::PhantomData
@@ -1164,6 +1166,17 @@ impl<'a> Validator<'a> {
                     self.push(Visit::GenericPath(&source.original))?;
                     if let Some(argument) = &source.argument {
                         self.push(Visit::Type(argument))?;
+                    }
+                }
+                Expr::Cell(call) => {
+                    call.source.require_kind(SourceCatalogKind::Cell)?;
+                    self.push(Visit::Path(&call.source.occurrence))?;
+                    self.push(Visit::GenericPath(&call.source.original))?;
+                    if let Some(argument) = &call.source.argument {
+                        self.push(Visit::Type(argument))?;
+                    }
+                    for value in call.receiver.iter().chain(call.value.iter()) {
+                        self.push(Visit::Expr(value))?;
                     }
                 }
                 Expr::ManuallyDrop(call) => {

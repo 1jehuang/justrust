@@ -944,6 +944,22 @@ impl<'c, 's> Inference<'c, 's> {
         actuals: &[ir::Ty],
     ) -> Result<ir::Ty, FactsError> {
         let plan = self.checker.signatures.plan.as_ref().unwrap();
+        if declaration == plan.catalog.id(tr::CatalogItem::Cell) {
+            let [argument] = actuals else {
+                return Err(source_error(
+                    &plan.budget,
+                    "Cell requires exactly one argument",
+                ));
+            };
+            let wrapper = ir::CellTy::new(&plan.catalog, argument.clone(), &plan.budget)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            let ty = ir::Ty::Cell(wrapper);
+            self.checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &plan.budget)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            return Ok(ty);
+        }
         if declaration == plan.catalog.id(tr::CatalogItem::ManuallyDrop) {
             let [argument] = actuals else {
                 return Err(source_error(
@@ -1151,6 +1167,41 @@ impl<'s> Checker<'s> {
                     argument,
                 ))?
             }
+            Expr::Cell(call) => match call.operation {
+                CellOperation::New => {
+                    let argument = match &call.source.argument {
+                        Some(ty) => {
+                            self.infer_type_term(&self.source_type_actual(ty)?, None, depth + 1)?
+                        }
+                        None => self.inference_evidence(
+                            call.value.as_deref().ok_or("missing Cell new value")?,
+                            depth + 1,
+                        )?,
+                    };
+                    self.infer_node(InferKind::Cell(
+                        plan.catalog.id(tr::CatalogItem::Cell),
+                        argument,
+                    ))?
+                }
+                CellOperation::Get => {
+                    let mut child = self.inference_evidence(
+                        call.receiver.as_deref().ok_or("missing Cell receiver")?,
+                        depth + 1,
+                    )?;
+                    while let InferKind::Ref(_, inner) = child.as_ref() {
+                        child = inner.clone();
+                    }
+                    match child.as_ref() {
+                        InferKind::Cell(owner, argument)
+                            if *owner == plan.catalog.id(tr::CatalogItem::Cell) =>
+                        {
+                            argument.clone()
+                        }
+                        _ => self.infer_node(InferKind::Unknown(false))?,
+                    }
+                }
+                CellOperation::Set => self.infer_node(InferKind::Rigid(ir::Ty::Unit))?,
+            },
             Expr::ManuallyDrop(call) => match call.operation {
                 ManuallyDropOperation::New => {
                     let argument = match &call.source.argument {
@@ -1965,6 +2016,7 @@ impl<'s> Checker<'s> {
             }
             InferKind::PhantomData(_, inner)
             | InferKind::ManuallyDrop(_, inner)
+            | InferKind::Cell(_, inner)
             | InferKind::Array(inner, _)
             | InferKind::Slice(inner)
             | InferKind::Ref(_, inner)
@@ -2824,6 +2876,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
     }
     match ty {
         Type::ManuallyDrop(_) => Err("unsupported: ManuallyDrop requires authoritative catalog planning".into()),
+        Type::Cell(_) => Err("unsupported: Cell requires authoritative catalog planning".into()),
         Type::PhantomData(_) => Err("unsupported: PhantomData requires authoritative catalog planning".into()),
         Type::FnPointer { .. } => Err("unsupported: function pointer signatures require authoritative planning".into()),
         Type::SelfType => env
@@ -5144,13 +5197,33 @@ impl<'a> Checker<'a> {
                 args: call_args,
             } => {
                 if let Some(owner) = self.method_receiver_hint(receiver)? {
+                    let mut cell_owner = &owner;
+                    let mut depth = 0usize;
+                    while let ir::Ty::Ref { referent, .. } = cell_owner {
+                        self.signatures.plan()?.budget.check_depth(depth)?;
+                        self.signatures.plan()?.budget.charge_work(1)?;
+                        depth += 1;
+                        cell_owner = referent;
+                    }
+                    if let ir::Ty::Cell(cell) = cell_owner {
+                        return Ok(
+                            match cell::method_operation(&self.signatures.plan()?.program, *name)? {
+                                Some(CellOperation::Get) => Some(cell.argument().clone()),
+                                Some(CellOperation::Set) => Some(ir::Ty::Unit),
+                                _ => None,
+                            },
+                        );
+                    }
                     self.method_selection_for_hint(&owner, name, type_args, call_args)?
                         .map(|selected| selected.signature.result)
                 } else {
                     None
                 }
             }
-            Expr::Struct { .. } | Expr::TupleStruct { .. } | Expr::EnumVariant { .. } => {
+            Expr::Cell(_)
+            | Expr::Struct { .. }
+            | Expr::TupleStruct { .. }
+            | Expr::EnumVariant { .. } => {
                 let evidence = self.inference_evidence(e, 0)?;
                 Inference::empty(self)?.resolve(&evidence, false, 0)?
             }
@@ -8287,6 +8360,10 @@ impl<'a> Checker<'a> {
             if let Some(value) = self.check_stored_closure(path, signature.as_ref())? {
                 return Ok(value);
             }
+        }
+        if let Some(id) = self.cell_method(e, expectation.hard())? {
+            self.record_runtime_site(e, id)?;
+            return Ok(id);
         }
         if let Some(id) = self.builtin_leading_zeros(e)? {
             if let Some(cap) = self.canonical {
@@ -12735,6 +12812,7 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::Unit),
                 )
             }
+            Expr::Cell(call) => self.cell_operation(call, expectation.hard())?,
             Expr::ManuallyDrop(call) => self.manually_drop_operation(call, expectation.hard())?,
             Expr::RawSlice { kind, arguments } => self.raw_slice(*kind, arguments)?,
             Expr::SliceDataPointer(slice) => self.slice_data_pointer(slice)?,
@@ -13109,7 +13187,7 @@ impl<'a> Checker<'a> {
         self.finish_checked_expression(e, kind, flow)
     }
 
-    fn finish_checked_expression(
+    pub(super) fn finish_checked_expression(
         &mut self,
         e: &Expr,
         kind: ir::ExprKind,

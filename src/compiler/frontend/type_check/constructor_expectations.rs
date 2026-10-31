@@ -183,6 +183,10 @@ impl Checker<'_> {
                 *declaration,
                 self.replace_constructor_slots(argument, arguments, depth + 1)?,
             ),
+            InferKind::Cell(declaration, argument) => InferKind::Cell(
+                *declaration,
+                self.replace_constructor_slots(argument, arguments, depth + 1)?,
+            ),
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;

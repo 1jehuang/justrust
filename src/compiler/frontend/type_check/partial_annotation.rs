@@ -8,7 +8,7 @@ use crate::compiler::ir;
 /// True when `ty` mentions `_` anywhere below the root.
 pub(in crate::compiler::frontend) fn has_nested_infer(ty: &Type) -> bool {
     match ty {
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => source
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => source
             .argument
             .as_ref()
             .is_some_and(|argument| has_nested_infer(argument)),
@@ -54,6 +54,14 @@ pub(in crate::compiler::frontend) fn matches_partial(
             }
         }
         (Type::ManuallyDrop(source), ir::Ty::ManuallyDrop(marker)) => {
+            let plan = env.plan()?;
+            marker.validate(&plan.catalog, &plan.budget)?;
+            match &source.argument {
+                Some(argument) => matches_partial(argument, marker.argument(), env),
+                None => mismatch(),
+            }
+        }
+        (Type::Cell(source), ir::Ty::Cell(marker)) => {
             let plan = env.plan()?;
             marker.validate(&plan.catalog, &plan.budget)?;
             match &source.argument {

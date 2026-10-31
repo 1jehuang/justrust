@@ -62,6 +62,7 @@ mod name_validation;
 mod nominal_defaults;
 mod validation_snapshot;
 pub(in crate::compiler) use validation_snapshot::ValidatedProgram;
+pub(in crate::compiler) mod cell;
 pub(in crate::compiler) mod manually_drop;
 mod pattern_usefulness;
 mod program_symbols;
@@ -2639,7 +2640,7 @@ fn compare_source_type_work(
                 }
             }
         }
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
             compare_source_path_work(&source.original, budget, at + 1)?;
             if let Some(argument) = &source.argument {
                 compare_source_type_work(argument, budget, at + 1)?;
@@ -2841,7 +2842,7 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
     sr::depth(budget, at)?;
     sr::work(budget, 1)?;
     Ok(match ty {
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
             sr::retain(
                 budget,
                 std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
@@ -2856,7 +2857,9 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
                     .map(|argument| copy_source_type(argument, budget, at + 1).map(Box::new))
                     .transpose()?,
             });
-            if matches!(ty, Type::ManuallyDrop(_)) {
+            if matches!(ty, Type::Cell(_)) {
+                Type::Cell(copy)
+            } else if matches!(ty, Type::ManuallyDrop(_)) {
                 Type::ManuallyDrop(copy)
             } else {
                 Type::PhantomData(copy)
@@ -2984,7 +2987,7 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
     sr::work(budget, 1)?;
     sr::retain(budget, 2 * std::mem::size_of::<Type>() + 32)?;
     match ty {
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
             sr::retain(budget, 2 * std::mem::size_of::<SourcePhantomData>())?;
             if let Some(argument) = &source.argument {
                 retain_source_type(argument, budget, depth + 1)?;
@@ -3053,10 +3056,12 @@ fn source_type_mentions_self(
             }
             found
         }
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => match &source.argument {
-            Some(argument) => source_type_mentions_self(argument, budget, depth + 1)?,
-            None => false,
-        },
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
+            match &source.argument {
+                Some(argument) => source_type_mentions_self(argument, budget, depth + 1)?,
+                None => false,
+            }
+        }
         Type::SelfType => true,
         Type::Projection(projection) => match projection.as_ref() {
             SourceProjection::SelfItem { .. } => false,
@@ -4426,6 +4431,28 @@ impl SourceInventory {
                     budget,
                 )?;
             }
+            Expr::Cell(call) => {
+                if let Some(receiver) = &call.receiver {
+                    self.expr(
+                        receiver,
+                        &node.child(46, 0, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+                if let Some(value) = &call.value {
+                    self.expr(
+                        value,
+                        &node.child(46, 1, budget)?,
+                        None,
+                        None,
+                        budget,
+                        depth + 1,
+                    )?;
+                }
+            }
             Expr::ManuallyDrop(call) => self.expr(
                 &call.value,
                 &node.child(45, 0, budget)?,
@@ -5323,6 +5350,7 @@ pub(super) fn replay_nominal_source_id(
             }
             ir::Ty::PhantomData(marker) => admit(marker.argument(), budget, depth + 1)?,
             ir::Ty::ManuallyDrop(wrapper) => admit(wrapper.argument(), budget, depth + 1)?,
+            ir::Ty::Cell(wrapper) => admit(wrapper.argument(), budget, depth + 1)?,
             ir::Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     admit(ty, budget, depth + 1)?;
@@ -5569,6 +5597,7 @@ fn contains_source_ref(
         ir::Ty::ManuallyDrop(wrapper) => {
             contains_source_ref(wrapper.argument(), budget, depth + 1)?
         }
+        ir::Ty::Cell(wrapper) => contains_source_ref(wrapper.argument(), budget, depth + 1)?,
         ir::Ty::Struct(t) => {
             let mut any = false;
             for t in t.def().type_args.iter() {
@@ -7332,6 +7361,7 @@ pub(super) fn replay_source_body_with_scratch(
             ));
         }
     }
+    let cell_sources = cell::replay_operations(original, checked, &positions, &mut seen, budget)?;
     let leading_zero_sources =
         replay_builtin_leading_zeros(original, checked, &positions, &mut seen, budget)?;
     let builtin_sources = replay_builtin_lens(original, checked, &positions, &mut seen, budget)?;
@@ -7350,7 +7380,8 @@ pub(super) fn replay_source_body_with_scratch(
     let mut call_scratch = tr::TraitScratch::default();
     for (index, site) in original.calls.iter().enumerate() {
         sr::work(budget, 1)?;
-        if builtin_sources[index]
+        if cell_sources[index]
+            || builtin_sources[index]
             || leading_zero_sources[index]
             || intrinsic_sources[index]
             || array_iter_sources[index]
@@ -8006,6 +8037,11 @@ pub(super) fn replay_source_body_with_scratch(
             *slot = true;
         }
     }
+    for (index, consumed) in cell_sources.iter().enumerate() {
+        if *consumed {
+            mapped[index] = true;
+        }
+    }
     for row in &original.builtin_len_mapping {
         if let Some(slot) = mapped.get_mut(row.source_index) {
             *slot = true;
@@ -8020,7 +8056,8 @@ pub(super) fn replay_source_body_with_scratch(
     if original
         .call_mapping
         .len()
-        .checked_add(original.builtin_len_mapping.len())
+        .checked_add(cell_sources.iter().filter(|value| **value).count())
+        .and_then(|n| n.checked_add(original.builtin_len_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_intrinsic_mapping.len()))
         .and_then(|n| n.checked_add(original.builtin_leading_zeros_mapping.len()))
         .and_then(|n| n.checked_add(original.array_iter_mapping.len()))
@@ -9274,9 +9311,25 @@ pub struct SourceCatalogType {
 enum SourceCatalogKind {
     PhantomData,
     ManuallyDrop,
+    Cell,
 }
 pub type SourcePhantomData = SourceCatalogType;
 pub type SourceManuallyDrop = SourceCatalogType;
+pub type SourceCell = SourceCatalogType;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CellOperation {
+    New,
+    Get,
+    Set,
+}
+#[derive(Clone, Debug)]
+pub struct SourceCellCall {
+    source: Box<SourceCell>,
+    operation: CellOperation,
+    receiver: Option<Box<Expr>>,
+    value: Option<Box<Expr>>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ManuallyDropOperation {
@@ -9295,6 +9348,7 @@ pub struct SourceManuallyDropCall {
 #[derive(Clone, Debug)]
 pub enum Type {
     ManuallyDrop(Box<SourceManuallyDrop>),
+    Cell(Box<SourceCell>),
     PhantomData(Box<SourcePhantomData>),
     Opaque(Box<SourceOpaqueType>),
     /// Safe, nonvariadic Rust ABI function pointer source signature.
@@ -9939,6 +9993,7 @@ fn validate_source_site(
 #[derive(Clone, Debug)]
 pub enum Expr {
     ManuallyDrop(Box<SourceManuallyDropCall>),
+    Cell(Box<SourceCellCall>),
     PhantomData(Box<SourcePhantomData>),
     TypeAlignment(Type),
     /// Source callee-expression invocation, resolved to the canonical callable
@@ -20386,7 +20441,9 @@ fn walk_depth_inspecting<'source>(
                     push(DepthNode::Type(field))?;
                 }
             }
-            DepthNode::Type(Type::PhantomData(source) | Type::ManuallyDrop(source)) => {
+            DepthNode::Type(
+                Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source),
+            ) => {
                 if let Some(argument) = &source.argument {
                     push(DepthNode::Type(argument))?;
                 }
@@ -20583,6 +20640,19 @@ fn walk_depth_inspecting<'source>(
                         push(DepthNode::Type(argument))?;
                     }
                     for segment in &source.original.segments {
+                        for argument in &segment.args {
+                            push(DepthNode::Type(argument))?;
+                        }
+                    }
+                }
+                Expr::Cell(call) => {
+                    for value in call.receiver.iter().chain(call.value.iter()) {
+                        push(DepthNode::Expr(value))?;
+                    }
+                    if let Some(argument) = &call.source.argument {
+                        push(DepthNode::Type(argument))?;
+                    }
+                    for segment in &call.source.original.segments {
                         for argument in &segment.args {
                             push(DepthNode::Type(argument))?;
                         }
@@ -20912,7 +20982,8 @@ fn exact_source_type(
             },
         ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
         (Type::PhantomData(a), Type::PhantomData(b))
-        | (Type::ManuallyDrop(a), Type::ManuallyDrop(b)) => {
+        | (Type::ManuallyDrop(a), Type::ManuallyDrop(b))
+        | (Type::Cell(a), Type::Cell(b)) => {
             let original =
                 exact_source_generic_path(names, &a.original, &b.original, budget, depth + 1)?;
             let argument = match (&a.argument, &b.argument) {
@@ -21108,6 +21179,7 @@ pub struct DeclInfo {
 pub struct DeclRegistry {
     phantom_data_factory: ir::PhantomDataFactory,
     manually_drop_factory: ir::ManuallyDropFactory,
+    cell_factory: ir::CellFactory,
     program: Arc<Program>,
     names: Arc<NameStore>,
     modules: Arc<ModuleArena>,
@@ -21759,6 +21831,7 @@ impl DeclRegistry {
             symbols: self.symbols.clone(),
             phantom_data_factory: self.phantom_data_factory,
             manually_drop_factory: self.manually_drop_factory,
+            cell_factory: self.cell_factory,
             declarations: Vec::new(),
             slots: HashMap::new(),
             functions: HashMap::new(),
@@ -22019,7 +22092,7 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                 SourceProjection::SelfItem { .. } => {}
             }
         }
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
             add(std::mem::size_of::<SourcePhantomData>())?;
             if let Some(argument) = &source.argument {
                 add(source_type_storage(argument, budget, depth + 1)?)?;
@@ -22523,6 +22596,7 @@ impl PlanCtx {
             symbols: program.symbols.clone(),
             phantom_data_factory: ir::PhantomDataFactory::from_builder(&catalog_builder, budget)?,
             manually_drop_factory: ir::ManuallyDropFactory::from_builder(&catalog_builder, budget)?,
+            cell_factory: ir::CellFactory::from_builder(&catalog_builder, budget)?,
             declarations: Vec::new(),
             slots: HashMap::new(),
             functions: HashMap::new(),
@@ -27230,7 +27304,7 @@ fn collect_source_params(
                 }
             }
         }
-        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
             if let Some(argument) = &source.argument {
                 collect_source_params(names, argument, used, budget, depth + 1)?;
             }

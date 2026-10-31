@@ -12,6 +12,69 @@ mod closure_oracle;
 mod stock_rustc;
 
 #[test]
+fn scalar_cell_shared_storage_effects_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "scalar-cell-shared-storage",
+        &[
+            Case {
+                name: "shared_aliases_observe_original_storage",
+                source: r#"use std::cell::Cell;
+fn main(){let cell=Cell::new(3usize);let a=&cell;let b=&cell;a.set(7usize);println!("{} {}",b.get(),cell.get());b.set(11usize);println!("{}",a.get());}"#,
+                expect: Expect::Run("7 7\n11\n"),
+            },
+            Case {
+                name: "reference_parameter_mutates_original_cell",
+                source: r#"use core::cell::Cell;fn set(cell:&Cell<usize>,value:usize){cell.set(value);}fn get(cell:&Cell<usize>)->usize{cell.get()}
+fn main(){let cell=Cell::new(2usize);let a=&cell;set(a,13usize);println!("{} {}",get(a),cell.get());}"#,
+                expect: Expect::Run("13 13\n"),
+            },
+            Case {
+                name: "owned_move_keeps_distinct_storage",
+                source: r#"use core::cell::Cell;fn main(){let first=Cell::new(4usize);let second=first;let other=Cell::new(9usize);second.set(6usize);println!("{} {}",second.get(),other.get());}"#,
+                expect: Expect::Run("6 9\n"),
+            },
+            Case {
+                name: "small_and_wide_scalar_memory_widths",
+                source: r#"use core::cell::Cell;fn main(){let byte=Cell::new(255u8);let flag=Cell::new(false);let letter=Cell::new('a');let wide=Cell::new(18446744073709551617u128);let real=Cell::new(1.5f64);byte.set(7u8);flag.set(true);letter.set('z');wide.set(36893488147419103235u128);real.set(2.5f64);assert_eq!(byte.get(),7u8);assert!(flag.get());assert_eq!(letter.get(),'z');assert_eq!(wide.get(),36893488147419103235u128);assert_eq!(real.get(),2.5f64);println!("scalar cell widths");}"#,
+                expect: Expect::Run("scalar cell widths\n"),
+            },
+            Case {
+                name: "shared_reborrow_keeps_exclusive_parent",
+                source: r#"use core::cell::Cell;fn main(){let mut cell=Cell::new(1usize);let exclusive=&mut cell;let shared=&*exclusive;shared.set(8usize);println!("{}",shared.get());exclusive.set(9usize);println!("{}",cell.get());}"#,
+                expect: Expect::Run("8\n9\n"),
+            },
+            Case {
+                name: "shared_closure_and_associated_operations",
+                source: r#"use core::cell::Cell;fn next(cell:&Cell<usize>)->usize{println!("value");cell.get()+1usize}fn main(){let cell=Cell::new(4usize);let observe=||cell.get();let write=||Cell::set(&cell,next(&cell));write();println!("{} {}",observe(),Cell::get(&cell));}"#,
+                expect: Expect::Run("value\n5 5\n"),
+            },
+            Case {
+                name: "cell_is_not_copy",
+                source: r#"use core::cell::Cell;fn main(){let cell=Cell::new(1usize);let moved=cell;println!("{} {}",cell.get(),moved.get());}"#,
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "exclusive_alias_still_conflicts",
+                source: r#"use core::cell::Cell;fn main(){let mut cell=Cell::new(1usize);let shared=&cell;let exclusive=&mut cell;shared.set(2usize);println!("{}",exclusive.get());}"#,
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "live_shared_cell_prevents_owner_move",
+                source: r#"use core::cell::Cell;fn main(){let cell=Cell::new(1usize);let shared=&cell;let moved=cell;shared.set(2usize);println!("{}",moved.get());}"#,
+                expect: Expect::Invalid("E0505"),
+            },
+            Case {
+                name: "cell_alias_cannot_outlive_owner",
+                source: r#"use core::cell::Cell;fn main(){let shared;{let cell=Cell::new(1usize);shared=&cell;}shared.set(2usize);}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn explicit_indexed_field_borrows_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check_with_compiler(

@@ -1655,6 +1655,7 @@ fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
     match (left, right) {
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::PhantomData(a), Ty::PhantomData(b)) => Arc::ptr_eq(a, b),
+        (Ty::Cell(a), Ty::Cell(b)) => Arc::ptr_eq(a, b),
         (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => Arc::ptr_eq(a, b),
         (Ty::FnPointer(a), Ty::FnPointer(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
@@ -2032,6 +2033,7 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
         (Ty::Opaque(x), Ty::Opaque(y)) => Arc::ptr_eq(x, y),
         (Ty::Closure(x), Ty::Closure(y)) => Arc::ptr_eq(x, y),
         (Ty::PhantomData(x), Ty::PhantomData(y)) => Arc::ptr_eq(x, y),
+        (Ty::Cell(x), Ty::Cell(y)) => Arc::ptr_eq(x, y),
         (Ty::ManuallyDrop(x), Ty::ManuallyDrop(y)) => Arc::ptr_eq(x, y),
         (Ty::FnPointer(x), Ty::FnPointer(y)) => Arc::ptr_eq(x, y),
         (Ty::FnItem(x), Ty::FnItem(y)) => Arc::ptr_eq(x, y),
@@ -2674,6 +2676,7 @@ enum TypeNode {
     FnPointer(usize),
     PhantomData(usize),
     ManuallyDrop(usize),
+    Cell(usize),
 }
 #[derive(Default)]
 struct TypeWalk {
@@ -2709,6 +2712,7 @@ impl TypeWalk {
                 t.def().id,
                 t.def() as *const ir::EnumDef as usize,
             )),
+            Ty::Cell(cell) => Some(TypeNode::Cell(Arc::as_ptr(cell) as usize)),
             Ty::PhantomData(marker) => Some(TypeNode::PhantomData(Arc::as_ptr(marker) as usize)),
             Ty::ManuallyDrop(wrapper) => {
                 Some(TypeNode::ManuallyDrop(Arc::as_ptr(wrapper) as usize))
@@ -3754,7 +3758,8 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
-            Ty::ManuallyDrop(_)
+            Ty::Cell(_)
+            | Ty::ManuallyDrop(_)
             | Ty::Ref { .. }
             | Ty::Closure(_)
             | Ty::PhantomData(_)
@@ -3929,6 +3934,17 @@ impl ValidatedTraitWorld {
                 for ty in closure.types() {
                     child(ty, TypeUse::Root)?;
                 }
+            }
+            Ty::Cell(cell) => {
+                cell.validate(&self.catalog, &self.budget)
+                    .map_err(|error| FactsError::from_message(&self.budget, &error))?;
+                if !cell.is_concrete() {
+                    self.catalog.validate_cell_schema_environment(
+                        env,
+                        caller.map(|facts| facts.declaration()),
+                    )?;
+                }
+                child(cell.argument(), TypeUse::Actual)?;
             }
             Ty::ManuallyDrop(wrapper) => {
                 wrapper
@@ -4635,6 +4651,7 @@ impl ValidatedTraitWorld {
                         }
                     }
                 }
+                Ty::Cell(cell) => enqueue(cell.argument())?,
                 Ty::ManuallyDrop(wrapper) => enqueue(wrapper.argument())?,
                 Ty::FnPointer(_) | Ty::PhantomData(_) => {}
                 Ty::FnItem(item) => {
@@ -4764,6 +4781,7 @@ impl ValidatedTraitWorld {
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1))
             }
+            (Ty::Cell(a), Ty::Cell(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::FnItem(a), Ty::FnItem(b)) => Ok(a.declaration == b.declaration
@@ -6428,6 +6446,7 @@ impl ValidatedTraitWorld {
                     mentions(&projection.trait_ref.self_ty, parameter, budget, depth + 1)?
                         || all(&projection.trait_ref.args)?
                 }
+                Ty::Cell(cell) => mentions(cell.argument(), parameter, budget, depth + 1)?,
                 Ty::ManuallyDrop(wrapper) => {
                     mentions(wrapper.argument(), parameter, budget, depth + 1)?
                 }
@@ -6618,6 +6637,17 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
+            (Ty::Cell(a), Ty::Cell(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    Ok::<bool, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "Cell declaration changed during transport",
+                    ));
+                }
+            }
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 if !a.try_eq(b, |a, b| {
                     self.collect_nominal_mappings(a, b, output, depth + 1)?;
@@ -7763,6 +7793,20 @@ impl ValidatedTraitWorld {
         if let Ty::Param(p) = term.ty {
             return Ok(term.side == side && *p == parameter);
         }
+        if let Ty::Cell(cell) = term.ty
+            && self.occurs(
+                side,
+                parameter,
+                Term {
+                    side: term.side,
+                    ty: cell.argument(),
+                },
+                bindings,
+                depth + 1,
+            )?
+        {
+            return Ok(true);
+        }
         if let Ty::ManuallyDrop(wrapper) = term.ty
             && self.occurs(
                 side,
@@ -7876,6 +7920,22 @@ impl ValidatedTraitWorld {
             return self.unify(right, left, bindings, depth + 1);
         }
         match (left.ty, right.ty) {
+            (Ty::Cell(a), Ty::Cell(b)) => {
+                return a.try_eq(b, |a, b| {
+                    self.unify(
+                        Term {
+                            side: left.side,
+                            ty: a,
+                        },
+                        Term {
+                            side: right.side,
+                            ty: b,
+                        },
+                        bindings,
+                        depth + 1,
+                    )
+                });
+            }
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 return a.try_eq(b, |a, b| {
                     self.unify(
@@ -9608,6 +9668,18 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
+            Ty::Cell(_) => {
+                if item == CatalogItem::Copy {
+                    return Ok(Some(ProofOutcome::NotProven));
+                }
+                if item == CatalogItem::Clone {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: Cell Clone contract is not implemented",
+                    ));
+                }
+                true
+            }
             Ty::ManuallyDrop(wrapper) => {
                 push(&self.budget, &mut children, wrapper.argument().clone())?;
                 true
@@ -10001,6 +10073,9 @@ impl ValidatedTraitWorld {
             };
         }
         match (pattern, actual) {
+            (Ty::Cell(a), Ty::Cell(b)) => {
+                return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
+            }
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
             }
@@ -12011,6 +12086,74 @@ mod tests {
         }
     }
 
+    #[test]
+    fn cell_metadata_rejects_catalog_parameter_transplant_and_is_never_copy() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let scalar = Ty::Cell(ir::CellTy::new(&world.catalog, Ty::Bool, &c.budget).unwrap());
+        facts.validate_ty(&scalar).unwrap();
+        let goal = |item| {
+            Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(item),
+                self_ty: scalar.clone(),
+                args: Arc::from([]),
+            })
+        };
+        assert!(matches!(
+            world.prove_goal(&goal(CatalogItem::Sized), &facts).unwrap(),
+            ProofOutcome::Proved(_)
+        ));
+        assert!(matches!(
+            world.prove_goal(&goal(CatalogItem::Copy), &facts).unwrap(),
+            ProofOutcome::NotProven
+        ));
+        assert!(
+            world
+                .prove_goal(&goal(CatalogItem::Clone), &facts)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
+        let row = world
+            .catalog
+            .declaration(world.catalog.id(CatalogItem::CellNew))
+            .unwrap();
+        let raw = &row.schema.as_ref().unwrap().signature.result;
+        assert!(matches!(raw, Ty::Cell(cell) if !cell.is_concrete()));
+        let error = facts.validate_ty(raw).unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Unsupported);
+        world
+            .validate_ty_metadata_in(raw, &row.info.env, 0)
+            .unwrap();
+        let other = world
+            .catalog
+            .declaration(world.catalog.id(CatalogItem::ManuallyDropNew))
+            .unwrap();
+        assert!(
+            world
+                .validate_ty_metadata_in(raw, &other.info.env, 0)
+                .is_err()
+        );
+        assert!(
+            world
+                .catalog
+                .validate_cell_schema_environment(&row.info.env, Some(c.caller))
+                .is_err()
+        );
+        for argument in [
+            c.caller_parameter.clone(),
+            c.leaf.clone(),
+            Ty::Unit,
+            Ty::Never,
+        ] {
+            assert!(
+                ir::CellTy::new(&world.catalog, argument, &c.budget)
+                    .unwrap_err()
+                    .starts_with("unsupported:")
+            );
+        }
+    }
     #[test]
     fn manually_drop_carrier_effect_lens_keeps_payload_and_shared_barriers() {
         let c = case();

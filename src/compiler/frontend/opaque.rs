@@ -342,7 +342,7 @@ impl DeclRegistry {
                 | Type::Slice(inner) => {
                     return find(inner, site, budget, depth + 1);
                 }
-                Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+                Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                     if let Some(argument) = &source.argument {
                         return find(argument, site, budget, depth + 1);
                     }

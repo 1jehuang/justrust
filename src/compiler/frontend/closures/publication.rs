@@ -39,6 +39,7 @@ impl CheckedClosureAuthority {
             facts
                 .validate_closure_body_source(closure, mode.mode, &mode.body)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            cell::replay_checked_body(plan, closure.provider(), &mode.body, &plan.budget)?;
             let body = ir::ClosureBodyShape::capture(&mode.body, &facts, &plan.budget)?;
             plan.budget.retain_bytes(std::mem::size_of::<ModeShape>())?;
             shapes.push(ModeShape {
@@ -84,6 +85,7 @@ impl CheckedClosureAuthority {
             facts
                 .validate_closure_body_source(&checked.ty, mode, &body)
                 .map_err(|e| e.into_legacy_diagnostic(&plan.budget))?;
+            cell::replay_checked_body(plan, checked.ty.provider(), &body, &plan.budget)?;
             shape.body.validate(&body, &facts, &plan.budget)?;
         }
         Ok(())

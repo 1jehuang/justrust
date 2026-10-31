@@ -544,6 +544,7 @@ fn read_cell_cover(
             | Ty::Bool
             | Ty::Unit
             | Ty::Never
+            | Ty::Cell(_)
             | Ty::RawPtr { .. } => Ok(true),
             _ => {
                 if let Ty::Enum(value) = ty {
@@ -3885,6 +3886,9 @@ impl CarrierBuilder<'_, '_> {
                 }
                 Ok(vec![(proof.captured_destination(), merged)])
             }
+            Rvalue::CellNew { .. } | Rvalue::CellGet { .. } | Rvalue::CellSet { .. } => {
+                Ok(Vec::new())
+            }
             Rvalue::ManuallyDropIntoInner { value, .. } => {
                 let mut carriers = self.operand_value(state, value)?;
                 for (location, _) in &mut carriers {
@@ -6138,6 +6142,8 @@ pub(super) struct AccessPoint {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Access {
+    CellRead,
+    CellWrite,
     Read,
     Write,
     Move,
@@ -6688,6 +6694,14 @@ fn visit_operand(op: &Operand, mut visit: impl FnMut(&Place, bool)) {
 }
 fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place, bool)) {
     match value {
+        Rvalue::CellNew { value, .. } => visit_operand(value, &mut visit),
+        Rvalue::CellGet { reference, .. } => visit(reference, false),
+        Rvalue::CellSet {
+            reference, value, ..
+        } => {
+            visit(reference, false);
+            visit_operand(value, &mut visit);
+        }
         Rvalue::ManuallyDropTake { payload, .. } => visit(payload, true),
         Rvalue::Borrow(id) => visit(&f.loan_sites[id.0].place, false),
         Rvalue::ManuallyDropIntoInner { value: op, .. }
@@ -7903,6 +7917,49 @@ impl Plan {
             statement,
             phase,
         } = point;
+        if matches!(access, Access::CellRead | Access::CellWrite) {
+            let Some(authority) = self.authority.as_ref() else {
+                return Ok(Some(Problem::Invalid(
+                    "Cell interior access lacks validated storage authority".into(),
+                )));
+            };
+            let base = match &target.place.root {
+                CanonicalRoot::Owned(local) => f.locals.get(local.0).map(|local| local.ty.clone()),
+                CanonicalRoot::ParameterReferent(local, position) => {
+                    let Some(local) = f.locals.get(local.0) else {
+                        return Ok(Some(Problem::Invalid(
+                            "Cell storage root is missing".into(),
+                        )));
+                    };
+                    match ir::carrier_at(&local.ty, position, authority.budget()) {
+                        Ok(Ty::Ref { referent, .. }) => Some(referent.as_ref().clone()),
+                        _ => None,
+                    }
+                }
+            };
+            let Some(base) = base else {
+                return Ok(Some(Problem::Invalid(
+                    "Cell storage root lacks an exact reference carrier".into(),
+                )));
+            };
+            let actual = match authority.projected_ty(&base, &target.place.projection) {
+                Ok(actual) => actual,
+                Err(error) if error.is_resource() => return Err(Exhausted),
+                Err(error) => return Ok(Some(Problem::Invalid(error.to_string()))),
+            };
+            if !matches!(&actual,Ty::Cell(cell) if cell.is_concrete()) {
+                return Ok(Some(Problem::Invalid(
+                    "Cell interior access requires canonical primitive Cell storage".into(),
+                )));
+            }
+            if let Err(error) = authority.validate_ty(&actual) {
+                return if error.is_resource() {
+                    Err(Exhausted)
+                } else {
+                    Ok(Some(Problem::Invalid(error.to_string())))
+                };
+            }
+        }
         let point = self.point_data(block, statement, phase);
         let active = self.active(&point.origins, &point.live, budget)?;
         'loans: for loan in active.members() {
@@ -7916,8 +7973,13 @@ impl Plan {
             let activating =
                 statement.is_none() && self.activations[block.0].contains(&LoanId(loan));
             let reserved = self.two_phase.has(loan) && !point.activated.has(loan) && !activating;
-            if matches!(access, Access::Read | Access::SharedBorrow)
-                && (self.kinds[loan] == BorrowKind::Shared || reserved)
+            if matches!(access, Access::CellWrite) && self.kinds[loan] == BorrowKind::Shared {
+                continue;
+            }
+            if matches!(
+                access,
+                Access::Read | Access::SharedBorrow | Access::CellRead
+            ) && (self.kinds[loan] == BorrowKind::Shared || reserved)
             {
                 continue;
             }
@@ -7952,11 +8014,13 @@ impl Plan {
                             "E0597: borrowed value does not live long enough"
                         }
                         (Access::Move, _) => "E0505: cannot move out of value while borrowed",
-                        (Access::Write, _) => "E0506: cannot assign to value while borrowed",
+                        (Access::Write | Access::CellWrite, _) => {
+                            "E0506: cannot assign to value while borrowed"
+                        }
                         (_, BorrowKind::Shared) => {
                             "E0502: cannot borrow as mutable because it is also borrowed as immutable"
                         }
-                        (Access::Read | Access::SharedBorrow, _) => {
+                        (Access::Read | Access::SharedBorrow | Access::CellRead, _) => {
                             "E0502: cannot borrow as immutable because it is also borrowed as mutable"
                         }
                         _ => "E0499: cannot borrow as mutable more than once at a time",

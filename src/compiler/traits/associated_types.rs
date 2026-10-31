@@ -394,6 +394,15 @@ impl ValidatedTraitWorld {
                     child(ty, replays)?;
                 }
             }
+            Ty::Cell(marker) => {
+                marker
+                    .validate(&self.catalog, &self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                if !marker.is_concrete() {
+                    self.catalog.validate_cell_schema_environment(env, None)?;
+                }
+                child(marker.argument(), replays)?;
+            }
             Ty::ManuallyDrop(marker) => {
                 marker
                     .validate(&self.catalog, &self.budget)
@@ -964,6 +973,11 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::Cell(marker) => {
+                if !self.raw_associated_ty_is_closed(marker.argument(), depth + 1)? {
+                    return Ok(false);
+                }
+            }
             Ty::ManuallyDrop(marker) => {
                 if !self.raw_associated_ty_is_closed(marker.argument(), depth + 1)? {
                     return Ok(false);
@@ -1353,6 +1367,11 @@ impl ValidatedTraitWorld {
                 push(&self.budget, dependencies, evidence)?;
                 Ok(normal)
             }
+            Ty::Cell(marker) => Ok(Ty::Cell(marker.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |t| self.normalize_type_in(t, context, stack, dependencies, depth + 1),
+            )?)),
             Ty::ManuallyDrop(marker) => Ok(Ty::ManuallyDrop(marker.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),
@@ -1919,6 +1938,18 @@ impl ValidatedTraitWorld {
             self.validate_rhs_substitution(left, right, env, arguments, depth + 1)
         };
         match (raw, actual) {
+            (Ty::Cell(left), Ty::Cell(right)) => {
+                if !left.try_eq(right, |left, right| {
+                    child(left, right)?;
+                    Ok::<_, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "Cell RHS substitution changed canonical declaration",
+                    ));
+                }
+                return Ok(());
+            }
             (Ty::ManuallyDrop(left), Ty::ManuallyDrop(right)) => {
                 if !left.try_eq(right, |left, right| {
                     child(left, right)?;

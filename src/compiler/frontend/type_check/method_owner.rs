@@ -43,6 +43,10 @@ impl Checker<'_> {
                 *declaration,
                 self.method_owner_term(argument, bindings, depth + 1)?,
             ),
+            InferKind::Cell(declaration, argument) => InferKind::Cell(
+                *declaration,
+                self.method_owner_term(argument, bindings, depth + 1)?,
+            ),
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;

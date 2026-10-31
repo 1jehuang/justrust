@@ -325,6 +325,12 @@ impl ValidatedTraitWorld {
             .charge_work(1)
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let valid = match (source, realized) {
+            (Ty::Cell(source), Ty::Cell(realized)) => {
+                source.try_eq(realized, |source, realized| {
+                    self.replay_nominal_field_term(replays, input, source, realized, depth + 1)?;
+                    Ok::<_, FactsError>(true)
+                })?
+            }
             (Ty::ManuallyDrop(source), Ty::ManuallyDrop(realized)) => {
                 source.try_eq(realized, |source, realized| {
                     self.replay_nominal_field_term(replays, input, source, realized, depth + 1)?;
@@ -526,6 +532,17 @@ impl ValidatedTraitWorld {
                             depth + 1,
                         )?;
                     }
+                }
+                Ty::Cell(marker) => {
+                    walk(
+                        world,
+                        replays,
+                        input,
+                        marker.argument(),
+                        dependencies,
+                        cursor,
+                        depth + 1,
+                    )?;
                 }
                 Ty::ManuallyDrop(marker) => {
                     walk(
@@ -791,6 +808,11 @@ impl ValidatedTraitWorld {
             .charge_work(1)
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let result = match ty {
+            Ty::Cell(marker) => Ty::Cell(marker.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |ty| self.close_nominal_bound_term(replays, ty, env, actuals, depth + 1),
+            )?),
             Ty::ManuallyDrop(marker) => Ty::ManuallyDrop(marker.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),

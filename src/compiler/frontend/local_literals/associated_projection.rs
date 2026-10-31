@@ -82,6 +82,15 @@ impl<'s> Solver<'_, '_, 's> {
                 let budget = &self.checker.signatures.plan()?.budget;
                 ir::Ty::ManuallyDrop(marker.try_map(budget, |error| error, |_| Ok(argument))?)
             }
+            ir::Ty::Cell(marker) => {
+                let Some(argument) =
+                    self.resolve_projection_representation(marker.argument(), depth + 1)?
+                else {
+                    return Ok(None);
+                };
+                let budget = &self.checker.signatures.plan()?.budget;
+                ir::Ty::Cell(marker.try_map(budget, |error| error, |_| Ok(argument))?)
+            }
             ir::Ty::FnPointer(pointer) => {
                 let budget = &self.checker.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(pointer.inputs.len(), budget)?;
@@ -206,6 +215,7 @@ impl<'s> Solver<'_, '_, 's> {
             }
             Domain::PhantomData(_, term)
             | Domain::ManuallyDrop(_, term)
+            | Domain::Cell(_, term)
             | Domain::Ref(_, term)
             | Domain::RawPtr(_, term)
             | Domain::Array(term, _)
@@ -247,6 +257,7 @@ impl<'s> Solver<'_, '_, 's> {
             }
             Domain::PhantomData(_, term)
             | Domain::ManuallyDrop(_, term)
+            | Domain::Cell(_, term)
             | Domain::Ref(_, term)
             | Domain::RawPtr(_, term)
             | Domain::Array(term, _)

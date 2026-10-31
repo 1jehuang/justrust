@@ -194,6 +194,7 @@ impl Encoder<'_> {
                         super::module_identity::CatalogModule::Clone => 2,
                         super::module_identity::CatalogModule::Ops => 3,
                         super::module_identity::CatalogModule::Mem => 4,
+                        super::module_identity::CatalogModule::Cell => 5,
                     }])?;
                 }
             }
@@ -213,6 +214,10 @@ impl Encoder<'_> {
             traits::CatalogItem::Drop => 6,
             traits::CatalogItem::DropItem => 7,
             traits::CatalogItem::PhantomData => 9,
+            traits::CatalogItem::Cell => 14,
+            traits::CatalogItem::CellNew => 15,
+            traits::CatalogItem::CellGet => 16,
+            traits::CatalogItem::CellSet => 17,
             traits::CatalogItem::ManuallyDrop => 10,
             traits::CatalogItem::ManuallyDropNew => 11,
             traits::CatalogItem::ManuallyDropIntoInner => 12,
@@ -282,6 +287,11 @@ impl Encoder<'_> {
                     self.pattern(ty, env, depth + 1)?;
                 }
                 Ok(())
+            }
+            ir::Ty::Cell(wrapper) => {
+                self.append(b"L")?;
+                self.declaration(wrapper.declaration())?;
+                self.pattern(wrapper.argument(), env, depth + 1)
             }
             ir::Ty::ManuallyDrop(wrapper) => {
                 self.append(b"W")?;
@@ -427,6 +437,11 @@ impl Encoder<'_> {
                     self.ty(ty, depth + 1)?;
                 }
                 Ok(())
+            }
+            ir::Ty::Cell(wrapper) => {
+                self.append(b"L")?;
+                self.declaration(wrapper.declaration())?;
+                self.ty(wrapper.argument(), depth + 1)
             }
             ir::Ty::ManuallyDrop(wrapper) => {
                 self.append(b"W")?;
@@ -633,6 +648,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
                     walk(ty, depth + 1, budget)?;
                 }
             }
+            ir::Ty::Cell(wrapper) => walk(wrapper.argument(), depth + 1, budget)?,
             ir::Ty::ManuallyDrop(wrapper) => walk(wrapper.argument(), depth + 1, budget)?,
             ir::Ty::PhantomData(marker) => walk(marker.argument(), depth + 1, budget)?,
             ir::Ty::FnPointer(pointer) => {

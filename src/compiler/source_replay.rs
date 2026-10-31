@@ -17,6 +17,7 @@ pub(super) enum InferKind {
     Tuple(Arc<[InferTerm]>),
     FnPointer(Arc<[InferTerm]>, InferTerm),
     PhantomData(ir::DeclId, InferTerm),
+    Cell(ir::DeclId, InferTerm),
     ManuallyDrop(ir::DeclId, InferTerm),
     Array(InferTerm, usize),
     Slice(InferTerm),
@@ -66,6 +67,28 @@ impl CallInferenceState {
         self.work(depth)?;
         Ok(match term.as_ref() {
             InferKind::Rigid(ty) => Some(ty.clone()),
+            InferKind::Cell(declaration, argument) => {
+                let Some(argument) = self.resolve(argument, fallback, depth + 1, materialize)?
+                else {
+                    return Ok(None);
+                };
+                let ty = materialize(*declaration, std::slice::from_ref(&argument))?;
+                let ir::Ty::Cell(cell) = &ty else {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "Cell inference materialized a foreign type",
+                    ));
+                };
+                if cell.declaration() != *declaration
+                    || !replay_types_equal_at(cell.argument(), &argument, &self.budget, depth + 1)?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "Cell inference changed original owner or actual",
+                    ));
+                }
+                Some(ty)
+            }
             InferKind::ManuallyDrop(declaration, argument) => {
                 let Some(argument) = self.resolve(argument, fallback, depth + 1, materialize)?
                 else {
@@ -315,6 +338,9 @@ impl CallInferenceState {
     ) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match schema.as_ref() {
+            InferKind::Cell(owner, argument) => {
+                InferKind::Cell(*owner, self.bind_schema(argument, slots, depth + 1)?)
+            }
             InferKind::ManuallyDrop(owner, argument) => {
                 InferKind::ManuallyDrop(*owner, self.bind_schema(argument, slots, depth + 1)?)
             }
@@ -507,6 +533,9 @@ impl CallInferenceState {
     fn taint(&self, term: &InferTerm, depth: usize) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match term.as_ref() {
+            InferKind::Cell(owner, argument) => {
+                InferKind::Cell(*owner, self.taint(argument, depth + 1)?)
+            }
             InferKind::ManuallyDrop(owner, argument) => {
                 InferKind::ManuallyDrop(*owner, self.taint(argument, depth + 1)?)
             }
@@ -617,6 +646,9 @@ impl CallInferenceState {
                 if frontend::replay_type_equal(x, y, &self.budget)? =>
             {
                 Ok(a.clone())
+            }
+            (InferKind::Cell(a, x), InferKind::Cell(b, y)) if a == b => {
+                self.node(InferKind::Cell(*a, self.merge(x, y, depth + 1)?))
             }
             (InferKind::ManuallyDrop(a, x), InferKind::ManuallyDrop(b, y)) if a == b => {
                 self.node(InferKind::ManuallyDrop(*a, self.merge(x, y, depth + 1)?))
@@ -729,7 +761,8 @@ impl CallInferenceState {
                     self.occurs(slot, f, depth + 1)?;
                 }
             }
-            InferKind::ManuallyDrop(_, element)
+            InferKind::Cell(_, element)
+            | InferKind::ManuallyDrop(_, element)
             | InferKind::PhantomData(_, element)
             | InferKind::Array(element, _)
             | InferKind::Slice(element)
@@ -765,6 +798,16 @@ impl CallInferenceState {
                 self.slots[*slot] = Some(value);
                 Ok(())
             }
+            InferKind::Cell(owner, argument) => match evidence.as_ref() {
+                InferKind::Cell(actual_owner, actual) if owner == actual_owner => {
+                    self.constrain(argument, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(argument, evidence, depth + 1),
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "Cell inference owner or actual mismatch",
+                )),
+            },
             InferKind::ManuallyDrop(owner, argument) => match evidence.as_ref() {
                 InferKind::ManuallyDrop(actual_owner, actual) if owner == actual_owner => {
                     self.constrain(argument, actual, depth + 1)
@@ -976,6 +1019,10 @@ impl CallInferenceState {
                 }
                 InferKind::Slot(param.index as usize)
             }
+            ir::Ty::Cell(cell) => InferKind::Cell(
+                cell.declaration(),
+                self.type_term(cell.argument(), schema, depth + 1)?,
+            ),
             ir::Ty::ManuallyDrop(wrapper) => InferKind::ManuallyDrop(
                 wrapper.declaration(),
                 self.type_term(wrapper.argument(), schema, depth + 1)?,
@@ -1296,6 +1343,8 @@ fn replay_types_equal_at(
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             replay_types_equal_at(a, b, budget, at + 1)
         }
+        (ir::Ty::Cell(a), ir::Ty::Cell(b)) => Ok(a.declaration() == b.declaration()
+            && replay_types_equal_at(a.argument(), b.argument(), budget, at + 1)?),
         (ir::Ty::ManuallyDrop(a), ir::Ty::ManuallyDrop(b)) => Ok(a.declaration()
             == b.declaration()
             && replay_types_equal_at(a.argument(), b.argument(), budget, at + 1)?),
@@ -2022,6 +2071,9 @@ fn terms_equal(
                 }
             }
             true
+        }
+        (InferKind::Cell(a, x), InferKind::Cell(b, y)) => {
+            a == b && terms_equal(x, y, budget, at + 1)?
         }
         (InferKind::ManuallyDrop(a, x), InferKind::ManuallyDrop(b, y)) => {
             a == b && terms_equal(x, y, budget, at + 1)?

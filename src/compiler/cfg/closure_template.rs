@@ -22,11 +22,18 @@ pub(in crate::compiler) fn lower_closure_template(
         .map_err(|error| error.into_legacy_diagnostic(budget))?;
     budget.charge_nodes(source.exprs.len().saturating_add(source.locals.len()))?;
     let facts = ir::FactsCtx::from_validated(&authority);
-    let mut lowered = lower_internal(&source, facts, Some(budget))?;
+    let closure_origin = super::super::source_replay::OriginalBodyId::new(budget)
+        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+    let mut lowered = lower_internal_with_source(
+        &source,
+        facts,
+        Some(budget),
+        SourceLowering::Closure(&closure_origin),
+    )?;
     lowered.call_evidence = ir::bind_call_evidence(source.clone(), authority.clone(), budget)?;
-    lowered.lowering_proof = Some(std::sync::Arc::new(GeneratedCfgShape::capture(
-        &lowered, &authority, budget,
-    )?));
+    let mut shape = GeneratedCfgShape::capture(&lowered, &authority, budget)?;
+    shape.closure_origin = Some(closure_origin);
+    lowered.lowering_proof = Some(std::sync::Arc::new(shape));
     let function = std::sync::Arc::new(lowered);
     function.preflight_plan(facts, budget)?;
     function.validate_with_facts(facts)?;

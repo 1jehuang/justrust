@@ -9,6 +9,9 @@ impl<'a> Checker<'a> {
             tr::CatalogItem::ManuallyDropNew,
             tr::CatalogItem::ManuallyDropIntoInner,
             tr::CatalogItem::ManuallyDropDrop,
+            tr::CatalogItem::CellNew,
+            tr::CatalogItem::CellGet,
+            tr::CatalogItem::CellSet,
         ] {
             plan.budget.charge_work(1)?;
             if declaration == plan.catalog.id(operation) {

@@ -62,6 +62,22 @@ println!("{} {}",std::mem::size_of::<&Unknown>(),std::mem::size_of::<[&str;3]>()
 }
 
 #[test]
+fn semantic_scalar_cell_metadata_matches_stored_scalar() {
+    let source = r#"use core::cell::Cell;fn main(){assert_eq!(std::mem::size_of::<Cell<u8>>(),1usize);assert_eq!(std::mem::align_of::<Cell<u8>>(),1usize);assert_eq!(std::mem::size_of::<Cell<u128>>(),16usize);assert_eq!(std::mem::align_of::<Cell<u128>>(),16usize);assert_eq!(std::mem::size_of::<Cell<bool>>(),1usize);assert_eq!(std::mem::size_of::<[Cell<u16>;3]>(),6usize);println!("scalar cell layout");}"#;
+    physical_matches_stock(source, "semantic_scalar_cell_metadata");
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        for kind in [102, 103, 108, 137, 140, 142] {
+            assert!(
+                !checked.report.published_kind(kind),
+                "Cell metadata CHECK demanded backend kind {kind}"
+            );
+        }
+    }
+}
+
+#[test]
 fn semantic_manually_drop_metadata_matches_stored_payload() {
     let source = r#"use core::mem::ManuallyDrop;
 fn size<T>()->usize{std::mem::size_of::<ManuallyDrop<T>>()}fn alignment<T>()->usize{std::mem::align_of::<ManuallyDrop<T>>()}

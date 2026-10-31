@@ -200,6 +200,7 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
         return Ok(true);
     }
     match ty {
+        ir::Ty::Cell(wrapper) => indirect(wrapper.argument(), budget),
         ir::Ty::ManuallyDrop(wrapper) => indirect(wrapper.argument(), budget),
         ir::Ty::FnPointer(_) => {
             Err("unsupported: function pointer native value ABI is not implemented".into())
@@ -231,6 +232,9 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
 
 pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     ir::reject_associated_types(ty, Some(budget))?;
+    if let ir::Ty::Cell(wrapper) = ty {
+        return value_size(wrapper.argument(), budget);
+    }
     if let ir::Ty::ManuallyDrop(wrapper) = ty {
         return value_size(wrapper.argument(), budget);
     }
@@ -358,6 +362,7 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
                     "unsupported: array element extent exceeds native memory limit".into()
                 })
         }
+        ir::Ty::Cell(wrapper) => element_extent(wrapper.argument(), budget, depth + 1),
         ir::Ty::ManuallyDrop(wrapper) => element_extent(wrapper.argument(), budget, depth + 1),
         ir::Ty::Unit | ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
@@ -397,6 +402,7 @@ fn zero_array_element_extent(
 /// Owning snapshots reserve rounded storage, but transport only real elements.
 fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     match ty {
+        ir::Ty::Cell(wrapper) => copied_value_bytes(wrapper.argument(), budget),
         ir::Ty::ManuallyDrop(wrapper) => copied_value_bytes(wrapper.argument(), budget),
         ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
@@ -410,6 +416,7 @@ fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, Strin
 
 fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     match ty {
+        ir::Ty::Cell(wrapper) => scalar_memory_bytes(wrapper.argument()),
         ir::Ty::ManuallyDrop(wrapper) => scalar_memory_bytes(wrapper.argument()),
         ir::Ty::Unit | ir::Ty::PhantomData(_) => 0,
         ir::Ty::Int(integer) => integer.bits() / 8,
@@ -3194,6 +3201,29 @@ impl Emitter<'_> {
                 ]);
                 // Preserve the exact kernel return word, including -errno.
                 // Allocation policy and error interpretation live in Rust.
+            }
+            cfg::Rvalue::CellNew { value, .. } => self.operand(value)?,
+            cfg::Rvalue::CellGet { reference, proof } => {
+                self.load_place(reference)?;
+                let ty = proof.descriptor().argument();
+                if !indirect(ty, self.concrete.facts().budget())? {
+                    self.load_element_scalar(ty);
+                    if let ir::Ty::Int(integer) = ty {
+                        self.normalize_integer(*integer);
+                    }
+                }
+            }
+            cfg::Rvalue::CellSet {
+                reference,
+                value,
+                proof,
+            } => {
+                self.operand(value)?;
+                self.bytes(&[0x50]);
+                self.load_place(reference)?;
+                self.bytes(&[0x48, 0x89, 0xc7, 0x58]);
+                self.store_element_value(proof.descriptor().argument())?;
+                self.immediate(0);
             }
             cfg::Rvalue::ManuallyDropTake { payload, .. } => {
                 self.load_place(payload)?;

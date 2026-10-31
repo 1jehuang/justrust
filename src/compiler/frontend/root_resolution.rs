@@ -5,6 +5,7 @@ use super::super::semantic_name::BuiltinAtom;
 use super::super::semantic_scope::{BindingId, ScopeId, scope_diagnostic};
 use super::*;
 mod capture_resolution;
+mod cell;
 mod const_inline;
 mod const_pattern;
 mod lexical_calls;
@@ -19,6 +20,7 @@ enum ResolvedPath {
     Builtin(BuiltinTrait),
     PhantomData,
     ManuallyDrop,
+    Cell,
 }
 #[derive(Clone, Debug)]
 struct ResolvedItem {
@@ -38,6 +40,7 @@ impl ResolvedItem {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedKind {
     ManuallyDrop,
+    Cell,
     PhantomData,
     TypeAlias,
     Trait,
@@ -130,7 +133,7 @@ impl Resolver<'_> {
         self.alias_budget.charge_work(1)?;
         let mut found = false;
         match ty {
-            Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+            Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                 if let Some(argument) = &source.argument {
                     found |= self.contains_projection(argument, depth + 1)?;
                 }
@@ -659,7 +662,9 @@ impl Resolver<'_> {
                                 }
                             }
                         }
-                        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+                        Type::PhantomData(source)
+                        | Type::ManuallyDrop(source)
+                        | Type::Cell(source) => {
                             if let Some(argument) = &source.argument {
                                 pending.push(argument);
                             }
@@ -766,7 +771,7 @@ impl Resolver<'_> {
                 Type::Dyn(_) => {
                     return Err("unsupported: trait object type aliases are unsupported".into());
                 }
-                Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+                Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                     if let Some(argument) = &source.argument {
                         check_target(argument)?;
                     }
@@ -884,7 +889,7 @@ impl Resolver<'_> {
                     }
                 }
             }
-            Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+            Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                 if let Some(argument) = &source.argument {
                     self.collect_params(argument, used, depth + 1)?;
                 }
@@ -992,6 +997,12 @@ impl Resolver<'_> {
                     self.alias_use(argument, source, depth + 1)?;
                 }
             }
+            Type::Cell(wrapper) => {
+                wrapper.occurrence = self.resolved_use(&wrapper.occurrence, source)?;
+                if let Some(argument) = &mut wrapper.argument {
+                    self.alias_use(argument, source, depth + 1)?;
+                }
+            }
             Type::FnPointer { inputs, output } => {
                 for field in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
                     self.alias_use(field, source, depth + 1)?;
@@ -1067,7 +1078,7 @@ impl Resolver<'_> {
                     }
                 }
             }
-            Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+            Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                 if let Some(argument) = &mut source.argument {
                     self.substitute(argument, params, args, depth + 1)?;
                 }
@@ -1167,6 +1178,17 @@ impl Resolver<'_> {
         namespace: bool,
     ) -> Result<Option<ResolvedItem>, String> {
         if namespace
+            && module == CatalogModule::Cell
+            && self.atom_is(ident, BuiltinAtom::Cell, Namespace::Type)?
+        {
+            return Ok(Some(ResolvedItem {
+                visibility: ir::Visibility::Public,
+                path: ResolvedPath::Cell,
+                module: namespace,
+                kind: ResolvedKind::Cell,
+            }));
+        }
+        if namespace
             && module == CatalogModule::Mem
             && self.atom_is(ident, BuiltinAtom::ManuallyDrop, Namespace::Type)?
         {
@@ -1199,6 +1221,8 @@ impl Resolver<'_> {
                 Some(CatalogModule::Ops)
             } else if self.atom_is(ident, BuiltinAtom::Mem, Namespace::Type)? {
                 Some(CatalogModule::Mem)
+            } else if self.atom_is(ident, BuiltinAtom::CellModule, Namespace::Type)? {
+                Some(CatalogModule::Cell)
             } else {
                 None
             }
@@ -1377,7 +1401,8 @@ impl Resolver<'_> {
                 }
                 ResolvedPath::CatalogModule(_)
                 | ResolvedPath::PhantomData
-                | ResolvedPath::ManuallyDrop => {
+                | ResolvedPath::ManuallyDrop
+                | ResolvedPath::Cell => {
                     return Err("resolved declaration is not a trait".into());
                 }
             }
@@ -1891,7 +1916,8 @@ impl Resolver<'_> {
                 }
                 ResolvedPath::Builtin(_)
                 | ResolvedPath::PhantomData
-                | ResolvedPath::ManuallyDrop => None,
+                | ResolvedPath::ManuallyDrop
+                | ResolvedPath::Cell => None,
             };
             let Some(item) = next else {
                 return Ok(None);
@@ -2542,6 +2568,10 @@ impl Resolver<'_> {
         result
     }
     fn ty_inner(&mut self, ty: &mut Type, module: ModuleId) -> Result<(), String> {
+        if let Some(source) = self.cell_type(ty, module)? {
+            *ty = Type::Cell(source);
+            return Ok(());
+        }
         if let Some(source) = self.manually_drop_type(ty, module)? {
             *ty = Type::ManuallyDrop(source);
             return Ok(());
@@ -2563,7 +2593,7 @@ impl Resolver<'_> {
             return Ok(());
         }
         match ty {
-            Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+            Type::PhantomData(source) | Type::ManuallyDrop(source) | Type::Cell(source) => {
                 if let Some(argument) = &mut source.argument {
                     self.ty(argument, module)?;
                 } else {
@@ -3647,6 +3677,9 @@ impl Resolver<'_> {
         module: ModuleId,
         locals: &mut Vec<std::collections::HashSet<LocalKey>>,
     ) -> Result<(), String> {
+        if self.resolve_cell_call(expr, module, locals)? {
+            return Ok(());
+        }
         if self.resolve_manually_drop_call(expr, module, locals)? {
             return Ok(());
         }
@@ -3837,6 +3870,14 @@ impl Resolver<'_> {
             return Ok(());
         }
         match expr {
+            Expr::Cell(call) => {
+                if let Some(argument) = &mut call.source.argument {
+                    self.ty(argument, module)?;
+                }
+                for value in call.receiver.iter_mut().chain(call.value.iter_mut()) {
+                    self.expr(value, module, locals)?;
+                }
+            }
             Expr::ManuallyDrop(call) => {
                 if let Some(argument) = &mut call.source.argument {
                     self.ty(argument, module)?;
@@ -5555,7 +5596,8 @@ fn collect_trait_imports(
                 ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
                 ResolvedPath::CatalogModule(_)
                 | ResolvedPath::PhantomData
-                | ResolvedPath::ManuallyDrop => {
+                | ResolvedPath::ManuallyDrop
+                | ResolvedPath::Cell => {
                     return Err("trait import names a module".into());
                 }
             };

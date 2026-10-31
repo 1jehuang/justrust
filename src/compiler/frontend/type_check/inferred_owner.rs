@@ -152,6 +152,7 @@ pub(super) fn mentions_param(ty: &ir::Ty) -> bool {
         ir::Ty::Array { element, .. } | ir::Ty::Slice { element } => mentions_param(element),
         ir::Ty::PhantomData(marker) => mentions_param(marker.argument()),
         ir::Ty::ManuallyDrop(wrapper) => mentions_param(wrapper.argument()),
+        ir::Ty::Cell(wrapper) => mentions_param(wrapper.argument()),
         ir::Ty::FnPointer(pointer) => pointer.types().any(mentions_param),
         ir::Ty::Tuple(fields) => fields.iter().any(mentions_param),
         ir::Ty::Struct(t) => t.def().type_args.iter().any(mentions_param),

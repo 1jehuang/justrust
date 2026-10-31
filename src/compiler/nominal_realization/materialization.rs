@@ -210,6 +210,11 @@ impl ReadComponent {
                 element: Arc::new(child(t)?),
                 len: *len,
             },
+            Term::Cell(..) => {
+                return Err(Error::new(
+                    "unsupported: recursive Cell materialization requires sealed catalog construction authority",
+                ));
+            }
             Term::ManuallyDrop(..) => {
                 return Err(Error::new(
                     "unsupported: recursive ManuallyDrop materialization requires sealed catalog construction authority",

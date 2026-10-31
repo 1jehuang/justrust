@@ -132,7 +132,7 @@ pub(super) fn preflight_clone_node(
     budget.retain_bytes(1024)?;
     match node {
         DepthNode::Type(ty) => match ty {
-            Type::PhantomData(_) | Type::ManuallyDrop(_) => budget.retain_bytes(
+            Type::PhantomData(_) | Type::ManuallyDrop(_) | Type::Cell(_) => budget.retain_bytes(
                 std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
             )?,
             Type::Named(path) => clone_ast_path(path, budget)?,
@@ -179,6 +179,12 @@ pub(super) fn preflight_clone_node(
         DepthNode::Expr(expr) => match expr {
             Expr::PhantomData(_) => budget.retain_bytes(
                 std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
+            )?,
+            Expr::Cell(_) => budget.retain_bytes(
+                std::mem::size_of::<SourceCellCall>()
+                    + std::mem::size_of::<SourceCatalogType>()
+                    + std::mem::size_of::<Type>()
+                    + 2 * std::mem::size_of::<Expr>(),
             )?,
             Expr::ManuallyDrop(_) => budget.retain_bytes(
                 std::mem::size_of::<SourceManuallyDropCall>()

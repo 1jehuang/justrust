@@ -186,6 +186,7 @@ impl ValidatedFacts {
                 | Ty::Char
                 | Ty::Unit
                 | Ty::PhantomData(_)
+                | Ty::Cell(_)
                 | Ty::ManuallyDrop(_)
                 | Ty::Never
                 | Ty::Str
@@ -367,6 +368,7 @@ impl ValidatedFacts {
                 | Ty::Char
                 | Ty::Unit
                 | Ty::PhantomData(_)
+                | Ty::Cell(_)
                 | Ty::ManuallyDrop(_)
                 | Ty::Never
                 | Ty::Str

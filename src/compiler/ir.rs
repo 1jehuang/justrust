@@ -99,6 +99,7 @@ impl Ty {
         match self {
             Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => false,
             Ty::PhantomData(marker) => marker.argument().is_closed_shallow(),
+            Ty::Cell(cell) => cell.is_concrete(),
             Ty::ManuallyDrop(wrapper) => wrapper.argument().is_closed_shallow(),
             Ty::FnPointer(p) => p.types().all(Ty::is_closed_shallow),
             Ty::Closure(c) => c.types().all(Ty::is_closed_shallow),
@@ -702,7 +703,8 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
+            Ty::Cell(_) | Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {
+            }
             Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
@@ -875,7 +877,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             "unsupported: opaque carrier requires its defining body fact".into(),
                         );
                     }
-                    Ty::FnItem(_) | Ty::FnPointer(_) | Ty::PhantomData(_) => {}
+                    Ty::Cell(_) | Ty::FnItem(_) | Ty::FnPointer(_) | Ty::PhantomData(_) => {}
                     Ty::ManuallyDrop(wrapper) => {
                         child(CarrierStep::ManuallyDropPayload, wrapper.argument())?
                     }
@@ -967,6 +969,9 @@ pub fn carrier_at(
         ty = match (step, &ty) {
             (CarrierStep::ManuallyDropPayload, Ty::ManuallyDrop(wrapper)) => {
                 wrapper.argument().clone()
+            }
+            (CarrierStep::Field(_), Ty::Cell(_)) => {
+                return Err("Cell has no public payload carrier".into());
             }
             (CarrierStep::Field(_), Ty::ManuallyDrop(_)) => {
                 return Err("ManuallyDrop payload requires canonical carrier step".into());
@@ -1607,6 +1612,7 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
             a.try_eq(b, |a, b| identical_type(a, b, budget))?
         }
+        (Ty::Cell(a), Ty::Cell(b)) => a.try_eq(b, |a, b| identical_type(a, b, budget))?,
         (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| identical_type(a, b, budget))?,
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -3446,6 +3452,11 @@ fn substitute_ty_walk(
                 Ty::Closure(Arc::new(mapped))
             }
         }
+        Ty::Cell(cell) => Ty::Cell(cell.try_map(
+            budget,
+            |error| error,
+            |child| substitute_ty_walk(child, env, args, caller, cx, budget, depth + 1),
+        )?),
         Ty::ManuallyDrop(wrapper) => Ty::ManuallyDrop(wrapper.try_map(
             budget,
             |e| e,
@@ -3821,6 +3832,14 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         budget.charge_work(1)?;
         expression.ty = visitor.ty(&expression.ty)?;
         match &mut expression.kind {
+            ExprKind::CellNew { ty, .. }
+            | ExprKind::CellGet { ty, .. }
+            | ExprKind::CellSet { ty, .. } => {
+                let Ty::Cell(mapped) = visitor.ty(&Ty::Cell(ty.clone()))? else {
+                    return Err("Cell substitution changed canonical type kind".into());
+                };
+                *ty = mapped;
+            }
             ExprKind::ManuallyDrop { ty, .. }
             | ExprKind::ManuallyDropIntoInner { ty, .. }
             | ExprKind::ManuallyDropDrop { ty, .. } => {
@@ -4610,6 +4629,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                 }
             }
             Ty::PhantomData(marker) => walk(marker.argument(), budget, depth + 1, seen)?,
+            Ty::Cell(cell) => walk(cell.argument(), budget, depth + 1, seen)?,
             Ty::ManuallyDrop(wrapper) => walk(wrapper.argument(), budget, depth + 1, seen)?,
             Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
@@ -4707,6 +4727,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
             }
         }
         match ty {
+            Ty::Cell(cell) => self.note_owners(cell.argument(), depth + 1)?,
             Ty::ManuallyDrop(wrapper) => self.note_owners(wrapper.argument(), depth + 1)?,
             Ty::Enum(value) if !value.is_back_edge() => {
                 let def = value.def();
@@ -5565,6 +5586,7 @@ pub(super) fn raw_deref_index_optional(
                 Ty::ManuallyDrop(wrapper) => wrapper.argument().clone(),
                 _ => return Ok(None),
             },
+            Projection::Field(_) if matches!(ty, Ty::Cell(_)) => return Ok(None),
             Projection::Field(_) if matches!(ty, Ty::ManuallyDrop(_)) => return Ok(None),
             Projection::Field(field) => match ty.field_ty_optional(*field, budget)? {
                 Some(ty) => ty,
@@ -5706,6 +5728,9 @@ fn projected_ty_inner(
                     return Err("ManuallyDrop payload projection requires canonical wrapper".into());
                 }
             },
+            Projection::Field(_) if matches!(ty, Ty::Cell(_)) => {
+                return Err("Cell has no public payload projection".into());
+            }
             Projection::Field(_) if matches!(ty, Ty::ManuallyDrop(_)) => {
                 return Err("ManuallyDrop payload requires canonical projection".into());
             }
@@ -6019,6 +6044,8 @@ pub enum Ty {
     FnPointer(Arc<FnPointerTy>),
     PhantomData(Arc<PhantomDataTy>),
     ManuallyDrop(Arc<ManuallyDropTy>),
+    /// Genuine interior-mutable scalar storage, never Copy.
+    Cell(Arc<CellTy>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
@@ -6193,6 +6220,7 @@ impl PhantomDataTy {
             | Ty::FnItem(_) => {
                 return Err("unsupported: PhantomData borrow, lifetime, unsized, projection or opaque argument contract".into());
             }
+            Ty::Cell(cell) => child(cell.argument())?,
             Ty::PhantomData(marker) => child(marker.argument())?,
             Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::FnPointer(pointer) => {
@@ -6396,6 +6424,191 @@ impl ManuallyDropTy {
         equal(&self.argument, &other.argument)
     }
 }
+/// Declaration-only authority for concrete scalar Cell applications.
+#[derive(Clone, Copy, Debug)]
+pub struct CellFactory {
+    declaration: DeclId,
+}
+impl CellFactory {
+    pub fn from_builder(
+        builder: &super::traits::CoreCatalogBuilder,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.charge_work(builder.base_declarations().len())?;
+        let entry = builder
+            .base_declarations()
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry.origin,
+                    super::traits::DeclOrigin::CoreCatalog {
+                        item: super::traits::CatalogItem::Cell,
+                        ..
+                    }
+                )
+            })
+            .ok_or("missing canonical Cell builder declaration")?;
+        Ok(Self {
+            declaration: entry.declaration,
+        })
+    }
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn with_argument(&self, argument: Ty, budget: &PlanBudget) -> Result<Arc<CellTy>, String> {
+        CellTy::concrete(self.declaration, argument, budget)
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum CellPayload {
+    Scalar(Ty),
+    /// Only the private catalog builder can mint this declaration schema token.
+    CatalogParameter(Ty),
+}
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CellTy {
+    declaration: DeclId,
+    payload: CellPayload,
+}
+impl CellTy {
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn argument(&self) -> &Ty {
+        match &self.payload {
+            CellPayload::Scalar(ty) | CellPayload::CatalogParameter(ty) => ty,
+        }
+    }
+    pub fn is_concrete(&self) -> bool {
+        matches!(self.payload, CellPayload::Scalar(_))
+    }
+    fn scalar(ty: &Ty) -> bool {
+        matches!(ty, Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char)
+    }
+    fn allocate(
+        declaration: DeclId,
+        payload: CellPayload,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let bytes = std::mem::size_of::<Self>()
+            .checked_add(2 * std::mem::size_of::<usize>())
+            .ok_or("resource limit: Cell metadata backing size overflow")?;
+        budget.retain_bytes(bytes)?;
+        Ok(Arc::new(Self {
+            declaration,
+            payload,
+        }))
+    }
+    fn concrete(
+        declaration: DeclId,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        budget.charge_work(1)?;
+        if !Self::scalar(&argument) {
+            return Err("unsupported: Cell payload requires a concrete primitive scalar".into());
+        }
+        Self::allocate(declaration, CellPayload::Scalar(argument), budget)
+    }
+    pub fn from_builder(
+        builder: &super::traits::CoreCatalogBuilder,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        CellFactory::from_builder(builder, budget)?.with_argument(argument, budget)
+    }
+    pub(in crate::compiler) fn catalog_schema(
+        builder: &super::traits::CoreCatalogBuilder,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let factory = CellFactory::from_builder(builder, budget)?;
+        let declaration = factory.declaration();
+        let parameter = Ty::Param(ParamId {
+            owner: BinderId { declaration },
+            index: 0,
+        });
+        Self::allocate(
+            declaration,
+            CellPayload::CatalogParameter(parameter),
+            budget,
+        )
+    }
+    pub fn new(
+        catalog: &super::traits::CoreCatalog,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let value = Self::concrete(
+            catalog.id(super::traits::CatalogItem::Cell),
+            argument,
+            budget,
+        )?;
+        value.validate(catalog, budget)?;
+        Ok(value)
+    }
+    pub fn validate(
+        &self,
+        catalog: &super::traits::CoreCatalog,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        let declaration = catalog.id(super::traits::CatalogItem::Cell);
+        let entry = catalog
+            .declaration(declaration)
+            .ok_or("missing canonical Cell declaration")?;
+        if self.declaration != declaration
+            || entry.info.kind != DeclKind::Struct
+            || entry.info.owner.is_some()
+            || entry.info.own_env.binder().declaration != declaration
+            || entry.info.own_env.arity() != 1
+            || entry.origin
+                != (super::traits::DeclOrigin::CoreCatalog {
+                    version: catalog.version(),
+                    item: super::traits::CatalogItem::Cell,
+                })
+        {
+            return Err("invalid canonical Cell declaration authority".into());
+        }
+        match &self.payload {
+            CellPayload::Scalar(ty) if Self::scalar(ty) => Ok(()),
+            CellPayload::CatalogParameter(Ty::Param(parameter))
+                if parameter.owner.declaration == declaration && parameter.index == 0 =>
+            {
+                Ok(())
+            }
+            _ => Err("invalid canonical Cell payload metadata".into()),
+        }
+    }
+    pub fn try_map<E>(
+        &self,
+        budget: &PlanBudget,
+        error: impl FnOnce(String) -> E,
+        map: impl FnOnce(&Ty) -> Result<Ty, E>,
+    ) -> Result<Arc<Self>, E> {
+        let argument = map(self.argument())?;
+        if matches!((&self.payload, &argument), (CellPayload::CatalogParameter(Ty::Param(old)), Ty::Param(new)) if old == new)
+        {
+            Self::allocate(
+                self.declaration,
+                CellPayload::CatalogParameter(argument),
+                budget,
+            )
+            .map_err(error)
+        } else {
+            Self::concrete(self.declaration, argument, budget).map_err(error)
+        }
+    }
+    pub fn try_eq<'a, 'b, E>(
+        &'a self,
+        other: &'b Self,
+        equal: impl FnOnce(&'a Ty, &'b Ty) -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        if self.declaration != other.declaration {
+            return Ok(false);
+        }
+        equal(self.argument(), other.argument())
+    }
+}
 /// Canonical safe Rust ABI function pointer metadata. Unsupported ABI, safety,
 /// binders and variadics are not representable and cannot be forged as flags.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -6458,6 +6671,7 @@ impl FnPointerTy {
                 Ty::RawPtr { pointee, .. } | Ty::Array { element: pointee, .. } | Ty::Slice { element: pointee } => component(pointee, budget, depth + 1)?,
                 Ty::Tuple(fields) => { for t in fields.iter() { component(t, budget, depth + 1)?; } }
                 Ty::PhantomData(marker) => component(marker.argument(), budget, depth + 1)?,
+                Ty::Cell(cell) => component(cell.argument(), budget, depth + 1)?,
                 Ty::ManuallyDrop(wrapper) => component(wrapper.argument(), budget, depth + 1)?,
                 Ty::FnPointer(pointer) => { for t in pointer.types() { component(t, budget, depth + 1)?; } }
                 Ty::Struct(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
@@ -6739,6 +6953,7 @@ fn type_metadata_walk(
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
             Ty::PhantomData(marker) => (12, Arc::as_ptr(marker) as usize),
+            Ty::Cell(cell) => (14, Arc::as_ptr(cell) as usize),
             Ty::ManuallyDrop(wrapper) => (13, Arc::as_ptr(wrapper) as usize),
             Ty::FnPointer(pointer) => (11, Arc::as_ptr(pointer) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
@@ -6832,6 +7047,7 @@ fn type_metadata_walk(
                     child(ty)?;
                 }
             }
+            Ty::Cell(cell) => child(cell.argument())?,
             Ty::PhantomData(marker) => child(marker.argument())?,
             Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::FnPointer(pointer) => {
@@ -7297,7 +7513,8 @@ impl Ty {
                     }
                 }
                 Self::ManuallyDrop(wrapper) => push(&mut pending, wrapper.argument())?,
-                Self::PhantomData(_)
+                Self::Cell(_)
+                | Self::PhantomData(_)
                 | Self::FnPointer(_)
                 | Self::FnItem(_)
                 | Self::Param(_)
@@ -7363,7 +7580,8 @@ impl Ty {
             | Self::FnPointer(_)
             | Self::FnItem(_)
             | Self::RawPtr { .. } => true,
-            Self::Opaque(_)
+            Self::Cell(_)
+            | Self::Opaque(_)
             | Self::AssociatedType(_)
             | Self::Struct(_)
             | Self::Enum(_)
@@ -7381,7 +7599,8 @@ impl Ty {
                             kind: BorrowKind::Mut,
                             ..
                         } => return false,
-                        Self::Opaque(_)
+                        Self::Cell(_)
+                        | Self::Opaque(_)
                         | Self::AssociatedType(_)
                         | Self::Struct(_)
                         | Self::Enum(_)
@@ -8645,7 +8864,8 @@ pub(in crate::compiler) fn reference_type_summary(
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
+            Ty::Cell(_) | Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {
+            }
             Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
@@ -8777,6 +8997,7 @@ fn ref_types_equal(
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
             (Ty::PhantomData(a), Ty::PhantomData(b)) => a.try_eq(b, &mut child)?,
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => a.try_eq(b, &mut child)?,
+            (Ty::Cell(a), Ty::Cell(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, &mut child)?,
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -9366,6 +9587,14 @@ fn pattern_types_equal_with_facts(
                     return Ok(false);
                 }
             }
+            (Ty::Cell(a), Ty::Cell(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    pending.push((a, b, depth + 1));
+                    Ok::<bool, String>(true)
+                })? {
+                    return Ok(false);
+                }
+            }
             (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 if !a.try_eq(b, |a, b| {
                     pending.push((a, b, depth + 1));
@@ -9923,6 +10152,22 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    CellNew {
+        ty: Arc<CellTy>,
+        value: ExprId,
+        source: Arc<super::frontend::cell::CellSourceOperation>,
+    },
+    CellGet {
+        ty: Arc<CellTy>,
+        receiver: ExprId,
+        source: Arc<super::frontend::cell::CellSourceOperation>,
+    },
+    CellSet {
+        ty: Arc<CellTy>,
+        receiver: ExprId,
+        value: ExprId,
+        source: Arc<super::frontend::cell::CellSourceOperation>,
+    },
     /// Canonical stored payload with suppressed implicit cleanup.
     ManuallyDrop {
         ty: Arc<ManuallyDropTy>,
@@ -10526,6 +10771,9 @@ impl CheckedFunction {
         for expression in &self.exprs {
             visit(&expression.ty)?;
             match &expression.kind {
+                ExprKind::CellNew { ty, .. }
+                | ExprKind::CellGet { ty, .. }
+                | ExprKind::CellSet { ty, .. } => visit(&Ty::Cell(ty.clone()))?,
                 ExprKind::Struct { ty, .. } => visit(&Ty::Struct(ty.clone()))?,
                 ExprKind::EnumVariant { ty, .. } => visit(&Ty::Enum(ty.clone()))?,
                 ExprKind::Call {
@@ -10773,6 +11021,24 @@ impl CheckedFunction {
         for expression in &self.exprs {
             facts.validate_value_ty_with_budget_scratch(&expression.ty, budget, scratch)?;
             match &expression.kind {
+                ExprKind::CellNew { ty, source, .. }
+                | ExprKind::CellGet { ty, source, .. }
+                | ExprKind::CellSet { ty, source, .. } => {
+                    let authority = facts
+                        .validated()
+                        .ok_or("unsupported: Cell requires canonical callable facts")?;
+                    source.validate(authority.world().canonical_catalog(), budget)?;
+                    if !ty.is_concrete() {
+                        return Err(
+                            "unsupported: Cell operation requires concrete scalar payload".into(),
+                        );
+                    }
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::Cell(ty.clone()),
+                        budget,
+                        scratch,
+                    )?;
+                }
                 ExprKind::ManuallyDrop { ty, source, .. }
                 | ExprKind::ManuallyDropIntoInner { ty, source, .. }
                 | ExprKind::ManuallyDropDrop { ty, source, .. } => {
@@ -11544,6 +11810,103 @@ impl CheckedFunction {
             .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
+                ExprKind::CellNew { ty, source, .. }
+                | ExprKind::CellGet { ty, source, .. }
+                | ExprKind::CellSet { ty, source, .. } => {
+                    let authority = facts
+                        .validated()
+                        .ok_or("unsupported: Cell requires canonical callable facts")?;
+                    let catalog = authority.world().canonical_catalog();
+                    source.validate(catalog, conditional_budget)?;
+                    if !ty.is_concrete() {
+                        return Err(
+                            "unsupported: Cell operation requires concrete scalar payload".into(),
+                        );
+                    }
+                    let (operation, receiver, argument) = match &value.kind {
+                        ExprKind::CellNew { value, .. } => {
+                            (super::traits::CatalogItem::CellNew, None, Some(*value))
+                        }
+                        ExprKind::CellGet { receiver, .. } => {
+                            (super::traits::CatalogItem::CellGet, Some(*receiver), None)
+                        }
+                        ExprKind::CellSet {
+                            receiver, value, ..
+                        } => (
+                            super::traits::CatalogItem::CellSet,
+                            Some(*receiver),
+                            Some(*value),
+                        ),
+                        _ => unreachable!(),
+                    };
+                    source.validate_site(
+                        authority.declaration(),
+                        catalog.id(operation),
+                        ExprId(borrow_index),
+                        receiver,
+                        argument,
+                    )?;
+                    let wrapper = Ty::Cell(ty.clone());
+                    facts.validate_ty_with_budget_scratch(&wrapper, conditional_budget, scratch)?;
+                    let same = |a: &Ty, b: &Ty| -> Result<bool, String> {
+                        authority
+                            .world()
+                            .types_equal(std::slice::from_ref(a), std::slice::from_ref(b))
+                            .map_err(|error| error.into_legacy_diagnostic(conditional_budget))
+                    };
+                    let mut completion = Completion::Returns;
+                    if let Some(receiver) = receiver {
+                        expr(receiver)?;
+                        let operand = &self.exprs[receiver.0];
+                        facts.validate_ty_with_budget_scratch(
+                            &operand.ty,
+                            conditional_budget,
+                            scratch,
+                        )?;
+                        let Ty::Ref {
+                            kind: BorrowKind::Shared,
+                            referent,
+                        } = &operand.ty
+                        else {
+                            return Err(
+                                "Cell operation requires genuine shared receiver borrow".into()
+                            );
+                        };
+                        if !same(referent, &wrapper)? {
+                            return Err("Cell receiver changed canonical descriptor".into());
+                        }
+                        completion = operand.completion;
+                    }
+                    if let Some(argument) = argument {
+                        expr(argument)?;
+                        let operand = &self.exprs[argument.0];
+                        facts.validate_ty_with_budget_scratch(
+                            &operand.ty,
+                            conditional_budget,
+                            scratch,
+                        )?;
+                        if !same(&operand.ty, ty.argument())? {
+                            return Err("Cell operation changed scalar payload type".into());
+                        }
+                        if operand.completion == Completion::Never {
+                            completion = Completion::Never;
+                        }
+                    }
+                    let output = match operation {
+                        super::traits::CatalogItem::CellNew => &wrapper,
+                        super::traits::CatalogItem::CellGet => ty.argument(),
+                        super::traits::CatalogItem::CellSet => &Ty::Unit,
+                        _ => unreachable!(),
+                    };
+                    facts.validate_ty_with_budget_scratch(
+                        &value.ty,
+                        conditional_budget,
+                        scratch,
+                    )?;
+                    if !same(&value.ty, output)? || value.completion != completion {
+                        return Err("Cell operation changed canonical result or completion".into());
+                    }
+                }
                 ExprKind::ManuallyDrop {
                     ty,
                     value: argument,
@@ -13614,6 +13977,90 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cell_factory_seals_scalar_payload_owner_and_allocation_without_product_access() {
+        use super::*;
+        use crate::compiler::traits as tr;
+        let budget = PlanBudget::default();
+        let builder = tr::CoreCatalogBuilder::new(
+            SnapshotId::standalone().unwrap(),
+            fixture_modules(),
+            &budget,
+        )
+        .unwrap();
+        let factory = CellFactory::from_builder(&builder, &budget).unwrap();
+        let schema = CellTy::catalog_schema(&builder, &budget).unwrap();
+        let start = builder.source_start();
+        let catalog = builder
+            .finish(start, tr::RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        let before = budget.usage_for_tests(|usage| usage.bytes);
+        let cell = factory.with_argument(Ty::Bool, &budget).unwrap();
+        assert_eq!(
+            budget.usage_for_tests(|usage| usage.bytes) - before,
+            std::mem::size_of::<CellTy>() + 2 * std::mem::size_of::<usize>()
+        );
+        cell.validate(&catalog, &budget).unwrap();
+        assert!(cell.is_concrete());
+        assert!(!schema.is_concrete());
+        let same = CellTy::new(&catalog, Ty::Bool, &budget).unwrap();
+        assert!(cell.try_eq(&same, |a, b| Ok::<_, String>(a == b)).unwrap());
+        let closed = schema
+            .try_map(&budget, |e| e, |_| Ok::<_, String>(Ty::Char))
+            .unwrap();
+        assert!(closed.is_concrete());
+        assert_eq!(closed.argument(), &Ty::Char);
+        for rejected in [
+            Ty::Unit,
+            Ty::Never,
+            Ty::Str,
+            schema.argument().clone(),
+            Ty::Tuple(Arc::from([])),
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Bool),
+            },
+        ] {
+            assert!(
+                factory
+                    .with_argument(rejected, &budget)
+                    .unwrap_err()
+                    .starts_with("unsupported:")
+            );
+        }
+        let mut forged = cell.as_ref().clone();
+        forged.declaration = catalog.id(tr::CatalogItem::ManuallyDrop);
+        assert!(forged.validate(&catalog, &budget).is_err());
+        forged.declaration = DeclId {
+            snapshot: SnapshotId::standalone().unwrap(),
+            index: cell.declaration().index,
+        };
+        assert!(forged.validate(&catalog, &budget).is_err());
+        let mut wrong_parameter = schema.as_ref().clone();
+        wrong_parameter.payload = CellPayload::CatalogParameter(Ty::Param(ParamId {
+            owner: BinderId {
+                declaration: cell.declaration(),
+            },
+            index: 1,
+        }));
+        assert!(wrong_parameter.validate(&catalog, &budget).is_err());
+        let denied = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            ..PlanLimits::default()
+        });
+        assert!(
+            factory
+                .with_argument(Ty::Bool, &denied)
+                .unwrap_err()
+                .contains("resource")
+        );
+        let ty = Ty::Cell(cell);
+        assert!(!ty.is_copy());
+        assert_eq!(ty.field_count(), None);
+        assert_eq!(ty.field_ty(0, &budget).unwrap(), None);
+        assert!(projected_ty(&ty, &[Projection::Field(0)], &budget).is_err());
+        assert!(carrier_locations(&ty, &budget).unwrap().is_empty());
+    }
     #[test]
     fn manually_drop_factory_authenticates_owner_actual_and_payload_carrier() {
         use super::*;

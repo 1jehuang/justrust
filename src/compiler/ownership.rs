@@ -434,6 +434,7 @@ fn type_requires_carrier_proof(
             | Ty::Unit
             | Ty::Never
             | Ty::PhantomData(_)
+            | Ty::Cell(_)
             | Ty::RawPtr { .. }
     ) {
         return Ok(false);
@@ -1669,6 +1670,13 @@ fn preflight_with_plan(
             if let Statement::Assign { destination, value } = &item.value {
                 place_type(f, destination, &mut budget)?;
                 match value {
+                    Rvalue::CellGet { reference, .. } => place_type(f, reference, &mut budget)?,
+                    Rvalue::CellSet {
+                        reference, value, ..
+                    } => {
+                        place_type(f, reference, &mut budget)?;
+                        operand(value, &mut budget)?;
+                    }
                     Rvalue::ManuallyDropTake {
                         reference, payload, ..
                     } => {
@@ -1697,7 +1705,8 @@ fn preflight_with_plan(
                         preflight_ty(&to.ty(), 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
-                    Rvalue::ManuallyDropIntoInner { value: op, .. }
+                    Rvalue::CellNew { value: op, .. }
+                    | Rvalue::ManuallyDropIntoInner { value: op, .. }
                     | Rvalue::OpaquePack { value: op, .. }
                     | Rvalue::Use(op)
                     | Rvalue::LeadingZeros { value: op }
@@ -2052,6 +2061,7 @@ impl<'a> MoveShape<'a> {
             | Ty::Ref { .. }
             | Ty::FnPointer(_)
             | Ty::PhantomData(_)
+            | Ty::Cell(_)
             | Ty::RawPtr { .. } => Self::Scalar,
         })
     }
@@ -3323,8 +3333,71 @@ impl Transfer<'_> {
         }
         Ok(())
     }
+    fn cell_access(
+        &mut self,
+        state: &mut State,
+        reference: &Place,
+        write: bool,
+    ) -> Result<(), Exhausted> {
+        if self.loans.is_none() {
+            self.problem(
+                Problem::Invalid("Cell interior access lacks live loan provenance".into()),
+                Place {
+                    local: reference.local,
+                    projection: Vec::new(),
+                },
+            );
+            return Ok(());
+        }
+        let count = reference.projection.len().checked_add(1).ok_or(Exhausted)?;
+        self.budget.reserve_bytes(
+            count
+                .checked_mul(std::mem::size_of::<Projection>())
+                .ok_or(Exhausted)?,
+        )?;
+        let mut projection = Vec::new();
+        projection.try_reserve_exact(count).map_err(|_| Exhausted)?;
+        if projection.capacity() > count {
+            self.budget.reserve_bytes(
+                (projection.capacity() - count)
+                    .checked_mul(std::mem::size_of::<Projection>())
+                    .ok_or(Exhausted)?,
+            )?;
+        }
+        projection.extend_from_slice(&reference.projection);
+        projection.push(Projection::Deref);
+        let storage = Place {
+            local: reference.local,
+            projection,
+        };
+        self.carrier_read(state, &storage)?;
+        for target in self.targets(state, &storage)? {
+            self.check_access(
+                &target,
+                if write {
+                    Access::CellWrite
+                } else {
+                    Access::CellRead
+                },
+            )?;
+            self.read_canonical(state, &target.place)?;
+            if write {
+                let node = self.paths.resolve_canonical(&target.place);
+                self.kill_proofs(state, node)?;
+            }
+        }
+        Ok(())
+    }
     fn rvalue(&mut self, state: &mut State, value: &Rvalue) -> Result<(), Exhausted> {
         match value {
+            Rvalue::CellNew { value, .. } => self.operand(state, value)?,
+            Rvalue::CellGet { reference, .. } => self.cell_access(state, reference, false)?,
+            Rvalue::CellSet {
+                reference, value, ..
+            } => {
+                self.operand(state, value)?;
+                self.cell_access(state, reference, true)?;
+            }
             Rvalue::ManuallyDropTake { payload, .. } => {
                 // Structural CFG validation authenticated the original unsafe operation.
                 // This is still a real exclusive move of the tracked initialized child.
@@ -3513,6 +3586,7 @@ impl Transfer<'_> {
                 | Ty::Unit
                 | Ty::PhantomData(_)
                 | Ty::ManuallyDrop(_)
+                | Ty::Cell(_)
                 | Ty::Never
                 | Ty::Ref { .. }
                 | Ty::RawPtr { .. }

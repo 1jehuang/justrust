@@ -23,6 +23,7 @@ pub(in crate::compiler) enum Shape {
     FnPointer(Arc<[Shape]>, Arc<Shape>),
     PhantomData(ir::DeclId, Arc<Shape>),
     ManuallyDrop(ir::DeclId, Arc<Shape>),
+    Cell(ir::DeclId, Arc<Shape>),
     Ref(ir::BorrowKind, Arc<Shape>),
     RawPtr(ir::BorrowKind, Arc<Shape>),
     Array(Arc<Shape>, usize),
@@ -56,7 +57,8 @@ impl Shape {
                 a == b && same_children(left, right, depth + 1, meter)?
             }
             (Shape::PhantomData(a, left), Shape::PhantomData(b, right))
-            | (Shape::ManuallyDrop(a, left), Shape::ManuallyDrop(b, right)) => {
+            | (Shape::ManuallyDrop(a, left), Shape::ManuallyDrop(b, right))
+            | (Shape::Cell(a, left), Shape::Cell(b, right)) => {
                 a == b && left.same_with(right, depth + 1, meter)?
             }
             (Shape::FnPointer(left, lo), Shape::FnPointer(right, ro)) => {
@@ -781,6 +783,22 @@ impl<'s> Solver<'_, '_, 's> {
                     self.manifest_term_in(argument, params, depth + 1)?,
                 )
             }
+            Shape::Cell(declaration, argument) => {
+                if *declaration
+                    != self
+                        .checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::Cell)
+                {
+                    return Err("contract: foreign Cell recipe owner".into());
+                }
+                Domain::Cell(
+                    *declaration,
+                    self.manifest_term_in(argument, params, depth + 1)?,
+                )
+            }
             Shape::FnPointer(inputs, output) => {
                 let mut mapped = ir::FnPointerTy::storage(
                     inputs.len(),
@@ -870,6 +888,7 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Domain::PhantomData(_, inner)
                 | Domain::ManuallyDrop(_, inner)
+                | Domain::Cell(_, inner)
                 | Domain::Ref(_, inner)
                 | Domain::RawPtr(_, inner)
                 | Domain::Array(inner, _)
@@ -1012,6 +1031,16 @@ impl<'s> Solver<'_, '_, 's> {
                     std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>(),
                 )?;
                 Shape::ManuallyDrop(
+                    declaration,
+                    Arc::new(self.manifest_shape(argument, depth + 1)?),
+                )
+            }
+            Domain::Cell(declaration, argument) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                budget.retain_bytes(
+                    std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>(),
+                )?;
+                Shape::Cell(
                     declaration,
                     Arc::new(self.manifest_shape(argument, depth + 1)?),
                 )

@@ -63,6 +63,11 @@ pub enum BuiltinAtom {
     ManuallyDropNew,
     ManuallyDropIntoInner,
     ManuallyDropDrop,
+    CellModule,
+    Cell,
+    CellNew,
+    CellGet,
+    CellSet,
     CloneModule,
     Ops,
     Sized,
@@ -86,6 +91,11 @@ impl BuiltinAtom {
             Self::ManuallyDropNew => "new",
             Self::ManuallyDropIntoInner => "into_inner",
             Self::ManuallyDropDrop => "drop",
+            Self::CellModule => "cell",
+            Self::Cell => "Cell",
+            Self::CellNew => "new",
+            Self::CellGet => "get",
+            Self::CellSet => "set",
             Self::CloneModule => "clone",
             Self::Ops => "ops",
             Self::Sized => "Sized",
@@ -380,6 +390,9 @@ impl NameStoreBuilder {
                 | BuiltinAtom::ManuallyDropNew
                 | BuiltinAtom::ManuallyDropIntoInner
                 | BuiltinAtom::ManuallyDropDrop
+                | BuiltinAtom::CellNew
+                | BuiltinAtom::CellGet
+                | BuiltinAtom::CellSet
         ) {
             return Err(
                 TokenError::InvalidInput("expected a closed catalog member descriptor").into(),
