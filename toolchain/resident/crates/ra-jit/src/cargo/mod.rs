@@ -51,9 +51,16 @@ pub(crate) use units::Record;
 
 /// `ra-jit cargo ...`: runs the command and ends with the status cargo would end with.
 pub(crate) fn command(args: impl Iterator<Item = String>) -> anyhow::Result<()> {
+    let detail_started = telemetry_enabled().then(|| {
+        crate::trace::install();
+        Instant::now()
+    });
     let result = command_code(args);
     // `command_code` has returned, so all phase guards have recorded, including on
     // errors. Finish before either propagating an error or exiting with the child's status.
+    if let Some(started) = detail_started {
+        crate::trace::note_all(crate::trace::take_detail(started));
+    }
     crate::trace::finish();
     std::process::exit(result?)
 }

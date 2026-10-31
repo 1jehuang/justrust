@@ -242,6 +242,8 @@ pub fn metadata_locked(asked: &Asked<'_>) -> Result<String> {
 pub fn programs(asked: &Asked<'_>, targets: Targets<'_>) -> Result<(String, Vec<Program>)> {
     anyhow::ensure!(asked.build.is_some(), "the programs are of a build");
     let Made { json, roots, unharnessed } = made(asked)?;
+    let _program_projection =
+        tracing::info_span!(target: "ra_jit::planning", "resolver program projection").entered();
     let metadata: serde_json::Value = serde_json::from_str(&json)?;
     let nodes = metadata["resolve"]["nodes"].as_array().into_iter().flatten();
     let features: FxHashMap<&str, Vec<&str>> = nodes
@@ -598,6 +600,8 @@ fn resolving_with<R>(
     relock: Option<Relock<'_>>,
     then: impl FnOnce(Resolved<'_>, Vec<SerializedPackage<'_>>, &[PackageId], &[PackageId]) -> Result<R>,
 ) -> Result<R> {
+    let workspace_config =
+        tracing::info_span!(target: "ra_jit::planning", "resolver workspace/config").entered();
     let mut config = Config::load(asked.cwd, asked.env.clone(), &[])?;
     config.start(relock.map_or("metadata", |it| it.command), asked.config)?;
     let offline = asked.offline || config.net_config()?.offline.unwrap_or(false);
@@ -614,6 +618,9 @@ fn resolving_with<R>(
         Err(err) => return Err(err).with_context(|| format!("reading {}", lock_path.display())),
     };
 
+    drop(workspace_config);
+    let package_loading =
+        tracing::info_span!(target: "ra_jit::planning", "resolver package loading").entered();
     let path_packages = path_packages(&ws, &root, &ctx)?;
     let mut path_deps = PathDeps::default();
     let members = ws.members().map(|(_, m)| m);
@@ -635,6 +642,9 @@ fn resolving_with<R>(
     // The registry packages the resolve picks that the lock file does not pin.
     let picked: Vec<Package>;
 
+    drop(package_loading);
+    let summary_preparation =
+        tracing::info_span!(target: "ra_jit::planning", "resolver summary preparation").entered();
     let mut serialized: Vec<SerializedPackage<'_>> =
         ws.members().map(|(path, m)| export_package(path, m)).collect();
     let member_count = serialized.len();
@@ -719,6 +729,9 @@ fn resolving_with<R>(
         }
         FeatureUnification::Selected | FeatureUnification::Package => &specs,
     };
+    drop(summary_preparation);
+    let version_resolve =
+        tracing::info_span!(target: "ra_jit::planning", "resolver version resolve").entered();
     let (mut whole, targeted) = resolve_ws(
         &mut PackageRegistry::new(Pinned(blaze_registry::IndexRegistry::new(&sources, registry))),
         &resolving,
@@ -727,6 +740,9 @@ fn resolving_with<R>(
         resolved_for,
         has_dev_units,
     )?;
+    drop(version_resolve);
+    let resolve_finalization =
+        tracing::info_span!(target: "ra_jit::planning", "resolver finalization").entered();
     if let Some(lock) = &lock {
         whole.merge_from(lock)?;
     }
@@ -783,6 +799,7 @@ fn resolving_with<R>(
         manifests: &manifests,
         config: &ctx.config,
     };
+    drop(resolve_finalization);
     then(resolved, serialized, &ids, &unused_patches)
 }
 
@@ -804,6 +821,8 @@ fn described(
     serialized: Vec<SerializedPackage<'_>>,
     ids: &[PackageId],
 ) -> Result<Made> {
+    let _feature_graph_export =
+        tracing::info_span!(target: "ra_jit::planning", "resolver feature graph/export").entered();
     let Resolved {
         ws,
         resolve: targeted,
