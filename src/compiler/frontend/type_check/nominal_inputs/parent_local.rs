@@ -46,6 +46,13 @@ fn closure_in(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<bool
             contains_closure(&n.def().type_args, budget, depth + 1)?
         }
         ir::Ty::Tuple(types) => contains_closure(types, budget, depth + 1)?,
+        ir::Ty::Cell(cell) => closure_in(cell.argument(), budget, depth + 1)?,
+        ir::Ty::ManuallyDrop(wrapper) => closure_in(wrapper.argument(), budget, depth + 1)?,
+        ir::Ty::PhantomData(marker) => closure_in(marker.argument(), budget, depth + 1)?,
+        ir::Ty::FnPointer(pointer) => {
+            contains_closure(&pointer.inputs, budget, depth + 1)?
+                || closure_in(&pointer.output, budget, depth + 1)?
+        }
         ir::Ty::Ref { referent: t, .. }
         | ir::Ty::RawPtr { pointee: t, .. }
         | ir::Ty::Array { element: t, .. }
@@ -213,6 +220,26 @@ fn substitute(
                 .collect::<Result<Vec<_>, _>>()?
                 .into(),
         ),
+        ir::Ty::Cell(cell) => ir::Ty::Cell(cell.try_map(
+            budget,
+            |error| error,
+            |ty| substitute(ty, env, actuals, budget, depth + 1),
+        )?),
+        ir::Ty::ManuallyDrop(wrapper) => ir::Ty::ManuallyDrop(wrapper.try_map(
+            budget,
+            |error| error,
+            |ty| substitute(ty, env, actuals, budget, depth + 1),
+        )?),
+        ir::Ty::PhantomData(marker) => ir::Ty::PhantomData(marker.try_map(
+            budget,
+            |error| error,
+            |ty| substitute(ty, env, actuals, budget, depth + 1),
+        )?),
+        ir::Ty::FnPointer(pointer) => ir::Ty::FnPointer(pointer.try_map(
+            budget,
+            |error| error,
+            |ty| substitute(ty, env, actuals, budget, depth + 1),
+        )?),
         ir::Ty::Struct(_)
         | ir::Ty::Enum(_)
         | ir::Ty::AssociatedType(_)
@@ -247,10 +274,87 @@ fn mentions_param(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
         ir::Ty::Struct(n) if !n.is_back_edge() => any(&n.def().type_args)?,
         ir::Ty::Enum(n) if !n.is_back_edge() => any(&n.def().type_args)?,
         ir::Ty::Tuple(types) => any(types)?,
+        ir::Ty::Cell(cell) => mentions_param(cell.argument(), budget, depth + 1)?,
+        ir::Ty::ManuallyDrop(wrapper) => mentions_param(wrapper.argument(), budget, depth + 1)?,
+        ir::Ty::PhantomData(marker) => mentions_param(marker.argument(), budget, depth + 1)?,
+        ir::Ty::FnPointer(pointer) => {
+            any(&pointer.inputs)? || mentions_param(&pointer.output, budget, depth + 1)?
+        }
         ir::Ty::Ref { referent: t, .. }
         | ir::Ty::RawPtr { pointee: t, .. }
         | ir::Ty::Array { element: t, .. }
         | ir::Ty::Slice { element: t } => mentions_param(t, budget, depth + 1)?,
         _ => false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn function_marker(budget: &ir::PlanBudget) -> (ir::ParamEnv, ir::Ty) {
+        let declaration = ir::DeclId {
+            snapshot: ir::SnapshotId::standalone().unwrap(),
+            index: 1,
+        };
+        let binder = ir::BinderId { declaration };
+        let env = ir::ParamEnv::new(binder, 1).unwrap();
+        let parameter = ir::Ty::Param(ir::ParamId {
+            owner: binder,
+            index: 0,
+        });
+        let ty = ir::Ty::FnPointer(
+            ir::FnPointerTy::new(vec![parameter.clone()], parameter, budget).unwrap(),
+        );
+        (env, ty)
+    }
+
+    #[test]
+    fn parent_local_function_marker_substitution_keeps_exact_binder() {
+        let budget = ir::PlanBudget::default();
+        let (env, ty) = function_marker(&budget);
+        assert!(mentions_param(&ty, &budget, 0).unwrap());
+        let mapped = substitute(&ty, &env, &[ir::Ty::Bool], &budget, 0).unwrap();
+        let ir::Ty::FnPointer(pointer) = &mapped else {
+            panic!("function marker kind changed")
+        };
+        assert!(matches!(pointer.inputs.as_ref(), [ir::Ty::Bool]));
+        assert!(matches!(pointer.output, ir::Ty::Bool));
+        assert!(!mentions_param(&mapped, &budget, 0).unwrap());
+        let mut foreign = env.binder();
+        foreign.declaration.index += 1;
+        let foreign = ir::ParamEnv::new(foreign, 1).unwrap();
+        assert!(
+            substitute(&ty, &foreign, &[ir::Ty::Bool], &budget, 0)
+                .unwrap_err()
+                .contains("foreign parameter")
+        );
+        assert!(
+            substitute(&ty, &env, &[], &budget, 0)
+                .unwrap_err()
+                .contains("outside nominal actuals")
+        );
+    }
+
+    #[test]
+    fn parent_local_wrapper_substitution_preserves_first_resource_failure() {
+        let setup = ir::PlanBudget::default();
+        let (env, ty) = function_marker(&setup);
+        let budget = ir::PlanBudget::new(ir::PlanLimits {
+            work: 1,
+            ..ir::PlanLimits::default()
+        });
+        assert!(
+            substitute(&ty, &env, &[ir::Ty::Bool], &budget, 0)
+                .unwrap_err()
+                .contains("resource")
+        );
+        let failure = budget.first_resource_failure().unwrap();
+        assert!(
+            mentions_param(&ty, &budget, 0)
+                .unwrap_err()
+                .contains("resource")
+        );
+        assert_eq!(budget.first_resource_failure(), Some(failure));
+    }
 }

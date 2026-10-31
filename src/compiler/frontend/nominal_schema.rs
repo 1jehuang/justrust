@@ -1060,6 +1060,52 @@ impl PlanState {
     ) -> Result<ir::Ty, String> {
         self.intern_with_transport(registry, decl, args, caller, budget, depth, None)
     }
+    fn probe_source_carriers(
+        &mut self,
+        ty: &ir::Ty,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        match ir::source_carrier_inventory(ty, budget)? {
+            ir::SourceCarrierInventory::Complete(_) => Ok(()),
+            ir::SourceCarrierInventory::Deferred(handles) => {
+                for handle in &handles {
+                    let mut active = false;
+                    for (_, building) in &self.nominals.building {
+                        budget.charge_work(1)?;
+                        if handle.same_unfinished_nominal(building) {
+                            active = true;
+                            break;
+                        }
+                    }
+                    if !active {
+                        return Err(
+                            "carrier inventory contains a foreign unfinished nominal definition"
+                                .into(),
+                        );
+                    }
+                }
+                budget.retain_bytes(std::mem::size_of::<ir::Ty>())?;
+                self.deferred_carriers
+                    .try_reserve(1)
+                    .map_err(|_| "deferred source carrier allocation failed")?;
+                self.deferred_carriers.push(ty.clone());
+                Ok(())
+            }
+        }
+    }
+    fn complete_source_carriers(&mut self, budget: &ir::PlanBudget) -> Result<(), String> {
+        if !self.nominals.building.is_empty() {
+            return Ok(());
+        }
+        // Every root is re-walked in full, including fields that were not yet
+        // known when its exact back edge was encountered. A failed obligation
+        // is retained and no completed application may escape this call.
+        while let Some(root) = self.deferred_carriers.last() {
+            ir::carrier_locations(root, budget)?;
+            self.deferred_carriers.pop();
+        }
+        Ok(())
+    }
     #[allow(clippy::too_many_arguments)]
     pub(super) fn intern_with_transport(
         &mut self,
@@ -1072,6 +1118,7 @@ impl PlanState {
         transport: Option<&ir::NominalSubstitutionRequest<'_>>,
     ) -> Result<ir::Ty, String> {
         budget.check_depth(depth)?;
+        self.complete_source_carriers(budget)?;
         budget.charge_work(args.len().checked_add(1).ok_or("nominal work overflow")?)?;
         let info = registry.declaration(decl)?;
         // Arity is authority even on a cache hit. Parameter-name bindings are
@@ -1092,7 +1139,7 @@ impl PlanState {
                 };
                 structural.validate_ty_metadata_with_budget(arg, budget)?;
                 if !raw_type_has_projection(arg, budget, 0)? {
-                    ir::carrier_locations(arg, budget)?;
+                    self.probe_source_carriers(arg, budget)?;
                 }
             } else {
                 validate_argument(arg, caller, budget, depth + 1)?;
@@ -1487,7 +1534,7 @@ impl PlanState {
             }
             if transport.is_some() {
                 if !raw_type_has_projection(&ty, budget, 0)? {
-                    ir::carrier_locations(&ty, budget)?;
+                    self.probe_source_carriers(&ty, budget)?;
                 }
             } else {
                 validate_argument(&ty, caller, budget, 0)?;
@@ -1509,6 +1556,7 @@ impl PlanState {
             } else {
                 ty
             };
+            self.complete_source_carriers(budget)?;
             self.nominals
                 .by_slot
                 .try_reserve(1)
@@ -1579,6 +1627,111 @@ fn source_elides_lifetime(ty: &Type) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_carrier_deferral_requires_exact_active_handle_and_complete_late_fields() {
+        let program = parse("struct Seed{x:i32}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let key = name_scope::path_key(
+            program.names.as_ref(),
+            &program.structs[0].name,
+            Namespace::Type,
+        )
+        .unwrap();
+        let declaration = *plan.registry.nominals.get(&key).unwrap();
+        let mut state = plan.scratch();
+        let original = state
+            .intern(
+                &plan.registry,
+                declaration,
+                &[],
+                ir::FactsCtx::Concrete,
+                &budget,
+                0,
+            )
+            .unwrap();
+        let ir::Ty::Struct(original) = original else {
+            panic!("source seed was not nominal");
+        };
+        let mut completed_back = None;
+        let definition = Arc::new_cyclic(|weak| {
+            let back = ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Back(
+                weak.clone(),
+                original.id(),
+            )));
+            let foreign = ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Back(
+                std::sync::Weak::new(),
+                original.id(),
+            )));
+            assert!(
+                ir::carrier_locations(&back, &budget)
+                    .unwrap_err()
+                    .contains("completed nominal")
+            );
+            assert!(!back.same_unfinished_nominal(&foreign));
+            state
+                .nominals
+                .building
+                .push(((declaration, Vec::new()), back.clone()));
+            assert!(
+                state
+                    .probe_source_carriers(&foreign, &budget)
+                    .unwrap_err()
+                    .contains("foreign unfinished")
+            );
+            assert!(state.deferred_carriers.is_empty());
+            state.probe_source_carriers(&back, &budget).unwrap();
+            assert_eq!(state.deferred_carriers.len(), 1);
+            state.complete_source_carriers(&budget).unwrap();
+            assert_eq!(state.deferred_carriers.len(), 1);
+            state.nominals.building.pop();
+            // Draining early must remain an explicit failure, never an empty
+            // inventory that could hide fields not installed yet.
+            assert!(
+                state
+                    .complete_source_carriers(&budget)
+                    .unwrap_err()
+                    .contains("completed nominal")
+            );
+            assert_eq!(state.deferred_carriers.len(), 1);
+            completed_back = Some(back.clone());
+            let mut definition = original.def().clone();
+            definition.fields = vec![
+                ir::FieldDef {
+                    name: "late_reference".into(),
+                    ty: ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+                    },
+                    visibility: ir::Visibility::Public,
+                    lifetime_bound: true,
+                },
+                ir::FieldDef {
+                    name: "next".into(),
+                    ty: ir::Ty::RawPtr {
+                        kind: ir::BorrowKind::Mut,
+                        pointee: Arc::new(back),
+                    },
+                    visibility: ir::Visibility::Public,
+                    lifetime_bound: false,
+                },
+            ]
+            .into();
+            definition
+        });
+        // Match the existing source builder's lifetime protocol for Back.
+        std::mem::forget(definition.clone());
+        state.complete_source_carriers(&budget).unwrap();
+        assert!(state.deferred_carriers.is_empty());
+        let locations = ir::carrier_locations(&completed_back.unwrap(), &budget).unwrap();
+        assert_eq!(locations.len(), 1);
+        assert_eq!(locations[0].path.0.as_ref(), &[ir::CarrierStep::Field(0)]);
+        assert_eq!(
+            locations[0].channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+        );
+    }
 
     #[test]
     fn field_keys_use_checked_member_identity_not_occurrence_spans() {

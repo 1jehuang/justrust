@@ -134,6 +134,248 @@ let mut number=ManuallyDrop::new(4i32);let read=&*number;println!("{}",*read);le
     );
 }
 
+#[test]
+fn typed_box_cleanup_preserves_original_address_and_drop_order() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "typed-box-in-place-drop",
+        &[
+            Case {
+                name: "pointee_drop_observes_original_allocation_once",
+                source: r#"struct Witness{address:usize,count:*mut u64,id:u64}
+impl Drop for Witness{fn drop(&mut self){assert!(self as *mut Witness as usize==self.address);unsafe{*self.count=*self.count*10u64+self.id;}println!("drop {}",self.id);}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let mut value=Box::new(Witness{address:0usize,count:count_ptr,id:1u64});
+let address=&*value as *const Witness as usize;value.address=address;
+drop(value);assert!(count==1u64);println!("count {}",count);}"#,
+                expect: Expect::Run("drop 1\ncount 1\n"),
+            },
+            Case {
+                name: "concrete_fn_mut_option_map_cleans_remaining_box_payload",
+                source: r#"struct Witness{count:*mut u64}
+impl Drop for Witness{fn drop(&mut self){unsafe{*self.count=*self.count+1u64;}println!("witness");}}
+struct Pair{value:i32,witness:Witness}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let input:Option<Box<Pair>>=Some(Box::new(Pair{value:7,witness:Witness{count:count_ptr}}));
+let mut sum:i32=0;let result:Option<i32>=input.map(|node|{sum+=node.value;node.value});
+assert!(result.unwrap()==7);assert!(sum==7);assert!(count==1u64);println!("count {} sum {}",count,sum);}"#,
+                expect: Expect::Run("witness\ncount 1 sum 7\n"),
+            },
+            Case {
+                name: "unused_concrete_box_drop_cannot_invalidate_borrow",
+                source: "struct Value{value:i32}fn unused(){let owner=Box::new(Value{value:7});let borrowed=&*owner;drop(owner);println!(\"{}\",borrowed.value);}fn main(){}",
+                expect: Expect::Invalid("E0505"),
+            },
+            Case {
+                name: "unused_concrete_box_cannot_move_after_drop",
+                source: "struct Value{value:i32}fn unused(){let owner=Box::new(Value{value:7});drop(owner);let moved=owner;}fn main(){}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "nested_boxes_drop_parent_then_child_at_original_addresses",
+                source: r#"struct Leaf{address:usize,count:*mut u64}
+impl Drop for Leaf{fn drop(&mut self){assert!(self as *mut Leaf as usize==self.address);unsafe{*self.count=*self.count*10u64+2u64;}println!("leaf");}}
+struct Parent{address:usize,count:*mut u64,child:Box<Leaf>}
+impl Drop for Parent{fn drop(&mut self){assert!(self as *mut Parent as usize==self.address);unsafe{*self.count=*self.count*10u64+1u64;}println!("parent");}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let mut leaf=Box::new(Leaf{address:0usize,count:count_ptr});let leaf_address=&*leaf as *const Leaf as usize;leaf.address=leaf_address;
+let mut parent=Box::new(Parent{address:0usize,count:count_ptr,child:leaf});let parent_address=&*parent as *const Parent as usize;parent.address=parent_address;
+let outer=Box::new(parent);drop(outer);assert!(count==12u64);println!("count {}",count);}"#,
+                expect: Expect::Run("parent\nleaf\ncount 12\n"),
+            },
+            Case {
+                name: "wide_payload_drops_in_place_before_release",
+                source: r#"struct Wide{address:usize,count:*mut u64,payload:[u64;1025]}
+impl Drop for Wide{fn drop(&mut self){assert!(self as *mut Wide as usize==self.address);assert!(self.payload[0]==7u64);assert!(self.payload[1024]==9u64);unsafe{*self.count=*self.count+1u64;}println!("wide");}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let mut value=Box::new(Wide{address:0usize,count:count_ptr,payload:[7u64;1025]});
+let address=&*value as *const Wide as usize;value.address=address;value.payload[1024]=9u64;
+drop(value);assert!(count==1u64);println!("count {}",count);}"#,
+                expect: Expect::Run("wide\ncount 1\n"),
+            },
+            Case {
+                name: "zero_sized_pointee_destructor_and_trivial_box",
+                source: r#"struct Zero;impl Drop for Zero{fn drop(&mut self){println!("zero");}}
+fn main(){drop(Box::new(Zero));drop(Box::new(()));let value=Box::new(7u64);assert!(*value==7u64);drop(value);println!("done");}"#,
+                expect: Expect::Run("zero\ndone\n"),
+            },
+            Case {
+                name: "noncopy_move_out_drops_only_the_returned_value",
+                source: r#"struct Witness{count:*mut u64}
+impl Drop for Witness{fn drop(&mut self){unsafe{*self.count=*self.count+1u64;}println!("witness");}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let owner=Box::new(Witness{count:count_ptr});let moved=*owner;assert!(count==0u64);drop(moved);assert!(count==1u64);println!("count {}",count);}"#,
+                expect: Expect::Run("witness\ncount 1\n"),
+            },
+            Case {
+                name: "dynamic_box_cleanup_keeps_existing_vtable_protocol",
+                source: r#"trait Value{fn value(&self)->i32;}
+struct Witness{count:*mut u64}
+impl Value for Witness{fn value(&self)->i32{7}}
+impl Drop for Witness{fn drop(&mut self){unsafe{*self.count=*self.count+1u64;}println!("dynamic");}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let owner:Box<dyn Value>=Box::new(Witness{count:count_ptr});assert!(owner.value()==7);drop(owner);assert!(count==1u64);println!("count {}",count);}"#,
+                expect: Expect::Run("dynamic\ncount 1\n"),
+            },
+        ],
+        Path::new(&stock_rustc()),
+    );
+}
+
+#[test]
+fn ordinary_box_source_applications_do_not_require_recursive_thunk_identity() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "ordinary-box-source-drop",
+        &[Case {
+            name: "repeated_source_views_and_distinct_actuals_keep_exact_cleanup",
+            source: r#"struct Guard<T>{value:T,digit:u64,count:*mut u64}
+impl<T> Drop for Guard<T>{fn drop(&mut self){unsafe{*self.count=*self.count*10u64+self.digit;}println!("guard {}",self.digit);}}
+fn boxed<T>(value:T)->Box<T>{Box::new(value)}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let first=boxed(Guard{value:7u64,digit:1u64,count:count_ptr});drop(first);
+let second=boxed(Guard{value:[8u64;2],digit:2u64,count:count_ptr});drop(second);
+let third=boxed(Guard{value:9u64,digit:3u64,count:count_ptr});drop(third);
+assert!(count==123u64);println!("count {}",count);}"#,
+            expect: Expect::Run("guard 1\nguard 2\nguard 3\ncount 123\n"),
+        }],
+        Path::new(&stock_rustc()),
+    );
+}
+
+#[test]
+fn recursive_generic_box_owners_keep_distinct_actuals_and_instance_scopes() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "recursive-generic-box-scopes",
+        &[Case {
+            name: "distinct_recursive_actuals_in_one_function_and_repeated_generic_instances",
+            source: r#"struct Token{digit:u64,count:*mut u64}
+impl Drop for Token{fn drop(&mut self){unsafe{*self.count=*self.count*10u64+self.digit;}println!("token {}",self.digit);}}
+struct Node<T>{value:T,next:Option<Box<Node<T>>>}
+fn consume<T>(value:Box<Node<T>>){drop(value);}
+fn main(){let mut count=0u64;let ptr=&mut count as *mut u64;
+{let first=Box::new(Node{value:Token{digit:1u64,count:ptr},next:None});
+let second=Box::new(Node{value:[Token{digit:2u64,count:ptr};1],next:None});
+drop(first);drop(second);}
+let third=Box::new(Node{value:Token{digit:3u64,count:ptr},next:None});consume(third);
+let fourth=Box::new(Node{value:[Token{digit:4u64,count:ptr};1],next:None});consume(fourth);
+assert!(count==1234u64);println!("count {}",count);}"#,
+            expect: Expect::Run("token 1\ntoken 2\ntoken 3\ntoken 4\ncount 1234\n"),
+        }],
+        Path::new(&stock_rustc()),
+    );
+}
+
+#[test]
+fn recursive_typed_boxes_drop_in_place_once_and_preserve_partial_moves() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "recursive-typed-box-drop",
+        &[
+            Case {
+                name: "recursive_nodes_run_own_drop_at_each_original_address",
+                source: r#"struct Node{address:usize,digit:u64,count:*mut u64,next:Option<Box<Node>>}
+impl Drop for Node{fn drop(&mut self){assert!(self as *mut Node as usize==self.address);unsafe{*self.count=*self.count*10u64+self.digit;}println!("node {}",self.digit);}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let mut last=Box::new(Node{address:0usize,digit:3u64,count:count_ptr,next:None});let address=&*last as *const Node as usize;last.address=address;
+let mut middle=Box::new(Node{address:0usize,digit:2u64,count:count_ptr,next:Some(last)});let address=&*middle as *const Node as usize;middle.address=address;
+let mut first=Box::new(Node{address:0usize,digit:1u64,count:count_ptr,next:Some(middle)});let address=&*first as *const Node as usize;first.address=address;
+drop(first);assert!(count==123u64);println!("count {}",count);}"#,
+                expect: Expect::Run("node 1\nnode 2\nnode 3\ncount 123\n"),
+            },
+            Case {
+                name: "mutually_recursive_aggregate_retains_only_live_partial_paths",
+                source: r#"struct Token{digit:u64,count:*mut u64}
+impl Drop for Token{fn drop(&mut self){unsafe{*self.count=*self.count*10u64+self.digit;}println!("token {}",self.digit);}}
+struct A{token:Token,next:Option<Box<B>>}struct B{token:Token,next:Option<Box<A>>}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+{let last=Box::new(A{token:Token{digit:3u64,count:count_ptr},next:None});
+let middle=Box::new(B{token:Token{digit:2u64,count:count_ptr},next:Some(last)});
+let first=Box::new(A{token:Token{digit:1u64,count:count_ptr},next:Some(middle)});
+let moved=first.token;drop(moved);assert!(count==1u64);}
+assert!(count==123u64);println!("count {}",count);}"#,
+                expect: Expect::Run("token 1\ntoken 2\ntoken 3\ncount 123\n"),
+            },
+        ],
+        Path::new(&stock_rustc()),
+    );
+}
+
+#[test]
+fn raw_pointer_casts_reborrow_mutable_reference_places_without_moving_them() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "raw-pointer-cast-reborrow",
+        &[
+            Case {
+                name: "mutable_reference_remains_live_after_mutable_and_const_casts",
+                source: r#"fn observe(r:&mut i32){let first=r as *mut i32;let second=r as *const i32;assert!(first as usize==second as usize);unsafe{*first=*first+1;}*r=*r+1;println!("{}",*r);}
+fn main(){let mut value=5;observe(&mut value);assert!(value==7);}"#,
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "raw_cast_rvalue_is_evaluated_once",
+                source: r#"fn main(){let mut value=5;let mut count=0;let pointer=({count+=1;&mut value}) as *mut i32;unsafe{*pointer=*pointer+1;}assert!(count==1);assert!(value==6);println!("{} {}",value,count);}"#,
+                expect: Expect::Run("6 1\n"),
+            },
+            Case {
+                name: "real_reference_move_still_invalidates_the_old_carrier",
+                source: "fn main(){let mut value=5;let r=&mut value;let moved=r;let pointer=r as *mut i32;*moved=7;}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "cast_reborrow_cannot_override_a_live_shared_loan",
+                source: "fn main(){let mut value=5;let r=&mut value;let shared=&*r;let pointer=r as *mut i32;println!(\"{}\",*shared);}",
+                expect: Expect::Invalid("E0502"),
+            },
+        ],
+        Path::new(&stock_rustc()),
+    );
+}
+
+#[test]
+fn typed_box_native_into_inner_sentinel_and_exact_mapping_extent() {
+    // The native Box::into_inner extension and private mmap extent are tested
+    // separately from the unchanged-source stock differential cases above.
+    let source = r#"struct Token{count:*mut u64}
+impl Drop for Token{fn drop(&mut self){unsafe{*self.count=*self.count+1u64;}}}
+fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
+let value=Box::into_inner(Box::new(Token{count:count_ptr}));assert!(count==0u64);drop(value);assert!(count==1u64);
+let owner=Box::new([7u64;1025]);let address=&*owner as *const [u64;1025] as usize;
+assert!(address%4096usize==0usize);let last_page=address+8192usize;
+let mut resident=0u8;let resident_ptr=&mut resident as *mut u8 as usize;
+let before=unsafe{__justrust_linux_syscall6!(27usize,last_page,4096usize,resident_ptr,0usize,0usize,0usize)};
+assert!(before==0usize);drop(owner);
+let after=unsafe{__justrust_linux_syscall6!(27usize,last_page,4096usize,resident_ptr,0usize,0usize,0usize)};
+assert!(after==18446744073709551604usize);println!("native box cleanup");}"#;
+    for workers in [1, 8] {
+        for check in [true, false] {
+            let context = format!("typed Box native protocol workers={workers} CHECK={check}");
+            let compiled = compiler::compile(source.into(), workers, check)
+                .unwrap_or_else(|error| panic!("{context}: {error}"));
+            assert_eq!(compiled.executable.is_none(), check, "{context}");
+            if check {
+                assert!(
+                    compiled
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+                    "{context}: CHECK demanded code generation"
+                );
+            } else {
+                let scratch = Scratch::new();
+                let path = scratch.write("native-box", &compiled.executable.unwrap());
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+                let ran = capture(&mut Command::new(path), &scratch, 20);
+                successful(&ran, &context);
+                assert_eq!(ran.stdout, b"native box cleanup\n", "{context}");
+            }
+        }
+    }
+}
+
 const INDEX: &str = include_str!("fixtures/drop_normal/receipts-v9/fixture-index.tsv");
 const MANIFEST_HASH: &str = "afc7b27b95496aa84316d9e21485fb7c4f2c18d57701251bcffc152593aee7fe";
 const INDEX_HASH: &str = "213e1c312094ffb078cd49c04e508721188e4b0308b1c990b939ce3af5b585e7";

@@ -10388,8 +10388,34 @@ impl<'a> Checker<'a> {
         value: &Expr,
         target: ir::Ty,
     ) -> Result<ir::ExprId, String> {
-        let value = match &target {
-            ir::Ty::RawPtr { .. } if matches!(value, Expr::Integer(_)) => {
+        // Casting an existing mutable reference to a raw pointer reborrows
+        // its referent. Reading the carrier as a value first would move the
+        // non-Copy `&mut T`, incorrectly invalidating later uses of `self`/`r`.
+        // Keep this adjustment specific to an admitted reference-to-pointer
+        // cast of a static source place, not ordinary moves or raw casts.
+        let reborrow = if matches!(target, ir::Ty::RawPtr { .. })
+            && let Ok(source_place) = static_source_place(value)
+            && let Ok((mut place, source_ty, _)) = self.checked_place(&source_place)
+            && matches!(
+                source_ty,
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    ..
+                }
+            )
+            && ir::ptr_cast_valid(&source_ty, &target)
+        {
+            if place.projection.len() >= 128 {
+                return Err("pointer cast reborrow projection limit128".into());
+            }
+            place.projection.push(ir::Projection::Deref);
+            Some(self.borrow_expression(ir::BorrowKind::Mut, place)?)
+        } else {
+            None
+        };
+        let value = match (reborrow, &target) {
+            (Some(value), _) => value,
+            (None, ir::Ty::RawPtr { .. }) if matches!(value, Expr::Integer(_)) => {
                 self.expr_expected(value, Some(&ir::Ty::Int(ir::IntTy::Usize)))?
             }
             _ => self.expr(value)?,

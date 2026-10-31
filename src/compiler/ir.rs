@@ -681,14 +681,43 @@ pub struct CarrierLocation {
 /// One canonical typed component walk for world contracts and the SAME Plan.
 /// Presence memoization avoids expanding reference-free shared type DAGs.
 pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLocation]>, String> {
+    match source_carrier_inventory(ty, budget)? {
+        SourceCarrierInventory::Complete(locations) => Ok(locations),
+        SourceCarrierInventory::Deferred(_) => {
+            Err("carrier inventory requires a completed nominal definition".into())
+        }
+    }
+}
+
+/// Construction-local result only. Deferred handles are obligations, never an
+/// empty inventory or permission to publish a source/graph fact.
+pub(super) enum SourceCarrierInventory {
+    Complete(Arc<[CarrierLocation]>),
+    Deferred(Vec<Ty>),
+}
+pub(super) fn source_carrier_inventory(
+    ty: &Ty,
+    budget: &PlanBudget,
+) -> Result<SourceCarrierInventory, String> {
     fn present(
         ty: &Ty,
         budget: &PlanBudget,
         depth: usize,
         memo: &mut std::collections::HashMap<usize, (bool, usize)>,
+        deferred: &mut Vec<Ty>,
     ) -> Result<(bool, usize), String> {
         budget.check_depth(depth)?;
         budget.charge_work(1)?;
+        if ty.has_unfinished_nominal_definition() {
+            budget.retain_bytes(std::mem::size_of::<Ty>())?;
+            deferred
+                .try_reserve(1)
+                .map_err(|_| "deferred carrier inventory allocation failed")?;
+            deferred.push(ty.clone());
+            // Unknown presence is retained conservatively. The walk below is
+            // forbidden until all deferred definitions have completed.
+            return Ok((true, 0));
+        }
         let key = std::ptr::from_ref(ty) as usize;
         if let Some(&(has, height)) = memo.get(&key) {
             budget.check_depth(depth.checked_add(height).ok_or("carrier depth overflow")?)?;
@@ -700,7 +729,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
         );
         let mut height = 0;
         let mut child = |ty: &Ty| -> Result<(), String> {
-            let (found, h) = present(ty, budget, depth + 1, memo)?;
+            let (found, h) = present(ty, budget, depth + 1, memo, deferred)?;
             has |= found;
             height = height.max(h + 1);
             Ok(())
@@ -951,14 +980,18 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
         Ok(())
     }
     let mut memo = std::collections::HashMap::new();
-    present(ty, budget, 0, &mut memo)?;
+    let mut deferred = Vec::new();
+    present(ty, budget, 0, &mut memo, &mut deferred)?;
+    if !deferred.is_empty() {
+        return Ok(SourceCarrierInventory::Deferred(deferred));
+    }
     let _scratch = budget.reserve_bytes(129 * std::mem::size_of::<CarrierStep>())?;
     let mut path = Vec::new();
     path.try_reserve_exact(129)
         .map_err(|_| "carrier path allocation resource limit")?;
     let mut output = Vec::new();
     walk(ty, &mut path, 0, 0, &mut output, budget, &memo)?;
-    Ok(output.into())
+    Ok(SourceCarrierInventory::Complete(output.into()))
 }
 
 pub fn carrier_at(
@@ -5386,6 +5419,42 @@ impl StructDef {
 }
 
 impl Ty {
+    fn has_unfinished_nominal_definition(&self) -> bool {
+        match self {
+            Ty::Struct(value) => {
+                matches!(&value.0, NominalRef::Back(weak, _) if weak.strong_count() == 0)
+            }
+            Ty::Enum(value) => {
+                matches!(&value.0, NominalRef::Back(weak, _) if weak.strong_count() == 0)
+            }
+            _ => false,
+        }
+    }
+    /// Exact allocation identity, readable during Arc::new_cyclic. Equal
+    /// application IDs alone cannot authorize a foreign unfinished definition.
+    pub(super) fn same_unfinished_nominal(&self, other: &Ty) -> bool {
+        match (self, other) {
+            (Ty::Struct(left), Ty::Struct(right)) => match (&left.0, &right.0) {
+                (NominalRef::Back(left, a), NominalRef::Back(right, b)) => {
+                    a == b
+                        && left.strong_count() == 0
+                        && right.strong_count() == 0
+                        && std::sync::Weak::ptr_eq(left, right)
+                }
+                _ => false,
+            },
+            (Ty::Enum(left), Ty::Enum(right)) => match (&left.0, &right.0) {
+                (NominalRef::Back(left, a), NominalRef::Back(right, b)) => {
+                    a == b
+                        && left.strong_count() == 0
+                        && right.strong_count() == 0
+                        && std::sync::Weak::ptr_eq(left, right)
+                }
+                _ => false,
+            },
+            _ => false,
+        }
+    }
     /// A cycle-closing reference of a recursive nominal type. Recursive type
     /// walkers treat it as a leaf: the outer strong application owns it.
     pub fn is_nominal_back_edge(&self) -> bool {

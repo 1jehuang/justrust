@@ -139,6 +139,74 @@ pub(super) enum NominalCallablePublication {
 mod canonical_source_replay_tests {
     use super::*;
     #[test]
+    fn source_ref_inventory_finishes_recursive_equations_without_hiding_other_payloads() {
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "source-ref-inventory.rs",
+            "struct Node{next:Option<Box<Node>>}fn f(x:Node){}fn main(){}",
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let parsed = parse_prepared(&prepared).unwrap();
+        let program = resolve(&parsed).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let signature = plan
+            .function_schema(plan.function_decl(0).unwrap())
+            .unwrap();
+        let owner = signature.signature.params[0].clone();
+        assert!(!contains_source_ref(&owner, &budget, 0).unwrap());
+        let ir::Ty::Struct(original) = &owner else {
+            panic!("source nominal")
+        };
+        let mut changed = original.def().clone();
+        let mut field = original.def().fields.read(&budget).unwrap()[0].clone();
+        field.ty = ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(ir::Ty::Bool),
+        };
+        changed.fields = Arc::<[ir::FieldDef]>::from([field]).into();
+        let different_payload = ir::Ty::Struct(ir::StructTy::new(changed));
+        let inventory = ir::Ty::Tuple(Arc::from([different_payload, owner.clone()]));
+        // The original recursive definition is visited first. A different
+        // payload without typed component authority cannot hide behind its ID.
+        assert!(contains_source_ref(&inventory, &budget, 0).unwrap());
+        let shallow = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 2,
+            ..ir::PlanLimits::default()
+        });
+        let mut deep = ir::Ty::Bool;
+        for _ in 0..4 {
+            deep = ir::Ty::Array {
+                element: Arc::new(deep),
+                len: 1,
+            };
+        }
+        let late_failure = ir::Ty::Tuple(Arc::from([
+            deep,
+            ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Bool),
+            },
+        ]));
+        assert_eq!(
+            contains_source_ref(&late_failure, &shallow, 0)
+                .unwrap_err()
+                .kind(),
+            tr::FactsErrorKind::Resource
+        );
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining).unwrap();
+        assert_eq!(
+            contains_source_ref(&owner, &budget, 0).unwrap_err().kind(),
+            tr::FactsErrorKind::Resource
+        );
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(first.used, budget.limits().work);
+        assert!(budget.charge_work(1).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+    #[test]
     fn recursive_return_and_expected_context_reject_forged_evidence() {
         for source in [
             "fn first<T,U>(x:T,y:U)->T{let _=y;x}fn main(){let mut n=7i32;let b=true;let r=first(&mut n,&b);}",
@@ -5582,57 +5650,107 @@ fn contains_source_ref(
     budget: &ir::PlanBudget,
     depth: usize,
 ) -> Result<bool, FactsError> {
-    sr::depth(budget, depth)?;
-    sr::work(budget, 1)?;
-    Ok(match ty {
-        ir::Ty::Ref { .. } => true,
-        ir::Ty::Tuple(fields) => {
-            let mut any = false;
-            for t in fields.iter() {
-                any |= contains_source_ref(t, budget, depth + 1)?;
+    let mut pending = Vec::new();
+    let mut visited: Vec<ir::Ty> = Vec::new();
+    let mut found = false;
+    sr::push(&mut pending, (ty.clone(), depth), budget)?;
+    while let Some((ty, depth)) = pending.pop() {
+        sr::depth(budget, depth)?;
+        sr::work(budget, 1)?;
+        let nominal = match &ty {
+            ir::Ty::Struct(value) => Some((value.id(), value.realization())),
+            ir::Ty::Enum(value) => Some((value.id(), value.realization())),
+            _ => None,
+        };
+        if let Some((identity, read)) = nominal {
+            let component = read.filter(|read| read.is_component());
+            if let Some(read) = component {
+                read.check_definition(&ty)
+                    .map_err(|error| source_error(budget, &error.to_string()))?;
             }
-            any
-        }
-        ir::Ty::Array { element, .. } => contains_source_ref(element, budget, depth + 1)?,
-        ir::Ty::ManuallyDrop(wrapper) => {
-            contains_source_ref(wrapper.argument(), budget, depth + 1)?
-        }
-        ir::Ty::Cell(wrapper) => contains_source_ref(wrapper.argument(), budget, depth + 1)?,
-        ir::Ty::Struct(t) => {
-            let mut any = false;
-            for t in t.def().type_args.iter() {
-                any |= contains_source_ref(t, budget, depth + 1)?;
-            }
-            for f in t
-                .def()
-                .fields
-                .read(budget)
-                .map_err(|e| source_error(budget, &e))?
-                .iter()
-            {
-                any |= contains_source_ref(&f.ty, budget, depth + 1)?;
-            }
-            any
-        }
-        ir::Ty::Enum(t) => {
-            let mut any = false;
-            for t in t.def().type_args.iter() {
-                any |= contains_source_ref(t, budget, depth + 1)?;
-            }
-            for v in t.def().variants.iter() {
-                for f in v
-                    .fields
-                    .read(budget)
-                    .map_err(|e| source_error(budget, &e))?
-                    .iter()
+            let mut repeated = false;
+            for previous in &visited {
+                sr::work(budget, 1)?;
+                let same_component = if component.is_some() {
+                    match previous {
+                        ir::Ty::Struct(value) => {
+                            value.id() == identity
+                                && value.realization().is_some_and(|read| read.is_component())
+                        }
+                        ir::Ty::Enum(value) => {
+                            value.id() == identity
+                                && value.realization().is_some_and(|read| read.is_component())
+                        }
+                        _ => false,
+                    }
+                } else {
+                    false
+                };
+                if same_component
+                    || ir::identical_type(&ty, previous, budget)
+                        .map_err(|error| source_error(budget, &error))?
                 {
-                    any |= contains_source_ref(&f.ty, budget, depth + 1)?;
+                    repeated = true;
+                    break;
                 }
             }
-            any
+            if repeated {
+                continue;
+            }
+            sr::push(&mut visited, ty.clone(), budget)?;
         }
-        _ => false,
-    })
+        let mut enqueue = |child: &ir::Ty| {
+            let next_depth = depth
+                .checked_add(1)
+                .ok_or_else(|| source_error(budget, "source reference depth overflow"))?;
+            sr::push(&mut pending, (child.clone(), next_depth), budget)
+        };
+        match &ty {
+            ir::Ty::Ref { .. } => found = true,
+            ir::Ty::Tuple(fields) => {
+                for child in fields.iter() {
+                    enqueue(child)?;
+                }
+            }
+            ir::Ty::Array { element, .. } => enqueue(element)?,
+            ir::Ty::ManuallyDrop(wrapper) => enqueue(wrapper.argument())?,
+            ir::Ty::Cell(wrapper) => enqueue(wrapper.argument())?,
+            ir::Ty::Struct(value) => {
+                for actual in value.def().type_args.iter() {
+                    enqueue(actual)?;
+                }
+                for field in value
+                    .def()
+                    .fields
+                    .read(budget)
+                    .map_err(|error| source_error(budget, &error))?
+                    .iter()
+                {
+                    enqueue(&field.ty)?;
+                }
+            }
+            ir::Ty::Enum(value) => {
+                for actual in value.def().type_args.iter() {
+                    enqueue(actual)?;
+                }
+                for variant in value.def().variants.iter() {
+                    sr::work(budget, 1)?;
+                    for field in variant
+                        .fields
+                        .read(budget)
+                        .map_err(|error| source_error(budget, &error))?
+                        .iter()
+                    {
+                        enqueue(&field.ty)?;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    // Every unique nominal's complete child inventory has been consumed.
+    // Skipping a repeated equation is not cached negative evidence.
+    Ok(found)
 }
 fn canonical_root_positions(
     cap: &CanonicalSourceCapability,
@@ -21968,6 +22086,9 @@ struct PlanState {
     source_context: Option<SourceTypeContext>,
     default_expansions: Vec<(ir::DeclId, usize)>,
     source_metadata: nominal_schema::SourceMetadataCache,
+    /// Unpublished source-construction obligations, discharged before returning
+    /// the outermost completed application. Never retained in PlanCtx/facts.
+    deferred_carriers: Vec<ir::Ty>,
     schemas: Arc<HashMap<ir::DeclId, Arc<NominalSchema>>>,
     nominals: NominalInterner,
     reservations: Vec<ir::PlanReservation>,
@@ -21981,6 +22102,7 @@ impl PlanState {
             source_context: None,
             default_expansions: Vec::new(),
             source_metadata: nominal_schema::SourceMetadataCache::default(),
+            deferred_carriers: Vec::new(),
             schemas: schemas.clone(),
             nominals: NominalInterner {
                 base: base.clone(),
@@ -23903,6 +24025,9 @@ impl PlanCtx {
         // Consume construction authority once before graph-facing adapters.
         source_schemas.complete_closure_predicates(&registry, budget)?;
         let source_schemas = source_schemas.seal_from_registry(&registry, budget)?;
+        if !state.deferred_carriers.is_empty() {
+            return Err("source publication has unfinished carrier inventory obligations".into());
+        }
         // Construction storage stays charged for the plan's life; the
         // interned applications become the immutable canonical base.
         for reservation in std::mem::take(&mut state.reservations) {
@@ -25419,6 +25544,25 @@ impl SchemaAdapter {
     }
 }
 impl tr::SchemaCx for SchemaAdapter {
+    fn native_box_application(
+        &self,
+        ty: &ir::Ty,
+        facts: &tr::ValidatedFacts,
+    ) -> Result<Option<Arc<native_box::NativeBoxApplication>>, tr::FactsError> {
+        native_box::issue_application(self, ty, facts)
+    }
+    fn native_box_source(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<Arc<native_box::NativeBoxSource>>, tr::FactsError> {
+        self.budget.charge_work(1).map_err(|e| self.error(e))?;
+        if !Arc::ptr_eq(&self.program, &self.registry.program) {
+            return Err(self
+                .error("native Box source authority changed the original source program".into()));
+        }
+        native_box::issue(&self.registry, declaration, &self.budget)
+            .map_err(|error| self.error(error))
+    }
     fn nominal_validation_session(
         &self,
     ) -> Result<Option<Box<dyn tr::NominalValidationSession>>, tr::FactsError> {
@@ -27486,6 +27630,7 @@ fn collect_source_params(
     Ok(())
 }
 mod dynamic_objects;
+pub mod native_box;
 mod native_sequence;
 pub use native_sequence::{NativeSequenceSlot, NativeSequenceSwap};
 mod nominal_declarations;

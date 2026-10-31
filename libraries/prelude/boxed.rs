@@ -39,15 +39,13 @@ impl<T> Box<T> {
     }
 }
 
-impl<T> Drop for Box<T> {
+impl<T: ?Sized> Drop for Box<T> {
     fn drop(&mut self) {
-        let p = self.ptr;
-        if p as usize == 0usize {
-            return;
-        }
-        let _value = unsafe { *p };
-        let bytes = storage_stride::<T>();
-        raw_free(p as usize, if bytes == 0usize { 8usize } else { bytes });
+        // Exact reserved-carrier cleanup is sealed by normal_drop_plan. It
+        // drops T in its original allocation, then frees the private storage
+        // extent (from the closed type or the dynamic vtable). The null
+        // pointer left by into_inner suppresses both actions. This source
+        // declaration covers the same ?Sized domain as Box itself.
     }
 }
 

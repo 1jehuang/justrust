@@ -1,5 +1,703 @@
 use super::*;
 
+fn native_box_application_fixture() -> (PlanCtx, Arc<tr::ValidatedFacts>) {
+    let program = native_box_source_program_text(
+        "struct UserRecursive{next:*mut UserRecursive}fn deferred<T>(value:Box<T>){}fn main(){}",
+    );
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let world = plan.trait_world().unwrap();
+    let main = plan
+        .registry
+        .function_ids
+        .iter()
+        .copied()
+        .find(|id| {
+            let info = plan.registry.declaration(*id).unwrap();
+            plan.program.functions[info.source_index]
+                .name
+                .segments()
+                .last()
+                .is_some_and(|name| plan.program.names.spelling(*name).unwrap() == "main")
+        })
+        .unwrap();
+    let facts = world
+        .instance_facts(&ir::CallTarget {
+            declaration: main,
+            type_args: Arc::from([]),
+        })
+        .unwrap();
+    (plan, facts)
+}
+
+#[test]
+fn native_box_application_replays_canonical_source_and_binds_exact_allocation() {
+    let (plan, facts) = native_box_application_fixture();
+    let budget = &plan.budget;
+    let owner = native_box_source_owner(&plan);
+    let ty = plan
+        .intern_nominal(
+            owner,
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            budget,
+        )
+        .unwrap();
+    let app = tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &facts)
+        .unwrap()
+        .unwrap();
+    app.authorize_definition(&ty, budget).unwrap();
+    let ir::Ty::Struct(value) = &ty else {
+        panic!("native source struct");
+    };
+    let original = value.def().clone();
+    let forged = |definition| {
+        ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Strong(Arc::new(
+            definition,
+        ))))
+    };
+    // Even a byte-for-byte metadata clone cannot borrow this allocation proof.
+    assert!(
+        app.authorize_definition(&forged(original.clone()), budget)
+            .unwrap_err()
+            .contains("exact source allocation")
+    );
+    let mut changed = original.clone();
+    changed.type_args = Arc::from([ir::Ty::Bool]);
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &forged(changed),
+            &facts
+        )
+        .is_err()
+    );
+    let mut changed = original.clone();
+    changed.type_args = Arc::from([ir::Ty::Bool]);
+    let mut fields = changed.fields.read(budget).unwrap().to_vec();
+    fields[0].ty = ir::Ty::RawPtr {
+        kind: ir::BorrowKind::Mut,
+        pointee: Arc::new(ir::Ty::Bool),
+    };
+    changed.fields = fields.into();
+    // A coherent new actual and pointer still cannot borrow the old slot.
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &forged(changed),
+            &facts
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("source application identity")
+    );
+    let mut changed = original.clone();
+    let ir::NominalIndex::SourceSlot(slot) = changed.id.index else {
+        panic!("source slot");
+    };
+    changed.id.index = ir::NominalIndex::SourceSlot(slot ^ 1);
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &forged(changed),
+            &facts
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("source application identity")
+    );
+    let mut changed = original.clone();
+    changed.name = "same-shape-is-not-source-replay".into();
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &forged(changed),
+            &facts
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("definition payload")
+    );
+    let mut changed = original.clone();
+    let mut fields = changed.fields.read(budget).unwrap().to_vec();
+    fields[0].lifetime_bound = !fields[0].lifetime_bound;
+    changed.fields = fields.into();
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &forged(changed),
+            &facts
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("field payload")
+    );
+    let mut changed = original.clone();
+    changed.source_decl = facts.declaration();
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &forged(changed),
+            &facts
+        )
+        .unwrap()
+        .is_none()
+    );
+    let nonbox_owner = plan
+        .registry
+        .declarations
+        .iter()
+        .find(|info| {
+            info.kind == ir::DeclKind::Struct
+                && plan.program.structs.get(info.source_index).is_some()
+                && info.name.rsplit("::").next() == Some("UserRecursive")
+        })
+        .unwrap()
+        .id;
+    let (_, nonbox) = plan.nominal_schema(nonbox_owner, budget).unwrap();
+    assert!(
+        tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &nonbox, &facts,)
+            .unwrap()
+            .is_none()
+    );
+    let ir::Ty::Struct(nonbox) = nonbox else {
+        panic!("original recursive struct")
+    };
+    let nonbox = nonbox.def().clone();
+    // Neither a native Box weak edge nor an unrelated recursive declaration
+    // owns a strong source application. The optional query must deny both
+    // without claiming a malformed native role for the unrelated declaration.
+    for definition in [original.clone(), nonbox] {
+        let backing = Arc::new(definition);
+        let weak = ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Back(
+            Arc::downgrade(&backing),
+            backing.id,
+        )));
+        assert!(
+            tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &weak, &facts,)
+                .unwrap()
+                .is_none()
+        );
+        assert!(app.authorize_definition(&weak, budget).is_err());
+    }
+    // Even an unfinished edge must not attempt StructTy::def(), which would
+    // read a definition that has not yet been published. No proof is issued.
+    let unfinished = ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Back(
+        std::sync::Weak::new(),
+        original.id,
+    )));
+    assert!(tr::SchemaCx::native_box_application(
+        facts.world().schema_for_tests(), &unfinished, &facts,
+    ).unwrap().is_none());
+    assert!(app.authorize_definition(&unfinished, budget).is_err());
+    let other = plan
+        .intern_nominal(owner, &[ir::Ty::Bool], ir::FactsCtx::Concrete, budget)
+        .unwrap();
+    assert!(app.authorize_definition(&other, budget).is_err());
+    tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &other, &facts)
+        .unwrap()
+        .unwrap()
+        .authorize_definition(&other, budget)
+        .unwrap();
+    let nested = plan
+        .intern_nominal(
+            owner,
+            std::slice::from_ref(&ty),
+            ir::FactsCtx::Concrete,
+            budget,
+        )
+        .unwrap();
+    tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &nested, &facts)
+        .unwrap()
+        .unwrap()
+        .authorize_definition(&nested, budget)
+        .unwrap();
+}
+
+#[test]
+fn native_box_application_denies_foreign_schema_even_with_same_snapshot_and_budget() {
+    let (plan, facts) = native_box_application_fixture();
+    let budget = &plan.budget;
+    let ty = plan
+        .intern_nominal(
+            native_box_source_owner(&plan),
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            budget,
+        )
+        .unwrap();
+    let other_adapter = native_box_source_adapter(&plan, budget);
+    assert_eq!(
+        facts.registry_snapshot(),
+        tr::SchemaCx::registry_snapshot(&other_adapter)
+    );
+    assert!(
+        facts
+            .budget()
+            .same_authority(tr::SchemaCx::budget(&other_adapter))
+    );
+    assert!(facts.world().schema_is(facts.world().schema_for_tests()));
+    assert!(!facts.world().schema_is(&other_adapter));
+    assert_eq!(
+        tr::SchemaCx::native_box_application(&other_adapter, &ty, &facts)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::InvalidMetadata
+    );
+    tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &facts)
+        .unwrap()
+        .unwrap();
+    let universal = facts.world().callable_facts(facts.declaration()).unwrap();
+    let application =
+        tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &universal)
+            .unwrap()
+            .unwrap();
+    application.authorize_definition(&ty, budget).unwrap();
+    assert_eq!(
+        tr::SchemaCx::native_box_application(&other_adapter, &ty, &universal)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::InvalidMetadata
+    );
+    let declaration = plan
+        .registry
+        .function_ids
+        .iter()
+        .copied()
+        .find(|id| {
+            let info = plan.registry.declaration(*id).unwrap();
+            plan.program.functions[info.source_index]
+                .name
+                .segments()
+                .last()
+                .is_some_and(|name| plan.program.names.spelling(*name).unwrap() == "deferred")
+        })
+        .unwrap();
+    let generic = facts.world().callable_facts(declaration).unwrap();
+    let generic_ty = plan.signature(declaration).unwrap().signature.params[0].clone();
+    assert!(
+        !generic
+            .native_box_actual_is_closed(match &generic_ty {
+                ir::Ty::Struct(value) => &value.def().type_args[0],
+                _ => panic!("original Box<T> signature required"),
+            })
+            .unwrap()
+    );
+    assert!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &generic_ty,
+            &generic,
+        )
+        .unwrap()
+        .is_none()
+    );
+    assert_eq!(
+        tr::SchemaCx::native_box_application(
+            facts.world().schema_for_tests(),
+            &generic_ty,
+            &universal,
+        )
+        .unwrap_err()
+        .kind(),
+        tr::FactsErrorKind::InvalidMetadata
+    );
+}
+
+#[test]
+fn native_box_application_preserves_typed_resource_and_first_failure() {
+    let (replay_plan, replay_facts) = native_box_application_fixture();
+    let replay_budget = &replay_plan.budget;
+    let replay_ty = replay_plan
+        .intern_nominal(
+            native_box_source_owner(&replay_plan),
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            replay_budget,
+        )
+        .unwrap();
+    let before = replay_budget.usage_snapshot().work;
+    let replay_app = tr::SchemaCx::native_box_application(
+        replay_facts.world().schema_for_tests(),
+        &replay_ty,
+        &replay_facts,
+    )
+    .unwrap()
+    .unwrap();
+    let cost = replay_budget.usage_snapshot().work - before;
+    assert!(cost > 4);
+    let remaining = replay_budget.limits().work - replay_budget.usage_snapshot().work;
+    replay_budget.charge_work(remaining - (cost - 1)).unwrap();
+    assert_eq!(
+        tr::SchemaCx::native_box_application(
+            replay_facts.world().schema_for_tests(),
+            &replay_ty,
+            &replay_facts
+        )
+        .unwrap_err()
+        .kind(),
+        tr::FactsErrorKind::Resource
+    );
+    let replay_first = replay_budget.first_resource_failure().unwrap();
+    assert_eq!(replay_first.kind, ir::ResourceBudgetKind::Work);
+    assert!(
+        replay_app
+            .authorize_definition(&replay_ty, replay_budget)
+            .is_err()
+    );
+    assert_eq!(replay_budget.first_resource_failure(), Some(replay_first));
+
+    let (plan, facts) = native_box_application_fixture();
+    let budget = &plan.budget;
+    let ty = plan
+        .intern_nominal(
+            native_box_source_owner(&plan),
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            budget,
+        )
+        .unwrap();
+    let app = tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &facts)
+        .unwrap()
+        .unwrap();
+    let universal = facts.world().callable_facts(facts.declaration()).unwrap();
+    let remaining = budget.limits().work - budget.usage_snapshot().work;
+    budget.charge_work(remaining - 1).unwrap();
+    assert_eq!(
+        tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &facts)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::Resource
+    );
+    let first = budget.first_resource_failure().unwrap();
+    assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+    assert_eq!(first.requested, 2);
+    assert!(app.authorize_definition(&ty, budget).is_err());
+    assert_eq!(budget.first_resource_failure(), Some(first));
+    assert_eq!(
+        tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &facts)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::Resource
+    );
+    assert_eq!(budget.first_resource_failure(), Some(first));
+    assert_eq!(
+        tr::SchemaCx::native_box_application(facts.world().schema_for_tests(), &ty, &universal,)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::Resource
+    );
+    assert_eq!(budget.first_resource_failure(), Some(first));
+}
+
+fn native_box_source_program() -> Program {
+    native_box_source_program_text("fn main(){}")
+}
+
+fn native_box_source_program_text(text: &str) -> Program {
+    use crate::compiler::source;
+    let options = source::SourceOptions::default();
+    let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+    let mut assembler = source::SourceAssembler::new(&options);
+    let mut step = assembler
+        .provide(Arc::new(source::prepare_text_unit(
+            "native-box-authority.rs",
+            text,
+            &options,
+        )))
+        .unwrap();
+    let prepared = loop {
+        match step {
+            source::AssemblyStep::Done(prepared) => break prepared,
+            source::AssemblyStep::Need(need) => {
+                let unit = match need.parent.as_deref() {
+                    None => source::prepare_prelude_unit(&options, &budget),
+                    Some(parent) => {
+                        source::prepare_child_unit(parent, need.index, &options, &budget)
+                    }
+                };
+                step = assembler.provide(Arc::new(unit)).unwrap();
+            }
+        }
+    };
+    resolve(&parse_prepared(&prepared).unwrap()).unwrap()
+}
+
+fn native_box_source_adapter(plan: &PlanCtx, budget: &ir::PlanBudget) -> SchemaAdapter {
+    SchemaAdapter {
+        program: plan.program.clone(),
+        catalog: plan.catalog.clone(),
+        registry: plan.registry.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
+        contexts: plan.contexts.clone(),
+        source_schemas: plan.source_schemas.clone(),
+        budget: budget.clone(),
+    }
+}
+
+fn native_box_source_owner(plan: &PlanCtx) -> ir::DeclId {
+    plan.registry
+        .declarations
+        .iter()
+        .find(|info| {
+            info.kind == ir::DeclKind::Struct
+                && plan
+                    .program
+                    .structs
+                    .get(info.source_index)
+                    .is_some_and(|source| {
+                        source.name.segments().last().is_some_and(|name| {
+                            plan.program.names.spelling(*name).unwrap() == "Box"
+                        })
+                    })
+        })
+        .unwrap()
+        .id
+}
+
+#[test]
+fn native_box_source_receipt_binds_original_owner_and_exact_pointer_actual() {
+    let program = native_box_source_program();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let adapter = native_box_source_adapter(&plan, &budget);
+    let owner = native_box_source_owner(&plan);
+    let receipt = tr::SchemaCx::native_box_source(&adapter, owner)
+        .unwrap()
+        .unwrap();
+    let int = plan
+        .intern_nominal(
+            owner,
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            &budget,
+        )
+        .unwrap();
+    let boolean = plan
+        .intern_nominal(owner, &[ir::Ty::Bool], ir::FactsCtx::Concrete, &budget)
+        .unwrap();
+    // A generic source receipt works for distinct authentic applications. The
+    // consumer independently requires exact graph read allocation and replay.
+    receipt.authorize_definition(&int, &budget).unwrap();
+    receipt.authorize_definition(&boolean, &budget).unwrap();
+    let ir::Ty::Struct(value) = &int else {
+        panic!("expected source Box");
+    };
+    let original = value.def().clone();
+    let forged = |definition| {
+        ir::Ty::Struct(ir::StructTy::from_ref(ir::NominalRef::Strong(Arc::new(
+            definition,
+        ))))
+    };
+    let mut changed = original.clone();
+    changed.type_args = Arc::from([ir::Ty::Bool]);
+    assert!(
+        receipt
+            .authorize_definition(&forged(changed), &budget)
+            .unwrap_err()
+            .contains("pointer argument")
+    );
+    let mut changed = original.clone();
+    changed.source_decl = plan.registry.function_ids[0];
+    assert!(
+        receipt
+            .authorize_definition(&forged(changed), &budget)
+            .unwrap_err()
+            .contains("original owner")
+    );
+    let mut changed = original.clone();
+    changed.module = plan.program.modules.source_root().unwrap();
+    assert!(
+        receipt
+            .authorize_definition(&forged(changed), &budget)
+            .unwrap_err()
+            .contains("original owner")
+    );
+    let mut changed = original.clone();
+    let mut fields = changed.fields.read(&budget).unwrap().to_vec();
+    fields[0].ty = ir::Ty::RawPtr {
+        kind: ir::BorrowKind::Shared,
+        pointee: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
+    };
+    changed.fields = fields.into();
+    assert!(
+        receipt
+            .authorize_definition(&forged(changed), &budget)
+            .unwrap_err()
+            .contains("pointer argument")
+    );
+    let mut changed = original;
+    changed.name = "not-an-authority".into();
+    receipt
+        .authorize_definition(&forged(changed), &budget)
+        .unwrap();
+    assert!(
+        receipt
+            .authorize_definition(&ir::Ty::Bool, &budget)
+            .is_err()
+    );
+    let comparison_budget = ir::PlanBudget::default();
+    comparison_budget
+        .charge_work(comparison_budget.limits().work - 4)
+        .unwrap();
+    // Entry (3) and field read (1) fit. The canonical type comparison itself
+    // must charge its next unit rather than escaping the exhausted budget.
+    assert!(
+        receipt
+            .authorize_definition(&int, &comparison_budget)
+            .is_err()
+    );
+    let first = comparison_budget.first_resource_failure().unwrap();
+    assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+    assert_eq!(first.requested, 1);
+    assert_eq!(
+        comparison_budget.usage_snapshot().work,
+        comparison_budget.limits().work
+    );
+}
+
+#[test]
+fn native_box_source_receipt_denies_same_path_missing_or_foreign_issuer_and_program_swap() {
+    let genuine = native_box_source_program();
+    let foreign = native_box_source_program();
+    let raw =
+        parse("mod __justrust_std{pub mod boxed{pub struct Box<T:?Sized>{ptr:*mut T}}}fn main(){}")
+            .unwrap();
+    let raw_budget = ir::PlanBudget::default();
+    let raw_plan = PlanCtx::from_program(&raw, &raw_budget).unwrap();
+    let raw_adapter = native_box_source_adapter(&raw_plan, &raw_budget);
+    assert!(
+        tr::SchemaCx::native_box_source(&raw_adapter, native_box_source_owner(&raw_plan))
+            .unwrap()
+            .is_none()
+    );
+    for issuers in [Arc::from([]), foreign.embedded_issuers.clone()] {
+        let mut changed = genuine.clone();
+        changed.embedded_issuers = issuers;
+        let error = PlanCtx::from_program(&changed, &ir::PlanBudget::default()).unwrap_err();
+        assert!(
+            error.contains("embedded function registration changed original source or occurrence"),
+            "{error}"
+        );
+        // Also exercise the receipt query in isolation after genuine admission.
+        // This forged immutable snapshot deliberately retains identical names
+        // and source declarations but removes or swaps only loader issuers.
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&genuine, &budget).unwrap();
+        let owner = native_box_source_owner(&plan);
+        let mut adapter = native_box_source_adapter(&plan, &budget);
+        drop(plan);
+        let registry = Arc::get_mut(&mut adapter.registry).unwrap();
+        let changed = Arc::new(changed);
+        registry.program = changed.clone();
+        adapter.program = changed;
+        assert!(
+            tr::SchemaCx::native_box_source(&adapter, owner)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&genuine, &budget).unwrap();
+    let owner = native_box_source_owner(&plan);
+    let mut adapter = native_box_source_adapter(&plan, &budget);
+    adapter.program = Arc::new(genuine.clone());
+    assert_eq!(
+        tr::SchemaCx::native_box_source(&adapter, owner)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::InvalidMetadata
+    );
+    adapter.program = plan.program.clone();
+    let foreign_plan = PlanCtx::from_program(&foreign, &ir::PlanBudget::default()).unwrap();
+    assert!(
+        tr::SchemaCx::native_box_source(&adapter, native_box_source_owner(&foreign_plan)).is_err()
+    );
+    assert!(
+        tr::SchemaCx::native_box_source(&adapter, plan.registry.function_ids[0])
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
+fn native_box_source_receipt_rejects_forged_relaxation_and_preserves_resource_failure() {
+    let program = native_box_source_program();
+    let occurrence_budget = ir::PlanBudget::default();
+    let occurrence_plan = PlanCtx::from_program(&program, &occurrence_budget).unwrap();
+    let owner = native_box_source_owner(&occurrence_plan);
+    let mut occurrence_adapter = native_box_source_adapter(&occurrence_plan, &occurrence_budget);
+    drop(occurrence_plan);
+    let registry = Arc::get_mut(&mut occurrence_adapter.registry).unwrap();
+    let slot = registry.slots[&owner];
+    let original = &registry.program.structs[registry.declarations[slot].source_index];
+    let Type::RawPtr { pointee, .. } = &original.fields[0].ty else {
+        panic!("original pointer");
+    };
+    let Type::Param(occurrence) = pointee.as_ref() else {
+        panic!("original parameter occurrence");
+    };
+    // Same canonical parameter spelling/key is not the declaration occurrence.
+    registry.declarations[slot].type_params = Arc::from([*occurrence]);
+    assert_eq!(
+        tr::SchemaCx::native_box_source(&occurrence_adapter, owner)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::InvalidMetadata
+    );
+
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let owner = native_box_source_owner(&plan);
+    let mut adapter = native_box_source_adapter(&plan, &budget);
+    drop(plan);
+    let registry = Arc::get_mut(&mut adapter.registry).unwrap();
+    let slot = registry.slots[&owner];
+    let binder = registry.declarations[slot].param_env.binder();
+    let fake = Arc::new(ir::ParamEnv::with_relaxed_sized(binder, 1, 0).unwrap());
+    registry.declarations[slot].param_env = fake.clone();
+    registry.declarations[slot].env = Arc::new(ir::GenericEnv::new(&[fake], &budget).unwrap());
+    assert_eq!(
+        tr::SchemaCx::native_box_source(&adapter, owner)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::InvalidMetadata
+    );
+
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let adapter = native_box_source_adapter(&plan, &budget);
+    let owner = native_box_source_owner(&plan);
+    let receipt = tr::SchemaCx::native_box_source(&adapter, owner)
+        .unwrap()
+        .unwrap();
+    let ty = plan
+        .intern_nominal(
+            owner,
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            &budget,
+        )
+        .unwrap();
+    let remaining = budget.limits().work - budget.usage_snapshot().work;
+    budget.charge_work(remaining - 1).unwrap();
+    let limited = tr::SchemaCx::native_box_source(&adapter, owner).unwrap_err();
+    assert_eq!(limited.kind(), tr::FactsErrorKind::Resource);
+    let first = budget.first_resource_failure().unwrap();
+    assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+    assert_eq!(first.requested, 2);
+    assert!(receipt.authorize_definition(&ty, &budget).is_err());
+    assert_eq!(budget.first_resource_failure(), Some(first));
+    assert_eq!(
+        tr::SchemaCx::native_box_source(&adapter, owner)
+            .unwrap_err()
+            .kind(),
+        tr::FactsErrorKind::Resource
+    );
+    assert_eq!(budget.first_resource_failure(), Some(first));
+}
+
 #[test]
 fn inherent_parameter_sized_service_uses_only_original_impl_declaration() {
     for (source, expected) in [

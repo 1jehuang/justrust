@@ -245,9 +245,12 @@ pub(super) async fn produce(
                     &analysis,
                 ))
             })?;
-    let object = backend::emit_physical_cfg_function_with_profile(
+    let instance_symbol =
+        instances::symbol_of(&target, &types, &provider.0.budget).map_err(Error::new)?;
+    let object = backend::emit_physical_cfg_function_with_instance_profile(
         &concrete,
         &|target| instances::symbol_of(target, &types, &provider.0.budget),
+        &instance_symbol,
         provider.0.source_options.overflow_checks,
         provider.0.source_options.panic_unwind,
     )

@@ -683,6 +683,27 @@ pub trait SchemaCx {
             .map_err(|message| FactsError::from_message(self.budget(), &message))?;
         Ok(None)
     }
+    /// Default deny. Only original embedded source can issue this sealed role.
+    /// Declaration names and structural schema callbacks are not authority.
+    fn native_box_source(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::native_box::NativeBoxSource>>> {
+        let _ = declaration;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        Ok(None)
+    }
+    /// Default deny. Source application replay is distinct from a generic
+    /// original-source role and must bind the exact supplied closed definition.
+    fn native_box_application(
+        &self,
+        ty: &Ty,
+        facts: &ValidatedFacts,
+    ) -> Result<Option<Arc<super::frontend::native_box::NativeBoxApplication>>> {
+        let _ = (ty, facts);
+        charged(self.budget(), self.budget().charge_work(1))?;
+        Ok(None)
+    }
     fn budget(&self) -> &PlanBudget;
     fn registry_snapshot(&self) -> SnapshotId;
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
@@ -3173,25 +3194,150 @@ impl ValidatedTraitWorld {
                     ));
                 }
             }
-            for predicate in h.predicates.iter() {
-                charged(budget, budget.charge_work(1))?;
-                if !matches!(predicate,
-                    Predicate::Implements(trait_ref)
-                        if trait_ref.declaration == world.catalog.id(CatalogItem::Sized)
-                            && trait_ref.args.is_empty()
-                            && matches!(trait_ref.self_ty, Ty::Param(param) if h.schema_env.contains(param)))
-                {
-                    return Err(FactsError::unsupported(
-                        budget,
-                        "unsupported: generic Drop with additional owner predicates",
-                    ));
-                }
-            }
+            world.validate_drop_owner_predicates(h, &owner_args)?;
         }
         world.owner_normalization_finalized = true;
         let world = Arc::new(world);
         world.validate_constant_implementations()?;
         Ok(world)
+    }
+    /// Instantiate every original nominal bound, including associated equality
+    /// rows. These are obligations, never assumptions for the caller's proof.
+    pub(in crate::compiler) fn nominal_application_predicates(
+        &self,
+        ty: &Ty,
+        caller: &ValidatedFacts,
+    ) -> Result<Arc<[Predicate]>> {
+        self.check_facts(caller, true)?;
+        let mut replays = NominalReplays::default();
+        self.validate_ty_metadata_with_facts(ty, caller.env(), 0, &mut replays, Some(caller))?;
+        let (owner, actuals) = match ty {
+            Ty::Struct(owner) => (owner.def().source_decl, &owner.def().type_args),
+            Ty::Enum(owner) => (owner.def().source_decl, &owner.def().type_args),
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "nominal bounds require a nominal application",
+                ));
+            }
+        };
+        let info = self.info(owner)?;
+        let declared = self.schema.nominal_declaration_schema(owner)?;
+        if declared.declaration != owner
+            || !matches!(info.kind, DeclKind::Struct | DeclKind::Enum)
+            || !self.same_env(&info.env, &declared.env)?
+            || declared.env.total_arity() != actuals.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "nominal bound source declaration or binder changed",
+            ));
+        }
+        for predicate in declared.predicates.iter() {
+            self.validate_predicate_metadata(predicate, &declared.env)?;
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: declared.env,
+            signature: Signature {
+                ref_contract: Arc::new(ir::RefContract::default()),
+                params: Vec::new(),
+                result: Ty::Unit,
+            },
+            predicates: declared.predicates,
+        };
+        let instantiated =
+            self.schema
+                .instantiate_schema(&schema, actuals, caller.env(), &self.budget)?;
+        self.validate_predicates_with_facts(
+            &instantiated.predicates,
+            caller.env(),
+            None,
+            &mut replays,
+            Some(caller),
+        )?;
+        Ok(instantiated.predicates)
+    }
+    /// Drop's requirements must follow from its original nominal declaration,
+    /// not from the implementation environment that already assumes them.
+    fn validate_drop_owner_predicates(&self, header: &ImplHeader, owner_args: &[Ty]) -> Result<()> {
+        let implementation = self.info(header.declaration)?;
+        if implementation.kind != DeclKind::TraitImpl
+            || header.trait_ref.declaration != self.catalog.id(CatalogItem::Drop)
+            || !self.same_env(&implementation.env, &header.schema_env)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "Drop implementation predicate authority changed",
+            ));
+        }
+        if header.predicates.is_empty() {
+            return Ok(());
+        }
+        let owner = match &header.trait_ref.self_ty {
+            Ty::Struct(owner) => owner.def().source_decl,
+            Ty::Enum(owner) => owner.def().source_decl,
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "Drop predicate owner is not nominal",
+                ));
+            }
+        };
+        let info = self.info(owner)?;
+        let declared = self.schema.nominal_declaration_schema(owner)?;
+        if declared.declaration != owner
+            || !matches!(info.kind, DeclKind::Struct | DeclKind::Enum)
+            || !self.same_env(&info.env, &declared.env)?
+            || declared.env.total_arity() != owner_args.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "Drop nominal predicate authority changed",
+            ));
+        }
+        for predicate in declared.predicates.iter() {
+            self.validate_predicate_metadata(predicate, &declared.env)?;
+        }
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        let schema = GenericSchema {
+            env: declared.env,
+            signature: Signature {
+                ref_contract: Arc::new(ir::RefContract::default()),
+                params: Vec::new(),
+                result: Ty::Unit,
+            },
+            predicates: declared.predicates,
+        };
+        let instantiated = self.schema.instantiate_schema(
+            &schema,
+            owner_args,
+            &header.schema_env,
+            &self.budget,
+        )?;
+        let mut premises = Vec::new();
+        for predicate in instantiated.predicates.iter() {
+            self.validate_predicate_metadata(predicate, &header.schema_env)?;
+            self.append_predicate(&mut premises, predicate)?;
+        }
+        self.close_predicates(&mut premises, &header.schema_env)?;
+        for required in header.predicates.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let mut found = false;
+            for premise in &premises {
+                if self.eq_predicate(required, premise)? {
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: generic Drop with additional owner predicates",
+                ));
+            }
+        }
+        Ok(())
     }
     fn check_nominal_replay_issuer(&self) -> Result<()> {
         self.check_normalization_budget()?;
@@ -3204,6 +3350,14 @@ impl ValidatedTraitWorld {
                 .check()
                 .map_err(ModuleError::from),
         )
+    }
+    #[cfg(test)]
+    pub(in crate::compiler) fn schema_for_tests(&self) -> &dyn SchemaCx {
+        self.schema.as_ref()
+    }
+    pub(in crate::compiler) fn schema_is(&self, provider: &dyn SchemaCx) -> bool {
+        let current: &dyn SchemaCx = self.schema.as_ref();
+        std::ptr::addr_eq(current, provider)
     }
     pub fn registry_snapshot(&self) -> SnapshotId {
         self.registry
@@ -12353,6 +12507,198 @@ mod tests {
         }
     }
     #[test]
+    fn nominal_application_keeps_exact_fn_once_output_obligation_and_caller_authority() {
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "nominal-output-authority.rs",
+            "struct G<T,F>where F:FnOnce(T){v:core::mem::ManuallyDrop<T>,f:core::mem::ManuallyDrop<F>}fn good<T,F:FnOnce(T)>(x:G<T,F>){}fn main(){}",
+            &crate::compiler::source::SourceOptions::default(),
+        ).unwrap();
+        let parsed = crate::compiler::frontend::parse_prepared(&prepared).unwrap();
+        let program = crate::compiler::frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let facts = world.callable_facts(declaration).unwrap();
+        let owner = world.callable_schema(declaration).unwrap().signature.params[0].clone();
+        let obligations = world
+            .nominal_application_predicates(&owner, &facts)
+            .unwrap();
+        let equalities = obligations
+            .iter()
+            .filter_map(|predicate| match predicate {
+                Predicate::ProjectionEq { projection, ty } => Some((projection, ty)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(equalities.len(), 1);
+        let (projection, result) = equalities[0];
+        assert!(matches!(result, Ty::Unit));
+        assert_eq!(
+            world.info(projection.item).unwrap().owner,
+            Some(projection.trait_ref.declaration)
+        );
+        assert!(
+            matches!(&projection.trait_ref.self_ty, Ty::Param(parameter) if facts.env().contains(*parameter))
+        );
+        for obligation in obligations.iter() {
+            assert!(matches!(
+                world.prove_goal(obligation, &facts).unwrap(),
+                ProofOutcome::Proved(_)
+            ));
+        }
+        let wrong_output = Predicate::ProjectionEq {
+            projection: projection.clone(),
+            ty: Ty::Bool,
+        };
+        assert!(matches!(
+            world.prove_goal(&wrong_output, &facts).unwrap(),
+            ProofOutcome::NotProven
+        ));
+        let empty = world
+            .callable_facts(plan.function_decl(1).unwrap())
+            .unwrap();
+        assert_eq!(
+            world
+                .nominal_application_predicates(&owner, &empty)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let Ty::Struct(value) = &owner else {
+            panic!("nominal fixture")
+        };
+        let mut changed = value.def().clone();
+        changed.type_args = Arc::from([Ty::Bool, value.def().type_args[1].clone()]);
+        let forged = Ty::Struct(ir::StructTy::new(changed));
+        assert_eq!(
+            world
+                .nominal_application_predicates(&forged, &facts)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let mut changed = value.def().clone();
+        changed.source_decl.snapshot = SnapshotId::standalone().unwrap();
+        let forged = Ty::Struct(ir::StructTy::new(changed));
+        assert_eq!(
+            world
+                .nominal_application_predicates(&forged, &facts)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining).unwrap();
+        assert_eq!(
+            world
+                .nominal_application_predicates(&owner, &facts)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Resource
+        );
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(failure.used, budget.limits().work);
+        assert!(budget.charge_work(1).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(failure));
+    }
+
+    #[test]
+    fn drop_owner_predicates_rebind_only_original_nominal_premises() {
+        for source in [
+            "struct G<T:Copy>{v:T}impl<T:Copy>Drop for G<T>{fn drop(&mut self){}}fn main(){}",
+            "trait Strategy{}struct G<T,F,S>where F:FnOnce(T),S:Strategy{v:core::mem::ManuallyDrop<T>,f:core::mem::ManuallyDrop<F>,s:core::marker::PhantomData<fn(S)->S>}impl<T,F,S>Drop for G<T,F,S>where F:FnOnce(T),S:Strategy{fn drop(&mut self){}}fn main(){}",
+            "trait Mark{}struct G<A:Mark,B:Copy>{a:A,b:B}impl<X:Copy,Y:Mark>Drop for G<Y,X>{fn drop(&mut self){}}fn main(){}",
+        ] {
+            let prepared = crate::compiler::source::prepare_text_with_prelude(
+                "drop-owner-predicates.rs",
+                source,
+                &crate::compiler::source::SourceOptions::default(),
+            )
+            .unwrap();
+            let parsed = crate::compiler::frontend::parse_prepared(&prepared).unwrap();
+            let program = crate::compiler::frontend::resolve(&parsed).unwrap();
+            let budget = PlanBudget::default();
+            let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let world = plan.trait_world().unwrap();
+            let header = world
+                .impl_headers()
+                .iter()
+                .find(|header| {
+                    header.trait_ref.declaration == world.catalog.id(CatalogItem::Drop)
+                        && matches!(&header.trait_ref.self_ty, Ty::Struct(owner) if owner.def().name.rsplit("::").next() == Some("G"))
+                })
+                .unwrap();
+            let arguments = match &header.trait_ref.self_ty {
+                Ty::Struct(owner) => owner.def().type_args.clone(),
+                _ => panic!("struct Drop fixture"),
+            };
+            world
+                .validate_drop_owner_predicates(header, &arguments)
+                .unwrap();
+            let mut forged = header.clone();
+            forged.trait_ref.self_ty = Ty::Bool;
+            assert_eq!(
+                world
+                    .validate_drop_owner_predicates(&forged, &arguments)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::InvalidMetadata
+            );
+            let mut forged = header.clone();
+            forged.trait_ref.declaration = world.catalog.id(CatalogItem::Copy);
+            assert_eq!(
+                world
+                    .validate_drop_owner_predicates(&forged, &arguments)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::InvalidMetadata
+            );
+            let mut foreign = header.declaration;
+            foreign.snapshot = SnapshotId::standalone().unwrap();
+            let mut forged = header.clone();
+            forged.declaration = foreign;
+            assert_eq!(
+                world
+                    .validate_drop_owner_predicates(&forged, &arguments)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::InvalidMetadata
+            );
+            let mut required = header.predicates.to_vec();
+            required.push(Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(CatalogItem::Sync),
+                self_ty: arguments[0].clone(),
+                args: Arc::from([]),
+            }));
+            let mut forged = header.clone();
+            forged.predicates = required.into();
+            assert_eq!(
+                world
+                    .validate_drop_owner_predicates(&forged, &arguments)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::Unsupported
+            );
+            let remaining = budget.limits().work - budget.usage_snapshot().work;
+            budget.charge_work(remaining).unwrap();
+            assert_eq!(
+                world
+                    .validate_drop_owner_predicates(header, &arguments)
+                    .unwrap_err()
+                    .kind(),
+                FactsErrorKind::Resource
+            );
+            let failure = budget.first_resource_failure().unwrap();
+            assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+            assert_eq!(failure.used, budget.limits().work);
+            assert!(budget.charge_work(1).is_err());
+            assert_eq!(budget.first_resource_failure(), Some(failure));
+        }
+    }
+
+    #[test]
     fn inherent_impl_manually_drop_fields_use_exact_original_parameter_sized() {
         let program = crate::compiler::frontend::parse(
             "struct G<T>{v:core::mem::ManuallyDrop<T>}impl<T> G<T>{fn make(v:T)->Self{G{v:core::mem::ManuallyDrop::new(v)}}}fn main(){}",
@@ -12508,6 +12854,25 @@ mod tests {
             assert_eq!(error.kind(), expected_error);
         }
         let fixture = case().build().unwrap();
+        assert!(world.schema_is(world.schema.as_ref()));
+        assert!(!world.schema_is(fixture.schema.as_ref()));
+        assert!(
+            fixture
+                .schema
+                .native_box_source(parameter.owner.declaration)
+                .unwrap()
+                .is_none()
+        );
+        let source_facts = world
+            .callable_facts(plan.function_decl(0).unwrap())
+            .unwrap();
+        assert!(
+            fixture
+                .schema
+                .native_box_application(&Ty::Bool, &source_facts)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             fixture
                 .schema

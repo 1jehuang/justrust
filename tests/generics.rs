@@ -14,6 +14,235 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[path = "support/stock_rustc.rs"]
 mod defaults_stock;
 
+const BOX_EXPLICIT_DROP_INVALID: &[(&str, &str)] = &[
+    (
+        "fn main(){let mut owner=Box::new(7i32);owner.drop();}",
+        "explicit canonical destructor",
+    ),
+    (
+        "fn main(){let mut owner=Box::new(7i32);core::ops::Drop::drop(&mut owner);}",
+        "explicit canonical destructor",
+    ),
+    (
+        "fn main(){let mut owner=Box::new(7i32);<Box<i32> as Drop>::drop(&mut owner);}",
+        "explicit canonical destructor",
+    ),
+    (
+        "fn unused(owner:&mut Box<i32>){core::ops::Drop::drop(owner);}fn main(){}",
+        "explicit canonical destructor",
+    ),
+    (
+        "fn main(){let mut owner=Box::new(7i32);Drop::drop(&mut owner);}",
+        "unresolved function Drop::drop",
+    ),
+    (
+        "fn unused(owner:&mut Box<i32>){Drop::drop(owner);}fn main(){}",
+        "unresolved function Drop::drop",
+    ),
+];
+
+#[test]
+fn boxed_native_protocol_preserves_explicit_source_destructor_boundary() {
+    let rustc = defaults_stock::stock_rustc();
+    for (source, expected_native) in BOX_EXPLICIT_DROP_INVALID {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "invalid.rmeta"
+            } else {
+                "invalid-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=box_drop_boundary"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(
+                !result.status.success(),
+                "stock accepted explicit Box destructor: {source}"
+            );
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("E0040"),
+                "{source}: {result:?}"
+            );
+            assert!(!output.exists());
+        }
+        for workers in [1, 8] {
+            let output = scratch.path("must-not-exist");
+            for check in [true, false] {
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                assert_eq!(result.status.code(), Some(1), "{source}: {result:?}");
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(
+                    diagnostic.contains(expected_native),
+                    "{source}: {diagnostic}"
+                );
+                assert!(
+                    !diagnostic.contains("panicked at"),
+                    "{source}: {diagnostic}"
+                );
+                assert!(!output.exists());
+            }
+        }
+    }
+}
+
+#[test]
+fn source_box_spelling_does_not_replace_original_user_drop() {
+    let source = r#"struct Box<T>{ptr:*mut T}impl<T>Drop for Box<T>{fn drop(&mut self){println!("7");}}fn main(){let owner=Box::<i32>{ptr:0usize as *mut i32};}"#;
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    for check in [true, false] {
+        let output = scratch.path(if check {
+            "stock.rmeta"
+        } else {
+            "stock-program"
+        });
+        let mut command = Command::new(defaults_stock::stock_rustc());
+        command
+            .arg(&input)
+            .args(["--edition=2024", "--crate-name=local_box"]);
+        if check {
+            command.arg("--emit=metadata");
+        }
+        let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+        assert!(result.status.success(), "{result:?}");
+        if !check {
+            let result = capture(&mut Command::new(&output), &scratch, 5);
+            assert!(result.status.success(), "{result:?}");
+            assert_eq!(result.stdout, b"7\n");
+        }
+    }
+    runs(source, "7\n");
+}
+
+const DROP_OWNER_VALID: &[(&str, &str)] = &[
+    (
+        "parent_local_manually_drop_and_function_marker_actuals",
+        r#"struct G<T,F:FnOnce(T)>{value:core::mem::ManuallyDrop<T>,dropfn:core::mem::ManuallyDrop<F>,marker:core::marker::PhantomData<fn(T)->T>}fn make<T,F:FnOnce(T)>(value:T,dropfn:F)->G<T,F>{G{value:core::mem::ManuallyDrop::new(value),dropfn:core::mem::ManuallyDrop::new(dropfn),marker:core::marker::PhantomData}}fn main(){let guard=make(7i32,|value|{});println!("{}",core::mem::ManuallyDrop::into_inner(guard.value));}"#,
+    ),
+    (
+        "nominal_callable_unit_output_original_bounds",
+        r#"struct G<T,F:FnOnce(T)>{value:T,dropfn:F}impl<T,F:FnOnce(T)>Drop for G<T,F>{fn drop(&mut self){}}fn make<T,F:FnOnce(T)>(value:T,dropfn:F)->G<T,F>{G{value,dropfn}}fn main(){let guard=make(7i32,|value|{});println!("{}",guard.value);}"#,
+    ),
+    (
+        "nominal_callable_local_trait_output_identity",
+        r#"trait FnOnce{type Output;}struct Token;impl FnOnce for Token{type Output=();}struct G<F:FnOnce<Output=()>>{f:F}impl<F:FnOnce<Output=()>>Drop for G<F>{fn drop(&mut self){}}fn main(){let guard=G{f:Token};println!("7");}"#,
+    ),
+    (
+        "scopeguard_original_owner_predicates",
+        r#"trait Strategy{}struct ScopeGuard<T,F,S>where F:FnOnce(T),S:Strategy{value:core::mem::ManuallyDrop<T>,dropfn:core::mem::ManuallyDrop<F>,strategy:core::marker::PhantomData<fn(S)->S>}impl<T,F,S>Drop for ScopeGuard<T,F,S>where F:FnOnce(T),S:Strategy{fn drop(&mut self){}}fn main(){println!("7");}"#,
+    ),
+    (
+        "nominal_copy_exact_drop_bound",
+        r#"struct G<T:Copy>{x:T}impl<T:Copy>Drop for G<T>{fn drop(&mut self){println!("7");}}fn main(){let x=G{x:1};}"#,
+    ),
+    (
+        "nominal_local_marker_exact_drop_bound",
+        r#"trait Mark{}impl Mark for i32{}struct G<T:Mark>{x:T}impl<T:Mark>Drop for G<T>{fn drop(&mut self){println!("7");}}fn main(){let x=G{x:1};}"#,
+    ),
+    (
+        "nominal_bounds_follow_permuted_owner_actuals",
+        r#"struct Pair<A:Copy,B>{a:A,b:B}impl<X,Y:Copy>Drop for Pair<Y,X>{fn drop(&mut self){println!("7");}}fn main(){let x=Pair{a:1,b:2};}"#,
+    ),
+    (
+        "renamed_reordered_exact_owner_predicates",
+        r#"trait Mark{}impl Mark for i32{}struct G<A:Copy,B:Mark>{a:A,b:B}impl<Y:Mark,X:Copy>Drop for G<X,Y>{fn drop(&mut self){println!("7");}}fn main(){let x=G{a:1,b:2};}"#,
+    ),
+];
+const DROP_OWNER_INVALID: &[(&str, &str)] = &[
+    (
+        "nominal_callable_wrong_closure_output",
+        "struct G<F:FnOnce()>{f:F}fn main(){let guard=G{f:||7i32};}",
+    ),
+    (
+        "nominal_callable_wrong_output_in_unused_signature",
+        "struct G<F:FnOnce()>{f:F}fn unused<F:FnOnce()->i32>(guard:G<F>){}fn main(){}",
+    ),
+    (
+        "nominal_callable_local_trait_wrong_output",
+        "trait FnOnce{type Output;}struct Token;impl FnOnce for Token{type Output=i32;}struct G<F:FnOnce<Output=()>>{f:F}fn unused(guard:G<Token>){}fn main(){}",
+    ),
+    (
+        "stricter_copy_not_declared_on_owner",
+        "struct G<T>{x:T}impl<T:Copy>Drop for G<T>{fn drop(&mut self){}}fn main(){}",
+    ),
+    (
+        "stricter_local_marker_not_declared_on_owner",
+        "trait Mark{}struct G<T:Copy>{x:T}impl<T:Copy+Mark>Drop for G<T>{fn drop(&mut self){}}fn main(){}",
+    ),
+    (
+        "wrong_trait_identity_is_not_owner_predicate",
+        "mod a{pub trait Mark{}}mod b{pub trait Mark{}}struct G<T:a::Mark>{x:T}impl<T:a::Mark+b::Mark>Drop for G<T>{fn drop(&mut self){}}fn main(){}",
+    ),
+    (
+        "drop_cannot_restore_owner_relaxed_sized",
+        "struct G<T:?Sized>{p:*const T}impl<T>Drop for G<T>{fn drop(&mut self){}}fn main(){}",
+    ),
+    (
+        "drop_cannot_specialize_owner_argument",
+        "struct G<T:Copy>{x:T}impl Drop for G<i32>{fn drop(&mut self){}}fn main(){}",
+    ),
+    (
+        "drop_cannot_repeat_owner_parameter",
+        "struct G<A:Copy,B:Copy>{a:A,b:B}impl<T:Copy>Drop for G<T,T>{fn drop(&mut self){}}fn main(){}",
+    ),
+];
+
+#[test]
+fn generic_drop_owner_predicates_exact_stock_check_build_run() {
+    let rustc = defaults_stock::stock_rustc();
+    for (valid, cases) in [(true, DROP_OWNER_VALID), (false, DROP_OWNER_INVALID)] {
+        for (label, source) in cases {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            for check in [true, false] {
+                let output = scratch.path(if check {
+                    "stock.rmeta"
+                } else {
+                    "stock-program"
+                });
+                let mut command = Command::new(&rustc);
+                command
+                    .arg(&input)
+                    .args(["--edition=2024", "--crate-name=drop_owner"]);
+                if check {
+                    command.arg("--emit=metadata");
+                }
+                let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+                assert_eq!(
+                    result.status.success(),
+                    valid,
+                    "{label} check={check}: {result:?}"
+                );
+                if valid && !check {
+                    let result = capture(&mut Command::new(&output), &scratch, 5);
+                    assert!(result.status.success(), "{label}: {result:?}");
+                    assert_eq!(result.stdout, b"7\n", "{label}");
+                }
+                if !valid {
+                    assert!(!output.exists(), "{label}: invalid stock output");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn generic_drop_owner_predicates_native_check_build_run_workers_1_8() {
+    for (label, source) in DROP_OWNER_VALID {
+        eprintln!("Drop original owner valid: {label}");
+        runs(source, "7\n");
+    }
+    for (label, source) in DROP_OWNER_INVALID {
+        rejects(label, source);
+    }
+}
+
 const SYNC_VALID: &[(&str, &str)] = &[
     (
         "projection_auto_sync",
@@ -1384,7 +1613,15 @@ const CELL_INVALID: &[(&str, &str)] = &[
         "fn unused(x:core::cell::Cell){}fn main(){}",
     ),
 ];
+const CELL_BUILD_UNSUPPORTED: &[(&str, &str)] = &[(
+    "parent_local_concrete_cell_canonical_actual",
+    r#"struct G<F:FnOnce()>{value:core::cell::Cell<i32>,dropfn:F}fn make<F:FnOnce()>(value:i32,dropfn:F)->G<F>{G{value:core::cell::Cell::new(value),dropfn}}fn main(){let guard=make(7i32,||{});println!("{}",guard.value.get());}"#,
+)];
 const CELL_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "parent_local_generic_cell_canonical_actual",
+        r#"struct G<T,F:FnOnce()>{value:core::cell::Cell<T>,dropfn:F}fn make<T,F:FnOnce()>(value:T,dropfn:F)->G<T,F>{G{value:core::cell::Cell::new(value),dropfn}}fn main(){let guard=make(7i32,||{});println!("{}",guard.value.get());}"#,
+    ),
     (
         "generic_payload",
         r#"fn unused<T>(x:core::cell::Cell<T>){}fn main(){println!("7");}"#,
@@ -1421,7 +1658,11 @@ const CELL_UNSUPPORTED: &[(&str, &str)] = &[
 #[test]
 fn cell_exact_stock_baseline() {
     let rustc = defaults_stock::stock_rustc();
-    for (label, source) in CELL_VALID.iter().chain(CELL_UNSUPPORTED) {
+    for (label, source) in CELL_VALID
+        .iter()
+        .chain(CELL_UNSUPPORTED)
+        .chain(CELL_BUILD_UNSUPPORTED)
+    {
         let scratch = Scratch::new();
         let input = scratch.source(source);
         for check in [true, false] {
@@ -1477,6 +1718,30 @@ fn cell_native_check_build_run_workers_1_8() {
     for (label, source) in CELL_VALID {
         eprintln!("Cell valid: {label}");
         runs(source, "7\n");
+    }
+    for (label, source) in CELL_BUILD_UNSUPPORTED {
+        for workers in [1, 8] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path("unsupported-build-output");
+            let checked = capture(&mut compiler(&input, &output, workers, true), &scratch, 20);
+            assert!(checked.status.success(), "{label}: CHECK {checked:?}");
+            assert!(!output.exists(), "{label}: CHECK emitted executable");
+            let built = capture(&mut compiler(&input, &output, workers, false), &scratch, 20);
+            assert_eq!(built.status.code(), Some(1), "{label}: BUILD {built:?}");
+            let diagnostic = String::from_utf8_lossy(&built.stderr);
+            assert!(
+                diagnostic.contains(
+                    "unsupported: Cell generated operation lacks verified closure origin"
+                ),
+                "{label}: {diagnostic}"
+            );
+            assert!(!diagnostic.contains("panicked at"), "{label}: {diagnostic}");
+            assert!(
+                !output.exists(),
+                "{label}: unsupported BUILD emitted executable"
+            );
+        }
     }
     for (label, source) in CELL_INVALID {
         rejects(label, source);

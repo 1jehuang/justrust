@@ -107,11 +107,8 @@ impl type_check::Checker<'_> {
         if params.len() != args.len() {
             return Err("contract: nominal bound arity mismatch".into());
         }
-        let mut env = self.signatures.clone();
-        for (param, actual) in params.iter().zip(args.iter()) {
-            env.params
-                .insert(plan.registry.parameter_key(*param)?, actual.clone());
-        }
+        // Keep the existing projected-subject boundary. Full canonical source
+        // predicates below preserve equalities on admitted trait applications.
         for bound in bounds {
             let mut inspect = |node: &DepthNode<'_>, _| {
                 if matches!(node, DepthNode::Type(Type::Projection(_))) {
@@ -127,32 +124,35 @@ impl type_check::Checker<'_> {
                 None,
                 Some(&mut inspect),
             )?;
-            let owner = type_check::checked_ty(&bound.subject, &env)?;
-            for path in &bound.traits {
-                plan.budget.charge_work(1)?;
-                if matches!(path, TraitPath::Builtin(BuiltinTrait::Sized)) {
-                    continue;
-                }
-                let trait_ref =
-                    plan.resolve_trait_use(&owner, path, &env, self.facts(), &plan.budget)?;
-                let goal = ir::Predicate::Implements(trait_ref);
-                match facts
-                    .service()
-                    .prove_goal(&goal, facts)
-                    .map_err(|e| e.into_legacy_diagnostic(facts.budget()))?
-                {
-                    super::super::traits::ProofOutcome::Proved(_) => {}
-                    super::super::traits::ProofOutcome::NotProven => {
-                        let ir::Predicate::Implements(trait_ref) = &goal else {
-                            unreachable!()
-                        };
+        }
+        let obligations = facts
+            .world()
+            .nominal_application_predicates(ty, facts)
+            .map_err(|error| error.into_legacy_diagnostic(facts.budget()))?;
+        for goal in obligations.iter() {
+            plan.budget.charge_work(1)?;
+            match facts
+                .service()
+                .prove_goal(goal, facts)
+                .map_err(|error| error.into_legacy_diagnostic(facts.budget()))?
+            {
+                super::super::traits::ProofOutcome::Proved(_) => {}
+                super::super::traits::ProofOutcome::NotProven => match goal {
+                    ir::Predicate::Implements(trait_ref) => {
                         return Err(format!(
-                            "E0277: the trait bound `{owner:?}: {}` is not satisfied (required by a bound on {})",
+                            "E0277: the trait bound `{:?}: {}` is not satisfied (required by a bound on {})",
+                            trait_ref.self_ty,
                             plan.declaration(trait_ref.declaration)?.name,
                             plan.declaration(source_decl)?.name,
                         ));
                     }
-                }
+                    ir::Predicate::ProjectionEq { .. } => {
+                        return Err(format!(
+                            "E0271: associated type equality is not satisfied (required by a bound on {})",
+                            plan.declaration(source_decl)?.name,
+                        ));
+                    }
+                },
             }
         }
         Ok(())

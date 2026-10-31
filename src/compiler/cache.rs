@@ -321,6 +321,7 @@ pub(super) fn ssa_object(
 pub(super) fn native_object(
     concrete: &ownership::ConcreteCfg,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    instance_symbol: &str,
     options: &SourceOptions,
     meter: &Meter<'_>,
 ) -> Result<(backend::Object, Outcome), String> {
@@ -346,9 +347,10 @@ pub(super) fn native_object(
         object.receipt = Some(std::sync::Arc::new(receipt));
         return Ok((object, Outcome::Hit));
     }
-    let object = backend::emit_cfg_function_with_profile(
+    let object = backend::emit_cfg_function_with_instance_profile(
         concrete,
         resolve,
+        instance_symbol,
         options.overflow_checks,
         options.panic_unwind,
     )?;

@@ -100,6 +100,36 @@ fn trait_object_ref(ty: &ir::Ty) -> Option<ir::DeclId> {
 /// Exported per-type structural drop thunks (identical owners, identical code).
 pub(super) const DROP_THUNK_PREFIX: &str = "__jr_drop_glue_";
 
+fn instance_drop_label(
+    scope: &str,
+    ordinal: usize,
+    budget: &ir::PlanBudget,
+) -> Result<String, String> {
+    if scope.is_empty() {
+        return Err("native instance symbol is empty".into());
+    }
+    let extent = scope
+        .len()
+        .checked_mul(2)
+        .and_then(|n| n.checked_add(DROP_THUNK_PREFIX.len() + 64))
+        .ok_or("drop scope label overflow")?;
+    budget.charge_work(extent)?;
+    budget.retain_bytes(extent)?;
+    let mut name = String::new();
+    name.try_reserve(extent)
+        .map_err(|_| "drop scope label allocation failed")?;
+    use std::fmt::Write;
+    write!(&mut name, "{DROP_THUNK_PREFIX}i{}_", scope.len())
+        .map_err(|_| "drop scope label formatting failed")?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    for byte in scope.bytes() {
+        name.push(char::from(HEX[usize::from(byte >> 4)]));
+        name.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    write!(&mut name, "_n{ordinal}").map_err(|_| "drop scope ordinal formatting failed")?;
+    Ok(name)
+}
+
 /// Words 0..2 of every two-word fat carrier (slice data/len, object data/vtable).
 const FAT_LAYOUT: SliceLayout = SHARED_BYTE_SLICE_LAYOUT;
 
@@ -638,6 +668,11 @@ struct Emitter<'a> {
     drop_flags: Vec<Option<i32>>,
     /// Drop-elaboration flags for moved-from field paths of owning roots.
     path_flags: Vec<(LocalId, Vec<ir::Projection>, i32)>,
+    /// Exact node-local owners of emitted nominal destructor bodies. Symbols
+    /// are labels only, never permission to reuse a different owner's recipe.
+    nominal_drop_thunks: Vec<(ir::Ty, String)>,
+    /// Exact instance symbol supplied by the typed producer, never CFG display name.
+    drop_instance_scope: Option<String>,
     aggregate_scratch: i32,
     /// 0=LHS, 16=RHS, 32=result, 48..256=wide arithmetic workspace.
     /// Independent of aggregate scratch so constructors cannot destroy inputs.
@@ -1324,10 +1359,141 @@ impl<'a> Emitter<'a> {
     /// structural drop glue. It is emitted inline (jumped over) and exported
     /// under a name derived from the exact owner type, so identical owners
     /// share one canonical glue body across objects.
+    fn nominal_drop_name(&self, owner: &ir::Ty) -> Result<String, String> {
+        use std::hash::Hash;
+        if let Some(scope) = &self.drop_instance_scope {
+            // The producer supplies the complete canonical instance symbol.
+            // The local ordinal distinguishes non-equivalent actuals without
+            // using either a type hash or the CFG diagnostic display name.
+            return instance_drop_label(
+                scope,
+                self.nominal_drop_thunks.len(),
+                self.concrete.facts().budget(),
+            );
+        }
+        struct Coordinates<'a> {
+            budget: &'a ir::PlanBudget,
+            text: String,
+            failure: Option<String>,
+        }
+        impl std::hash::Hasher for Coordinates<'_> {
+            // No digest is used: every framed canonical coordinate is retained.
+            fn finish(&self) -> u64 {
+                0
+            }
+            fn write(&mut self, bytes: &[u8]) {
+                if self.failure.is_some() {
+                    return;
+                }
+                let append = || -> Result<usize, String> {
+                    let count = bytes.len().checked_add(8).ok_or("drop symbol overflow")?;
+                    self.budget.charge_work(count)?;
+                    let count = count.checked_mul(2).ok_or("drop symbol overflow")?;
+                    self.budget.retain_bytes(count)?;
+                    Ok(count)
+                };
+                let count = match append() {
+                    Ok(count) => count,
+                    Err(error) => {
+                        self.failure = Some(error);
+                        return;
+                    }
+                };
+                if self.text.try_reserve(count).is_err() {
+                    self.failure = Some("drop symbol allocation failed".into());
+                    return;
+                }
+                const HEX: &[u8; 16] = b"0123456789abcdef";
+                for byte in (bytes.len() as u64).to_le_bytes().iter().chain(bytes) {
+                    self.text.push(char::from(HEX[usize::from(byte >> 4)]));
+                    self.text.push(char::from(HEX[usize::from(byte & 15)]));
+                }
+            }
+        }
+        let (kind, identity) = match owner {
+            ir::Ty::Struct(owner) => ('s', owner.id()),
+            ir::Ty::Enum(owner) => ('e', owner.id()),
+            _ => return Err("recursive cleanup requires a canonical nominal owner".into()),
+        };
+        let budget = self.concrete.facts().budget();
+        budget.retain_bytes(DROP_THUNK_PREFIX.len() + 1)?;
+        let mut coordinates = Coordinates {
+            budget,
+            text: format!("{DROP_THUNK_PREFIX}{kind}"),
+            failure: None,
+        };
+        identity.hash(&mut coordinates);
+        if let Some(error) = coordinates.failure {
+            return Err(error);
+        }
+        Ok(coordinates.text)
+    }
+    fn existing_nominal_drop(&self, owner: &ir::Ty) -> Result<Option<String>, String> {
+        for (candidate, name) in &self.nominal_drop_thunks {
+            if self
+                .concrete
+                .facts()
+                .same_normal_drop_owner(candidate, owner)
+                .map_err(|error| error.into_legacy_diagnostic(self.concrete.facts().budget()))?
+            {
+                self.concrete.facts().budget().retain_bytes(name.len())?;
+                return Ok(Some(name.clone()));
+            }
+        }
+        Ok(None)
+    }
+    fn nominal_drop_thunk(
+        &mut self,
+        destructor: &super::traits::ValidatedDestructor,
+    ) -> Result<String, String> {
+        if let Some(name) = self.existing_nominal_drop(destructor.owner())? {
+            return Ok(name);
+        }
+        if matches!(destructor.glue(), super::traits::DropGlue::Recursive) {
+            return Err("recursive cleanup has no emitted canonical ancestor".into());
+        }
+        if self.drop_instance_scope.is_none() && self.recursive_drop_recipe(destructor, 0)? {
+            return Err("recursive cleanup requires an exact instance symbol scope".into());
+        }
+        let name = self.nominal_drop_name(destructor.owner())?;
+        for (_, existing) in &self.object.exports {
+            self.concrete.facts().budget().charge_work(1)?;
+            if existing == &name {
+                return Err("canonical drop label has conflicting owner definitions".into());
+            }
+        }
+        let budget = self.concrete.facts().budget();
+        budget.retain_bytes(
+            std::mem::size_of::<(ir::Ty, String)>() + std::mem::size_of::<(usize, String)>(),
+        )?;
+        budget.retain_bytes(name.len().checked_mul(2).ok_or("drop label overflow")?)?;
+        self.object
+            .exports
+            .try_reserve(1)
+            .map_err(|_| "drop export allocation failed")?;
+        self.nominal_drop_thunks
+            .try_reserve(1)
+            .map_err(|_| "drop thunk inventory allocation failed")?;
+        self.nominal_drop_thunks
+            .push((destructor.owner().clone(), name.clone()));
+        let over = self.jump(&[0xe9]);
+        let entry = self.position();
+        // Register before descending into the body. A finite recursive marker
+        // can refer only to an exact ancestor already in this local inventory.
+        self.object.exports.push((entry, name.clone()));
+        self.bytes(&[0xff, 0x74, 0x24, 0x08]);
+        self.drop_glue_body(destructor)?;
+        self.bytes(&[0x48, 0x83, 0xc4, 8, 0xc3]);
+        self.patch(over, self.position())?;
+        Ok(name)
+    }
     fn drop_thunk(
         &mut self,
         destructor: &super::traits::ValidatedDestructor,
     ) -> Result<String, String> {
+        if matches!(destructor.owner(), ir::Ty::Struct(_) | ir::Ty::Enum(_)) {
+            return self.nominal_drop_thunk(destructor);
+        }
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         format!("{:?}", destructor.owner()).hash(&mut hasher);
@@ -1338,7 +1504,7 @@ impl<'a> Emitter<'a> {
         let over = self.jump(&[0xe9]);
         let entry = self.position();
         self.bytes(&[0xff, 0x74, 0x24, 0x08]); // push qword [rsp+8] (&mut Self)
-        self.drop_glue(destructor)?;
+        self.drop_glue_body(destructor)?;
         self.bytes(&[0x48, 0x83, 0xc4, 8, 0xc3]); // add rsp, 8; ret
         let here = self.position();
         self.patch(over, here)?;
@@ -1372,10 +1538,66 @@ impl<'a> Emitter<'a> {
         }
         self.load_place(place)
     }
+    /// Inspect only this already sealed finite recipe. Ordinary source
+    /// cleanup does not need a recursive thunk or a thunk identity lookup.
+    fn recursive_drop_recipe(
+        &self,
+        destructor: &super::traits::ValidatedDestructor,
+        depth: usize,
+    ) -> Result<bool, String> {
+        use super::traits::DropGlue;
+        self.concrete.facts().budget().check_depth(depth)?;
+        self.concrete.facts().budget().charge_work(1)?;
+        match destructor.glue() {
+            DropGlue::Recursive => Ok(true),
+            DropGlue::Fields(fields) => {
+                for (_, field) in fields {
+                    if self.recursive_drop_recipe(field, depth + 1)? {
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            DropGlue::Variants(variants) => {
+                for (_, fields) in variants {
+                    for (_, field) in fields {
+                        if self.recursive_drop_recipe(field, depth + 1)? {
+                            return Ok(true);
+                        }
+                    }
+                }
+                Ok(false)
+            }
+            DropGlue::Array { element, .. }
+            | DropGlue::BoxValue(Some(element))
+            | DropGlue::RcValue(Some(element)) => self.recursive_drop_recipe(element, depth + 1),
+            DropGlue::None
+            | DropGlue::BoxedObject
+            | DropGlue::RcObject
+            | DropGlue::BoxValue(None)
+            | DropGlue::RcValue(None) => Ok(false),
+        }
+    }
     /// Run the complete drop of the value whose address is at [rsp]: the
     /// owner's own `Drop::drop`, then structural glue in declaration order.
     /// Leaves the stack as found.
     fn drop_glue(&mut self, destructor: &super::traits::ValidatedDestructor) -> Result<(), String> {
+        if matches!(destructor.owner(), ir::Ty::Struct(_) | ir::Ty::Enum(_))
+            && self.recursive_drop_recipe(destructor, 0)?
+        {
+            let name = self.nominal_drop_thunk(destructor)?;
+            self.bytes(&[0xff, 0x34, 0x24]); // push original owner address
+            let at = self.jump(&[0xe8]);
+            self.object.calls.push((at, name));
+            self.bytes(&[0x48, 0x83, 0xc4, 8]);
+            return Ok(());
+        }
+        self.drop_glue_body(destructor)
+    }
+    fn drop_glue_body(
+        &mut self,
+        destructor: &super::traits::ValidatedDestructor,
+    ) -> Result<(), String> {
         use super::traits::DropGlue;
         if let Some(target) = destructor.own_target() {
             self.bytes(&[0xff, 0x34, 0x24]); // push qword [rsp]
@@ -1386,6 +1608,9 @@ impl<'a> Emitter<'a> {
         let owner = destructor.owner().clone();
         match destructor.glue() {
             DropGlue::None => {}
+            DropGlue::Recursive => {
+                return Err("recursive cleanup marker has no full nominal body".into());
+            }
             DropGlue::Fields(fields) => {
                 for (index, field) in fields {
                     let (offset, _) = field_offset(&owner, *index, self.concrete.facts().budget())?;
@@ -1415,6 +1640,36 @@ impl<'a> Emitter<'a> {
                     let here = self.position();
                     self.patch(skip, here)?;
                 }
+            }
+            DropGlue::BoxValue(value) => {
+                let pointee = self
+                    .concrete
+                    .facts()
+                    .native_box_pointee(&owner)
+                    .map_err(|error| error.into_legacy_diagnostic(self.concrete.facts().budget()))?
+                    .ok_or("Box value cleanup requires authenticated native ownership")?;
+                if matches!(pointee, ir::Ty::Dyn(_)) {
+                    return Err("Box value cleanup cannot replace dynamic object cleanup".into());
+                }
+                let bytes = value_size(pointee, self.concrete.facts().budget())?.max(8);
+                let data_offset = field_offset(&owner, 0, self.concrete.facts().budget())?.0;
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // rax = owner carrier
+                self.bytes(&[0x48, 0x8b, 0x80]); // rax = original T allocation
+                self.i32(data_offset);
+                self.bytes(&[0x48, 0x85, 0xc0]); // test rax, rax (into_inner sentinel)
+                let moved = self.jump(&[0x0f, 0x84]);
+                if let Some(value) = value {
+                    self.bytes(&[0x50]); // child receives original allocation, not a copy
+                    self.drop_glue(value)?;
+                    self.bytes(&[0x48, 0x83, 0xc4, 8]);
+                }
+                self.bytes(&[0x48, 0x8b, 0x04, 0x24]); // reload owner after child calls
+                self.bytes(&[0x48, 0x8b, 0xb8]); // rdi = exact allocation
+                self.i32(data_offset);
+                self.bytes(&[0xbe]); // esi = exact private typed storage extent
+                self.i32(bytes);
+                self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]); // munmap
+                self.patch(moved, self.position())?;
             }
             DropGlue::RcValue(value) => {
                 let Some((ir::OwnedPointerKind::Rc, pointee)) = owner.owned_pointer_pointee()
@@ -1592,6 +1847,16 @@ impl<'a> Emitter<'a> {
         path: &mut Vec<ir::Projection>,
         destructor: &super::traits::ValidatedDestructor,
     ) -> Result<(), String> {
+        self.concrete.facts().budget().charge_work(1)?;
+        self.concrete.facts().budget().check_depth(path.len())?;
+        if matches!(destructor.owner(), ir::Ty::Struct(_) | ir::Ty::Enum(_))
+            && !matches!(destructor.glue(), super::traits::DropGlue::Recursive)
+            && self.recursive_drop_recipe(destructor, 0)?
+        {
+            // Partial cleanup remains inline and flag-sensitive, but its full
+            // canonical ancestor body must exist for untouched recursive tails.
+            self.nominal_drop_thunk(destructor)?;
+        }
         let skip = if let Some((_, _, at)) = self
             .path_flags
             .iter()
@@ -1611,35 +1876,59 @@ impl<'a> Emitter<'a> {
             .any(|(l, p, _)| *l == local && p.len() > path.len() && p.starts_with(path));
         if !below {
             self.drop_glue(destructor)?;
-        } else if let Some((ir::OwnedPointerKind::Box, pointee)) =
-            destructor.owner().owned_pointer_pointee()
-        {
-            // Box's source destructor moves the complete pointee. After a
-            // projection move only the still-live subpaths may be destroyed.
-            // The carrier itself remains live until its allocation is freed.
-            let pointee = pointee.clone();
+        } else if matches!(destructor.glue(), super::traits::DropGlue::Recursive) {
+            // Re-expand only at an explicit moved-path boundary. A full
+            // nominal recipe advances through a field/variant/owning deref
+            // before another marker, so finite tracked projections bound this.
             let plan = self
                 .concrete
                 .facts()
-                .normal_drop_plan(&pointee)
-                .map_err(|e| e.into_legacy_diagnostic(self.concrete.facts().budget()))?;
-            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x8b, 0x00, 0x50]);
-            path.push(ir::Projection::Deref);
-            match plan {
-                super::traits::NormalDropPlan::Destructor(value) => {
-                    self.drop_elaborated(local, path, &value)?;
-                }
-                super::traits::NormalDropPlan::Trivial => {}
-                super::traits::NormalDropPlan::Unresolved => {
-                    return Err("unresolved Box pointee cleanup".into());
-                }
+                .normal_drop_plan(destructor.owner())
+                .map_err(|error| error.into_legacy_diagnostic(self.concrete.facts().budget()))?;
+            let super::traits::NormalDropPlan::Destructor(full) = plan else {
+                return Err("recursive partial cleanup lost its canonical body".into());
+            };
+            if !matches!(
+                full.glue(),
+                super::traits::DropGlue::Fields(_)
+                    | super::traits::DropGlue::Variants(_)
+                    | super::traits::DropGlue::BoxValue(_)
+            ) {
+                return Err("recursive partial cleanup cannot advance its projection".into());
             }
-            path.pop();
-            self.bytes(&[0x48, 0x83, 0xc4, 8]);
-            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x8b, 0x38]);
+            self.drop_elaborated(local, path, &full)?;
+        } else if let super::traits::DropGlue::BoxValue(value) = destructor.glue() {
+            // A partial move destroys only the still-live pointee subpaths.
+            // Reuse the sealed Box recipe, never a reserved-name ownership grant.
+            let owner = destructor.owner();
+            let pointee = self
+                .concrete
+                .facts()
+                .native_box_pointee(owner)
+                .map_err(|error| error.into_legacy_diagnostic(self.concrete.facts().budget()))?
+                .ok_or("Box value cleanup requires authenticated native ownership")?;
+            if matches!(pointee, ir::Ty::Dyn(_)) {
+                return Err("Box value cleanup cannot replace dynamic object cleanup".into());
+            }
+            let data_offset = field_offset(owner, 0, self.concrete.facts().budget())?.0;
+            let bytes = value_size(pointee, self.concrete.facts().budget())?.max(8);
+            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x8b, 0x80]);
+            self.i32(data_offset);
+            self.bytes(&[0x48, 0x85, 0xc0]); // test original allocation before child drop
+            let moved = self.jump(&[0x0f, 0x84]);
+            if let Some(value) = value {
+                self.bytes(&[0x50]);
+                path.push(ir::Projection::Deref);
+                self.drop_elaborated(local, path, value)?;
+                path.pop();
+                self.bytes(&[0x48, 0x83, 0xc4, 8]);
+            }
+            self.bytes(&[0x48, 0x8b, 0x04, 0x24, 0x48, 0x8b, 0xb8]);
+            self.i32(data_offset);
             self.bytes(&[0xbe]);
-            self.i32(value_size(&pointee, self.concrete.facts().budget())?.max(8));
+            self.i32(bytes);
             self.bytes(&[0xb8, 11, 0, 0, 0, 0x0f, 0x05]);
+            self.patch(moved, self.position())?;
         } else {
             if destructor.own_target().is_some() {
                 return Err(
@@ -4060,6 +4349,7 @@ pub fn emit_cfg_function_with_profile(
     emit_native_cfg(
         NativeConcrete::Ordinary(concrete),
         resolve,
+        None,
         overflow_checks,
         unwind,
     )
@@ -4073,6 +4363,7 @@ pub(super) fn emit_physical_cfg_function(
     emit_physical_cfg_function_with_profile(concrete, resolve, true, false)
 }
 
+#[cfg(test)]
 pub(super) fn emit_physical_cfg_function_with_profile(
     concrete: &ownership::PhysicalConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
@@ -4083,6 +4374,40 @@ pub(super) fn emit_physical_cfg_function_with_profile(
     emit_native_cfg(
         NativeConcrete::Physical(concrete),
         resolve,
+        None,
+        overflow_checks,
+        unwind,
+    )
+}
+
+pub(super) fn emit_cfg_function_with_instance_profile(
+    concrete: &ownership::ConcreteCfg,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    instance_symbol: &str,
+    overflow_checks: bool,
+    unwind: bool,
+) -> Result<Object, String> {
+    emit_native_cfg(
+        NativeConcrete::Ordinary(concrete),
+        resolve,
+        Some(instance_symbol),
+        overflow_checks,
+        unwind,
+    )
+}
+
+pub(super) fn emit_physical_cfg_function_with_instance_profile(
+    concrete: &ownership::PhysicalConcrete<'_>,
+    resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    instance_symbol: &str,
+    overflow_checks: bool,
+    unwind: bool,
+) -> Result<Object, String> {
+    concrete.validate()?;
+    emit_native_cfg(
+        NativeConcrete::Physical(concrete),
+        resolve,
+        Some(instance_symbol),
         overflow_checks,
         unwind,
     )
@@ -4091,11 +4416,27 @@ pub(super) fn emit_physical_cfg_function_with_profile(
 fn emit_native_cfg(
     concrete: NativeConcrete<'_>,
     resolve: &dyn Fn(&ir::CallTarget) -> Result<String, String>,
+    instance_symbol: Option<&str>,
     overflow_checks: bool,
     unwind: bool,
 ) -> Result<Object, String> {
     let function = concrete.function().as_ref();
     let budget = concrete.facts().budget();
+    let drop_instance_scope = instance_symbol
+        .map(|symbol| {
+            if symbol.is_empty() {
+                return Err("native instance symbol is empty".to_string());
+            }
+            budget.charge_work(symbol.len())?;
+            budget.retain_bytes(symbol.len())?;
+            let mut owned = String::new();
+            owned
+                .try_reserve(symbol.len())
+                .map_err(|_| "drop instance scope allocation failed")?;
+            owned.push_str(symbol);
+            Ok(owned)
+        })
+        .transpose()?;
     let validate_slice = |ty: &ir::Ty| -> Result<(), String> {
         if let Some((_, element)) = ty.slice_ref_element() {
             // Admission includes the exact borrow kind and carrier boundary.
@@ -4313,6 +4654,8 @@ fn emit_native_cfg(
         locals,
         drop_flags,
         path_flags,
+        nominal_drop_thunks: Vec::new(),
+        drop_instance_scope,
         aggregate_scratch,
         wide_scratch,
         vtable_scratch,
@@ -5277,6 +5620,29 @@ mod tests {
     }
 
     #[test]
+    fn instance_drop_labels_frame_scope_and_distinguish_local_owners() {
+        let budget = ir::PlanBudget::default();
+        let first = instance_drop_label("$jr$0102", 0, &budget).unwrap();
+        assert_eq!(first, instance_drop_label("$jr$0102", 0, &budget).unwrap());
+        assert_ne!(first, instance_drop_label("$jr$0201", 0, &budget).unwrap());
+        assert_ne!(first, instance_drop_label("$jr$0102", 1, &budget).unwrap());
+        assert_ne!(
+            instance_drop_label("ab_n1", 0, &budget).unwrap(),
+            instance_drop_label("ab", 1, &budget).unwrap()
+        );
+        assert!(instance_drop_label("", 0, &budget).is_err());
+        let concrete = unit_concrete_fixture();
+        let resolve = |_: &ir::CallTarget| -> Result<String, String> { Err("no calls".into()) };
+        assert!(
+            emit_cfg_function_with_instance_profile(&concrete, &resolve, "", true, false)
+                .unwrap_err()
+                .contains("instance symbol is empty")
+        );
+        // Ordinary nonrecursive public fixtures need no instance scope.
+        emit_cfg_function_with_profile(&concrete, &resolve, true, false).unwrap();
+    }
+
+    #[test]
     fn char_private_layout_transport_and_unsigned_comparison_encoding() {
         assert_eq!(value_size(&ir::Ty::Char, &ir::PlanBudget::default()), Ok(8));
         assert_eq!(
@@ -5320,6 +5686,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -5393,6 +5761,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: -48,
@@ -5450,6 +5820,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: -16,
             wide_scratch: -64,
@@ -5707,6 +6079,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -6148,6 +6522,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: 0,
             wide_scratch: 0,
@@ -6570,6 +6946,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: -2048,
             wide_scratch: 0,
@@ -8929,6 +9307,8 @@ mod tests {
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: vec![],
             aggregate_scratch: -8,
             wide_scratch: -264,
@@ -9206,6 +9586,8 @@ mod tests {
                 resolve: &|_| Err("physical fixture has no instance calls".into()),
                 drop_flags: Vec::new(),
                 path_flags: Vec::new(),
+                nominal_drop_thunks: Vec::new(),
+                drop_instance_scope: None,
                 locals: vec![],
                 aggregate_scratch: 0,
                 wide_scratch: 0,
@@ -9308,6 +9690,8 @@ mod tests {
             resolve: &|_| Err("physical fixture has no instance calls".into()),
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: vec![],
             aggregate_scratch: -32,
             wide_scratch: -288,

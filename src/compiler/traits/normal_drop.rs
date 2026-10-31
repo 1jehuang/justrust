@@ -43,6 +43,18 @@ pub enum DropGlue {
     RcObject,
     /// Sized Rc pointee glue at its original allocation, never a moved snapshot.
     RcValue(Option<Arc<ValidatedDestructor>>),
+    /// Authenticated native Box pointee glue at its original allocation.
+    /// No source destructor is called in addition to this owning recipe.
+    BoxValue(Option<Arc<ValidatedDestructor>>),
+    /// A finite reference to an exact active canonical owner reached through
+    /// an authenticated owning Box edge. Private planner construction binds
+    /// this marker to its ancestor descriptor.
+    Recursive,
+}
+
+struct NormalDropFrame {
+    owner: Ty,
+    owning_depth: usize,
 }
 
 /// Only canonical trait facts may construct this capability. Display names never participate.
@@ -106,8 +118,14 @@ impl ValidatedDestructor {
                 .for_each(|(_, f)| f.iter().for_each(|(_, d)| d.collect_targets(out))),
             DropGlue::Array { element, .. } => element.collect_targets(out),
             // Object destructors are demanded at each unsizing site.
-            DropGlue::BoxedObject | DropGlue::RcObject | DropGlue::RcValue(None) => {}
-            DropGlue::RcValue(Some(value)) => value.collect_targets(out),
+            DropGlue::BoxedObject
+            | DropGlue::RcObject
+            | DropGlue::RcValue(None)
+            | DropGlue::BoxValue(None)
+            | DropGlue::Recursive => {}
+            DropGlue::RcValue(Some(value)) | DropGlue::BoxValue(Some(value)) => {
+                value.collect_targets(out)
+            }
         }
     }
     pub fn validate(&self, owner: &Ty, facts: &ValidatedFacts) -> Result<()> {
@@ -352,11 +370,205 @@ impl ValidatedFacts {
         scratch: &mut TraitScratch,
     ) -> Result<NormalDropPlan> {
         self.validate_ty_scratch(ty, scratch)?;
-        self.normal_drop_plan_inner(ty, 0)
+        self.normal_drop_plan_inner(ty, 0, 0, &mut Vec::new())
     }
-    fn normal_drop_plan_inner(&self, ty: &Ty, depth: usize) -> Result<NormalDropPlan> {
+    pub(in crate::compiler) fn native_box_actual_is_closed(&self, actual: &Ty) -> Result<bool> {
+        self.world.check_facts(self, true)?;
+        self.validate_ty(actual)?;
+        let closed = self.world.closedness_of_root(
+            actual,
+            self.env(),
+            TypeUse::Actual,
+            0,
+            &mut ProofScratch::default(),
+        )?;
+        Ok(!closed.has_parameters && !closed.has_opaque)
+    }
+    pub(in crate::compiler) fn native_box_pointee<'a>(&self, ty: &'a Ty) -> Result<Option<&'a Ty>> {
+        charged(self.budget(), self.budget().charge_work(1))?;
+        let Ty::Struct(owner) = ty else {
+            return Ok(None);
+        };
+        if let Some(read) = owner.realization() {
+            read.check_definition(ty)
+                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            read.replay(ty, self.world())
+                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            if read.is_component() {
+                if read.component_pointer_kind() != Some(ir::OwnedPointerKind::Box) {
+                    return Ok(None);
+                }
+            } else {
+                let Some(source) = self
+                    .world
+                    .schema
+                    .native_box_source(owner.def().source_decl)?
+                else {
+                    return Ok(None);
+                };
+                source
+                    .authorize_definition(ty, self.budget())
+                    .map_err(|error| FactsError::from_message(self.budget(), &error))?;
+            }
+        } else {
+            if self.phase() == FactsPhase::Universal {
+                let Some(source) = self
+                    .world
+                    .schema
+                    .native_box_source(owner.def().source_decl)?
+                else {
+                    return Ok(None);
+                };
+                source
+                    .authorize_definition(ty, self.budget())
+                    .map_err(|error| FactsError::from_message(self.budget(), &error))?;
+                let [actual] = owner.def().type_args.as_ref() else {
+                    return Err(FactsError::invalid(
+                        self.budget(),
+                        "native Box has changed actual arguments",
+                    ));
+                };
+                if !self.native_box_actual_is_closed(actual)? {
+                    return Ok(None);
+                }
+            } else if self.phase() != FactsPhase::Closed {
+                return Ok(None);
+            }
+            let Some(application) = self.world.schema.native_box_application(ty, self)? else {
+                return Ok(None);
+            };
+            application
+                .authorize_definition(ty, self.budget())
+                .map_err(|error| FactsError::from_message(self.budget(), &error))?;
+        }
+        let [pointee] = owner.def().type_args.as_ref() else {
+            return Err(FactsError::invalid(
+                self.budget(),
+                "native Box has changed actual arguments",
+            ));
+        };
+        Ok(Some(pointee))
+    }
+    pub(in crate::compiler) fn same_normal_drop_owner(
+        &self,
+        left: &Ty,
+        right: &Ty,
+    ) -> Result<bool> {
+        charged(self.budget(), self.budget().charge_work(1))?;
+        let ((left_id, left_read), (right_id, right_read)) = match (left, right) {
+            (Ty::Struct(left), Ty::Struct(right)) => (
+                (left.id(), left.realization()),
+                (right.id(), right.realization()),
+            ),
+            (Ty::Enum(left), Ty::Enum(right)) => (
+                (left.id(), left.realization()),
+                (right.id(), right.realization()),
+            ),
+            _ => return Ok(false),
+        };
+        if left_id != right_id {
+            return Ok(false);
+        }
+        if let (Some(left_read), Some(right_read)) = (left_read, right_read) {
+            left_read
+                .check_definition(left)
+                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            left_read
+                .replay(left, self.world())
+                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            right_read
+                .check_definition(right)
+                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            right_read
+                .replay(right, self.world())
+                .map_err(|error| FactsError::from_message(self.budget(), &error.to_string()))?;
+            self.validate_ty(left)?;
+            self.validate_ty(right)?;
+            return self.world.eq_ty(left, right, 0);
+        }
+        if left_read.is_none()
+            && right_read.is_none()
+            && !left.is_nominal_back_edge()
+            && !right.is_nominal_back_edge()
+            && matches!(left_id.index, ir::NominalIndex::SourceSlot(_))
+        {
+            // SourceSlot is an original source application, not ParentLocal or
+            // a detached graph identity. Replay both complete supplied payloads
+            // against the original declaration and canonical ordered actuals.
+            self.world
+                .schema
+                .validate_nominal_with_facts(left, self, self.budget())?;
+            self.world
+                .schema
+                .validate_nominal_with_facts(right, self, self.budget())?;
+            self.validate_ty(left)?;
+            self.validate_ty(right)?;
+            return self.world.eq_ty(left, right, 0);
+        }
+        // Other source representations may share only the exact definition
+        // allocation, authenticated in this caller. In particular a weak,
+        // parent-local or detached graph ID is not an original source proof.
+        if !charged(
+            self.budget(),
+            ir::identical_type(left, right, self.budget()),
+        )? {
+            return Ok(false);
+        }
+        self.validate_ty(left)?;
+        self.validate_ty(right)?;
+        Ok(true)
+    }
+    fn normal_drop_plan_inner(
+        &self,
+        ty: &Ty,
+        depth: usize,
+        owning_depth: usize,
+        active: &mut Vec<NormalDropFrame>,
+    ) -> Result<NormalDropPlan> {
         charged(self.budget(), self.budget().check_depth(depth))?;
         charged(self.budget(), self.budget().charge_work(1))?;
+        if matches!(ty, Ty::Struct(_) | Ty::Enum(_)) {
+            for frame in active.iter() {
+                if self.same_normal_drop_owner(ty, &frame.owner)? {
+                    if owning_depth <= frame.owning_depth {
+                        return Err(FactsError::invalid(
+                            self.budget(),
+                            "recursive drop without an authenticated owning edge",
+                        ));
+                    }
+                    retain::<ValidatedDestructor>(self.budget(), 1)?;
+                    return Ok(NormalDropPlan::Destructor(Arc::new(ValidatedDestructor {
+                        owner: frame.owner.clone(),
+                        target: None,
+                        signature: None,
+                        glue: DropGlue::Recursive,
+                        world: self.world.clone(),
+                        budget: self.budget().clone(),
+                    })));
+                }
+            }
+            push(
+                self.budget(),
+                active,
+                NormalDropFrame {
+                    owner: ty.clone(),
+                    owning_depth,
+                },
+            )?;
+            let result = self.normal_drop_plan_body(ty, depth, owning_depth, active);
+            active.pop();
+            result
+        } else {
+            self.normal_drop_plan_body(ty, depth, owning_depth, active)
+        }
+    }
+    fn normal_drop_plan_body(
+        &self,
+        ty: &Ty,
+        depth: usize,
+        owning_depth: usize,
+        active: &mut Vec<NormalDropFrame>,
+    ) -> Result<NormalDropPlan> {
         // References and raw pointers never own their referent.
         if matches!(
             ty,
@@ -378,14 +590,69 @@ impl ValidatedFacts {
         if matches!(ty, Ty::Param(_) | Ty::AssociatedType(_)) {
             return Ok(NormalDropPlan::Unresolved);
         }
+        if let Some(pointee) = self.native_box_pointee(ty)?
+            && !matches!(pointee, Ty::Dyn(_))
+        {
+            let next_owning_depth = owning_depth.checked_add(1).ok_or_else(|| {
+                FactsError::resource(self.budget(), "owning drop edge depth overflow")
+            })?;
+            let value =
+                match self.normal_drop_plan_inner(pointee, depth + 1, next_owning_depth, active)? {
+                    NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
+                    NormalDropPlan::Trivial => None,
+                    NormalDropPlan::Destructor(value) => Some(value),
+                };
+            charged(
+                self.budget(),
+                self.budget()
+                    .retain_bytes(std::mem::size_of::<ValidatedDestructor>()),
+            )?;
+            return Ok(NormalDropPlan::Destructor(Arc::new(ValidatedDestructor {
+                owner: ty.clone(),
+                target: None,
+                signature: None,
+                glue: DropGlue::BoxValue(value),
+                world: self.world.clone(),
+                budget: self.budget().clone(),
+            })));
+        }
+        if let Some((ir::OwnedPointerKind::Box, pointee)) = ty.owned_pointer_pointee()
+            && !matches!(pointee, Ty::Dyn(_))
+        {
+            if self.phase() == FactsPhase::Universal
+                && let Ty::Struct(owner) = ty
+                && owner.realization().is_none()
+                && let Some(source) = self
+                    .world
+                    .schema
+                    .native_box_source(owner.def().source_decl)?
+            {
+                source
+                    .authorize_definition(ty, self.budget())
+                    .map_err(|error| FactsError::from_message(self.budget(), &error))?;
+                // Source checking asks a logical ownership question before
+                // executable nominal reads exist. Unknown is not trivial and
+                // grants no destructor. Closed lowering must recheck through
+                // native_box_pointee and obtain genuine read authority.
+                return Ok(NormalDropPlan::Unresolved);
+            }
+            // Legacy spelling/field classification is never executable Box
+            // cleanup authority. In particular an empty source Drop body may
+            // not silently leak an owner whose component evidence is absent.
+            return Err(FactsError::unsupported(
+                self.budget(),
+                "unsupported: typed Box cleanup requires authenticated native ownership evidence",
+            ));
+        }
         if let Some((ir::OwnedPointerKind::Rc, pointee)) = ty.owned_pointer_pointee()
             && !matches!(pointee, Ty::Dyn(_))
         {
-            let value = match self.normal_drop_plan_inner(pointee, depth + 1)? {
-                NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
-                NormalDropPlan::Trivial => None,
-                NormalDropPlan::Destructor(value) => Some(value),
-            };
+            let value =
+                match self.normal_drop_plan_inner(pointee, depth + 1, owning_depth, active)? {
+                    NormalDropPlan::Unresolved => return Ok(NormalDropPlan::Unresolved),
+                    NormalDropPlan::Trivial => None,
+                    NormalDropPlan::Destructor(value) => Some(value),
+                };
             charged(
                 self.budget(),
                 self.budget()
@@ -426,7 +693,7 @@ impl ValidatedFacts {
             OwnNormalDrop::Resolved(target, signature) => (Some((target, signature)), false),
         };
         let mut child = |child: &Ty| -> Result<Option<Arc<ValidatedDestructor>>> {
-            match self.normal_drop_plan_inner(child, depth + 1)? {
+            match self.normal_drop_plan_inner(child, depth + 1, owning_depth, active)? {
                 NormalDropPlan::Destructor(d) => Ok(Some(d)),
                 NormalDropPlan::Unresolved => {
                     unresolved = true;
@@ -576,6 +843,295 @@ mod owning_rc_authority_tests {
     use crate::compiler::{frontend, source};
 
     #[test]
+    fn native_recursive_box_plan_is_finite_and_unbound_markers_reject() {
+        let prepared = source::prepare_text_with_prelude(
+            "recursive-box-authority.rs",
+            "enum List{Cons(Box<List>),Nil}fn f(x:List){}fn main(){}",
+            &source::SourceOptions::default(),
+        )
+        .unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = context.function_decl(0).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) =
+            context.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("source body required")
+        };
+        let facts = publication.facts();
+        assert_eq!(facts.phase(), FactsPhase::Closed);
+        let checked = publication.source();
+        let owner = checked.locals[checked.params[0].0].ty.clone();
+        let NormalDropPlan::Destructor(plan) = facts.normal_drop_plan(&owner).unwrap() else {
+            panic!("recursive owner needs destruction")
+        };
+        let DropGlue::Variants(variants) = plan.glue() else {
+            panic!("enum fields")
+        };
+        let box_drop = &variants[0].1[0].1;
+        let DropGlue::BoxValue(Some(recursive)) = box_drop.glue() else {
+            panic!("owning Box edge")
+        };
+        assert!(matches!(recursive.glue(), DropGlue::Recursive));
+        assert!(ir::identical_type(recursive.owner(), &owner, &budget).unwrap());
+        assert!(recursive.own_target().is_none());
+        let Ty::Enum(original) = &owner else {
+            panic!("enum owner")
+        };
+        let replayed = Ty::Enum(ir::EnumTy::new(original.def().clone()));
+        assert!(!ir::identical_type(&replayed, &owner, &budget).unwrap());
+        assert!(facts.same_normal_drop_owner(&replayed, &owner).unwrap());
+        let mut wrong_slot = original.def().clone();
+        let ir::NominalIndex::SourceSlot(slot) = wrong_slot.id.index else {
+            panic!("source application fixture")
+        };
+        wrong_slot.id.index = ir::NominalIndex::SourceSlot(slot + 1);
+        let wrong_slot = Ty::Enum(ir::EnumTy::new(wrong_slot));
+        assert!(!facts.same_normal_drop_owner(&wrong_slot, &owner).unwrap());
+        assert!(facts.normal_drop_plan(&wrong_slot).is_err());
+        let mut changed = original.def().clone();
+        changed.variants = Arc::from([]);
+        let forged_same_id = Ty::Enum(ir::EnumTy::new(changed));
+        assert!(
+            facts
+                .same_normal_drop_owner(&forged_same_id, &owner)
+                .is_err()
+        );
+        assert!(facts.normal_drop_plan(&forged_same_id).is_err());
+        plan.validate(&owner, facts).unwrap();
+        assert!(recursive.validate(&owner, facts).is_err());
+        assert!(plan.targets().is_empty());
+        let mut forged = plan.as_ref().clone();
+        forged.glue = DropGlue::Recursive;
+        assert_eq!(
+            forged.validate(&owner, facts).unwrap_err().kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let mut direct = Vec::new();
+        push(
+            &budget,
+            &mut direct,
+            NormalDropFrame {
+                owner: owner.clone(),
+                owning_depth: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            facts
+                .normal_drop_plan_inner(&owner, 0, 0, &mut direct)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining).unwrap();
+        assert_eq!(
+            facts
+                .same_normal_drop_owner(&replayed, &owner)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Resource
+        );
+        assert_eq!(
+            facts.normal_drop_plan(&owner).unwrap_err().kind(),
+            FactsErrorKind::Resource
+        );
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(first.used, budget.limits().work);
+        assert!(budget.charge_work(1).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn native_source_box_universal_query_defers_and_closed_requires_application_proof() {
+        let prepared = source::prepare_text_with_prelude(
+            "box-universal-authority.rs",
+            "fn generic<T>(x:Box<T>){}fn concrete(x:Box<i32>){}fn main(){}",
+            &source::SourceOptions::default(),
+        )
+        .unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        for index in [0, 1] {
+            let declaration = context.function_decl(index).unwrap();
+            let frontend::PublishedCallableBody::Source(publication) =
+                context.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("source body required")
+            };
+            assert_eq!(
+                publication.facts().phase(),
+                if index == 0 {
+                    FactsPhase::Universal
+                } else {
+                    FactsPhase::Closed
+                }
+            );
+            // Non-generic publication is already a closed body. Ask the
+            // canonical world for its original callable context explicitly,
+            // rather than relabeling the publication's executable facts.
+            let facts = publication
+                .facts()
+                .world()
+                .callable_facts(declaration)
+                .unwrap();
+            let checked = publication.source();
+            let owner = checked.locals[checked.params[0].0].ty.clone();
+            let Ty::Struct(value) = &owner else {
+                panic!("native Box source expected")
+            };
+            assert!(value.realization().is_none());
+            assert_eq!(facts.phase(), FactsPhase::Universal);
+            assert!(
+                facts
+                    .world
+                    .schema
+                    .native_box_source(value.def().source_decl)
+                    .unwrap()
+                    .is_some()
+            );
+            if index == 0 {
+                assert!(
+                    !facts
+                        .native_box_actual_is_closed(&value.def().type_args[0])
+                        .unwrap()
+                );
+                assert!(facts.native_box_pointee(&owner).unwrap().is_none());
+                assert!(matches!(
+                    facts.normal_drop_plan(&owner).unwrap(),
+                    NormalDropPlan::Unresolved
+                ));
+            } else {
+                assert!(
+                    facts
+                        .native_box_actual_is_closed(&value.def().type_args[0])
+                        .unwrap()
+                );
+                assert!(matches!(
+                    facts.native_box_pointee(&owner).unwrap(),
+                    Some(Ty::Int(ir::IntTy::I32))
+                ));
+                let NormalDropPlan::Destructor(universal) = facts.normal_drop_plan(&owner).unwrap()
+                else {
+                    panic!("closed actual needs authentic source cleanup even in Universal caller")
+                };
+                assert!(matches!(universal.glue(), DropGlue::BoxValue(None)));
+                universal.validate(&owner, &facts).unwrap();
+                assert_eq!(facts.phase(), FactsPhase::Universal);
+            }
+            if index == 1 {
+                let closed = facts
+                    .world
+                    .instance_facts(&CallTarget {
+                        declaration,
+                        type_args: Arc::from([]),
+                    })
+                    .unwrap();
+                assert_eq!(closed.phase(), FactsPhase::Closed);
+                assert!(matches!(
+                    closed.native_box_pointee(&owner).unwrap(),
+                    Some(Ty::Int(ir::IntTy::I32))
+                ));
+                let application = closed
+                    .world
+                    .schema
+                    .native_box_application(&owner, &closed)
+                    .unwrap()
+                    .unwrap();
+                application.authorize_definition(&owner, &budget).unwrap();
+                let NormalDropPlan::Destructor(destructor) =
+                    closed.normal_drop_plan(&owner).unwrap()
+                else {
+                    panic!("genuine canonical source application requires owning cleanup")
+                };
+                assert!(matches!(destructor.glue(), DropGlue::BoxValue(None)));
+                assert!(destructor.own_target().is_none());
+                destructor.validate(&owner, &closed).unwrap();
+                let mut changed = value.def().clone();
+                changed.type_args = Arc::from([Ty::Bool]);
+                let forged_actual = Ty::Struct(ir::StructTy::new(changed));
+                assert!(
+                    application
+                        .authorize_definition(&forged_actual, &budget)
+                        .is_err()
+                );
+                assert!(closed.native_box_pointee(&forged_actual).is_err());
+                let cloned_definition = Ty::Struct(ir::StructTy::new(value.def().clone()));
+                assert!(
+                    application
+                        .authorize_definition(&cloned_definition, &budget)
+                        .is_err()
+                );
+                let mut changed = value.def().clone();
+                changed.name.push_str("_forged");
+                let forged_name = Ty::Struct(ir::StructTy::new(changed));
+                assert!(closed.native_box_pointee(&forged_name).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn typed_box_cleanup_never_uses_reserved_spelling_without_component_evidence() {
+        let program =
+            frontend::parse("struct Box<T>{ptr:*mut T}struct N;fn f(x:Box<N>){}fn main(){}")
+                .unwrap();
+        let budget = PlanBudget::default();
+        let context = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) = context
+            .publish_callable_body(context.function_decl(0).unwrap(), &budget)
+            .unwrap()
+        else {
+            panic!("source body required")
+        };
+        let facts = publication.facts();
+        let checked = publication.source();
+        let owner = checked.locals[checked.params[0].0].ty.clone();
+        assert!(facts.native_box_pointee(&owner).unwrap().is_none());
+        assert!(!matches!(
+            facts.normal_drop_plan(&owner).unwrap(),
+            NormalDropPlan::Destructor(_)
+        ));
+        let Ty::Struct(value) = &owner else {
+            panic!("struct fixture")
+        };
+        let mut changed = value.def().clone();
+        changed.name = "crate::__justrust_std::boxed::Box".into();
+        let forged = Ty::Struct(ir::StructTy::new(changed));
+        // The legacy classifier recognizes spelling and fields, but this is
+        // explicitly not the sealed ownership capability needed by BoxValue.
+        assert!(matches!(
+            forged.owned_pointer_pointee(),
+            Some((ir::OwnedPointerKind::Box, _))
+        ));
+        assert!(facts.native_box_pointee(&forged).unwrap().is_none());
+        assert_eq!(
+            facts
+                .normal_drop_plan_inner(&forged, 0, 0, &mut Vec::new())
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Unsupported
+        );
+        assert!(facts.normal_drop_plan(&forged).is_err());
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining).unwrap();
+        assert_eq!(
+            facts.native_box_pointee(&owner).unwrap_err().kind(),
+            FactsErrorKind::Resource
+        );
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(failure.used, budget.limits().work);
+        assert!(budget.charge_work(1).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(failure));
+    }
+
+    #[test]
     fn rc_cleanup_cannot_change_owner_protocol_or_erase_pointee_destructor() {
         let prepared = source::prepare_text_with_prelude(
             "rc-authority.rs",
@@ -614,6 +1170,7 @@ mod owning_rc_authority_tests {
                 DropGlue::BoxedObject,
                 DropGlue::None,
                 DropGlue::RcValue(None),
+                DropGlue::BoxValue(None),
             ] {
                 let mut forged = valid.as_ref().clone();
                 forged.glue = glue;

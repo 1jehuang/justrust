@@ -2854,9 +2854,16 @@ impl Provider for CompilerProvider {
                             return cx.publish_fact(0, object);
                         }
                     }
+                    let instance_target = proof.concrete.facts().target().ok_or_else(|| {
+                        Error::new("native object proof omitted its closed instance target")
+                    })?;
+                    let instance_symbol =
+                        instances::symbol_of(instance_target, &types, &this.0.budget)
+                            .map_err(Error::new)?;
                     let (mut object, outcome) = cache::native_object(
                         &proof.concrete,
                         &|target| instances::symbol_of(target, &types, &this.0.budget),
+                        &instance_symbol,
                         &this.0.source_options,
                         &ssa::meter::Meter::new(&this.0.budget),
                     )

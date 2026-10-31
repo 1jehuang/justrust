@@ -544,11 +544,6 @@ fn generic_drop_specialization_and_extra_constraints_reject() {
             "unsupported: generic Drop with additional owner predicates",
             "E0367",
         ),
-        (
-            "struct Guard<T:Copy>{pointer:*mut T}impl<T:Copy> Drop for Guard<T>{fn drop(&mut self){}}fn main(){}",
-            "generic Drop with additional owner predicates",
-            "",
-        ),
     ] {
         rejects_source("generic_drop_admission", source, needle);
         if stock {
@@ -574,6 +569,15 @@ fn generic_drop_specialization_and_extra_constraints_reject() {
             );
         }
     }
+}
+
+#[test]
+fn generic_drop_matching_original_owner_constraints_are_not_extra() {
+    runs_source(
+        "generic_drop_matching_owner_constraint",
+        "struct Guard<T:Copy>{pointer:*mut T}impl<T:Copy> Drop for Guard<T>{fn drop(&mut self){}}fn main(){}",
+        "",
+    );
 }
 
 #[test]

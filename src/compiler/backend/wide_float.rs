@@ -244,6 +244,8 @@ mod tests {
             resolve: &resolve,
             drop_flags: Vec::new(),
             path_flags: Vec::new(),
+            nominal_drop_thunks: Vec::new(),
+            drop_instance_scope: None,
             locals: Vec::new(),
             aggregate_scratch: -256,
             wide_scratch: -256,
