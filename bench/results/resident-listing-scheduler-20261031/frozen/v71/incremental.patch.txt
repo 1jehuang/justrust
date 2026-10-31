@@ -1,0 +1,28 @@
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -12069,6 +12069,7 @@
+         // A fresh real database per mode prevents a warmed query cache from hiding work.
+         let snapshot = |enabled, nested| {
+             let (db, file) = RootDatabase::with_single_file(&source);
++            let file = file.file_id(&db);
+             let _flag = ListingTestFlag::set(enabled);
+             let _worker = ListingWorker::enter(nested);
+             LISTING_ROUTES.set([0; 4]);
+--- a/docs/resident-listing-scheduler.md
++++ b/docs/resident-listing-scheduler.md
+@@ -1,7 +1,15 @@
+ # Resident listing scheduler v70 (source-only hypothesis)
+ 
++## v71 fixture-only repair, source uncompiled
++
++Root's actual v70 check exited 101 with E0308 at the differential fixture's `relevant_crates(&db, file)`: the vendored `WithFixture::with_single_file` returns `EditionedFileId`, while `relevant_crates` accepts `vfs::FileId`. v71 adds only `let file = file.file_id(&db);` immediately after fixture creation. The vendored `EditionedFileId::file_id(self, db)` returns `vfs::FileId`, and existing fixtures use the same conversion. No assertion, production code, routing, or scheduling behavior changes.
++
++The immutable v70 sources, manifest and full root failure log remain untouched. Root's full log is `<PRIVATE_EXPERIMENT_ROOT>/candidate-build-v70/check.log` (SHA256 `f2655e2a19d65e57bc6dd79e1cc44eedb8b97e6045056495799c0497376b5fa8`), with `check.exit` containing `101`. The distinct v71 freeze root is `<PRIVATE_EXPERIMENT_ROOT>/listing-scheduler-v71`, containing full pre-repair originals, candidates, incremental v70-to-v71 and full baseline-to-v71 patches, SHA manifest, standalone rustfmt parse/check output and RELEASE. v71 remains source uncompiled and its native fixtures unexecuted. Root reruns all native gates. A rustfmt parse/check is a static syntax/style check, not a compiler or correctness gate.
++
+ ## Status and evidence boundary
+ 
++For v71, standalone `rustfmt --edition 2024 --emit stdout` on the exact live main returned 0 with empty stderr, establishing parsing only. `rustfmt --edition 2024 --check` returned 1 with formatting differences retained in the v71 freeze. No formatting was applied, keeping the authorized repair to one fixture conversion and preserving all production bytes. These static checks do not establish compilation or test success.
++
+ On 2026-10-31 root reported roughly four seconds in roots with many-crate listing. This is root's measurement, not a new measurement by this worker. The hypothesis is that nested OS thread creation and oversubscription contribute: `Listed::of_all` distributes crates across available CPUs, `ListedCrate::new` calls `declared_in` and `exported`, and `declared_in` repeatedly calls `lower`, which otherwise distributes bodies across available CPUs again. No speedup is claimed.
+ 
+ Accepted original `main.rs` SHA256:

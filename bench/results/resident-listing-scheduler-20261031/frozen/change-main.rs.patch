@@ -1,0 +1,235 @@
+--- a/main.rs
++++ b/main.rs
+@@ -3598,6 +3598,7 @@
+             let db = db.clone();
+             let (next, helping) = (&next, &helping);
+             scope.spawn(move || {
++                let _listing = ListingWorker::enter(threads.min(crates.len()) > 1);
+                 while let Some(&krate) =
+                     crates.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                 {
+@@ -3738,7 +3739,11 @@
+         for _ in 0..helpers {
+             let db = db.clone();
+             let each = &each;
+-            scope.spawn(move || hir::attach_db(&db, || each(&db)));
++            let listing_worker = LISTING_WORKER_DEPTH.get() > 0;
++            scope.spawn(move || {
++                let _listing = ListingWorker::enter(listing_worker);
++                hir::attach_db(&db, || each(&db))
++            });
+         }
+         each(db);
+     });
+@@ -4089,6 +4094,71 @@
+     }
+ }
+ 
++// Only listing work nested under multi-crate workers is flattened. No query cache or
++// compiler scheduling state depends on this flag, which is frozen at process first use.
++fn listing_flat_threads() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| listing_exact_flag(std::env::var_os("RA_JIT_LISTING_FLAT_THREADS").as_deref()))
++}
++
++fn listing_exact_flag(value: Option<&std::ffi::OsStr>) -> bool {
++    value == Some(std::ffi::OsStr::new("1"))
++}
++
++thread_local! {
++    static LISTING_WORKER_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++    #[cfg(test)]
++    static LISTING_TEST_FLAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
++    #[cfg(test)]
++    static LISTING_ROUTES: std::cell::Cell<[usize; 4]> = const { std::cell::Cell::new([0; 4]) };
++}
++
++struct ListingWorker(usize);
++
++impl ListingWorker {
++    fn enter(active: bool) -> Self {
++        let prior = LISTING_WORKER_DEPTH.get();
++        if active {
++            LISTING_WORKER_DEPTH.set(prior + 1);
++        }
++        Self(prior)
++    }
++}
++
++impl Drop for ListingWorker {
++    fn drop(&mut self) {
++        LISTING_WORKER_DEPTH.set(self.0);
++    }
++}
++
++#[derive(Clone, Copy)]
++enum ListingRoute {
++    Lower,
++    Exported,
++}
++
++fn listing_flatten(route: ListingRoute) -> bool {
++    let enabled = listing_flat_threads();
++    #[cfg(test)]
++    let enabled = LISTING_TEST_FLAG.get().unwrap_or(enabled);
++    let flat = enabled && LISTING_WORKER_DEPTH.get() > 0;
++    #[cfg(test)]
++    LISTING_ROUTES.with(|counts| {
++        let mut next = counts.get();
++        next[(route as usize) * 2 + usize::from(flat)] += 1;
++        counts.set(next);
++    });
++    if flat {
++        static MARKED: std::sync::Once = std::sync::Once::new();
++        MARKED.call_once(|| {
++            use std::io::Write;
++            let _ = writeln!(std::io::stderr(), "listing: v70 flat nested branch activated");
++        });
++    }
++    let _ = route;
++    flat
++}
++
+ /// For each of `functions`, whether a runtime looks it up by name. Its attributes say, which
+ /// are read off the source: on every core, as a build waits for this of every crate it builds.
+ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+@@ -4100,6 +4170,9 @@
+         };
+         functions.iter().map(exported).collect()
+     };
++    if listing_flatten(ListingRoute::Exported) {
++        return exported(db, functions);
++    }
+     let threads = std::thread::available_parallelism().map_or(1, |it| it.get());
+     let each = functions.len().div_ceil(threads).max(256);
+     if functions.len() <= each {
+@@ -4166,6 +4239,7 @@
+                 .map(|_| {
+                     let (db, next) = (db.clone(), &next);
+                     scope.spawn(move || {
++                        let _listing = ListingWorker::enter(threads.min(crates.len()) > 1);
+                         hir::attach_db(&db, || {
+                             let at = || next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                             while let Some(&krate) = crates.get(at()) {
+@@ -4645,6 +4719,14 @@
+ /// Lowers the bodies on all threads and hands them back. An edit to a file has every body in
+ /// it lowered again, which is most of the work of looking through them.
+ fn lower(db: &RootDatabase, bodies: Vec<DefWithBodyId>) -> Vec<DefWithBodyId> {
++    if listing_flatten(ListingRoute::Lower) {
++        hir::attach_db(db, || {
++            for &body in &bodies {
++                Body::of(db, body);
++            }
++        });
++        return bodies;
++    }
+     // A thread costs about what lowering a few small bodies does: the bodies of one edited
+     // file are lowered where they are asked for.
+     const PER_THREAD: usize = 16;
+@@ -11929,6 +12011,106 @@
+ mod tests {
+     use super::*;
+ 
++    struct ListingTestFlag(Option<bool>);
++
++    impl ListingTestFlag {
++        fn set(enabled: bool) -> Self {
++            Self(LISTING_TEST_FLAG.replace(Some(enabled)))
++        }
++    }
++
++    impl Drop for ListingTestFlag {
++        fn drop(&mut self) {
++            LISTING_TEST_FLAG.set(self.0);
++        }
++    }
++
++    #[test]
++    fn listing_v70_exact_flag_and_unwind_isolation() {
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!listing_exact_flag(value.map(std::ffi::OsStr::new)));
++        }
++        assert!(listing_exact_flag(Some(std::ffi::OsStr::new("1"))));
++        let _flag = ListingTestFlag::set(true);
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
++        let outer = ListingWorker::enter(true);
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 1);
++        let unwind = std::panic::catch_unwind(|| {
++            let _inner = ListingWorker::enter(true);
++            assert_eq!(LISTING_WORKER_DEPTH.get(), 2);
++            panic!("listing guard fixture");
++        });
++        assert!(unwind.is_err());
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 1);
++        std::thread::scope(|scope| {
++            scope.spawn(|| {
++                assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
++                let _flag = ListingTestFlag::set(true);
++                assert!(!listing_flatten(ListingRoute::Lower));
++            }).join().unwrap();
++        });
++        assert!(listing_flatten(ListingRoute::Lower));
++        drop(outer);
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
++        assert!(!listing_flatten(ListingRoute::Exported));
++    }
++
++    #[test]
++    fn listing_v70_real_database_differential_order_and_routes() {
++        use test_fixture::WithFixture;
++        let mut source = String::from(
++            "trait T { fn provided() { fn nested_provided() {} } }\n\
++             static S: u8 = 1; const C: u8 = { fn nested_const() {} 1 };\n\
++             fn main() { fn nested() { fn deeper() {} } }\n",
++        );
++        for index in 0..600 {
++            source.push_str(&format!("#[no_mangle] pub fn export_{index}() {{ fn inner_{index}() {{}} }}\n"));
++        }
++        // A fresh real database per mode prevents a warmed query cache from hiding work.
++        let snapshot = |enabled, nested| {
++            let (db, file) = RootDatabase::with_single_file(&source);
++            let file = file.file_id(&db);
++            let _flag = ListingTestFlag::set(enabled);
++            let _worker = ListingWorker::enter(nested);
++            LISTING_ROUTES.set([0; 4]);
++            hir::attach_db(&db, || {
++                let krate = Crate::from(ide_db::base_db::relevant_crates(&db, file)[0]);
++                let listed = ListedCrate::new(&db, krate);
++                let names = |items: &[FunctionId]| items.iter().map(|&id| {
++                    hir::Function::from(id).name(&db).as_str().to_owned()
++                }).collect::<Vec<_>>();
++                let result = (
++                    names(&listed.functions), names(&listed.in_provided),
++                    listed.exported.clone(),
++                    listed.statics.iter().map(|&id| hir::Static::from(id).name(&db).as_str().to_owned()).collect::<Vec<_>>(),
++                    listed.kept.iter().map(|&id| hir::Static::from(id).name(&db).as_str().to_owned()).collect::<Vec<_>>(),
++                    listed.rooted.iter().map(|&(id, exported, generic)| {
++                        (hir::Function::from(id).name(&db).as_str().to_owned(), exported, generic)
++                    }).collect::<Vec<_>>(),
++                    listed.provided.iter().map(|&(id, generic)| {
++                        (hir::Function::from(id).name(&db).as_str().to_owned(), generic)
++                    }).collect::<Vec<_>>(),
++                    listed.main.map(|id| hir::Function::from(id).name(&db).as_str().to_owned()),
++                );
++                (result, LISTING_ROUTES.get())
++            })
++        };
++        let (original, off) = snapshot(false, true);
++        let (flat, nested) = snapshot(true, true);
++        let (direct, direct_routes) = snapshot(true, false);
++        assert_eq!(original, flat);
++        assert_eq!(original, direct);
++        assert!(original.0.iter().any(|name| name == "deeper"));
++        assert!(original.1.iter().any(|name| name == "nested_provided"));
++        assert!(original.2.iter().filter(|&&exported| exported).count() >= 600);
++        assert!(off[0] > 0 && off[2] > 0);
++        assert_eq!((off[1], off[3]), (0, 0));
++        assert!(nested[1] > 0 && nested[3] > 0);
++        assert_eq!((nested[0], nested[2]), (0, 0));
++        assert!(direct_routes[0] > 0 && direct_routes[2] > 0);
++        assert_eq!((direct_routes[1], direct_routes[3]), (0, 0));
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());

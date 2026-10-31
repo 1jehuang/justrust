@@ -1,0 +1,122 @@
+Diff in <PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/diagnostic_hash.rs:25:
+     const SOURCES: &[(&str, &str)] = &[
+         ("empty", ""),
+         ("trivia", " \t\r\n// only a comment\n/* trailing */\n"),
+[32m+        ("utf8", "// café 🦀\nfn café() { let 名 = \"λ🦀\"; /* 日本語 */ }\n"),
+(B[m         (
+[31m-            "utf8",
+(B[m[31m-            "// café 🦀\nfn café() { let 名 = \"λ🦀\"; /* 日本語 */ }\n",
+(B[m[31m-        ),
+(B[m[31m-        (
+(B[m             "nested",
+             "/// docs\nmod outer { /* a /* nested */ comment */\n    fn f() { let x = { (1 + 2) }; if x > 0 { f(); } }\n}\n",
+         ),
+Diff in <PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/diagnostic_hash.rs:36:
+         ("empty blocks", "mod m {} fn f() {} struct S {}\n"),
+[31m-        (
+(B[m[31m-            "recovery",
+(B[m[31m-            "fn broken( { let x = ; /* kept */\n mod inner {",
+(B[m[31m-        ),
+(B[m[32m+        ("recovery", "fn broken( { let x = ; /* kept */\n mod inner {"),
+(B[m     ];
+ 
+     fn check_subtrees(root: &SyntaxNode, source: &str, flat: bool) {
+Diff in <PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/main.rs:4098:
+ // compiler scheduling state depends on this flag, which is frozen at process first use.
+ fn listing_flat_threads() -> bool {
+     static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+[31m-    *ENABLED.get_or_init(|| listing_exact_flag(std::env::var_os("RA_JIT_LISTING_FLAT_THREADS").as_deref()))
+(B[m[32m+    *ENABLED.get_or_init(|| {
+(B[m[32m+        listing_exact_flag(std::env::var_os("RA_JIT_LISTING_FLAT_THREADS").as_deref())
+(B[m[32m+    })
+(B[m }
+ 
+ fn listing_exact_flag(value: Option<&std::ffi::OsStr>) -> bool {
+Diff in <PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/main.rs:12043:
+         assert!(unwind.is_err());
+         assert_eq!(LISTING_WORKER_DEPTH.get(), 1);
+         std::thread::scope(|scope| {
+[31m-            scope.spawn(|| {
+(B[m[31m-                assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
+(B[m[31m-                let _flag = ListingTestFlag::set(true);
+(B[m[31m-                assert!(!listing_flatten(ListingRoute::Lower));
+(B[m[31m-            }).join().unwrap();
+(B[m[32m+            scope
+(B[m[32m+                .spawn(|| {
+(B[m[32m+                    assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
+(B[m[32m+                    let _flag = ListingTestFlag::set(true);
+(B[m[32m+                    assert!(!listing_flatten(ListingRoute::Lower));
+(B[m[32m+                })
+(B[m[32m+                .join()
+(B[m[32m+                .unwrap();
+(B[m         });
+         assert!(listing_flatten(ListingRoute::Lower));
+         drop(outer);
+Diff in <PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/main.rs:12064:
+              fn main() { fn nested() { fn deeper() {} } }\n",
+         );
+         for index in 0..600 {
+[31m-            source.push_str(&format!("#[no_mangle] pub fn export_{index}() {{ fn inner_{index}() {{}} }}\n"));
+(B[m[32m+            source.push_str(&format!(
+(B[m[32m+                "#[no_mangle] pub fn export_{index}() {{ fn inner_{index}() {{}} }}\n"
+(B[m[32m+            ));
+(B[m         }
+         // A fresh real database per mode prevents a warmed query cache from hiding work.
+         let snapshot = |enabled, nested| {
+Diff in <PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/main.rs:12076:
+             hir::attach_db(&db, || {
+                 let krate = Crate::from(ide_db::base_db::relevant_crates(&db, file)[0]);
+                 let listed = ListedCrate::new(&db, krate);
+[31m-                let names = |items: &[FunctionId]| items.iter().map(|&id| {
+(B[m[31m-                    hir::Function::from(id).name(&db).as_str().to_owned()
+(B[m[31m-                }).collect::<Vec<_>>();
+(B[m[32m+                let names = |items: &[FunctionId]| {
+(B[m[32m+                    items
+(B[m[32m+                        .iter()
+(B[m[32m+                        .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
+(B[m[32m+                        .collect::<Vec<_>>()
+(B[m[32m+                };
+(B[m                 let result = (
+[31m-                    names(&listed.functions), names(&listed.in_provided),
+(B[m[32m+                    names(&listed.functions),
+(B[m[32m+                    names(&listed.in_provided),
+(B[m                     listed.exported.clone(),
+[31m-                    listed.statics.iter().map(|&id| hir::Static::from(id).name(&db).as_str().to_owned()).collect::<Vec<_>>(),
+(B[m[31m-                    listed.kept.iter().map(|&id| hir::Static::from(id).name(&db).as_str().to_owned()).collect::<Vec<_>>(),
+(B[m[31m-                    listed.rooted.iter().map(|&(id, exported, generic)| {
+(B[m[31m-                        (hir::Function::from(id).name(&db).as_str().to_owned(), exported, generic)
+(B[m[31m-                    }).collect::<Vec<_>>(),
+(B[m[31m-                    listed.provided.iter().map(|&(id, generic)| {
+(B[m[31m-                        (hir::Function::from(id).name(&db).as_str().to_owned(), generic)
+(B[m[31m-                    }).collect::<Vec<_>>(),
+(B[m[32m+                    listed
+(B[m[32m+                        .statics
+(B[m[32m+                        .iter()
+(B[m[32m+                        .map(|&id| hir::Static::from(id).name(&db).as_str().to_owned())
+(B[m[32m+                        .collect::<Vec<_>>(),
+(B[m[32m+                    listed
+(B[m[32m+                        .kept
+(B[m[32m+                        .iter()
+(B[m[32m+                        .map(|&id| hir::Static::from(id).name(&db).as_str().to_owned())
+(B[m[32m+                        .collect::<Vec<_>>(),
+(B[m[32m+                    listed
+(B[m[32m+                        .rooted
+(B[m[32m+                        .iter()
+(B[m[32m+                        .map(|&(id, exported, generic)| {
+(B[m[32m+                            (
+(B[m[32m+                                hir::Function::from(id).name(&db).as_str().to_owned(),
+(B[m[32m+                                exported,
+(B[m[32m+                                generic,
+(B[m[32m+                            )
+(B[m[32m+                        })
+(B[m[32m+                        .collect::<Vec<_>>(),
+(B[m[32m+                    listed
+(B[m[32m+                        .provided
+(B[m[32m+                        .iter()
+(B[m[32m+                        .map(|&(id, generic)| {
+(B[m[32m+                            (hir::Function::from(id).name(&db).as_str().to_owned(), generic)
+(B[m[32m+                        })
+(B[m[32m+                        .collect::<Vec<_>>(),
+(B[m                     listed.main.map(|id| hir::Function::from(id).name(&db).as_str().to_owned()),
+                 );
+                 (result, LISTING_ROUTES.get())

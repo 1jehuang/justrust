@@ -1,0 +1,10 @@
+--- a/main.rs
++++ b/main.rs
+@@ -12069,6 +12069,7 @@
+         // A fresh real database per mode prevents a warmed query cache from hiding work.
+         let snapshot = |enabled, nested| {
+             let (db, file) = RootDatabase::with_single_file(&source);
++            let file = file.file_id(&db);
+             let _flag = ListingTestFlag::set(enabled);
+             let _worker = ListingWorker::enter(nested);
+             LISTING_ROUTES.set([0; 4]);

@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "time_utc": "2026-10-31T13:21:03Z",
+  "scope": "Portable stdlib-only historical evidence replay, no native execution",
+  "strict_original_oracle_rows": 28,
+  "native_historical_named_counts": [53, 366],
+  "native_historical_scheduler_fixtures": 2,
+  "semantic_negative_mutations": 41,
+  "offline_tests_passed": 8,
+  "controls": [
+    "exact raw named/count/status contracts",
+    "original tuple equality preserved by raw reparsing",
+    "actual native fixture named results",
+    "exact source patch context and one-line fixture-only repair",
+    "coherent raw-plus-parsed wrong-name rejection",
+    "rehashed native journal and full failed-check transcript tamper rejection",
+    "coherent timing and matching arithmetic rewrite rejected by fixed historical commitment",
+    "relocated Python -I -B with empty HOME and PATH, HOME remains untouched",
+    "fixed privacy allowlists and package private-home scan"
+  ],
+  "restoration": "Point-in-time original cmp and scoped empty HEAD diff verified at 2026-10-31T13:11:54Z, then source released",
+  "decision": "rejected",
+  "promotion": false,
+  "speed_claim": false,
+  "causal_regression_claim": false,
+  "noise": "unknown",
+  "native_jobs_executed_by_evidence_worker": 0
+}

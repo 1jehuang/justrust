@@ -1,0 +1,147 @@
+{
+  "comparisons": [
+    {
+      "off": "off",
+      "on": "on",
+      "rows": [
+        {
+          "off_seconds": 20.275660562008852,
+          "on_seconds": 24.374779915000545,
+          "percent_on_vs_off": 20.216946029725612,
+          "phase": "cold-prepare"
+        },
+        {
+          "off_seconds": 0.0411659539968241,
+          "on_seconds": 0.05625132899149321,
+          "percent_on_vs_off": 36.645270010827225,
+          "phase": "repeated-noop-1"
+        },
+        {
+          "off_seconds": 9.583475578023354,
+          "on_seconds": 11.188167687010719,
+          "percent_on_vs_off": 16.744364775835763,
+          "phase": "manifest-feature-add"
+        },
+        {
+          "off_seconds": 9.329817140998784,
+          "on_seconds": 11.462883594009327,
+          "percent_on_vs_off": 22.862896676045573,
+          "phase": "type-error"
+        },
+        {
+          "off_seconds": 8.669899250002345,
+          "on_seconds": 9.985041131003527,
+          "percent_on_vs_off": 15.169056099479207,
+          "phase": "type-recovery"
+        },
+        {
+          "off_seconds": 2.008111356990412,
+          "on_seconds": 1.9929844560101628,
+          "percent_on_vs_off": -0.7532899471730525,
+          "phase": "assert-failure"
+        },
+        {
+          "off_seconds": 0.494529659015825,
+          "on_seconds": 0.5221822849998716,
+          "percent_on_vs_off": 5.591702232597884,
+          "phase": "assert-recovery"
+        }
+      ]
+    },
+    {
+      "off": "off-repeat",
+      "on": "on-repeat",
+      "rows": [
+        {
+          "off_seconds": 21.238113928004168,
+          "on_seconds": 21.45731666800566,
+          "percent_on_vs_off": 1.0321196163867175,
+          "phase": "cold-prepare"
+        },
+        {
+          "off_seconds": 0.04243837800459005,
+          "on_seconds": 0.04278627099120058,
+          "percent_on_vs_off": 0.8197603277224852,
+          "phase": "repeated-noop-1"
+        },
+        {
+          "off_seconds": 10.08065698001883,
+          "on_seconds": 11.437990932987304,
+          "percent_on_vs_off": 13.464737027148988,
+          "phase": "manifest-feature-add"
+        },
+        {
+          "off_seconds": 10.02737611401244,
+          "on_seconds": 11.264073831000132,
+          "percent_on_vs_off": 12.333213623646856,
+          "phase": "type-error"
+        },
+        {
+          "off_seconds": 9.357852368004387,
+          "on_seconds": 10.575750866992166,
+          "percent_on_vs_off": 13.014722300513304,
+          "phase": "type-recovery"
+        },
+        {
+          "off_seconds": 2.0728439889790025,
+          "on_seconds": 2.1884009710047394,
+          "percent_on_vs_off": 5.57480363404752,
+          "phase": "assert-failure"
+        },
+        {
+          "off_seconds": 0.46834226298960857,
+          "on_seconds": 0.5176202800066676,
+          "percent_on_vs_off": 10.521795898260077,
+          "phase": "assert-recovery"
+        }
+      ]
+    }
+  ],
+  "decision": "REJECTED: no useful replicated scoped latency improvement",
+  "marker_scope": "Cumulative once-per-process actual flattened branch, not fresh phase work or latency attribution",
+  "markers": {
+    "off": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "off-repeat": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "on": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ],
+    "on-repeat": [
+      1,
+      1,
+      1,
+      1,
+      1,
+      1,
+      1
+    ]
+  },
+  "native_codegen": 53,
+  "native_resident": 366,
+  "noise": "unknown",
+  "promotion": false,
+  "speed_claim": false,
+  "status": "passed",
+  "strict_rows": 28
+}

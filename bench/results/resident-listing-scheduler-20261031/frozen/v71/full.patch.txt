@@ -1,0 +1,292 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index 9288ae995..927a636b8 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -3598,6 +3598,7 @@ fn resolve_all(db: &RootDatabase, crates: &[ide_db::base_db::Crate], threads: us
+             let db = db.clone();
+             let (next, helping) = (&next, &helping);
+             scope.spawn(move || {
++                let _listing = ListingWorker::enter(threads.min(crates.len()) > 1);
+                 while let Some(&krate) =
+                     crates.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+                 {
+@@ -3738,7 +3739,11 @@ fn on_idle_threads<T: Sync>(
+         for _ in 0..helpers {
+             let db = db.clone();
+             let each = &each;
+-            scope.spawn(move || hir::attach_db(&db, || each(&db)));
++            let listing_worker = LISTING_WORKER_DEPTH.get() > 0;
++            scope.spawn(move || {
++                let _listing = ListingWorker::enter(listing_worker);
++                hir::attach_db(&db, || each(&db))
++            });
+         }
+         each(db);
+     });
+@@ -4089,6 +4094,71 @@ impl ListedCrate {
+     }
+ }
+ 
++// Only listing work nested under multi-crate workers is flattened. No query cache or
++// compiler scheduling state depends on this flag, which is frozen at process first use.
++fn listing_flat_threads() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| listing_exact_flag(std::env::var_os("RA_JIT_LISTING_FLAT_THREADS").as_deref()))
++}
++
++fn listing_exact_flag(value: Option<&std::ffi::OsStr>) -> bool {
++    value == Some(std::ffi::OsStr::new("1"))
++}
++
++thread_local! {
++    static LISTING_WORKER_DEPTH: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++    #[cfg(test)]
++    static LISTING_TEST_FLAG: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
++    #[cfg(test)]
++    static LISTING_ROUTES: std::cell::Cell<[usize; 4]> = const { std::cell::Cell::new([0; 4]) };
++}
++
++struct ListingWorker(usize);
++
++impl ListingWorker {
++    fn enter(active: bool) -> Self {
++        let prior = LISTING_WORKER_DEPTH.get();
++        if active {
++            LISTING_WORKER_DEPTH.set(prior + 1);
++        }
++        Self(prior)
++    }
++}
++
++impl Drop for ListingWorker {
++    fn drop(&mut self) {
++        LISTING_WORKER_DEPTH.set(self.0);
++    }
++}
++
++#[derive(Clone, Copy)]
++enum ListingRoute {
++    Lower,
++    Exported,
++}
++
++fn listing_flatten(route: ListingRoute) -> bool {
++    let enabled = listing_flat_threads();
++    #[cfg(test)]
++    let enabled = LISTING_TEST_FLAG.get().unwrap_or(enabled);
++    let flat = enabled && LISTING_WORKER_DEPTH.get() > 0;
++    #[cfg(test)]
++    LISTING_ROUTES.with(|counts| {
++        let mut next = counts.get();
++        next[(route as usize) * 2 + usize::from(flat)] += 1;
++        counts.set(next);
++    });
++    if flat {
++        static MARKED: std::sync::Once = std::sync::Once::new();
++        MARKED.call_once(|| {
++            use std::io::Write;
++            let _ = writeln!(std::io::stderr(), "listing: v70 flat nested branch activated");
++        });
++    }
++    let _ = route;
++    flat
++}
++
+ /// For each of `functions`, whether a runtime looks it up by name. Its attributes say, which
+ /// are read off the source: on every core, as a build waits for this of every crate it builds.
+ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+@@ -4100,6 +4170,9 @@ fn exported(db: &RootDatabase, functions: &[FunctionId]) -> Vec<bool> {
+         };
+         functions.iter().map(exported).collect()
+     };
++    if listing_flatten(ListingRoute::Exported) {
++        return exported(db, functions);
++    }
+     let threads = std::thread::available_parallelism().map_or(1, |it| it.get());
+     let each = functions.len().div_ceil(threads).max(256);
+     if functions.len() <= each {
+@@ -4166,6 +4239,7 @@ impl Listed {
+                 .map(|_| {
+                     let (db, next) = (db.clone(), &next);
+                     scope.spawn(move || {
++                        let _listing = ListingWorker::enter(threads.min(crates.len()) > 1);
+                         hir::attach_db(&db, || {
+                             let at = || next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                             while let Some(&krate) = crates.get(at()) {
+@@ -4645,6 +4719,14 @@ fn body_declarations(db: &dyn HirDatabase, body: DefWithBodyId, under_provided:
+ /// Lowers the bodies on all threads and hands them back. An edit to a file has every body in
+ /// it lowered again, which is most of the work of looking through them.
+ fn lower(db: &RootDatabase, bodies: Vec<DefWithBodyId>) -> Vec<DefWithBodyId> {
++    if listing_flatten(ListingRoute::Lower) {
++        hir::attach_db(db, || {
++            for &body in &bodies {
++                Body::of(db, body);
++            }
++        });
++        return bodies;
++    }
+     // A thread costs about what lowering a few small bodies does: the bodies of one edited
+     // file are lowered where they are asked for.
+     const PER_THREAD: usize = 16;
+@@ -11929,6 +12011,106 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
+ mod tests {
+     use super::*;
+ 
++    struct ListingTestFlag(Option<bool>);
++
++    impl ListingTestFlag {
++        fn set(enabled: bool) -> Self {
++            Self(LISTING_TEST_FLAG.replace(Some(enabled)))
++        }
++    }
++
++    impl Drop for ListingTestFlag {
++        fn drop(&mut self) {
++            LISTING_TEST_FLAG.set(self.0);
++        }
++    }
++
++    #[test]
++    fn listing_v70_exact_flag_and_unwind_isolation() {
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!listing_exact_flag(value.map(std::ffi::OsStr::new)));
++        }
++        assert!(listing_exact_flag(Some(std::ffi::OsStr::new("1"))));
++        let _flag = ListingTestFlag::set(true);
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
++        let outer = ListingWorker::enter(true);
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 1);
++        let unwind = std::panic::catch_unwind(|| {
++            let _inner = ListingWorker::enter(true);
++            assert_eq!(LISTING_WORKER_DEPTH.get(), 2);
++            panic!("listing guard fixture");
++        });
++        assert!(unwind.is_err());
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 1);
++        std::thread::scope(|scope| {
++            scope.spawn(|| {
++                assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
++                let _flag = ListingTestFlag::set(true);
++                assert!(!listing_flatten(ListingRoute::Lower));
++            }).join().unwrap();
++        });
++        assert!(listing_flatten(ListingRoute::Lower));
++        drop(outer);
++        assert_eq!(LISTING_WORKER_DEPTH.get(), 0);
++        assert!(!listing_flatten(ListingRoute::Exported));
++    }
++
++    #[test]
++    fn listing_v70_real_database_differential_order_and_routes() {
++        use test_fixture::WithFixture;
++        let mut source = String::from(
++            "trait T { fn provided() { fn nested_provided() {} } }\n\
++             static S: u8 = 1; const C: u8 = { fn nested_const() {} 1 };\n\
++             fn main() { fn nested() { fn deeper() {} } }\n",
++        );
++        for index in 0..600 {
++            source.push_str(&format!("#[no_mangle] pub fn export_{index}() {{ fn inner_{index}() {{}} }}\n"));
++        }
++        // A fresh real database per mode prevents a warmed query cache from hiding work.
++        let snapshot = |enabled, nested| {
++            let (db, file) = RootDatabase::with_single_file(&source);
++            let file = file.file_id(&db);
++            let _flag = ListingTestFlag::set(enabled);
++            let _worker = ListingWorker::enter(nested);
++            LISTING_ROUTES.set([0; 4]);
++            hir::attach_db(&db, || {
++                let krate = Crate::from(ide_db::base_db::relevant_crates(&db, file)[0]);
++                let listed = ListedCrate::new(&db, krate);
++                let names = |items: &[FunctionId]| items.iter().map(|&id| {
++                    hir::Function::from(id).name(&db).as_str().to_owned()
++                }).collect::<Vec<_>>();
++                let result = (
++                    names(&listed.functions), names(&listed.in_provided),
++                    listed.exported.clone(),
++                    listed.statics.iter().map(|&id| hir::Static::from(id).name(&db).as_str().to_owned()).collect::<Vec<_>>(),
++                    listed.kept.iter().map(|&id| hir::Static::from(id).name(&db).as_str().to_owned()).collect::<Vec<_>>(),
++                    listed.rooted.iter().map(|&(id, exported, generic)| {
++                        (hir::Function::from(id).name(&db).as_str().to_owned(), exported, generic)
++                    }).collect::<Vec<_>>(),
++                    listed.provided.iter().map(|&(id, generic)| {
++                        (hir::Function::from(id).name(&db).as_str().to_owned(), generic)
++                    }).collect::<Vec<_>>(),
++                    listed.main.map(|id| hir::Function::from(id).name(&db).as_str().to_owned()),
++                );
++                (result, LISTING_ROUTES.get())
++            })
++        };
++        let (original, off) = snapshot(false, true);
++        let (flat, nested) = snapshot(true, true);
++        let (direct, direct_routes) = snapshot(true, false);
++        assert_eq!(original, flat);
++        assert_eq!(original, direct);
++        assert!(original.0.iter().any(|name| name == "deeper"));
++        assert!(original.1.iter().any(|name| name == "nested_provided"));
++        assert!(original.2.iter().filter(|&&exported| exported).count() >= 600);
++        assert!(off[0] > 0 && off[2] > 0);
++        assert_eq!((off[1], off[3]), (0, 0));
++        assert!(nested[1] > 0 && nested[3] > 0);
++        assert_eq!((nested[0], nested[2]), (0, 0));
++        assert!(direct_routes[0] > 0 && direct_routes[2] > 0);
++        assert_eq!((direct_routes[1], direct_routes[3]), (0, 0));
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+diff --git a/docs/resident-listing-scheduler.md b/docs/resident-listing-scheduler.md
+new file mode 100644
+index 000000000..0b216567f
+--- /dev/null
++++ b/docs/resident-listing-scheduler.md
+@@ -0,0 +1,49 @@
++# Resident listing scheduler v70 (source-only hypothesis)
++
++## v71 fixture-only repair, source uncompiled
++
++Root's actual v70 check exited 101 with E0308 at the differential fixture's `relevant_crates(&db, file)`: the vendored `WithFixture::with_single_file` returns `EditionedFileId`, while `relevant_crates` accepts `vfs::FileId`. v71 adds only `let file = file.file_id(&db);` immediately after fixture creation. The vendored `EditionedFileId::file_id(self, db)` returns `vfs::FileId`, and existing fixtures use the same conversion. No assertion, production code, routing, or scheduling behavior changes.
++
++The immutable v70 sources, manifest and full root failure log remain untouched. Root's full log is `<PRIVATE_EXPERIMENT_ROOT>/candidate-build-v70/check.log` (SHA256 `f2655e2a19d65e57bc6dd79e1cc44eedb8b97e6045056495799c0497376b5fa8`), with `check.exit` containing `101`. The distinct v71 freeze root is `<PRIVATE_EXPERIMENT_ROOT>/listing-scheduler-v71`, containing full pre-repair originals, candidates, incremental v70-to-v71 and full baseline-to-v71 patches, SHA manifest, standalone rustfmt parse/check output and RELEASE. v71 remains source uncompiled and its native fixtures unexecuted. Root reruns all native gates. A rustfmt parse/check is a static syntax/style check, not a compiler or correctness gate.
++
++## Status and evidence boundary
++
++For v71, standalone `rustfmt --edition 2024 --emit stdout` on the exact live main returned 0 with empty stderr, establishing parsing only. `rustfmt --edition 2024 --check` returned 1 with formatting differences retained in the v71 freeze. No formatting was applied, keeping the authorized repair to one fixture conversion and preserving all production bytes. These static checks do not establish compilation or test success.
++
++On 2026-10-31 root reported roughly four seconds in roots with many-crate listing. This is root's measurement, not a new measurement by this worker. The hypothesis is that nested OS thread creation and oversubscription contribute: `Listed::of_all` distributes crates across available CPUs, `ListedCrate::new` calls `declared_in` and `exported`, and `declared_in` repeatedly calls `lower`, which otherwise distributes bodies across available CPUs again. No speedup is claimed.
++
++Accepted original `main.rs` SHA256:
++`0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176`.
++The original was copied before editing and its digest verified. Ownership is limited to `toolchain/resident/crates/ra-jit/src/main.rs` and this new document. Panda's evidence worker uses frozen v69, not live main.
++
++## Routing
++
++`RA_JIT_LISTING_FLAT_THREADS=1` is exact and default OFF. A process-global `OnceLock<bool>` samples the environment on the first production routing use. Missing, non-Unicode, empty, `0`, `true`, `01`, and whitespace-suffixed values do not enable it. Later environment changes do not change the production decision.
++
++A scoped thread-local depth marks actual multi-crate worker closures in `Listed::of_all` and `resolve_all`, only when their effective worker count is greater than one. `resolve_all` can reach `declared_in` for language crates after finding impls. Its `warm_impls` and `warm_files` call `on_idle_threads`. These helpers may perform queries that reach listing, so the existing outer-worker context is captured explicitly at that actual helper spawn boundary. The parent executes its own work with its existing context. No general context is inherited by arbitrary spawned threads.
++
++Only `lower` and `exported` branch on the combination of the flag and positive depth. The flattened lower branch calls the same `Body::of` for every input body and returns the original vector, unchanged in order. The flattened exported branch uses the existing sequential attribute predicate closure for every input function, in original order. There is no body count cap, pruning, body skipping, added memoization or declaration graph change. Direct calls and calls under only one outer worker retain original threading. Original OFF lower/exported bodies remain byte-for-byte after their inserted early branches.
++
++`resolve_names`, `verify_impls`, compiler/codegen workers, and all unrelated pools are untouched. `on_idle_threads` retains its original scheduling, helper budgeting, zero-helper behavior, work distribution, and query closure. Only the listing context is propagated to its existing helper closures. `warm_impls` is not itself serialized. This matters because its helper work is intentional when dependencies leave other cores idle.
++
++The guard restores the exact prior TLS depth on normal return and unwind. It does not catch or replace cancellation. No new global lock is held over a query. Existing outer joins and OFF-path panic handling remain in place. Flattened queries execute on the current attached database thread, with normal Salsa unwinding rather than new error suppression. The existing lower `PROBING` propagation is unchanged on the original path, while flattened calls naturally retain the current thread's value.
++
++The first actual flattened branch writes `listing: v70 flat nested branch activated` once per process. Write failures are ignored. This marker proves activation only. It is not a worker count, body count, timing measurement, or proof that any particular invocation would otherwise have spawned workers.
++
++## Correctness argument and tradeoff
++
++The optimization changes scheduling, not input identity, query keys, query dependencies, outputs, or retained caches. Every original module/body traversal and every body query remains. `body_declarations` and `module_declarations` remain Salsa tracked with unchanged implementations, so edits still invalidate the same dependencies. No new memo or stale-cache invalidation rule is necessary. Existing cache locks in `Listed::of` and `of_all` remain released before construction and query work.
++
++Serializing the inner loops can lose useful parallelism near the tail when only one expensive crate remains in a pool originally started for multiple crates. Other crates may be idle while that worker still lists. This is deliberately an opt-in hypothesis, not a promoted default. Root must judge total agent wait, cold/incremental regressions, actual activation and results before promotion.
++
++## Native fixtures added, NOT EXECUTED
++
++- `listing_v70_exact_flag_and_unwind_isolation`: exact flag helper values, nested depth, unwind restoration, thread-local isolation, and restoration back to direct routing.
++- `listing_v70_real_database_differential_order_and_routes`: fresh real `RootDatabase` fixtures for OFF+nested, ON+nested, and ON+direct. It creates 600 exports plus nested function bodies, deeper bodies, trait-provided bodies, const bodies and a static. It compares ordered function names, provided function names, export bits, static and kept-static names, rooted/generic output, provided/generic output and main selection. Test-only per-thread counters in the actual production `lower`/`exported` routing function assert which branches the real listing reached. No environment mutation or production counter overhead is introduced.
++
++These fixtures exercise the production routing with the production guard in a controlled context. They do not independently prove that the outer pool closures are reached in root's workload, count worker spawns, validate cancellation end-to-end, or measure performance. Root owns actual compiler builds, fixture execution, full suites, counterordered timings, restore and promotion. This worker ran no builds, tests, workload probes, installs, commits or timing experiments.
++
++## Frozen handoff
++
++Freeze root: `<PRIVATE_EXPERIMENT_ROOT>/listing-scheduler-v70`.
++`originals/main.rs` is the full pre-edit source. The document did not previously exist, recorded by `originals/resident-listing-scheduler.md.ABSENT`. `candidates/` contains both full candidates. `candidate.patch` is the full source-and-document patch. `SHA256SUMS`, `checks.txt` and `RELEASE` record integrity, static checks and the handoff boundary. After RELEASE, this worker stops edits. No artifacts are built or installed.

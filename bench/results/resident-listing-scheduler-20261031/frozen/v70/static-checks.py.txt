@@ -1,0 +1,44 @@
+from pathlib import Path
+import hashlib
+root = Path('<PRIVATE_EXPERIMENT_ROOT>/listing-scheduler-v70')
+a = (root / 'originals/main.rs').read_text()
+b = Path('<PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/main.rs').read_text()
+assert hashlib.sha256(a.encode()).hexdigest() == '0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176'
+print('PASS accepted original SHA256')
+def region(text, start, end):
+    return text[text.index(start):text.index(end, text.index(start))]
+for function, end, inserted in [
+    ('\nfn lower(db:', '\nstruct Build {', '''    if listing_flatten(ListingRoute::Lower) {
+        hir::attach_db(db, || {
+            for &body in &bodies {
+                Body::of(db, body);
+            }
+        });
+        return bodies;
+    }
+'''),
+    ('\nfn exported(db:', '\n/// Whether a function is a method', '''    if listing_flatten(ListingRoute::Exported) {
+        return exported(db, functions);
+    }
+'''),
+]:
+    assert region(b, function, end).replace(inserted, '', 1) == region(a, function, end)
+    print('PASS bytewise original OFF body after removing one early branch:', function.strip())
+for start, end in [
+    ('\nfn declared_in(', '\n/// The functions of a crate'),
+    ('\nfn module_declarations(', '\n#[salsa::tracked'),
+    ('\nfn body_declarations(', '\n/// Lowers the bodies'),
+    ('\nfn warm_impls(', '\n/// Asks for the impls'),
+    ('\nfn warm_files(', '\n/// Runs `run`'),
+    ('\nfn resolve_names(', '\n/// Resolves the names and finds'),
+    ('\nfn verify_impls', '\n/// Parses the files'),
+]:
+    assert region(a, start, end) == region(b, start, end), start
+    print('PASS unchanged query/traversal/unrelated scheduling:', start.strip())
+assert b.count('ListingWorker::enter(threads.min(crates.len()) > 1)') == 2
+assert b.count('ListingWorker::enter(listing_worker)') == 1
+assert b.count('fn listing_v70_') == 2
+print('PASS static boundary and native fixture presence counts')
+print('NOTE initial text comparison anchor matched an unrelated declared_in method. Corrected to a newline-anchored free function. No source fix was necessary.')
+print('NOT RUN compiler, tests, workload probes, timing, installation, commits')
+print('LIMIT text/integrity checks only, not Rust typechecking or fixture execution')

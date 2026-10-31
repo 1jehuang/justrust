@@ -1,0 +1,7 @@
+# Preserve single-space context lines only in these historical diff artifacts.
+frozen/change-main.rs.patch -whitespace
+frozen/fixture-repair-main.rs.patch -whitespace
+frozen/v70/candidate.patch.txt -whitespace
+frozen/v71/full.patch.txt -whitespace
+frozen/v71/incremental.patch.txt -whitespace
+frozen/v71/rustfmt-check.stdout.txt -whitespace

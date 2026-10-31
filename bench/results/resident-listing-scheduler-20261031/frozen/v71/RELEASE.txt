@@ -1,0 +1,42 @@
+v71 FIXTURE-ONLY SOURCE RELEASE / FREEZE
+2026-10-31T13:02:05Z
+ROOT=<PRIVATE_EXPERIMENT_ROOT>/listing-scheduler-v71
+SOURCE UNCOMPILED. Native fixtures UNEXECUTED. No native jobs run.
+
+Authorized delta: exactly one added line in the real differential fixture:
+    let file = file.file_id(&db);
+Vendored API inspected: WithFixture::with_single_file -> EditionedFileId,
+EditionedFileId::file_id(self, db) -> vfs::FileId,
+relevant_crates(db, file_id: FileId).
+All assertions and all production source bytes remain identical to v70.
+Only main.rs and docs/resident-listing-scheduler.md changed in the checkout.
+
+Candidate main SHA256:
+d162341487a1301191e11e93281d07523f0f25ad5c7fad582f53911728da31b5
+Candidate document SHA256:
+5b3c9a7614c372edf70e5c4203ec170926cbca2a414e575bcae512c830039406
+Incremental v70-to-v71 patch SHA256:
+10f31cf279b2c5e7738366af2e4798413452371480bdf668ce84536256b788b1
+Full baseline-to-v71 patch SHA256:
+e3ce27f8679856363a8b067d837c7a29246847deeed98433390f1ee79193ba96
+
+Originals/ are full v70 pre-repair main and document. Candidates/ are full v71 files.
+Original accepted pre-v70 baseline remains in immutable listing-scheduler-v70/originals/main.rs.
+The full v70 failed check.log and check.exit are preserved at original root paths,
+and copied in full into v70-failed-evidence/. Log SHA256:
+f2655e2a19d65e57bc6dd79e1cc44eedb8b97e6045056495799c0497376b5fa8
+Root v70 check exited 101 with E0308. Not a passing v70 gate.
+
+Static results:
+- Exact main rustfmt --edition 2024 --emit stdout: exit 0, empty stderr.
+- Exact main rustfmt --edition 2024 --check: exit 1, retained formatting differences.
+- No formatting applied, no unrelated or production edits.
+- One-line-only delta assertion PASS.
+- Owned git diff --check PASS.
+- Both incremental/full patches git apply --check --reverse PASS.
+- Immutable v70 sha256sum -c SHA256SUMS PASS.
+- v71 sha256sum -c SHA256SUMS PASS.
+
+rustfmt is a static syntax/style check, not typechecking or correctness validation.
+Root owns all native compiler/fixture/full-suite gates, timings, restore and promotion.
+STOP EDITS after this RELEASE. Do not overwrite v70.

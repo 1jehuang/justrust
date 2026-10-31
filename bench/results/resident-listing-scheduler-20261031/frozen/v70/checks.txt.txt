@@ -1,0 +1,15 @@
+PASS accepted original SHA256
+PASS bytewise original OFF body after removing one early branch: fn lower(db:
+PASS bytewise original OFF body after removing one early branch: fn exported(db:
+PASS unchanged query/traversal/unrelated scheduling: fn declared_in(
+PASS unchanged query/traversal/unrelated scheduling: fn module_declarations(
+PASS unchanged query/traversal/unrelated scheduling: fn body_declarations(
+PASS unchanged query/traversal/unrelated scheduling: fn warm_impls(
+PASS unchanged query/traversal/unrelated scheduling: fn warm_files(
+PASS unchanged query/traversal/unrelated scheduling: fn resolve_names(
+PASS unchanged query/traversal/unrelated scheduling: fn verify_impls
+PASS static boundary and native fixture presence counts
+NOTE initial text comparison anchor matched an unrelated declared_in method. Corrected to a newline-anchored free function. No source fix was necessary.
+NOT RUN compiler, tests, workload probes, timing, installation, commits
+LIMIT text/integrity checks only, not Rust typechecking or fixture execution
+PASS git diff --check owned source and document

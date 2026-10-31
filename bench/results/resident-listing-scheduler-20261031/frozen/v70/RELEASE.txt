@@ -1,0 +1,24 @@
+v70 SOURCE-ONLY RELEASE / FREEZE
+2026-10-31T12:58:26Z
+ROOT=<PRIVATE_EXPERIMENT_ROOT>/listing-scheduler-v70
+
+STOP EDITS: owned source and document frozen. Root owns all subsequent compiler execution, fixture/full-suite gates, counterordered timing, restore and promotion.
+
+Original main.rs SHA256:
+0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176
+Candidate main.rs SHA256:
+85c46d0f20cf9c70dc05fdde28233a0b518b6d079b32d4e9401bc868c5b1eeb4
+Candidate document SHA256:
+e944dae0274fbcc5b555f7ea421e50ded8a73e327b475bd4acf6879946cdaf79
+Full source+document patch SHA256:
+d21f34ad3b126abadf79d8e211cda060aaf13b1289c7286eac362efc2842ab18
+
+Static checks PASS: original digest, bytewise original lower/exported OFF bodies after removing the inserted early branches, unchanged declared_in/module_declarations/body_declarations/warm_impls/warm_files/resolve_names/verify_impls, boundary/fixture presence counts, git diff --check, git apply --check --reverse candidate.patch, both live/candidate cmp, sha256sum -c SHA256SUMS.
+Initial static text anchor matched an unrelated same-named method. Corrected checker reran successfully. No source change was needed for this checker issue.
+
+NO builds, tests, workload probes, locks, installs, commits, timings or speed claims. Rust typechecking and all native fixtures remain UNEXECUTED. Fixtures use fresh real RootDatabase instances and actual production routing counters, but manually scoped worker contexts. Actual workload pool reachability and worker counts require root-owned validation.
+
+Routing: exact process-first-use RA_JIT_LISTING_FLAT_THREADS=1, default OFF. Scoped TLS restore on unwind. Actual multi-crate worker closures in of_all and resolve_all, with context propagation only to existing on_idle_threads helper workers. Only inner lower/exported listing loops are flattened, never unrelated compiler work. Marker is once per process and activation-only, ignores stderr I/O errors.
+
+Panda evidence worker must continue using frozen v69, not live main.
+No further edits by this worker after this RELEASE.

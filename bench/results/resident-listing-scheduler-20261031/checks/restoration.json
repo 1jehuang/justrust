@@ -1,0 +1,11 @@
+{
+  "live_doc_cmp_frozen": true,
+  "live_main_cmp_frozen": true,
+  "lock_modified": false,
+  "main_sha256": "0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176",
+  "scope": "Only main.rs restored, point-in-time receipt; source released to coordinator",
+  "source_cmp_original": true,
+  "source_head_diff_empty": true,
+  "time_utc": "2026-10-31T13:11:54Z",
+  "witness": "Actual worker cmp live-to-frozen then preserved live snapshots, write original, cmp original and scoped HEAD diff PASS"
+}

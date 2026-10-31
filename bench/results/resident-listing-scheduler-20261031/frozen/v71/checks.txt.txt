@@ -1,0 +1,6 @@
+PASS v71 source is exactly v70 plus one fixture FileId conversion. All assertions and production bytes unchanged.
+PASS immutable root v70 full failed log and exit identity
+PASS vendored API inspection: WithFixture returns EditionedFileId, file_id(db) yields vfs::FileId, relevant_crates accepts FileId
+rustfmt exact main parse: exit 0, empty stderr. rustfmt --check: exit 1, formatting differences retained, not applied.
+SOURCE UNCOMPILED. No native jobs, builds, tests, installations or commits. Root reruns gates.
+PASS git diff --check owned files

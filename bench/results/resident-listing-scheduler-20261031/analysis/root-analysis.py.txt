@@ -1,0 +1,41 @@
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, '<PRIVATE_CHECKOUT>/bench')
+import resident_engine_compare as shared
+import resident_state_matrix as matrix
+ROOT = Path('<PRIVATE_EXPERIMENT_ROOT>')
+states = {}
+markers = {}
+for label in ('off', 'on', 'on-repeat', 'off-repeat'):
+    folder = ROOT / f'listing-scheduler-v71-{label}-seven'
+    state = json.loads((folder / 'state.json').read_text())
+    assert state['status'] == 'passed' and state['unchanged']
+    assert len(state['rows']) == 7
+    expected = None
+    counts = []
+    for index, row in enumerate(state['rows']):
+        prefix = folder / f'{index:02}-{row["phase"]}'
+        raw, text, error = matrix.captured(prefix)
+        assert raw == row['raw'] and error == row['raw_error']
+        parsed = shared.runtime.test_results(text)
+        assert json.loads(json.dumps(parsed)) == row['parsed']
+        if index == 0:
+            expected = matrix.contract(parsed, row['phase'])
+            assert expected is not None
+        fresh = dict(row, parsed=parsed)
+        assert not matrix.oracle(fresh, text, expected, row['phase'], row['nonce'], 0)
+        assert row['accepted'] and row['input_unchanged'] and not row['failures']
+        counts.append((folder / f'{index:02}-{row["phase"]}-worker-0.log').read_text().count('listing: v70 flat nested branch activated'))
+    assert counts == ([0] * 7 if label.startswith('off') else [1] * 7)
+    states[label] = state
+    markers[label] = counts
+comparisons = []
+for off, on in (('off', 'on'), ('off-repeat', 'on-repeat')):
+    rows = []
+    for baseline, candidate in zip(states[off]['rows'], states[on]['rows']):
+        assert baseline['phase'] == candidate['phase']
+        old, new = baseline['elapsed_seconds'], candidate['elapsed_seconds']
+        rows.append(dict(phase=baseline['phase'], off_seconds=old, on_seconds=new, percent_on_vs_off=100*(new/old-1)))
+    comparisons.append(dict(off=off, on=on, rows=rows))
+print(json.dumps(dict(status='passed', decision='REJECTED: no useful replicated scoped latency improvement', promotion=False, speed_claim=False, noise='unknown', strict_rows=28, native_codegen=53, native_resident=366, markers=markers, marker_scope='Cumulative once-per-process actual flattened branch, not fresh phase work or latency attribution', comparisons=comparisons), indent=2))
