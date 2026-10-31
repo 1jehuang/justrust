@@ -1,0 +1,30 @@
+test_abba_bytes_changed_on_touch (__main__.Replay.test_abba_bytes_changed_on_touch) ... ok
+test_abba_first_touch_dropped (__main__.Replay.test_abba_first_touch_dropped) ... ok
+test_abba_start_tick_changed (__main__.Replay.test_abba_start_tick_changed) ... ok
+test_abba_time_changed_without_result (__main__.Replay.test_abba_time_changed_without_result) ... ok
+test_binary_rejected (__main__.Replay.test_binary_rejected) ... ok
+test_coherent_time_rewrite_still_not_historical (__main__.Replay.test_coherent_time_rewrite_still_not_historical) ... ok
+test_duplicate_marker (__main__.Replay.test_duplicate_marker) ... ok
+test_isolated_relocation_empty_home_path (__main__.Replay.test_isolated_relocation_empty_home_path) ... ok
+test_marker_removed (__main__.Replay.test_marker_removed) ... ok
+test_native_inventory_missing (__main__.Replay.test_native_inventory_missing) ... ok
+test_native_named_failure_coherent_journal (__main__.Replay.test_native_named_failure_coherent_journal) ... ok
+test_noise_rewrite (__main__.Replay.test_noise_rewrite) ... ok
+test_oracle_cannot_be_coherently_weakened (__main__.Replay.test_oracle_cannot_be_coherently_weakened) ... ok
+test_parent_symlink_cannot_read_outside (__main__.Replay.test_parent_symlink_cannot_read_outside) ... ok
+test_positive_semantics (__main__.Replay.test_positive_semantics) ... ok
+test_private_path_rejected (__main__.Replay.test_private_path_rejected) ... ok
+test_profile_trace_coherently_rewritten (__main__.Replay.test_profile_trace_coherently_rewritten) ... ok
+test_promotion_rewrite (__main__.Replay.test_promotion_rewrite) ... ok
+test_source_patch_context_changed (__main__.Replay.test_source_patch_context_changed) ... ok
+test_store_deletion_receipt_rejected (__main__.Replay.test_store_deletion_receipt_rejected) ... ok
+test_strict_diagnostic_removed (__main__.Replay.test_strict_diagnostic_removed) ... ok
+test_strict_multiple_modes_cannot_alias_controls (__main__.Replay.test_strict_multiple_modes_cannot_alias_controls) ... ok
+test_strict_parsed_and_raw_contract_coherently_weakened (__main__.Replay.test_strict_parsed_and_raw_contract_coherently_weakened) ... ok
+test_strict_stale_nonce (__main__.Replay.test_strict_stale_nonce) ... ok
+test_unknown_top_field (__main__.Replay.test_unknown_top_field) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 8.072s
+
+OK

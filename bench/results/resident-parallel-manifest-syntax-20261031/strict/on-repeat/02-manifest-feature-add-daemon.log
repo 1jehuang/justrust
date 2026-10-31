@@ -1,0 +1,5 @@
+daemon 0.20261027.0-0a2137f2-77f8c68-18e3ab84369db90b (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-d9c8c7fd0e7300395ab4a2c45606babb979d72c6812ff5d0ebe4200ea3f831dc)) of pid 3458426 listens on <private-home>/p81-on-repeat/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 11f0fbbbb73173fc of pid 3458429 for <source63>/
+<source63>: ready
+worker 11f0fbbbb73173fc of pid 3464104 for <source63>/
+<source63>: ready

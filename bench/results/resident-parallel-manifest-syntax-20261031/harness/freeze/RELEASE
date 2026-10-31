@@ -1,0 +1,45 @@
+RELEASE: parallel-manifest-harness-v81
+BASE: c8829bae0, stable
+SOURCE FREEZE: 2026-10-31, before coordinator native execution
+OWNED: bench/resident_suite.py, bench/test_resident_parallel_manifest.py,
+       docs/resident-suite.md only
+STATUS: source-only preparation validated, native acceptance NOT RUN by worker
+
+Frozen candidate extends one existing RetouchPolicy runner and raw-log replay.
+Legacy v74/v76 test source hash unchanged. Static AST checks preserve all legacy
+helpers outside enumerated policy/dispatch/runner extensions. No Rust, Cargo.lock,
+other docs, installed client or working branch changes by this worker. No commit.
+
+ACTIVATION CONTRACT: exact raw stderr line plus newline:
+ra-jit: parallel-manifest-parse-v81 batch
+ON candidate timed calls exactly one, OFF/reference/version zero. Other ON
+nonversion calls at most one. No dynamic fields and no eligibility inference.
+ROOT/native owner must separately prove actual bounded-batch marker semantics.
+
+FLAGS: candidate whole-generation=1 and watcher=1, parser=0/1 only.
+Reference all three explicitly0. Same candidate ELF OFF/ON/ON/OFF. Per-call exact
+triple flags/schema/run/rules. Per-segment same PID/start ticks/exe/socket both arms.
+Twenty timed calls + four warmups, all first touches retained. Original source63,
+full pinned toolchain identity, version/type/assert failure+recovery, original raw
+four-test tuple, fixed source overlay, fresh runtime nonce, file bytes+mtime and
+private stop/restoration safeguards retained. Distinct schema rejects crossmix.
+
+VALIDATION (Python mock only, never native acceptance):
+- testlogs/parallel.log: 18 tests PASS
+- testlogs/legacy.log: 113 tests PASS
+- testlogs/final-all.log: 131 tests PASS, final combined run
+- staticchecks.log: legacy helper AST/test hash and prospective path checks PASS
+All engine/compiler commands and /proc proofs mocked in new controls.
+
+Prospective output <abba>, absolute18bytes, fresh at freeze.
+ROOT must recheck freshness before native execution and never overwrite an abort.
+USAGE contains coordinator commands. Only execute after both native correctness
+and source freeze. No native build/probe/install/lock/job/commit done by worker.
+
+Scope: descriptive noop/clientplanning combined same-byte manifest+lock factor.
+Noise unknown. No separate-file attribution, speedup/significance/general/default
+or sessionweighted promotion claim. Runtime and measurements remain ROOT's work.
+
+STOPEDITS: owned source edits complete. Candidate copies and SHA256SUMS are the
+frozen handoff, with full originals and owned.patch. ROOT may commit only these
+owned source changes after its separate native gates.

@@ -1,0 +1,40 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+ra-jit: parallel-manifest-parse-v81 batch
+
+justrust: ok: 6 tests passed in 19.3s
+  time    startup 0.41s | compile 18.81s | tests 0.03s | after 0.04s
+  units   6 compiled (6 local, 0 deps, 0 build scripts), 159 fresh. Rebuilt because: blaze-manifest changed (2 crates); blaze-registry changed (blaze-metadata)
+          blaze_registry                     6.98s  cpu  36.2s    583 MB
+          blaze_metadata                     6.94s  cpu  34.9s    492 MB
+          blaze_metadata (test)              2.58s  cpu   8.7s    335 MB
+          blaze_units                        1.39s  cpu   7.7s    310 MB
+  tests   6 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 0.03s
+  cpu     91.6s total, avg 4.8/peak 5.9 of 16 cores; others used 10.8 cores
+  memory  peak 1139 MB build, 583 MB largest rustc, 32.7 GB free; stalls cpu 5.19s mem 0.00s io 0.01s
+  output  3 warnings shown, 44 hidden; 175 progress and 6 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~ 17.9s  blaze-units, blaze-registry, blaze-metadata rebuilt only because blaze-manifest, blaze-registry changed (17.9s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~  6.9s  only blaze-metadata's lib unit tests ran, but the command also built its other targets (blaze_metadata 6.9s); `cargo test --lib --release --locked -p blaze-metadata -j 6` would skip them, saving ~6.9s
+          ~  6.5s  machine was busy: other processes used 11 of 16 cores on average and tasks stalled 5.2s waiting for CPU
+  more    `justrust log 20261031-095459962-3395380` full output, `justrust show 20261031-095459962-3395380` full profile

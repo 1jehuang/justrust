@@ -1,0 +1,4 @@
+ra-jit: manifest-content-generation-v1 entered
+   Compiling justrust v0.1.0-alpha.1 (<source63>)
+    Finished `test` profile [blaze] target(s) in 0.21s
+     Running unittests src/lib.rs (<abba>/s3/engine/target/debug/deps/justrust-9e308754a1d78141)

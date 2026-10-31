@@ -1,0 +1,487 @@
+diff --git a/bench/resident_suite.py b/bench/resident_suite.py
+index d547c066f..86c31655e 100644
+--- a/bench/resident_suite.py
++++ b/bench/resident_suite.py
+@@ -24,6 +24,18 @@ RETOUCH_FILES = ('Cargo.toml', 'Cargo.lock')
+ RETOUCH_MARKER = 'ra-jit: manifest-content-generation-v1 entered'
+ WATCHED_FLAG = 'RA_JIT_WATCHED_MANIFEST_BYTES'
+ WATCHED_SCHEMA = 'native_resident_watched_manifest_retouch/v1'
++PARALLEL_FLAG = 'RA_JIT_PARALLEL_MANIFEST_PARSE'
++PARALLEL_SCHEMA = 'native_resident_parallel_manifest_retouch/v1'
++PARALLEL_MARKER = 'ra-jit: parallel-manifest-parse-v81 batch'
++PARALLEL_RULES = {'workload': 'combined same-byte manifest+lock retouch',
++                  'scope': 'noop/clientplanning factor only',
++                  'first_touch': 'retain all five samples per segment',
++                  'candidate_fixed_flags': {RETOUCH_FLAG: '1', WATCHED_FLAG: '1'},
++                  'factor': PARALLEL_FLAG,
++                  'reference_flags': {RETOUCH_FLAG: '0', WATCHED_FLAG: '0', PARALLEL_FLAG: '0'},
++                  'actual_batch_stderr_marker': PARALLEL_MARKER,
++                  'marker_counts': 'ON timed exactly 1, OFF/reference/version 0, other ON at most 1',
++                  'worker': 'same PID/start ticks/exe/socket within each candidate segment'}
+ 
+ 
+ @dataclass(frozen=True)
+@@ -31,23 +43,29 @@ class RetouchPolicy:
+     mode: str
+     schema: str
+     watched: bool = False
++    parallel: bool = False
+ 
+     def flags(self, arm, reference=False):
++        if self.parallel:
++            return {RETOUCH_FLAG: '0' if reference else '1',
++                    WATCHED_FLAG: '0' if reference else '1',
++                    PARALLEL_FLAG: '1' if arm == 'on' and not reference else '0'}
+         if self.watched:
+             return {RETOUCH_FLAG: '0' if reference else '1',
+                     WATCHED_FLAG: '1' if arm == 'on' and not reference else '0'}
+         return {RETOUCH_FLAG: '1' if arm == 'on' else '0'}
+ 
+     def reuse_worker(self, arm):
+-        return self.watched or arm == 'on'
++        return self.parallel or self.watched or arm == 'on'
+ 
+ 
+ RETOUCH_POLICY = RetouchPolicy('manifest-retouch', RETOUCH_SCHEMA)
+ WATCHED_POLICY = RetouchPolicy('watched-manifest-retouch', WATCHED_SCHEMA, True)
++PARALLEL_POLICY = RetouchPolicy('parallel-manifest-retouch', PARALLEL_SCHEMA, parallel=True)
+ 
+ 
+ def retouch_policy(schema):
+-    for policy in (RETOUCH_POLICY, WATCHED_POLICY):
++    for policy in (RETOUCH_POLICY, WATCHED_POLICY, PARALLEL_POLICY):
+         if schema == policy.schema:
+             return policy
+     raise ValueError('native resident: unsupported retouch schema')
+@@ -169,7 +187,7 @@ def replay(root, expected_source):
+ 
+ 
+ def validate(result):
+-    if result.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA):
++    if result.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA, PARALLEL_SCHEMA):
+         return validate_retouch(result)
+     require(result.get('schema') == SCHEMA, 'unsupported schema')
+     root = Path(result['artifacts_root'])
+@@ -184,6 +202,8 @@ def validate(result):
+ 
+ 
+ def cmd_resident(args):
++    if getattr(args, 'mode', 'edit') == PARALLEL_POLICY.mode:
++        return cmd_manifest_retouch(args, PARALLEL_POLICY)
+     if getattr(args, 'mode', 'edit') == 'manifest-retouch':
+         return cmd_manifest_retouch(args)
+     if getattr(args, 'mode', 'edit') == WATCHED_POLICY.mode:
+@@ -203,7 +223,7 @@ def cmd_resident(args):
+ 
+ 
+ def compare(a, b, floor=10.0):
+-    if any(r.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA) for r in (a, b)):
++    if any(r.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA, PARALLEL_SCHEMA) for r in (a, b)):
+         return compare_retouch(a, b, floor)
+     require(a.get('schema') == SCHEMA and b.get('schema') == SCHEMA, 'cannot mix native and non-native results')
+     ma, sa = validate(a)
+@@ -323,6 +343,18 @@ def check_retouch_environment(env, metadata, arm, policy=RETOUCH_POLICY, referen
+         require(env.get(key) == server, 'proc macro policy differs')
+ 
+ 
++def check_parallel_activation(stdout, stderr, flag, phase):
++    """A fixed actual-batch stderr receipt, never an eligibility/summary boolean."""
++    prefix = 'ra-jit: parallel-manifest-parse-'
++    count = stderr.splitlines().count(PARALLEL_MARKER)
++    require(prefix not in stdout and stderr.count(prefix) == count
++            and stderr.count(PARALLEL_MARKER + '\n') == count,
++            'wrong parallel batch marker location/format')
++    expected = 0 if flag == '0' or phase == 'version' else 1 if phase == 'retouch' else None
++    require(count == expected if expected is not None else count <= 1,
++            'wrong parallel batch marker count')
++
++
+ def replay_retouch(root, expected_source, policy=RETOUCH_POLICY):
+     """Strict new schema. Never reinterpret the legacy unique-edit measurements."""
+     metadata = json.loads((root / 'metadata.json').read_text())
+@@ -332,6 +364,12 @@ def replay_retouch(root, expected_source, policy=RETOUCH_POLICY):
+     if policy.watched:
+         require(metadata.get('mode') == policy.mode and metadata.get('factor') == WATCHED_FLAG,
+                 'wrong watched retouch mode/factor')
++    if policy.parallel:
++        require(metadata.get('mode') == policy.mode and metadata.get('factor') == PARALLEL_FLAG,
++                'wrong parallel retouch mode/factor')
++        require(metadata.get('rules') == PARALLEL_RULES
++                and re.fullmatch('[0-9a-f]{32}', metadata.get('run_id', '')),
++                'wrong parallel rules/run identity')
+     require(metadata.get('order') == list(RETOUCH_ORDER) and metadata.get('samples') == 5,
+             'wrong ABBA order/sample count')
+     require(len(expected_source) == 63 and metadata.get('source_before') == expected_source
+@@ -408,14 +446,20 @@ def replay_retouch(root, expected_source, policy=RETOUCH_POLICY):
+         env = states[group]
+         check_retouch_environment(env, metadata, arm, policy, segment is None)
+         require(row.get('flag') == env[RETOUCH_FLAG], 'missing per-call exact flag receipt')
+-        if policy.watched:
++        if policy.watched or policy.parallel:
+             require(row.get('flags') == policy.flags(arm, segment is None), 'wrong per-call flags receipt')
++        if policy.parallel:
++            require(row.get('schema') == policy.schema and row.get('run_id') == metadata['run_id']
++                    and row.get('rules') == PARALLEL_RULES, 'cross-schema/run/rules row mixture')
+         tool = tools['reference' if segment is None else 'engine']
+         command = [tool['path'], '--version'] if phase == 'version' else harness.command(Path(tool['path']), 'reference' if segment is None else 'engine')
+         prefix = f'call-{index:03}'
+         logs = [prefix + '.stdout', prefix + '.stderr']
+         artifacts.extend(logs)
+         text = '\n'.join((root / name).read_text(errors='replace') for name in logs)
++        if policy.parallel:
++            check_parallel_activation((root / logs[0]).read_text(errors='replace'),
++                                      (root / logs[1]).read_text(errors='replace'), env[PARALLEL_FLAG], phase)
+         if env[RETOUCH_FLAG] == '0' or phase == 'version':
+             require(RETOUCH_MARKER not in text, 'unexpected opt-in entry marker')
+         require(row.get('command') == command and row.get('error') is None and row.get('timed_out') is False,
+@@ -462,6 +506,8 @@ def replay_retouch(root, expected_source, policy=RETOUCH_POLICY):
+             pids = re.findall(r'worker: pid (\d+)', status_text)
+             require(len(pids) == 1, 'missing/ambiguous native worker PID')
+             identity = worker_key(row.get('worker'), tool, env['RA_JIT_HOME'])
++            if policy.parallel:
++                identity += (row['worker']['cmdline_hex'],)
+             require(identity[0] == int(pids[0]), 'status and proc PID differ')
+             if phase == 'retouch':
+                 require((identity == worker[group]) == policy.reuse_worker(arm), 'worker PID/starttime did not match arm behavior')
+@@ -544,6 +590,11 @@ def cmd_manifest_retouch(args, policy=RETOUCH_POLICY):
+     if policy.watched:
+         metadata.update(mode=policy.mode, factor=WATCHED_FLAG,
+                         scope='WATCHED manifest+lock factor, whole-generation fixed ON, descriptive, no default promotion')
++    if policy.parallel:
++        metadata.update(mode=policy.mode, factor=PARALLEL_FLAG,
++                        run_id=uuid.uuid4().hex, rules=PARALLEL_RULES,
++                        scope='noop/clientplanning parser factor, combined same-byte manifest+lock retouch, '
++                              'whole-generation+watcher fixed ON, descriptive, no default promotion')
+     rows, environments, stops = [], {}, []
+     expected_tests = None
+ 
+@@ -573,8 +624,10 @@ def cmd_manifest_retouch(args, policy=RETOUCH_POLICY):
+                'flag': env[RETOUCH_FLAG], 'nonce': nonce,
+                'nonce_environment': {RETOUCH_NONCE: nonce} if nonce else {},
+                'touches': touches or [], 'source_before': before}
+-        if policy.watched:
+-            row['flags'] = {key: env[key] for key in (RETOUCH_FLAG, WATCHED_FLAG)}
++        if policy.watched or policy.parallel:
++            row['flags'] = {key: env[key] for key in policy.flags('off')}
++        if policy.parallel:
++            row.update(schema=policy.schema, run_id=metadata['run_id'], rules=PARALLEL_RULES)
+         rows.append(row)
+         save()
+         row.update(harness.runtime.run_process(command, args.source, env, prefix, args.timeout))
+@@ -582,6 +635,9 @@ def cmd_manifest_retouch(args, policy=RETOUCH_POLICY):
+         require(row['source_after'] == before and identify() == metadata['tools_before'],
+                 'inputs/tools changed during command')
+         text = '\n'.join(prefix.with_suffix(suffix).read_text(errors='replace') for suffix in ('.stdout', '.stderr'))
++        if policy.parallel:
++            check_parallel_activation(prefix.with_suffix('.stdout').read_text(errors='replace'),
++                                      prefix.with_suffix('.stderr').read_text(errors='replace'), env[PARALLEL_FLAG], phase)
+         require(row.get('error') is None and row.get('timed_out') is False, 'native process failed/timed out')
+         if phase == 'version':
+             version = re.escape(harness.REFERENCE_VERSION) + '$' if stack == 'reference' else r'jr-engine\s+\S+'
+@@ -636,6 +692,8 @@ def cmd_manifest_retouch(args, policy=RETOUCH_POLICY):
+                     'RA_JIT_REMOTE', 'BLAZE_PROC_MACRO_SERVER', 'RA_JIT_PROC_MACRO_SERVER', RETOUCH_FLAG)
+             if policy.watched:
+                 keys += (WATCHED_FLAG,)
++            if policy.parallel:
++                keys += (WATCHED_FLAG, PARALLEL_FLAG)
+             metadata['environments'][group] = {key: env[key] for key in keys if key in env}
+             metadata['environments'][group].update(harness.runtime.PROFILES)
+             metadata['toolchain_links'][group] = str(Path(env['BLAZE_HOME']) / 'toolchains' / args.toolchain.name)
+@@ -688,7 +746,7 @@ def cmd_manifest_retouch(args, policy=RETOUCH_POLICY):
+ 
+ 
+ def compare_retouch(a, b, floor):
+-    require(a.get('schema') == b.get('schema') and a.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA),
++    require(a.get('schema') == b.get('schema') and a.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA, PARALLEL_SCHEMA),
+             'cannot mix retouch and edit schemas or retouch modes')
+     policy = retouch_policy(a['schema'])
+     ma, sa = validate_retouch(a)
+@@ -699,7 +757,10 @@ def compare_retouch(a, b, floor):
+     require(math.isfinite(floor) and floor >= 0, 'invalid floor')
+     old, new = sa['off']['median_seconds'], sb['on']['median_seconds']
+     delta = (new / old - 1) * 100
+-    if policy.watched:
++    if policy.parallel:
++        print('Native resident noop/clientplanning parser factor, whole-generation+watcher fixed ON.')
++        print('Parser flag explicitly 0/1; reference all three flags 0. All first-touch samples retained.')
++    elif policy.watched:
+         print('Native resident WATCHED manifest+lock factor scoped diagnostic, whole-generation fixed ON.')
+         print('Watcher flag explicitly 0/1; reference both flags 0. All first-touch samples retained.')
+     else:
+@@ -718,6 +779,6 @@ def add_parser(sub):
+     parser.add_argument('--proc-macro-server', type=harness.absolute)
+     parser.add_argument('--samples', type=int, choices=(5,), default=5)
+     parser.add_argument('--timeout', type=float, default=360)
+-    parser.add_argument('--mode', choices=('edit', 'manifest-retouch', WATCHED_POLICY.mode), default='edit',
++    parser.add_argument('--mode', choices=('edit', 'manifest-retouch', WATCHED_POLICY.mode, PARALLEL_POLICY.mode), default='edit',
+                         help='manifest-retouch runs fixed same-engine OFF/ON/ON/OFF, five samples each')
+     parser.set_defaults(fn=cmd_resident)
+diff --git a/docs/resident-suite.md b/docs/resident-suite.md
+index 8e3b5a146..9d9ba563a 100644
+--- a/docs/resident-suite.md
++++ b/docs/resident-suite.md
+@@ -167,6 +167,47 @@ Preserve every first-touch sample and the original aborted runs. A completed
+ comparison is descriptive combined manifest+lock evidence with unknown noise,
+ not independent file attribution, a general agent speedup or default promotion.
+ 
++## Parallel-manifest parser factor
++
++`--mode parallel-manifest-retouch` uses the same runner and safeguards with
++schema `native_resident_parallel_manifest_retouch/v1`. It is a
++**noop/clientplanning factor** diagnostic, not separate manifest/lock attribution,
++default promotion, or session-weighted performance evidence. The same candidate
++ELF runs OFF/ON/ON/OFF, five measurements plus one warmup per segment. All twenty
++measurements, including every first retouch, are retained. Whole-generation
++`RA_JIT_MANIFEST_CONTENT_GENERATION=1` and watcher
++`RA_JIT_WATCHED_MANIFEST_BYTES=1` are fixed in both candidate arms. Only
++`RA_JIT_PARALLEL_MANIFEST_PARSE=0/1` changes. The reference has all three flags
++explicitly zero. Flags are recorded per state and per call, with exact schema,
++run and rule receipts. Each candidate segment must keep its worker PID, kernel
++start ticks, executable and socket through both arms' retouches.
++
++Every ON timed fresh-client call must prove an actual chosen parallel batch in
++its raw stderr, not merely flag eligibility or a cached summary boolean. OFF
++and reference/version calls must have no batch marker. The exact fixed line is
++`ra-jit: parallel-manifest-parse-v81 batch` followed by a newline, once per
++ON timed client. Other ON non-version calls may have zero or one marker.
++Dynamic package/worker fields are not part of this contract.
++The fixed reachable nonce overlay,
++original source63 and TC4020 identity, original semantic failures/recoveries,
++same-byte manifest+lock mtime checks, restoration and private stops still apply.
++Replay rejects mixed modes, runs, rules, flags and identities. Native correctness
++and source freeze must precede coordinator execution. No native runtime or
++performance conclusion follows from the Python-only mock tests.
++
++```sh
++python3 bench/suite.py resident --mode parallel-manifest-retouch \
++  --reference-engine /absolute/reference/ra-jit \
++  --engine /absolute/candidate/jr-engine --source /absolute/pristine/source63 \
++  --toolchain /absolute/pinned/toolchain --output <abba> \
++  --samples 5 --timeout 360
++python3 bench/suite.py compare <abba>/off.json <abba>/on.json
++```
++
++Output must be a fresh absolute path of at most 30 bytes. Comparisons remain
++descriptive with unknown noise and no significance or general speedup verdict.
++Mock controls are in `bench/test_resident_parallel_manifest.py`.
++
+ ## Existing mode regression tests
+ 
+ ```sh
+diff --git a/bench/test_resident_parallel_manifest.py b/bench/test_resident_parallel_manifest.py
+new file mode 100644
+index 000000000..08239a599
+--- /dev/null
++++ b/bench/test_resident_parallel_manifest.py
+@@ -0,0 +1,211 @@
++"""Python-only parser factor controls. All native launches and /proc are mocked."""
++import argparse
++import contextlib
++import copy
++from dataclasses import FrozenInstanceError
++import io
++import json
++import unittest
++from unittest.mock import patch
++
++import resident_suite as suite
++import test_resident_manifest_retouch as prior
++
++
++class ParallelManifestTests(unittest.TestCase):
++    def setUp(self):
++        prior.ManifestRetouchTests.setUp(self)
++        self.args.mode = suite.PARALLEL_POLICY.mode
++
++    run_harness = prior.ManifestRetouchTests.run_harness
++    result = prior.ManifestRetouchTests.result
++    mutate_json = prior.ManifestRetouchTests.mutate_json
++    fake_proc = prior.ManifestRetouchTests.fake_proc
++
++    def replay(self):
++        return suite.replay_retouch(self.args.output, self.source, suite.PARALLEL_POLICY)
++
++    def fake_run(self, command, cwd, env, prefix, timeout):
++        result = prior.ManifestRetouchTests.fake_run(self, command, cwd, env, prefix, timeout)
++        result['elapsed_seconds'] = 0.005 if env[suite.PARALLEL_FLAG] == '1' else 0.01
++        if command[-1] not in ('stop', 'status', '--version') and env[suite.PARALLEL_FLAG] == '1':
++            prefix.with_suffix('.stderr').write_text(suite.PARALLEL_MARKER + '\n')
++        return result
++
++    test_full_abba = prior.ManifestRetouchTests.test_full_abba_real_file_touches_runtime_fixture_and_semantic_gates
++    test_runtime_fixture = prior.ManifestRetouchTests.test_fixture_reachable_runtime_env_not_per_sample_source_or_env_macro
++    test_raw_nonce = prior.ManifestRetouchTests.test_raw_nonce_missing_stale_duplicate_and_suffix_rejected
++    test_bad_rows_and_touches = prior.ManifestRetouchTests.test_bad_rows_and_touch_metadata_fail_closed
++    test_original_semantic_gates = prior.ManifestRetouchTests.test_raw_original_semantic_gate_failure_and_zero_tests_rejected
++    test_identity_and_restoration = prior.ManifestRetouchTests.test_identity_policy_flag_private_state_and_restore_rejected
++    test_compare = prior.ManifestRetouchTests.test_compare_distinct_schema_same_abba_only_and_descriptive
++    test_failure_cleanup = prior.ManifestRetouchTests.test_failure_restores_originals_and_stops_private_state
++    test_proc_reader = prior.ManifestRetouchTests.test_native_pid_proof_reader_and_start_race_fail_closed
++    test_socket_budget = prior.ManifestRetouchTests.test_output_native_socket_budget_is_explicit
++
++    def test_frozen_policy_and_old_flag_semantics(self):
++        with self.assertRaises(FrozenInstanceError):
++            suite.PARALLEL_POLICY.parallel = False
++        self.assertEqual(suite.RETOUCH_POLICY.flags('off'), {suite.RETOUCH_FLAG: '0'})
++        self.assertEqual(suite.RETOUCH_POLICY.flags('on'), {suite.RETOUCH_FLAG: '1'})
++        self.assertFalse(suite.RETOUCH_POLICY.reuse_worker('off'))
++        self.assertEqual(suite.WATCHED_POLICY.flags('off'),
++                         {suite.RETOUCH_FLAG: '1', suite.WATCHED_FLAG: '0'})
++        self.assertEqual(suite.WATCHED_POLICY.flags('on'),
++                         {suite.RETOUCH_FLAG: '1', suite.WATCHED_FLAG: '1'})
++        self.assertTrue(suite.WATCHED_POLICY.reuse_worker('off'))
++        self.assertTrue(suite.PARALLEL_POLICY.reuse_worker('off'))
++
++    def test_exact_three_flags_and_only_parser_changes(self):
++        self.run_harness()
++        metadata, _, _ = self.replay()
++        states = metadata['environments']
++        self.assertEqual({k: states['reference'][k] for k in suite.PARALLEL_POLICY.flags('off')},
++                         {k: '0' for k in suite.PARALLEL_POLICY.flags('off')})
++        rows = json.loads((self.args.output / 'records.json').read_text())
++        for i, arm in enumerate(suite.RETOUCH_ORDER):
++            expected = {suite.RETOUCH_FLAG: '1', suite.WATCHED_FLAG: '1',
++                        suite.PARALLEL_FLAG: '1' if arm == 'on' else '0'}
++            self.assertEqual(suite.PARALLEL_POLICY.flags(arm), expected)
++            group = f'segment-{i}'
++            self.assertEqual({k: states[group][k] for k in expected}, expected)
++            selected = [r for r in rows if r['group'] == group]
++            self.assertTrue(all(r['flags'] == expected for r in selected))
++            measured = [r for r in selected if r['phase'] in ('warmup', 'retouch')]
++            self.assertEqual(len({(r['worker']['pid'], r['worker']['stat'], r['worker']['cmdline_hex'])
++                                  for r in measured}), 1)
++        with self.assertRaisesRegex(ValueError, 'wrong retouch schema'):
++            suite.replay_retouch(self.args.output, self.source, suite.WATCHED_POLICY)
++
++    def test_wrong_flags_schema_run_rules_and_first_touch_omission(self):
++        self.run_harness()
++        for name in ('metadata.json', 'records.json'):
++            path = self.args.output / name
++            original = path.read_bytes()
++            if name == 'metadata.json':
++                mutations = [lambda m: m.update(schema=suite.WATCHED_SCHEMA),
++                             lambda m: m.update(factor=suite.WATCHED_FLAG),
++                             lambda m: m.update(rules={}), lambda m: m.update(run_id='bad')]
++                for group in ('reference', 'segment-0', 'segment-1'):
++                    for flag in suite.PARALLEL_POLICY.flags('off'):
++                        for bad in ('true', '01', None):
++                            mutations.append(lambda m, g=group, f=flag, b=bad:
++                                             m['environments'][g].update({f: b}))
++            else:
++                def first(rows):
++                    return next(r for r in rows if r['phase'] == 'retouch')
++                mutations = [lambda r: first(r).update(schema=suite.WATCHED_SCHEMA),
++                             lambda r: first(r).update(run_id='a' * 32),
++                             lambda r: first(r).update(rules={}),
++                             lambda r: r.remove(first(r))]
++                for flag in suite.PARALLEL_POLICY.flags('off'):
++                    mutations.append(lambda r, f=flag: first(r)['flags'].update({f: 'wrong'}))
++            for i, mutate in enumerate(mutations):
++                with self.subTest(name=name, mutation=i):
++                    path.write_bytes(original)
++                    self.mutate_json(name, mutate)
++                    with self.assertRaises(ValueError):
++                        self.replay()
++            path.write_bytes(original)
++
++    def test_actual_batch_raw_stderr_not_summary_boolean(self):
++        self.run_harness()
++        rows = json.loads((self.args.output / 'records.json').read_text())
++        for arm in ('off', 'on'):
++            index = next(i for i, r in enumerate(rows) if r['phase'] == 'retouch'
++                         and r['flags'][suite.PARALLEL_FLAG] == ('1' if arm == 'on' else '0'))
++            path = self.args.output / f'call-{index:03}.stderr'
++            original = path.read_bytes()
++            for bad in ('', suite.PARALLEL_MARKER + '\n' + suite.PARALLEL_MARKER + '\n',
++                        suite.PARALLEL_MARKER + ' suffix\n') if arm == 'on' else (suite.PARALLEL_MARKER + '\n',):
++                path.write_text(bad)
++                with self.assertRaisesRegex(ValueError, 'parallel.*marker'):
++                    self.replay()
++            path.write_bytes(original)
++            if arm == 'on':
++                # Moving a genuine marker to stdout cannot prove stderr activation.
++                stdout = self.args.output / f'call-{index:03}.stdout'
++                saved = stdout.read_bytes()
++                stdout.write_bytes(saved + original)
++                path.write_text('')
++                with self.assertRaisesRegex(ValueError, 'parallel.*marker'):
++                    self.replay()
++                stdout.write_bytes(saved)
++                path.write_bytes(original)
++
++    def test_marker_contract_versions_off_and_no_dynamic_fields(self):
++        line = suite.PARALLEL_MARKER + '\n'
++        suite.check_parallel_activation('', line, '1', 'retouch')
++        suite.check_parallel_activation('', '', '1', 'version')
++        suite.check_parallel_activation('', '', '1', 'warmup')
++        for flag, phase, stderr in [('0', 'retouch', line), ('0', 'prepare', line),
++                                    ('1', 'version', line), ('1', 'retouch', ''),
++                                    ('1', 'retouch', line + line),
++                                    ('1', 'retouch', suite.PARALLEL_MARKER),
++                                    ('1', 'retouch', line.rstrip() + ' packages=5 workers=2\n'),
++                                    ('1', 'retouch', line.replace('v81', 'v80'))]:
++            with self.subTest(flag=flag, phase=phase, stderr=stderr), self.assertRaisesRegex(ValueError, 'marker'):
++                suite.check_parallel_activation('', stderr, flag, phase)
++
++    def test_missing_actual_batch_fails_runner_and_stops_private_states(self):
++        original = self.fake_run
++        def no_batch(command, cwd, env, prefix, timeout):
++            receipt = original(command, cwd, env, prefix, timeout)
++            if prefix.name.startswith('call-') and not prefix.name.endswith('-status'):
++                rows = json.loads((self.args.output / 'records.json').read_text())
++                if rows[-1]['phase'] == 'retouch' and env[suite.PARALLEL_FLAG] == '1':
++                    prefix.with_suffix('.stderr').write_text('')
++            return receipt
++        with patch.object(self, 'fake_run', side_effect=no_batch), self.assertRaisesRegex(ValueError, 'marker'):
++            self.run_harness()
++        self.assertEqual(suite.harness.source_hashes(self.args.source), self.source)
++        self.assertFalse((self.args.output / 'off.json').exists())
++        metadata = json.loads((self.args.output / 'metadata.json').read_text())
++        self.assertIn('marker', metadata['error'])
++        self.assertEqual(len(metadata['stops']), 3)
++
++    def test_same_pid_ticks_exe_and_socket_both_candidate_arms(self):
++        self.run_harness()
++        path = self.args.output / 'records.json'
++        original = path.read_bytes()
++        for arm in ('0', '1'):
++            for field, value in (('pid', 99), ('stat', None), ('exe', '/wrong'),
++                                 ('exe_sha256', 'f' * 64), ('cmdline_hex', None)):
++                rows = json.loads(original)
++                row = next(r for r in rows if r['phase'] == 'retouch' and r['flags'][suite.PARALLEL_FLAG] == arm)
++                if field == 'stat':
++                    value = row['worker']['stat'] + '0'
++                if field == 'cmdline_hex':
++                    value = bytes.fromhex(row['worker'][field]).replace(b'worker-id', b'other-id').hex()
++                row['worker'][field] = value
++                path.write_text(json.dumps(rows))
++                with self.subTest(arm=arm, field=field), self.assertRaises(ValueError):
++                    self.replay()
++        path.write_bytes(original)
++
++    def test_parser_dispatch_and_cross_mode_compare(self):
++        parser = argparse.ArgumentParser()
++        suite.add_parser(parser.add_subparsers())
++        argv = ['resident', '--mode', suite.PARALLEL_POLICY.mode]
++        for name in ('reference-engine', 'engine', 'source', 'output', 'toolchain'):
++            argv += ['--' + name, '/absolute/' + name]
++        args = parser.parse_args(argv)
++        with patch.object(suite, 'cmd_manifest_retouch') as call:
++            suite.cmd_resident(args)
++        call.assert_called_once_with(args, suite.PARALLEL_POLICY)
++        self.run_harness()
++        off, on = self.result(), self.result('on')
++        for schema in (suite.SCHEMA, suite.RETOUCH_SCHEMA, suite.WATCHED_SCHEMA):
++            changed = copy.deepcopy(on)
++            changed['schema'] = schema
++            with self.assertRaisesRegex(ValueError, 'mix'):
++                suite.compare(off, changed)
++        text = io.StringIO()
++        with patch.object(suite, 'pinned_hashes', return_value=self.source), contextlib.redirect_stdout(text):
++            suite.compare(off, on)
++        self.assertIn('noop/clientplanning', text.getvalue())
++        self.assertIn('noise unknown', text.getvalue())
++
++
++if __name__ == '__main__':
++    unittest.main()

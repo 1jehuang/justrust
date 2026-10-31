@@ -1,0 +1,24 @@
+   Compiling justrust v0.1.0-alpha.1 (<source63>)
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 26.67s
+     Running unittests src/lib.rs (<private-home>/p81-off/engine/target/debug/deps/justrust-bdb6f2c3c6c95241)
+blaze time: 26683.6 ms: daemon 26023.7 (98%), client planning owned resolver 630.3 (2%), client command 10.1 (0%), client↔daemon 6.1 (0%), client test execution 4.8 (0%), client planning rustc host 3.2 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                    10.1 ms   0.0%
+blaze    client test                        0.4 ms   0.0%
+blaze    client metadata                    0.9 ms   0.0%
+blaze    client planning                    0.1 ms   0.0%
+blaze    client planning rustc host         3.2 ms   0.0%
+blaze    client planning target cfg         1.1 ms   0.0%
+blaze    client planning asked setup        0.0 ms   0.0%
+blaze    client planning owned resolver     630.3 ms   2.4%
+blaze    client checkout                    0.7 ms   0.0%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      6.1 ms   0.0%
+blaze    daemon read request                0.7 ms   0.0%
+blaze    daemon                         26023.7 ms  97.5%
+blaze    daemon↔worker                      1.0 ms   0.0%
+blaze    client install artifacts           0.3 ms   0.0%
+blaze    client test execution              4.8 ms   0.0%
+blaze    total                          26683.6 ms 100.0%

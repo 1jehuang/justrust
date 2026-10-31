@@ -1,0 +1,25 @@
+v81 EVIDENCE-ONLY RELEASE, October 31, 2026
+
+Decision: REJECT. Observed median reduction 9.579317076710248% does not exceed
+strictly greater than 10% floor. Noise unknown. No causal/general/default claim.
+
+Native source ownership was released after exact-original restoration of the two
+production files and preservation/removal of the two new native fixture modules.
+The candidate five live files matched the immutable source freeze before restore.
+The subsequent v82 source belongs to another owner and is not modified here.
+
+This release scope is ONLY this new evidence directory and
+ docs/resident-parallel-manifest-syntax.md
+No native build, compiler, engine, test, probe, install or Cargo job is part of
+this evidence packaging. The root's historical native jobs are preserved inputs.
+
+Portable acceptance:
+ python3 -B validate.py --manifest
+ python3 -B test_offline.py
+Includes original semantic oracle replay, in-memory patch joins, coherently
+resealed semantic negatives, fixed-history negative, and isolated relocated
+empty-HOME/PATH replay with six actual denied effects. Native correctness is
+not re-established by this replay. Artifact hashes do not establish provenance.
+
+Commit only this directory and the named document after coordinator readiness
+notification, offline PASS and empty shared index. Preserve unrelated changes.

@@ -1,0 +1,906 @@
+diff --git a/toolchain/resident/crates/blaze-manifest/src/manifest.rs b/toolchain/resident/crates/blaze-manifest/src/manifest.rs
+index f15ca4440..442709510 100644
+--- a/toolchain/resident/crates/blaze-manifest/src/manifest.rs
++++ b/toolchain/resident/crates/blaze-manifest/src/manifest.rs
+@@ -347,6 +347,11 @@ pub fn read_manifest(
+     source_id: SourceId,
+     ctx: &Context,
+ ) -> anyhow::Result<EitherManifest> {
++    let original_toml = read_manifest_syntax(path)?;
++    normalize_manifest(original_toml, path, source_id, ctx)
++}
++
++fn read_manifest_syntax(path: &Path) -> anyhow::Result<TomlManifest> {
+     let ext = path.extension();
+     if ext.is_none() || ext == Some(std::ffi::OsStr::new("rs")) {
+         bail!("parsing `{}` requires `-Zscript`", path.display());
+@@ -357,7 +362,120 @@ pub fn read_manifest(
+         .map_err(|_| anyhow!("path at `{}` was not valid utf-8", path.display()))?;
+     let original_toml: TomlManifest =
+         toml::from_str(&contents).map_err(|e| ManifestDiagnostic::from_toml(e, &contents, path))?;
++    Ok(original_toml)
++}
++
++#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
++fn bytes_to_contents(bytes: Vec<u8>, path: &Path) -> anyhow::Result<String> {
++    String::from_utf8(bytes)
++        .map_err(|_| anyhow!("path at `{}` was not valid utf-8", path.display()))
++}
++
++#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
++fn parse_manifest_syntax(contents: String, path: &Path) -> anyhow::Result<TomlManifest> {
++    toml::from_str(&contents).map_err(|e| ManifestDiagnostic::from_toml(e, &contents, path))
++}
++
++/// Owned syntax for exactly one path. No configuration or workspace state crosses a thread.
++pub struct ParsedManifest {
++    path: PathBuf,
++    syntax: Option<anyhow::Result<TomlManifest>>,
++}
++
++impl ParsedManifest {
++    /// Complete the original semantic body on the caller's thread, in input order.
++    pub fn read(self, source_id: SourceId, ctx: &Context) -> anyhow::Result<EitherManifest> {
++        match self.syntax {
++            Some(syntax) => normalize_manifest(syntax?, &self.path, source_id, ctx),
++            None => read_manifest(&self.path, source_id, ctx),
++        }
++    }
++}
++
++/// Opportunistically parse a sufficiently large batch of regular Cargo.toml files.
++/// The caller alone decides whether the experimental mode is enabled. A fresh batch
++/// owns fresh bytes, not a cache. Unsupported platforms and special files fall back.
++pub fn preparse_manifests(paths: &[PathBuf]) -> Option<Vec<ParsedManifest>> {
++    if paths.len() < 8
++        || paths.iter().any(|path| {
++            path.file_name() != Some(std::ffi::OsStr::new("Cargo.toml"))
++                || !std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file())
++        })
++    {
++        return None;
++    }
++    preparse_regular_manifests(paths)
++}
+ 
++#[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
++fn preparse_regular_manifests(_: &[PathBuf]) -> Option<Vec<ParsedManifest>> {
++    None
++}
++
++#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
++fn preparse_regular_manifests(paths: &[PathBuf]) -> Option<Vec<ParsedManifest>> {
++    use std::io::{Read as _, Write as _};
++    use std::os::unix::fs::OpenOptionsExt as _;
++
++    fn read_regular(path: &Path) -> Option<anyhow::Result<TomlManifest>> {
++        // Linux O_NONBLOCK: if a regular path is replaced by a FIFO between
++        // preflight and open, opening it must not wait for a writer. Verify the
++        // opened handle as well. This is not a filesystem snapshot guarantee.
++        // O_NOFOLLOW also declines a last-component symlink introduced after
++        // preflight. Flag values here are specific to Linux x86_64.
++        let mut file =
++            std::fs::OpenOptions::new().read(true).custom_flags(0x800 | 0x20000).open(path).ok()?;
++        if !file.metadata().ok()?.is_file() {
++            return None;
++        }
++        let mut bytes = Vec::new();
++        Some((|| {
++            file.read_to_end(&mut bytes)
++                .with_context(|| format!("failed to read `{}`", path.display()))?;
++            parse_manifest_syntax(bytes_to_contents(bytes, path)?, path)
++        })())
++    }
++
++    let workers = std::thread::available_parallelism().map_or(2, usize::from).clamp(2, 4);
++    std::thread::scope(|scope| {
++        let mut handles = Vec::new();
++        for chunk in paths.chunks(paths.len().div_ceil(workers)) {
++            let handle = std::thread::Builder::new()
++                .name("manifest-syntax".into())
++                .spawn_scoped(scope, move || {
++                    chunk
++                        .iter()
++                        .map(|path| ParsedManifest {
++                            path: path.clone(),
++                            syntax: read_regular(path),
++                        })
++                        .collect::<Vec<_>>()
++                })
++                .ok()?;
++            handles.push(handle);
++        }
++        static MARKER: std::sync::Once = std::sync::Once::new();
++        MARKER.call_once(|| {
++            let _ = writeln!(std::io::stderr().lock(), "ra-jit: parallel-manifest-parse-v81 batch");
++        });
++        let mut parsed = Vec::with_capacity(paths.len());
++        for handle in handles {
++            parsed.extend(handle.join().ok()?);
++        }
++        Some(parsed)
++    })
++}
++
++#[cfg(test)]
++#[path = "../tests/parallel_manifest_syntax/mod.rs"]
++mod parallel_manifest_syntax_tests;
++
++fn normalize_manifest(
++    original_toml: TomlManifest,
++    path: &Path,
++    source_id: SourceId,
++    ctx: &Context,
++) -> anyhow::Result<EitherManifest> {
+     let mut warnings = Vec::new();
+     let mut errors = Vec::new();
+     (|| {
+diff --git a/toolchain/resident/crates/blaze-metadata/src/lib.rs b/toolchain/resident/crates/blaze-metadata/src/lib.rs
+index 99f733249..c97aee95b 100644
+--- a/toolchain/resident/crates/blaze-metadata/src/lib.rs
++++ b/toolchain/resident/crates/blaze-metadata/src/lib.rs
+@@ -1036,7 +1036,21 @@ fn fetch(
+         locked.push(blaze_registry::Locked { source, package });
+         texts.push(source_text);
+     }
+-    let roots = sources.fetch(&locked)?;
++    let roots = {
++        let _fetch =
++            tracing::info_span!(target: "ra_jit::planning", "resolver sources.fetch").entered();
++        sources.fetch(&locked)?
++    };
++    if parallel_manifest_parse_enabled()
++        && ids.iter().all(|id| {
++            sources.map().replacement(id.source_id()).is_ok_and(|from| from.is_remote_registry())
++        })
++    {
++        let paths: Vec<_> = roots.iter().map(|(dir, _)| dir.join("Cargo.toml")).collect();
++        if let Some(read) = read_fetched_parallel(&texts, &paths, ctx, true)? {
++            return Ok(read);
++        }
++    }
+     let mut read = Vec::with_capacity(texts.len());
+     for (source_text, (dir, _)) in texts.into_iter().zip(roots) {
+         let manifest_path = dir.join("Cargo.toml");
+@@ -1049,6 +1063,60 @@ fn fetch(
+     Ok(read)
+ }
+ 
++fn parallel_manifest_parse_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| {
++        std::env::var_os("RA_JIT_PARALLEL_MANIFEST_PARSE")
++            .is_some_and(|value| value == std::ffi::OsStr::new("1"))
++    })
++}
++
++#[cfg(test)]
++#[path = "../tests/parallel_manifest_syntax/mod.rs"]
++mod parallel_manifest_syntax_tests;
++
++// Explicit mode for native fixtures, never mutate the process-cached flag in tests.
++fn read_fetched_parallel(
++    texts: &[String],
++    paths: &[PathBuf],
++    ctx: &Context,
++    enabled: bool,
++) -> Result<Option<Vec<Package>>> {
++    if !enabled
++        || texts.len() != paths.len()
++        || !texts.iter().all(|text| text.starts_with("registry+") || text.starts_with("sparse+"))
++    {
++        return Ok(None);
++    }
++    let parsed = {
++        let _syntax =
++            tracing::info_span!(target: "ra_jit::planning", "resolver fetched manifest syntax")
++                .entered();
++        blaze_manifest::manifest::preparse_manifests(paths)
++    };
++    let Some(parsed) = parsed else {
++        return Ok(None);
++    };
++    let _normalize =
++        tracing::info_span!(target: "ra_jit::planning", "resolver fetched manifest normalize")
++            .entered();
++    let mut read = Vec::with_capacity(texts.len());
++    for ((source_text, manifest_path), parsed) in texts.iter().zip(paths).zip(parsed) {
++        // Source/config errors still precede this manifest's syntax errors, and
++        // every earlier manifest's complete semantics still precedes this one.
++        let source = manifest_source(source_text, &ctx.config)?;
++        let EitherManifest::Real(manifest) = parsed.read(source, ctx)? else {
++            bail!("{} has no package", manifest_path.display());
++        };
++        read.push(Package {
++            manifest_path: manifest_path.clone(),
++            manifest,
++            locked_source: Some(source_text.clone()),
++        });
++    }
++    Ok(Some(read))
++}
++
+ /// The registries' indexes behind the packages the lock file pins, read from their fetched
+ /// manifests so that a locked build reads no index. Git checkouts and vendored directories,
+ /// which blaze does not list yet, answer only at the versions the lock file pins.
+diff --git a/toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs b/toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs
+new file mode 100644
+index 000000000..d7a0e442e
+--- /dev/null
++++ b/toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs
+@@ -0,0 +1,307 @@
++//! Native differential fixtures. The oracle below is the complete accepted v80
++//! read_manifest body, not a call to the new normalization helper.
++#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
++
++use super::*;
++use anyhow::Context as _;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++// Frozen from c8829bae0. Keep this independent of the candidate's split helpers.
++fn original_read_manifest(
++    path: &Path,
++    source_id: SourceId,
++    ctx: &Context,
++) -> anyhow::Result<EitherManifest> {
++    let ext = path.extension();
++    if ext.is_none() || ext == Some(std::ffi::OsStr::new("rs")) {
++        bail!("parsing `{}` requires `-Zscript`", path.display());
++    }
++    let bytes =
++        std::fs::read(path).with_context(|| format!("failed to read `{}`", path.display()))?;
++    let contents = String::from_utf8(bytes)
++        .map_err(|_| anyhow!("path at `{}` was not valid utf-8", path.display()))?;
++    let original_toml: TomlManifest =
++        toml::from_str(&contents).map_err(|e| ManifestDiagnostic::from_toml(e, &contents, path))?;
++
++    let mut warnings = Vec::new();
++    let mut errors = Vec::new();
++    (|| {
++        let empty = Vec::new();
++        let cargo_features = original_toml.cargo_features.as_ref().unwrap_or(&empty);
++        let features = Features::new(cargo_features, &mut warnings, source_id.is_path())?;
++        let workspace_config = to_workspace_config(&original_toml, path, &mut warnings)?;
++        if let WorkspaceConfig::Root(ws_root_config) = &workspace_config {
++            let package_root = path.parent().unwrap();
++            ctx.ws_roots.borrow_mut().insert(package_root.to_owned(), (**ws_root_config).clone());
++        }
++        let normalized_toml = normalize_toml(
++            &original_toml,
++            &features,
++            &workspace_config,
++            path,
++            ctx,
++            &mut warnings,
++            &mut errors,
++        )?;
++        if normalized_toml.package().is_some() {
++            to_real_manifest(
++                original_toml,
++                normalized_toml,
++                features,
++                workspace_config,
++                source_id,
++                path,
++                ctx,
++                &mut warnings,
++            )
++            .map(|mut m| {
++                m.warnings = std::mem::take(&mut warnings);
++                EitherManifest::Real(Box::new(m))
++            })
++        } else if normalized_toml.workspace.is_some() {
++            to_virtual_manifest(normalized_toml, features, workspace_config, source_id, path, ctx)
++                .map(|mut m| {
++                    warnings.append(&mut m.warnings);
++                    m.warnings = std::mem::take(&mut warnings);
++                    EitherManifest::Virtual(Box::new(m))
++                })
++        } else {
++            bail!("manifest is missing either a `[package]` or a `[workspace]`")
++        }
++    })()
++    .with_context(|| format!("failed to parse manifest at `{}`", path.display()))
++}
++
++struct Fixture(PathBuf);
++
++impl Fixture {
++    fn new() -> Self {
++        static NEXT: AtomicUsize = AtomicUsize::new(0);
++        let path = std::env::temp_dir().join(format!(
++            "blaze-parallel-manifest-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, Ordering::Relaxed)
++        ));
++        std::fs::create_dir(&path).unwrap();
++        std::fs::create_dir(path.join("home")).unwrap();
++        Self(path)
++    }
++
++    fn write(&self, relative: &str, bytes: impl AsRef<[u8]>) -> PathBuf {
++        let path = self.0.join(relative);
++        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
++        std::fs::write(&path, bytes).unwrap();
++        path
++    }
++
++    fn paths(&self) -> Vec<PathBuf> {
++        (0..12)
++            .map(|i| {
++                self.write(&format!("p{i}/src/lib.rs"), "pub fn fixture() {}\n");
++                self.write(
++                    &format!("p{i}/Cargo.toml"),
++                    format!("[package]\nname = 'p{i}'\nversion = '1.0.{i}'\nedition = '2021'\n"),
++                )
++            })
++            .collect()
++    }
++
++    fn context(&self) -> Context {
++        Context::new(
++            Config::load(
++                &self.0,
++                [("CARGO_HOME".into(), self.0.join("home").display().to_string())],
++                &[],
++            )
++            .unwrap(),
++        )
++    }
++}
++
++impl Drop for Fixture {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_dir_all(&self.0);
++    }
++}
++
++fn source() -> SourceId {
++    SourceId::for_registry(&"https://example.invalid/index".parse().unwrap())
++}
++
++fn snapshot(result: anyhow::Result<EitherManifest>, cwd: &Path) -> String {
++    match result {
++        Ok(manifest) => {
++            // Full native structures include normalized schema, cfg dependencies,
++            // workspace/config fields, targets and warning order, not only JSON.
++            let exported = match &manifest {
++                EitherManifest::Real(m) => serde_json::to_string(&crate::metadata::export_package(
++                    &cwd.join("Cargo.toml"),
++                    m,
++                ))
++                .unwrap(),
++                EitherManifest::Virtual(_) => "virtual".into(),
++            };
++            format!("{manifest:#?}\n{exported}")
++        }
++        Err(error) => format!(
++            "{:?}\n{:?}\n{}",
++            error.downcast_ref::<ManifestDiagnostic>(),
++            error.chain().map(ToString::to_string).collect::<Vec<_>>(),
++            crate::diagnostic::report(&error, cwd),
++        ),
++    }
++}
++
++fn differential(fixture: &Fixture, paths: &[PathBuf]) -> Vec<String> {
++    let original = fixture.context();
++    let sequential = fixture.context();
++    let parallel = fixture.context();
++    let parsed = preparse_manifests(paths).expect("regular batch must select parallel syntax");
++    let mut observations = Vec::new();
++    for (path, syntax) in paths.iter().zip(parsed) {
++        let expected = snapshot(original_read_manifest(path, source(), &original), &fixture.0);
++        assert_eq!(snapshot(read_manifest(path, source(), &sequential), &fixture.0), expected);
++        assert_eq!(snapshot(syntax.read(source(), &parallel), &fixture.0), expected);
++        assert_eq!(
++            format!("{:?}", original.ws_roots.borrow()),
++            format!("{:?}", parallel.ws_roots.borrow())
++        );
++        let config_warnings = original.config.take_warnings();
++        assert_eq!(config_warnings, sequential.config.take_warnings());
++        assert_eq!(config_warnings, parallel.config.take_warnings());
++        observations.push(expected);
++    }
++    observations
++}
++
++#[test]
++fn regular_registry_batch_order_warnings_cfg_and_targets() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    fixture.write("p1/Cargo.toml", "[package]\nname='p1'\nversion='1.0.1'\nedition='2018'\n[dev_dependencies]\nhelper='1'\n[target.'cfg(unix)'.dependencies]\nplatform='2'\n");
++    fixture.write("p2/src/main.rs", "fn main() {}\n");
++    fixture.write("p2/tests/real.rs", "#[test] fn real() {}\n");
++    fixture.write("p2/examples/example.rs", "fn main() {}\n");
++    let observations = differential(&fixture, &paths);
++    assert_eq!(observations.len(), 12);
++    assert!(observations[1].contains("dev_dependencies"));
++    assert!(observations[1].contains("cfg(unix)"));
++    assert!(observations[2].contains("real.rs"));
++    assert!(observations[2].contains("example.rs"));
++    let EitherManifest::Real(warned) =
++        original_read_manifest(&paths[1], source(), &fixture.context()).unwrap()
++    else {
++        panic!("warning fixture must be a real package");
++    };
++    assert!(!warned.warnings.is_empty(), "fixture must exercise actual warning preservation");
++}
++
++#[test]
++fn malformed_utf8_syntax_schema_and_semantic_error_chains() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    fixture.write("p0/Cargo.toml", [0xff, 0xfe]);
++    fixture.write("p1/Cargo.toml", "[package\nname = 'broken'\n");
++    fixture.write("p2/Cargo.toml", "[package]\nname = 42\n");
++    fixture.write("p3/Cargo.toml", "[package]\nname = 'p3'\nversion = 'not-a-version'\n");
++    fixture.write("p4/Cargo.toml", "[package]\nname='p4'\nversion='1.0.0'\nedition='2099'\n");
++    fixture.write("p5/Cargo.toml", "[dependencies]\nmissing='1'\n");
++    fixture.write(
++        "p6/Cargo.toml",
++        "[package]\nname='p6'\nversion='1.0.0'\n[features]\ndefault=['does-not-exist']\n",
++    );
++    let observations = differential(&fixture, &paths);
++    assert!(observations[0].contains("not valid utf-8"));
++    assert!(observations[1].contains("p1/Cargo.toml"));
++    assert!(observations[2].contains("p2/Cargo.toml"));
++    assert!(observations[3].contains("p3/Cargo.toml"));
++    assert!(observations[5].contains("failed to parse manifest"));
++}
++
++#[test]
++fn workspace_inheritance_and_config_stay_sequential() {
++    let fixture = Fixture::new();
++    let mut paths = fixture.paths();
++    let root = fixture.write("Cargo.toml", "[workspace]\nmembers=['p0','p1']\n[workspace.package]\nversion='3.2.1'\nedition='2021'\n[workspace.dependencies]\nhelper='2'\n");
++    fixture.write(
++        ".cargo/config.toml",
++        "[registries.alternate]\nindex='https://alternate.invalid/index'\n",
++    );
++    fixture.write("p0/Cargo.toml", "[package]\nname='p0'\nversion.workspace=true\nedition.workspace=true\nworkspace='..'\n[dependencies]\nhelper.workspace=true\nother={version='1',registry='alternate'}\n");
++    paths.insert(0, root);
++    let observations = differential(&fixture, &paths);
++    assert!(observations[1].contains("3.2.1"));
++    assert!(observations[1].contains("alternate.invalid"));
++    // A malformed inheritance root must retain the full original context chain.
++    fixture.write("Cargo.toml", "[workspace]\n[workspace.package]\nversion=4\n");
++    differential(&fixture, &paths);
++}
++
++#[test]
++fn repeated_invocations_read_fresh_syntax_semantics_and_target_files() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    let before = differential(&fixture, &paths);
++    fixture.write(
++        "p0/Cargo.toml",
++        "[package]\nname='renamed'\nversion='7.6.5'\nedition='2021'\n[dependencies]\nfresh='3'\n",
++    );
++    fixture.write("p0/src/main.rs", "fn main() {}\n");
++    let changed = differential(&fixture, &paths);
++    assert_ne!(before[0], changed[0]);
++    assert!(changed[0].contains("renamed"));
++    assert!(changed[0].contains("7.6.5"));
++    assert!(changed[0].contains("main.rs"));
++    fixture.write("p0/Cargo.toml", "not valid [toml");
++    let broken = differential(&fixture, &paths);
++    assert_ne!(changed[0], broken[0]);
++    fixture.write("p0/Cargo.toml", "[package]\nname='repaired'\nversion='1.0.0'\n");
++    let repaired = differential(&fixture, &paths);
++    assert!(repaired[0].contains("repaired"));
++}
++
++#[test]
++fn unknown_paths_symlinks_directories_and_fifo_are_not_speculatively_read() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    assert!(preparse_manifests(&paths[..7]).is_none());
++    let mut unknown = paths.clone();
++    unknown[0] = fixture.0.join("missing/Cargo.toml");
++    assert!(preparse_manifests(&unknown).is_none());
++    unknown[0] = fixture.write("not-a-manifest.rs", "");
++    assert!(preparse_manifests(&unknown).is_none());
++    let directory = fixture.0.join("directory/Cargo.toml");
++    std::fs::create_dir_all(&directory).unwrap();
++    unknown[0] = directory;
++    assert!(preparse_manifests(&unknown).is_none());
++    let link = fixture.0.join("link/Cargo.toml");
++    std::fs::create_dir(link.parent().unwrap()).unwrap();
++    std::os::unix::fs::symlink(&paths[0], &link).unwrap();
++    unknown[0] = link;
++    assert!(preparse_manifests(&unknown).is_none());
++    // mkfifo is a fixture setup command only. The parser must return without
++    // opening this FIFO, with no writer process and no opportunity to block.
++    let fifo = fixture.0.join("fifo/Cargo.toml");
++    std::fs::create_dir(fifo.parent().unwrap()).unwrap();
++    assert!(std::process::Command::new("mkfifo").arg(&fifo).status().unwrap().success());
++    unknown[0] = fifo;
++    assert!(preparse_manifests(&unknown).is_none());
++}
++
++#[test]
++fn public_sequential_path_extensions_missing_files_and_virtual_manifest() {
++    let fixture = Fixture::new();
++    let ctx = fixture.context();
++    for path in [
++        fixture.write("script.rs", "fn main() {}"),
++        fixture.write("no-extension", ""),
++        fixture.0.join("missing.toml"),
++        fixture.write("Cargo.toml", "[workspace]\nmembers=[]\n"),
++    ] {
++        let original = fixture.context();
++        assert_eq!(
++            snapshot(read_manifest(&path, source(), &ctx), &fixture.0),
++            snapshot(original_read_manifest(&path, source(), &original), &fixture.0),
++        );
++    }
++}
+diff --git a/toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs b/toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs
+new file mode 100644
+index 000000000..a1f3420a2
+--- /dev/null
++++ b/toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs
+@@ -0,0 +1,227 @@
++//! Real-filesystem fixtures for the fetched registry fast path. The sequential
++//! oracle is the accepted fetch loop, with fetching replaced only by local roots.
++#![cfg(all(target_os = "linux", target_arch = "x86_64"))]
++
++use super::*;
++use std::sync::atomic::{AtomicUsize, Ordering};
++
++struct Fixture(PathBuf);
++
++impl Fixture {
++    fn new() -> Self {
++        static NEXT: AtomicUsize = AtomicUsize::new(0);
++        let path = std::env::temp_dir().join(format!(
++            "blaze-metadata-parallel-manifest-{}-{}",
++            std::process::id(),
++            NEXT.fetch_add(1, Ordering::Relaxed)
++        ));
++        std::fs::create_dir(&path).unwrap();
++        std::fs::create_dir(path.join("home")).unwrap();
++        Self(path)
++    }
++
++    fn write(&self, relative: &str, text: impl AsRef<[u8]>) -> PathBuf {
++        let path = self.0.join(relative);
++        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
++        std::fs::write(&path, text).unwrap();
++        path
++    }
++
++    fn paths(&self) -> Vec<PathBuf> {
++        (0..12)
++            .map(|i| {
++                self.write(&format!("p{i}/src/lib.rs"), "pub fn fixture() {}\n");
++                self.write(
++                    &format!("p{i}/Cargo.toml"),
++                    format!("[package]\nname='p{i}'\nversion='1.0.{i}'\nedition='2021'\n"),
++                )
++            })
++            .collect()
++    }
++
++    fn context(&self) -> Context {
++        Context::new(
++            Config::load(
++                &self.0,
++                [("CARGO_HOME".into(), self.0.join("home").display().to_string())],
++                &[],
++            )
++            .unwrap(),
++        )
++    }
++
++    fn texts(&self, len: usize) -> Vec<String> {
++        (0..len).map(|_| "registry+https://example.invalid/index".into()).collect()
++    }
++}
++
++impl Drop for Fixture {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_dir_all(&self.0);
++    }
++}
++
++// The original accepted ordered fetch tail. No candidate fast-path helpers here.
++fn original_read_fetched(
++    texts: Vec<String>,
++    roots: Vec<PathBuf>,
++    ctx: &Context,
++) -> Result<Vec<Package>> {
++    let mut read = Vec::with_capacity(texts.len());
++    for (source_text, dir) in texts.into_iter().zip(roots) {
++        let manifest_path = dir.join("Cargo.toml");
++        let source = manifest_source(&source_text, &ctx.config)?;
++        let EitherManifest::Real(manifest) = read_manifest(&manifest_path, source, ctx)? else {
++            bail!("{} has no package", manifest_path.display());
++        };
++        read.push(Package { manifest_path, manifest, locked_source: Some(source_text) });
++    }
++    Ok(read)
++}
++
++fn snapshot(result: Result<Vec<Package>>, root: &Path) -> String {
++    match result {
++        Ok(packages) => packages
++            .into_iter()
++            .map(|p| {
++                format!(
++                    "{}\n{:?}\n{:#?}\n{}",
++                    p.manifest_path.display(),
++                    p.locked_source,
++                    p.manifest,
++                    serde_json::to_string(&export_package(&p.manifest_path, &p.manifest)).unwrap(),
++                )
++            })
++            .collect::<Vec<_>>()
++            .join("\n"),
++        Err(error) => format!(
++            "{:?}\n{}",
++            error.chain().map(ToString::to_string).collect::<Vec<_>>(),
++            blaze_manifest::diagnostic::report(&error, root),
++        ),
++    }
++}
++
++fn differential(fixture: &Fixture, texts: &[String], paths: &[PathBuf]) -> String {
++    let original_ctx = fixture.context();
++    let parallel_ctx = fixture.context();
++    let roots = paths.iter().map(|p| p.parent().unwrap().to_owned()).collect();
++    let expected =
++        snapshot(original_read_fetched(texts.to_vec(), roots, &original_ctx), &fixture.0);
++    let actual = read_fetched_parallel(texts, paths, &parallel_ctx, true)
++        .map(|value| value.expect("eligible fixture batch must select parallel syntax"));
++    assert_eq!(snapshot(actual, &fixture.0), expected);
++    assert_eq!(original_ctx.config.take_warnings(), parallel_ctx.config.take_warnings());
++    expected
++}
++
++#[test]
++fn vector_order_native_manifest_fields_warnings_and_targets() {
++    let fixture = Fixture::new();
++    let mut paths = fixture.paths();
++    fixture.write("p1/Cargo.toml", "[package]\nname='p1'\nversion='1.0.1'\nedition='2018'\n[dev_dependencies]\nhelper='1'\n[target.'cfg(unix)'.dependencies]\nplatform='2'\n");
++    fixture.write("p2/tests/real.rs", "#[test] fn real() {}\n");
++    paths.swap(0, 8);
++    paths.swap(2, 11);
++    let output = differential(&fixture, &fixture.texts(paths.len()), &paths);
++    assert!(output.starts_with(&paths[0].display().to_string()));
++    assert!(output.contains("real.rs"));
++    assert!(output.contains("cfg(unix)"));
++}
++
++#[test]
++fn multiple_syntax_errors_report_first_input_error_not_first_worker() {
++    let fixture = Fixture::new();
++    let mut paths = fixture.paths();
++    fixture.write("p1/Cargo.toml", "[package\nfirst broken");
++    fixture.write("p8/Cargo.toml", [0xff]);
++    let texts = fixture.texts(paths.len());
++    let output = differential(&fixture, &texts, &paths);
++    assert!(output.contains("p1/Cargo.toml"));
++    assert!(!output.contains("p8/Cargo.toml"));
++    paths.swap(1, 8);
++    let output = differential(&fixture, &texts, &paths);
++    assert!(output.contains("p8/Cargo.toml"));
++    assert!(!output.contains("p1/Cargo.toml"));
++}
++
++#[test]
++fn earlier_semantic_error_precedes_later_syntax_error_and_virtual_error() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    let texts = fixture.texts(paths.len());
++    fixture.write(
++        "p0/Cargo.toml",
++        "[package]\nname='p0'\nversion='1.0.0'\n[features]\ndefault=['missing-feature']\n",
++    );
++    fixture.write("p1/Cargo.toml", "[package\nbroken");
++    let output = differential(&fixture, &texts, &paths);
++    assert!(output.contains("p0/Cargo.toml"));
++    assert!(!output.contains("p1/Cargo.toml"));
++    fixture.write("p0/Cargo.toml", "[workspace]\nmembers=[]\n");
++    let output = differential(&fixture, &texts, &paths);
++    assert!(output.contains("p0/Cargo.toml has no package"));
++    assert!(!output.contains("p1/Cargo.toml"));
++}
++
++#[test]
++fn registry_config_error_precedes_same_manifest_syntax_error() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    fixture.write(".cargo/config.toml", "[registry]\nindex='https://forbidden.invalid/index'\n");
++    fixture.write("p0/Cargo.toml", [0xff]);
++    let texts = (0..paths.len())
++        .map(|_| format!("registry+{}", blaze_manifest::source::CRATES_IO_INDEX))
++        .collect::<Vec<_>>();
++    let output = differential(&fixture, &texts, &paths);
++    assert!(output.contains("registry.index"));
++    assert!(!output.contains("not valid utf-8"));
++}
++
++#[test]
++fn disabled_tiny_unknown_git_and_nonregular_batches_decline() {
++    let fixture = Fixture::new();
++    let mut paths = fixture.paths();
++    let texts = fixture.texts(paths.len());
++    let ctx = fixture.context();
++    assert!(read_fetched_parallel(&texts, &paths, &ctx, false).unwrap().is_none());
++    assert!(read_fetched_parallel(&texts[..7], &paths[..7], &ctx, true).unwrap().is_none());
++    assert!(read_fetched_parallel(&texts[..7], &paths, &ctx, true).unwrap().is_none());
++    let mut unknown = texts.clone();
++    unknown[2] = "git+https://example.invalid/repo".into();
++    assert!(read_fetched_parallel(&unknown, &paths, &ctx, true).unwrap().is_none());
++    unknown[2] = "unknown+https://example.invalid/repo".into();
++    assert!(read_fetched_parallel(&unknown, &paths, &ctx, true).unwrap().is_none());
++    paths[0] = fixture.0.join("missing/Cargo.toml");
++    assert!(read_fetched_parallel(&texts, &paths, &ctx, true).unwrap().is_none());
++}
++
++#[test]
++fn fresh_reads_preserve_workspace_inheritance_config_and_target_edits() {
++    let fixture = Fixture::new();
++    let paths = fixture.paths();
++    let texts = fixture.texts(paths.len());
++    fixture
++        .write("Cargo.toml", "[workspace]\nmembers=['p0']\n[workspace.package]\nversion='2.0.0'\n");
++    fixture
++        .write("p0/Cargo.toml", "[package]\nname='p0'\nversion.workspace=true\nworkspace='..'\n");
++    let before = differential(&fixture, &texts, &paths);
++    assert!(before.contains("2.0.0"));
++    fixture
++        .write("Cargo.toml", "[workspace]\nmembers=['p0']\n[workspace.package]\nversion='3.0.0'\n");
++    fixture.write("p0/src/main.rs", "fn main() {}\n");
++    let after = differential(&fixture, &texts, &paths);
++    assert!(after.contains("3.0.0"));
++    assert!(after.contains("main.rs"));
++    assert_ne!(before, after);
++    fixture.write("p0/Cargo.toml", "[package]\nname='p0'\nversion='4.0.0'\n[dependencies]\nother={version='1',registry='alternate'}\n");
++    fixture
++        .write(".cargo/config.toml", "[registries.alternate]\nindex='https://one.invalid/index'\n");
++    let first = differential(&fixture, &texts, &paths);
++    fixture
++        .write(".cargo/config.toml", "[registries.alternate]\nindex='https://two.invalid/index'\n");
++    let second = differential(&fixture, &texts, &paths);
++    assert!(first.contains("one.invalid"));
++    assert!(second.contains("two.invalid"));
++    assert_ne!(first, second);
++}
+diff --git a/docs/resident-parallel-manifest-syntax.md b/docs/resident-parallel-manifest-syntax.md
+new file mode 100644
+index 000000000..99524be93
+--- /dev/null
++++ b/docs/resident-parallel-manifest-syntax.md
+@@ -0,0 +1,129 @@
++# Resident parallel manifest syntax experiment (v81)
++
++## Status and hypothesis
++
++This is an implemented, **default-off** candidate, not a measured speedup or a
++promotion. The motivating v80 profile attributed 16.723 to 19.843 ms of eight
++actual calls to package loading, compared with 3.853 to 5.293 ms for summary
++preparation and 2.876 to 3.974 ms for version resolution. Those observations
++identify an experiment, not its outcome. The previous typed JSON projection
++experiment is not reused.
++
++The candidate overlaps only independent manifest file reads, UTF-8 conversion,
++and native `TomlManifest` deserialization. Semantic work is deliberately not
++parallel. No dependency or lock-file changes are needed.
++
++## Mode and eligibility
++
++`RA_JIT_PARALLEL_MANIFEST_PARSE=1` is the sole enabling value. The first invocation
++of the fetched-package mode check freezes the value in a process `OnceLock`.
++Unset, empty, `0`, `true`, or any other value is off. Tests call an explicit
++private boolean helper rather than modifying a cached process environment.
++
++The fetched batch must contain at least eight entries, all original source texts
++must be registry/sparse registry sources, and every effective source after source
++replacement must be a remote registry. Git checkouts, vendored directory sources,
++local registries, path packages, unknown sources, and mixed batches retain the
++original sequential path. `sources.fetch` still executes in its original place
++before any manifest read. An eligible batch is checked with `symlink_metadata`:
++every entry must be a regular file named `Cargo.toml`. Missing paths, directories,
++symlinks, and special files decline the batch without speculative file reads.
++
++The current nonblocking-open implementation is intentionally limited to Linux
++x86_64, the ABI for its explicit `O_NONBLOCK | O_NOFOLLOW` flags. Other platforms
++use the original path. The opened file's metadata is checked again before reading.
++This avoids waiting for a FIFO writer during speculative open if a checked path
++is replaced with a FIFO. A last-component symlink introduced after preflight is
++also declined. Failed opens or handle checks produce a per-entry fallback to the
++original reader, invoked only when that entry is reached in sequential order.
++The fallback retains the original behavior, including any blocking behavior of an
++actual special file reached by the original reader. This is not a filesystem
++snapshot, a defense against arbitrary hostile filesystem mutation, or a promise
++that concurrent edits produce the same read interleaving as sequential reading.
++
++## Ownership and ordering
++
++The original public `read_manifest` signature and its extension/read/UTF-8/schema
++error ordering are retained. The original semantic body is moved unchanged to
++`normalize_manifest`. Both the public reader and parsed-syntax completion call
++that body. Its configuration access, workspace-root `RefCell`, inheritance,
++normalization, cfg-dependent dependencies, target discovery, warnings, features,
++and diagnostic context remain on the calling thread.
++
++Each worker owns a path and an `Option<Result<TomlManifest>>`. A scoped-thread
++return of the real native schema requires Rust to prove `Send` through the actual
++spawn operation. There is no unsafe implementation, substituted schema, manual
++identity assertion, shared `Context`, or assertion that configuration is thread
++safe. Native compilation is a root-owned gate, not something the source-only
++worker has run.
++
++There are two to four scoped threads, bounded by available parallelism (clamped
++to that range). Chunks and join results retain input order. Thread-creation
++failure declines the speculative batch. Every invocation reads fresh bytes.
++There is no syntax cache, persistent artifact, timestamp shortcut, invalidation
++protocol, or cross-invocation reuse.
++
++After preparsing, source/config conversion and complete semantic normalization
++execute one manifest at a time, in the original vector order. Source/config errors
++precede the same manifest's stored syntax error. Earlier semantic errors precede
++later syntax errors, even when the latter were discovered first by a worker.
++The original `has no package` error remains in the metadata layer. Schema errors
++retain `ManifestDiagnostic` filename, source contents, and span. UTF-8 and read
++errors retain their original path-bearing text and error-chain boundaries.
++
++## Diagnostics and attribution
++
++On the first actual parallel batch chosen in a process, the candidate attempts
++one fixed stderr line:
++
++```text
++ra-jit: parallel-manifest-parse-v81 batch
++```
++
++Writes are best effort and errors are ignored. The marker is not a cache hit,
++proof of completed parsing, proof of successful normalization, or proof of a
++speedup. Tiny/ineligible batches do not emit it. It is not path-dependent.
++
++Native spans use the existing `ra_jit::planning` target and existing subscriber
++and threshold policy. `resolver sources.fetch` covers fetching in either mode.
++On a selected candidate path, `resolver fetched manifest syntax` covers eligibility,
++worker creation, file reads and syntax parsing, and `resolver fetched manifest
++normalize` covers ordered source/config conversion and semantic completion.
++These spans do not add a tracing dependency to blaze-manifest.
++
++## Native differential fixtures and pending gates
++
++Two narrowly scoped unit-test modules live below each crate's
++`tests/parallel_manifest_syntax/mod.rs`. They are included only in native test
++builds, not automatically discovered as standalone integration tests.
++
++The manifest module contains the full frozen accepted v80 `read_manifest` body,
++independent of the new split helpers. Six fixtures compare the original reader,
++new sequential reader and parallel syntax completion using full native debug
++structures, exported metadata, ordered warnings, workspace-root state,
++configuration warnings, diagnostic details, rendered diagnostics and complete
++error chains. They cover regular registry batches, cfg dependencies, real target
++files, UTF-8/schema/syntax/semantic errors, virtual manifests, inheritance,
++configuration, repeated semantic/syntax/target edits, extension/missing-file
++errors, and preflight fallback for symlinks, directories and a writerless FIFO.
++
++The metadata module contains six fixtures around the frozen original ordered
++fetch tail, using real local registry-shaped files rather than a network mock.
++They cover vector order, full native manifest fields, warnings/targets,
++multiple malformed manifests in reversed order, an earlier semantic error versus
++a later syntax error, virtual-package rejection, registry-config precedence over
++UTF-8 failure, explicit off/threshold/source fallback and fresh workspace,
++configuration and target-file edits. No fixture weakens an error into success.
++
++At source freeze, only rustfmt and static source/patch checks have been run.
++**No native build, test, probe, workload, install, lock update, or commit was run
++by this worker.** Root owns native schema `Send` verification, these crate tests,
++the existing 53/373 gates, source pinning, workload/error gates and controlled
++before/after timing after both source and harness freezes. A source-only static
++pass is not native acceptance, and there is no speed claim.
++
++Frozen originals, candidate copies, complete owned patch, SHA256 inventory,
++static checks and `RELEASE` are under
++`<native-root>/parallel-manifest-syntax-v81`.
++The worker's final `STOPEDITS` handoff marks the exact point at which root may
++start those gates.

@@ -1,0 +1,40 @@
+Parser-factor harness v81, source-only preparation
+Base: c8829bae0
+Owner scope: bench/resident_suite.py, bench/test_resident_parallel_manifest.py,
+             docs/resident-suite.md only.
+
+Do not run native measurements until ROOT has verified native correctness and
+frozen native source plus this harness. This worker ran Python-only mocked tests,
+not any compiler, native engine, probe, build, install, lock, commit or native job.
+
+Prospective fresh ABS output: <abba> (18 bytes, <=30).
+ROOT must recheck freshness immediately before use. Do not reuse an aborted root.
+
+After independent native correctness and both source freezes:
+python3 bench/suite.py resident --mode parallel-manifest-retouch \
+  --reference-engine "$REFERENCE_ELF" --engine "$CANDIDATE_ELF" \
+  --toolchain "$PINNED_TC4020" --source "$PRISTINE_SOURCE63" \
+  --output <abba> --samples 5 --timeout 360
+python3 bench/suite.py compare <abba>/off.json <abba>/on.json
+Supply the same frozen --proc-macro-server if required by native controls.
+
+One candidate ELF, OFF/ON/ON/OFF, one warmup + five measured samples each.
+Whole-generation + watcher = 1 in both candidate arms, parser = 0/1 only.
+Reference all three = 0. Each candidate segment must retain PID/start ticks,
+executable + socket across all warmup/retouch calls. Every ON timed fresh client
+must show EXACTLY ONE raw stderr line, including newline:
+ra-jit: parallel-manifest-parse-v81 batch
+No dynamic fields. OFF/reference/version zero, other ON nonversion at most one.
+The marker must mean actual bounded parallel batch chosen, not flag eligibility.
+Each call retains fixed source overlay, nonce execution, original four-test tuple,
+source63, toolchain identity, byte/mtime proofs, failure/recovery and stop safeguards.
+
+Keep all twenty measurements and four warmups, all first-touch samples and raw
+aborted evidence. Never trust summary booleans or substitute the synthetic tests
+for native acceptance. This is descriptive noop/clientplanning combined same-byte
+manifest+lock factor evidence with unknown noise. No separate file attribution,
+no significance/speedup verdict, no general/default/sessionweighted promotion.
+
+Offline validation commands and outputs are in testlogs/ and staticchecks.log.
+Originals, candidates, owned.patch and SHA256SUMS are the frozen source receipt.
+RELEASE and STOPEDITS delimit the edit boundary before ROOT execution.

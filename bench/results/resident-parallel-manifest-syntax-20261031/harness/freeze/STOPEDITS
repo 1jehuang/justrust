@@ -1,0 +1,5 @@
+STOPEDITS 2026-10-31T16:43:12Z
+Owned source edits complete before ROOT native execution.
+131 combined Python-only mock tests PASS. No native execution or commit.
+Exact fixed v81 batch marker contract implemented, no dynamic fields.
+Fresh prospective ABS output: <abba> (18 bytes).

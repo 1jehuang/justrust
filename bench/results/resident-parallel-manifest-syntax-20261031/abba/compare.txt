@@ -1,0 +1,7 @@
+Native resident noop/clientplanning parser factor, whole-generation+watcher fixed ON.
+Parser flag explicitly 0/1; reference all three flags 0. All first-touch samples retained.
+Same candidate ELF, OFF/ON/ON/OFF; 5 samples per segment, 10 per arm.
+OFF median: 0.057750s -> ON median: 0.052218s, delta -0.005532s (-9.58%).
+Absolute median delta does not exceed requested 10% floor.
+Descriptive/uncontrolled, noise unknown. No significance or general speedup verdict.
+Combined retouch only, not separate manifest/lock attribution or default promotion.

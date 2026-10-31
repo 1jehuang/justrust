@@ -1,0 +1,11 @@
+ra-jit: manifest-content-generation-v1 entered
+   Compiling justrust v0.1.0-alpha.1 (<source63>)
+    Finished `test` profile [blaze] target(s) in 0.20s
+     Running unittests src/lib.rs (<abba>/s3/engine/target/debug/deps/justrust-9e308754a1d78141)
+
+thread 'summary::tests::shares_overlapping_time' (3707381) panicked at src/summary.rs:1100:1:
+assertion `left == right` failed: JR_RUNTIME_FAILURE
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p justrust --lib`

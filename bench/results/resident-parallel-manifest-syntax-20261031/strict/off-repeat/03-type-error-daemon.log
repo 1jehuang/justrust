@@ -1,0 +1,20 @@
+daemon 0.20261027.0-0a2137f2-77f8c68-18e3ab84369db90b (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-d9c8c7fd0e7300395ab4a2c45606babb979d72c6812ff5d0ebe4200ea3f831dc)) of pid 3477003 listens on <private-home>/p81-off-repeat/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 74b0ac4f2ff00296 of pid 3477006 for <source63>/
+<source63>: ready
+worker 74b0ac4f2ff00296 of pid 3482665 for <source63>/
+<source63>: ready
+worker 74b0ac4f2ff00296 of pid 3486660 for <source63>/
+the worker of pid 3486660 for <source63>/ ended (exit status: 1); its log <private-home>/p81-off-repeat/engine/engine-home/resident-v1/runtime/workers/74b0ac4f2ff00296/log ends with:
+  check: FileId(33): the bodies of 44 of 44 functions asked
+  check: FileId(176): the bodies of 96 of 96 functions asked
+  check: FileId(181): the bodies of 36 of 36 functions asked
+  check: FileId(193): the bodies of 96 of 96 functions asked
+  check: FileId(192): the bodies of 44 of 44 functions asked
+  check: FileId(195): the bodies of 204 of 204 functions asked
+  check: 31 files in 2.3s
+  Error: error[E0308]: expected u64, found &'static str
+      --> src/summary.rs:1100:14
+       |
+  1100 | let _: u64 = "JR_MATRIX_TYPE_9e396bd70dd5415fbd0b54a3b3ce5a45";
+       |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<source63>: the source has an error

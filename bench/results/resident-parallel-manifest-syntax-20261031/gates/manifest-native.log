@@ -1,0 +1,39 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+ra-jit: parallel-manifest-parse-v81 batch
+
+justrust: ok: 28 tests passed in 38.8s
+  time    startup 0.34s | compile 38.25s | gaps 0.01s | tests 0.12s | after 0.05s
+  units   10 compiled (10 local, 0 deps, 0 build scripts), 74 fresh. Rebuilt because: edited crates/blaze-manifest/src/manifest.rs (blaze-manifest)
+          blaze_manifest                    19.87s  cpu  80.6s    727 MB
+          blaze_manifest (test)             10.81s  cpu  57.6s    649 MB
+          profiles                           2.22s  cpu   8.7s    259 MB
+          profiles (test)                    1.58s  cpu  10.0s    268 MB
+  tests   28 passed, 0 failed, 0 ignored, 0 filtered out, 6 binaries in 0.12s
+  cpu     178.4s total, avg 4.6/peak 5.9 of 16 cores; others used 10.7 cores
+  memory  peak 1404 MB build, 727 MB largest rustc, 32.4 GB free; stalls cpu 8.79s mem 0.00s io 0.02s
+  output  3 warnings shown, 43 hidden; 105 progress and 28 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~ 12.9s  machine was busy: other processes used 11 of 16 cores on average and tasks stalled 8.8s waiting for CPU
+  more    `justrust log 20261031-095421135-3390978` full output, `justrust show 20261031-095421135-3390978` full profile

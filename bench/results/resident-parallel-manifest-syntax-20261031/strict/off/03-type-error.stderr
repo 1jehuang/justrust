@@ -1,0 +1,27 @@
+ra-jit: manifest-content-generation-v1 entered
+error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_MATRIX_TYPE_3e4751cbaf5d480198e96faca5a7cca3";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib test) due to 1 previous error
+blaze time: 13195.6 ms: daemon 13150.8 (100%), client planning owned resolver 30.2 (0%), client command 8.1 (0%), client planning rustc host 3.0 (0%), client planning target cfg 1.0 (0%), client metadata 0.8 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     8.1 ms   0.1%
+blaze    client test                        0.2 ms   0.0%
+blaze    client metadata                    0.8 ms   0.0%
+blaze    client planning                    0.0 ms   0.0%
+blaze    client planning rustc host         3.0 ms   0.0%
+blaze    client planning target cfg         1.0 ms   0.0%
+blaze    client planning asked setup        0.0 ms   0.0%
+blaze    client planning owned resolver      30.2 ms   0.2%
+blaze    client checkout                    0.6 ms   0.0%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      0.5 ms   0.0%
+blaze    daemon read request                0.2 ms   0.0%
+blaze    daemon                         13150.8 ms  99.7%
+blaze    client install artifacts           0.0 ms   0.0%
+blaze    total                          13195.6 ms 100.0%

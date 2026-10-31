@@ -1,0 +1,24 @@
+ra-jit: parallel-manifest-parse-v81 batch
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 0.07s
+     Running unittests src/lib.rs (<private-home>/p81-on/engine/target/debug/deps/justrust-51910e48d598929b)
+blaze time: 78.8 ms: client planning owned resolver 27.4 (35%), client↔daemon 20.6 (26%), daemon 9.6 (12%), client command 8.0 (10%), client test execution 5.4 (7%), client planning rustc host 2.9 (4%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.1%
+blaze    client command                     8.0 ms  10.1%
+blaze    client test                        0.2 ms   0.3%
+blaze    client metadata                    0.9 ms   1.1%
+blaze    client planning                    0.0 ms   0.1%
+blaze    client planning rustc host         2.9 ms   3.7%
+blaze    client planning target cfg         0.9 ms   1.2%
+blaze    client planning asked setup        0.0 ms   0.0%
+blaze    client planning owned resolver      27.4 ms  34.8%
+blaze    client checkout                    0.5 ms   0.7%
+blaze    client whole build                 0.1 ms   0.1%
+blaze    client↔daemon                     20.6 ms  26.2%
+blaze    daemon read request                0.2 ms   0.3%
+blaze    daemon                             9.6 ms  12.2%
+blaze    daemon↔worker                      1.8 ms   2.3%
+blaze    client install artifacts           0.2 ms   0.2%
+blaze    client test execution              5.4 ms   6.8%
+blaze    total                             78.8 ms 100.0%
