@@ -4679,6 +4679,9 @@ fn lower(db: &RootDatabase, bodies: Vec<DefWithBodyId>) -> Vec<DefWithBodyId> {
 }
 
 struct Build {
+    /// Exact native round metadata under the separate startup diagnostic flag.
+    /// Never read by root selection, rejection handling, manifests or linking.
+    inventory: Option<hir_ty_codegen::CodegenInventory>,
     compiled: usize,
     skipped: Vec<(String, CodegenError)>,
     /// Of [`Build::skipped`], by where each is in it, those the program reaches: with nothing
@@ -4724,6 +4727,7 @@ impl Build {
     /// The build whose files a manifest of the store has ([`manifest`]): nothing compiled.
     fn of_manifest(unwritten: Vec<(PathBuf, Vec<u8>)>) -> Build {
         Build {
+            inventory: None,
             compiled: 0,
             skipped: Vec::new(),
             reached: Vec::new(),
@@ -5448,6 +5452,7 @@ fn build(
     let skipped =
         unit.skipped.into_iter().map(|(func, e)| (name(func), explained(func, e))).collect();
     let mut build = Build {
+        inventory: unit.inventory.take(),
         compiled: unit.compiled.len(),
         skipped,
         reached,
@@ -5648,6 +5653,20 @@ fn failed_macro(db: &RootDatabase, krate: Crate) -> Option<String> {
 }
 
 fn report(build: &Build) {
+    if let Some(inventory) = &build.inventory {
+        eprintln!(
+            "demand inventory: {} compiled roots, {} skipped roots, {} declared instances, \
+             {} found instances, {} rejected instances, {} kept statics, {} data definitions{}",
+            inventory.roots.compiled.len(),
+            inventory.roots.skipped.len(),
+            inventory.instances.len(),
+            inventory.found_instances.len(),
+            inventory.rejected.len(),
+            inventory.roots.kept.len(),
+            inventory.data_definitions.len(),
+            if inventory.is_patch { " (patch delta only)" } else { " (full round)" },
+        );
+    }
     eprintln!(
         "compiled {} of {} fns (+{} instances) in {:.1?} (+{:.1?} emit)",
         build.compiled,
@@ -12319,6 +12338,87 @@ mod user {
             };
             let value = n.eval(&db).expect("the constant is evaluated");
             assert_eq!(value.render_debug(&db).unwrap(), "3");
+        });
+    }
+
+    /// Exercise the inventory's identity model with real database IDs and
+    /// interned substitutions, not symbol names or a count of callees.
+    #[test]
+    fn demand_inventory_preserves_root_instance_static_and_refusal_identities() {
+        use hir_ty::next_solver::{DbInterner, GenericArgs, Ty, TyKind};
+        use hir_ty_codegen::{Instance, InstanceDef, RootInventory};
+        use test_fixture::WithFixture;
+        let (db, file) = RootDatabase::with_single_file(
+            "fn entry() {} fn generic<T>(_: T) {} fn refused() {} \
+             #[used] static KEPT: u8 = 1; static OFFERED: u8 = 2;",
+        );
+        hir::attach_db(&db, || {
+            let sema = hir::Semantics::new(&db);
+            let module = sema.file_to_module_defs(file.file_id(&db)).next().unwrap();
+            let declared = declared_in(&db, module.krate(&db));
+            let function = |name: &str| {
+                *declared
+                    .functions
+                    .iter()
+                    .find(|&&it| hir::Function::from(it).name(&db).as_str() == name)
+                    .unwrap()
+            };
+            let (entry, generic, refused) =
+                (function("entry"), function("generic"), function("refused"));
+            assert_eq!(declared.statics.len(), 2);
+            let static_id = |name: &str| {
+                *declared
+                    .statics
+                    .iter()
+                    .find(|&&it| hir::Static::from(it).name(&db).as_str() == name)
+                    .unwrap()
+            };
+            let kept = [static_id("KEPT")];
+            let offered = [static_id("OFFERED")];
+            let entries = [entry];
+            let demand = [generic, refused];
+            let compiled = [(entry, "fixture::entry".to_owned())];
+            let skipped = [(refused, CodegenError::Unsupported("fixture refusal".into()))];
+            let roots = Roots {
+                entries: &entries,
+                on_demand: &demand,
+                start: Some(entry),
+                shared: false,
+                whole: true,
+                kept: &kept,
+                offered: &offered,
+            };
+            let inventory = RootInventory::capture(roots, &compiled, &skipped);
+            assert_eq!(inventory.entries, entries);
+            assert_eq!(inventory.on_demand, demand);
+            assert_eq!(inventory.start, Some(entry));
+            assert_eq!(inventory.kept, roots.kept);
+            assert_eq!(inventory.offered, roots.offered);
+            assert_ne!(inventory.kept, inventory.offered);
+            assert_eq!(inventory.compiled, compiled);
+            assert_eq!(inventory.skipped[0].0, refused);
+            assert!(!inventory.compiled.iter().any(|it| it.0 == refused));
+            assert_eq!(inventory.skipped[0].1.to_string(), skipped[0].1.to_string());
+            assert!(inventory.whole && !inventory.shared);
+
+            let interner = DbInterner::new_no_crate(&db);
+            let bool_args = GenericArgs::new_from_slice(&[Ty::new(interner, TyKind::Bool).into()]);
+            let char_args = GenericArgs::new_from_slice(&[Ty::new(interner, TyKind::Char).into()]);
+            let instance =
+                Instance { def: InstanceDef::Fn(generic), args: bool_args.store(), checked: true };
+            let different_type = Instance { args: char_args.store(), ..instance.clone() };
+            let different_checks = Instance { checked: false, ..instance.clone() };
+            let different_root = Instance { def: InstanceDef::Fn(entry), ..instance.clone() };
+            let different_shim = Instance { def: InstanceDef::DropGlue, ..instance.clone() };
+            let mut identities = FxHashSet::default();
+            for it in
+                [&instance, &different_type, &different_checks, &different_root, &different_shim]
+            {
+                assert!(identities.insert(it.clone()));
+            }
+            assert!(!identities.insert(instance.clone()));
+            assert_eq!(identities.len(), 5);
+            assert_eq!(instance.args, bool_args.store());
         });
     }
 

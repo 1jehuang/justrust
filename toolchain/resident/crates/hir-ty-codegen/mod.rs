@@ -709,6 +709,8 @@ impl AbiScalar {
 
 /// The result of compiling a set of root functions into one object file.
 pub struct CodegenUnit {
+    /// Diagnostic metadata only. Never used to select, omit or reuse code.
+    pub inventory: Option<CodegenInventory>,
     /// The object, unless the one of the build before still stands and `patch` amends it.
     pub object: Option<Vec<u8>>,
     /// With [`Rejections::patching`], an object to link ahead of the last `object`: its
@@ -722,6 +724,99 @@ pub struct CodegenUnit {
     pub skipped: Vec<(FunctionId, CodegenError)>,
     /// Callees without a rustc symbol (generic or inlined) that were compiled as local functions.
     pub instances: usize,
+}
+
+/// Exact, database-local identities of the successful codegen round. This is not
+/// a stable cache key, a dependency certificate, or a claim that an object splits.
+/// Hash-map iteration order and module IDs are deliberately not serialized.
+pub struct CodegenInventory {
+    pub roots: RootInventory,
+    pub denied: Vec<FunctionId>,
+    /// Declared instances, not necessarily local definitions. See `forwarded`
+    /// and module declaration linkages before interpreting coverage.
+    pub instances: Vec<(Instance, FuncId)>,
+    pub environments: Vec<(Instance, StoredParamEnvAndCrate)>,
+    pub found_instances: Vec<(FuncId, Instance, StoredParamEnvAndCrate)>,
+    pub forwarded: Vec<Instance>,
+    pub pending: Vec<(Instance, StoredParamEnvAndCrate, FuncId)>,
+    pub unit_instances: Vec<Instance>,
+    pub unit_roots: Vec<FunctionId>,
+    pub unit_tried: Vec<FunctionId>,
+    pub ahead: Vec<(Instance, StoredParamEnvAndCrate)>,
+    pub rejected: Vec<(Instance, StoredParamEnvAndCrate, String)>,
+    pub statics: Vec<(StaticId, DataId)>,
+    pub frozen_statics: Vec<(StaticId, DataId)>,
+    pub imported_statics: Vec<(StaticId, DataId)>,
+    pub shared_statics: Vec<(StaticId, DataId)>,
+    pub static_order: Vec<StaticId>,
+    pub vtables: Vec<((StoredTy, Option<(TraitId, StoredGenericArgs)>), DataId)>,
+    pub constants: Vec<(ConstBlob, DataId)>,
+    /// Original typed blobs before hash_type_ids, including non-shared and
+    /// writable allocations. Native post-fixup inputs are in data_definitions.
+    pub blobs: Vec<(DataId, ConstBlob, Option<String>)>,
+    pub named_vtables: Vec<(String, DataId)>,
+    /// Includes anonymous/writable allocations as well as named statics. These
+    /// are successful native module definitions, with their exact relocations.
+    pub data_definitions: Vec<(DataId, DataDescription)>,
+    /// Successfully stitched native functions, including runtime shims and asm.
+    /// Backend finalization support code is not a source-level instance.
+    pub function_definitions: Vec<FuncId>,
+    pub data_declarations: Vec<(DataId, Option<String>, Linkage, bool, bool)>,
+    pub function_declarations: Vec<(FuncId, Option<String>, Linkage, Signature)>,
+    /// Finalization replaces placeholder data with these refusal messages.
+    pub stand_ins: Vec<(DataId, Box<[u8]>)>,
+    pub hidden: Vec<FuncId>,
+    pub unstitched: Vec<FuncId>,
+    pub custom_sections: Vec<(String, Vec<u8>)>,
+    /// A delta must not be mistaken for a whole-program inventory.
+    pub is_patch: bool,
+}
+
+/// Root requests and outcomes remain separate: kept/offered means requested,
+/// not successfully defined, and skipped roots retain their original errors.
+pub struct RootInventory {
+    pub entries: Vec<FunctionId>,
+    pub on_demand: Vec<FunctionId>,
+    pub start: Option<FunctionId>,
+    pub kept: Vec<StaticId>,
+    pub offered: Vec<StaticId>,
+    pub compiled: Vec<(FunctionId, String)>,
+    pub skipped: Vec<(FunctionId, CodegenError)>,
+    pub shared: bool,
+    pub whole: bool,
+}
+
+impl RootInventory {
+    pub fn capture(
+        roots: Roots<'_>,
+        compiled: &[(FunctionId, String)],
+        skipped: &[(FunctionId, CodegenError)],
+    ) -> Self {
+        Self {
+            entries: roots.entries.to_vec(),
+            on_demand: roots.on_demand.to_vec(),
+            start: roots.start,
+            kept: roots.kept.to_vec(),
+            offered: roots.offered.to_vec(),
+            compiled: compiled.to_vec(),
+            skipped: skipped.to_vec(),
+            shared: roots.shared,
+            whole: roots.whole,
+        }
+    }
+}
+
+/// Separate exact opt-in, sampled once when the native codegen first starts.
+/// No enumeration, hashing or data cloning is done on the disabled path.
+fn demand_inventory_enabled() -> bool {
+    static ENABLED: LazyLock<bool> = LazyLock::new(|| {
+        demand_inventory_flag(std::env::var_os("RA_JIT_DEMAND_INVENTORY").as_deref())
+    });
+    *ENABLED
+}
+
+fn demand_inventory_flag(value: Option<&std::ffi::OsStr>) -> bool {
+    value == Some(std::ffi::OsStr::new("1"))
 }
 
 /// The functions a build starts from.
@@ -845,6 +940,11 @@ impl CodegenUnit {
                 }
             };
             if let Some(patch) = patch {
+                if demand_inventory_enabled() {
+                    eprintln!(
+                        "demand inventory: unavailable for retained-base patch, no full-round coverage claimed"
+                    );
+                }
                 backend::Tally::global().report();
                 let compiled_now = known.compiled_since_last_build();
                 known.stats = BuildStats {
@@ -859,6 +959,7 @@ impl CodegenUnit {
                     onto_rustcs: false,
                 };
                 let unit = CodegenUnit {
+                    inventory: None,
                     object: None,
                     patch: Some(patch.object),
                     apart: Vec::new(),
@@ -1232,12 +1333,14 @@ impl CodegenUnit {
                 // The object frees them as it is written, on a thread of its own.
                 drop(entries.take());
                 let start = stdx::time::Instant::now();
+                let inventory = cg.inventory(roots, &compiled, &skipped, denied);
                 let (object, apart) = cg.finish()?;
                 stats.phases.object = start.elapsed();
                 backend::Tally::global().report();
                 (*theirs, *unknown) = (own_statics.theirs, own_statics.unknown);
                 let patch = if patching { Some(patch::empty_object()?) } else { None };
                 return Ok(Some(CodegenUnit {
+                    inventory,
                     object: Some(object),
                     patch,
                     apart,
@@ -1845,16 +1948,16 @@ pub struct Phases {
 
 /// A function with concrete generic arguments that we compile ourselves.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct Instance {
-    def: InstanceDef,
-    args: StoredGenericArgs,
+pub struct Instance {
+    pub def: InstanceDef,
+    pub args: StoredGenericArgs,
     /// Whether the crate that compiles it has `-C overflow-checks`: the one that asks for it,
     /// until [`ObjectCodegen::settled`] says which crate rustc had compile it.
-    checked: bool,
+    pub checked: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-enum InstanceDef {
+pub enum InstanceDef {
     Fn(FunctionId),
     /// An `InternedClosureId`, stored without its database lifetime.
     Closure(salsa::Id),
@@ -2220,6 +2323,11 @@ fn split_top_on<'t>(text: &'t str, separator: &str) -> Vec<&'t str> {
 /// Stitches compiled functions into one object: gives every function and data object they
 /// ask for an id in the module, and defines the ones that are ours.
 struct ObjectCodegen<'a, 'db> {
+    /// Only allocated for the separate diagnostic opt-in. Record after a native
+    /// definition succeeds, so a failed round cannot masquerade as coverage.
+    inventory_data: Option<Vec<(DataId, DataDescription)>>,
+    inventory_functions: Option<Vec<FuncId>>,
+    inventory_blobs: Option<Vec<(DataId, ConstBlob, Option<String>)>>,
     db: &'db dyn HirDatabase,
     symbols: &'a dyn SymbolResolver,
     module: ObjectModule,
@@ -5276,6 +5384,9 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
             );
         }
         Ok(ObjectCodegen {
+            inventory_data: demand_inventory_enabled().then(Vec::new),
+            inventory_functions: demand_inventory_enabled().then(Vec::new),
+            inventory_blobs: demand_inventory_enabled().then(Vec::new),
             db,
             symbols,
             module,
@@ -5366,6 +5477,74 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
             stored_roots: FxHashMap::default(),
             root_names: FxHashMap::default(),
         })
+    }
+
+    /// Snapshot actual native state without asking new semantic questions. In
+    /// particular, no MIR query, object-symbol parsing, or dependency hashing runs.
+    fn inventory(
+        &self,
+        roots: Roots<'_>,
+        compiled: &[(FunctionId, String)],
+        skipped: &[(FunctionId, CodegenError)],
+        denied: &FxHashSet<FunctionId>,
+    ) -> Option<CodegenInventory> {
+        let data = self.inventory_data.as_ref()?;
+        let pairs =
+            |map: &FxHashMap<StaticId, DataId>| map.iter().map(|(&id, &data)| (id, data)).collect();
+        Some(CodegenInventory {
+            roots: RootInventory::capture(roots, compiled, skipped),
+            denied: denied.iter().copied().collect(),
+            instances: self.instances.iter().map(|(it, &id)| (it.clone(), id)).collect(),
+            environments: self.envs.clone(),
+            found_instances: self
+                .found_instances
+                .iter()
+                .map(|(&id, (it, env))| (id, it.clone(), env.clone()))
+                .collect(),
+            forwarded: self.forwarded.iter().cloned().collect(),
+            pending: self.pending.clone(),
+            unit_instances: self.unit_instances.keys().cloned().collect(),
+            unit_roots: self.unit_roots.keys().copied().collect(),
+            unit_tried: self.unit_tried.iter().copied().collect(),
+            ahead: self.ahead.iter().cloned().collect(),
+            rejected: self
+                .rejected
+                .iter()
+                .map(|(it, rejected)| (it.clone(), rejected.env.clone(), rejected.why.clone()))
+                .collect(),
+            statics: pairs(&self.statics),
+            frozen_statics: pairs(&self.frozen_statics),
+            imported_statics: pairs(&self.imported_statics),
+            shared_statics: pairs(&self.shared_statics),
+            static_order: self.own_static_order.clone(),
+            vtables: self.vtables.iter().map(|(it, &id)| (it.clone(), id)).collect(),
+            constants: self.consts.iter().map(|(it, &id)| (it.clone(), id)).collect(),
+            blobs: self.inventory_blobs.as_ref()?.clone(),
+            named_vtables: self.named_vtables.iter().map(|(it, &id)| (it.clone(), id)).collect(),
+            data_definitions: data.clone(),
+            function_definitions: self.inventory_functions.as_ref()?.clone(),
+            data_declarations: self
+                .module
+                .declarations()
+                .get_data_objects()
+                .map(|(id, it)| (id, it.name.clone(), it.linkage, it.writable, it.tls))
+                .collect(),
+            function_declarations: self
+                .module
+                .declarations()
+                .get_functions()
+                .map(|(id, it)| (id, it.name.clone(), it.linkage, it.signature.clone()))
+                .collect(),
+            stand_ins: self.stand_ins.clone(),
+            hidden: self.hidden.clone(),
+            unstitched: self.unstitched.iter().copied().collect(),
+            custom_sections: self.custom_sections.clone(),
+            is_patch: self.base.is_some(),
+        })
+    }
+
+    fn define_recorded_data(&mut self, id: DataId, data: &DataDescription) -> Result<()> {
+        define_inventory_data(&mut self.module, &mut self.inventory_data, id, data)
     }
 
     /// The object, and the files of what a debugger reads that is kept apart from it.
@@ -5838,7 +6017,7 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
         let text = self.declare_local_data(false)?;
         let mut data = DataDescription::new();
         data.define(Box::new([]));
-        self.module.define_data(text, &data).map_err(backend)?;
+        self.define_recorded_data(text, &data)?;
         self.stand_ins.push((text, message.into_boxed_slice()));
         // With no C library the stand-in only traps: the link still has its message.
         let said = if Target::current().has_libc() {
@@ -6740,6 +6919,9 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
                 .add_function(&mut self.module, id, unwind)
                 .map_err(CodegenError::Backend)?;
         }
+        if let Some(inventory) = &mut self.inventory_functions {
+            inventory.push(id);
+        }
         Ok(())
     }
 
@@ -6804,6 +6986,9 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
             .declare_function(&name, Linkage::Local, sig)
             .map_err(|e| CodegenError::Backend(e.to_string()))?;
         self.module.define_function_bytes(id, 16, &assembled.code, &[])?;
+        if let Some(inventory) = &mut self.inventory_functions {
+            inventory.push(id);
+        }
         self.assemblies.insert(text.to_owned(), id);
         Ok(id)
     }
@@ -7768,9 +7953,7 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
                 description.write_data_addr(0, global, 0);
             }
         }
-        self.module
-            .define_data(data, &description)
-            .map_err(|e| CodegenError::Backend(e.to_string()))?;
+        self.define_recorded_data(data, &description)?;
         Ok(data)
     }
 
@@ -7783,9 +7966,7 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
         let data = self.declare_named_data(&name, Linkage::Hidden, false, false, true)?;
         let mut description = DataDescription::new();
         description.define_zeroinit(1);
-        self.module
-            .define_data(data, &description)
-            .map_err(|e| CodegenError::Backend(e.to_string()))
+        self.define_recorded_data(data, &description)
     }
 
     /// Writes rustc's hash of each type in `blob.type_ids` at its place in the bytes.
@@ -7795,6 +7976,7 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
 
     /// Defines `id` as `blob`, in the section named `section` when there is one.
     fn fill_data(&mut self, id: DataId, mut blob: ConstBlob, section: Option<&str>) -> Result<()> {
+        let original = self.inventory_blobs.as_ref().map(|_| blob.clone());
         self.hash_type_ids(&mut blob)?;
         let mut data = DataDescription::new();
         if let Some(section) = section {
@@ -7810,7 +7992,11 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
             let target = self.module.declare_func_in_data(target, &mut data);
             data.write_function_addr(offset, target);
         }
-        self.module.define_data(id, &data).map_err(|e| CodegenError::Backend(e.to_string()))
+        self.define_recorded_data(id, &data)?;
+        if let (Some(inventory), Some(blob)) = (&mut self.inventory_blobs, original) {
+            inventory.push((id, blob, section.map(str::to_owned)));
+        }
+        Ok(())
     }
 
     fn import(&mut self, symbol: &str, sig: &Signature) -> Result<FuncId> {
@@ -7824,6 +8010,21 @@ impl<'a, 'db> ObjectCodegen<'a, 'db> {
         self.imports.insert(symbol.to_owned(), id);
         Ok(id)
     }
+}
+
+/// Keep the native call and its error behavior identical with diagnostics off.
+/// Record only successful definitions, including ones without a semantic name.
+fn define_inventory_data(
+    module: &mut ObjectModule,
+    inventory: &mut Option<Vec<(DataId, DataDescription)>>,
+    id: DataId,
+    data: &DataDescription,
+) -> Result<()> {
+    module.define_data(id, data).map_err(|e| CodegenError::Backend(e.to_string()))?;
+    if let Some(inventory) = inventory {
+        inventory.push((id, data.clone()));
+    }
+    Ok(())
 }
 
 /// What a call to an intrinsic turned into.
@@ -7870,16 +8071,16 @@ enum DataIdentity {
 #[derive(
     Debug, Default, Clone, PartialEq, Eq, Hash, serde_derive::Serialize, serde_derive::Deserialize,
 )]
-struct ConstBlob {
-    bytes: Vec<u8>,
-    relocs: Vec<(u32, DataId, i64)>,
-    fn_relocs: Vec<(u32, FuncId)>,
-    align: u64,
+pub struct ConstBlob {
+    pub bytes: Vec<u8>,
+    pub relocs: Vec<(u32, DataId, i64)>,
+    pub fn_relocs: Vec<(u32, FuncId)>,
+    pub align: u64,
     /// The `TypeId`s in `bytes` by offset, which hold the ids const eval gave their types
     /// until [`ObjectCodegen::fill_data`] writes rustc's hashes there. A blob is kept with
     /// the hashes in it.
     #[serde(skip)]
-    type_ids: Vec<(u32, StoredTy)>,
+    pub type_ids: Vec<(u32, StoredTy)>,
 }
 
 impl ConstBlob {
@@ -19268,6 +19469,85 @@ fn operands_of(rvalue: &Rvalue) -> Vec<&Operand> {
 mod tests {
     use cranelift_codegen::ir::{self, AbiParam, InstBuilder, types};
     use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+
+    #[test]
+    fn demand_inventory_requires_the_exact_separate_opt_in() {
+        use std::ffi::OsStr;
+        assert!(!super::demand_inventory_flag(None));
+        for value in ["", "0", "true", "yes", "01", "1 ", " 1"] {
+            assert!(!super::demand_inventory_flag(Some(OsStr::new(value))));
+        }
+        assert!(super::demand_inventory_flag(Some(OsStr::new("1"))));
+    }
+
+    /// Run the very same module definition calls with capture off and on. The
+    /// native bytes and duplicate-definition errors must stay identical, while
+    /// anonymous/local and writable/TLS data keep exact relocations in memory.
+    #[test]
+    fn demand_inventory_data_capture_does_not_change_native_output_or_errors() {
+        use super::{define_inventory_data, target, write_object};
+        use cranelift_module::{
+            DataDescription, Linkage, Module, ModuleRelocTarget, default_libcall_names,
+        };
+        use cranelift_object::{ObjectBuilder, ObjectModule};
+        let build = |enabled: bool| {
+            let builder = ObjectBuilder::new(
+                target().unwrap().clone(),
+                "inventory-fixture",
+                default_libcall_names(),
+            )
+            .unwrap();
+            let mut module = ObjectModule::new(builder);
+            let mut inventory = enabled.then(Vec::new);
+            let local =
+                module.declare_data(".Lfixture.anonymous", Linkage::Local, false, false).unwrap();
+            let tls = module.declare_data("TLS", Linkage::Export, true, true).unwrap();
+            let function = module
+                .declare_function("external", Linkage::Import, &module.make_signature())
+                .unwrap();
+            let mut plain = DataDescription::new();
+            plain.define(Box::new([1, 2, 3, 4]));
+            plain.set_align(4);
+            define_inventory_data(&mut module, &mut inventory, local, &plain).unwrap();
+            let mut pointers = DataDescription::new();
+            pointers.define_zeroinit(16);
+            pointers.set_align(8);
+            pointers.set_used(true);
+            let data_ref = module.declare_data_in_data(local, &mut pointers);
+            let func_ref = module.declare_func_in_data(function, &mut pointers);
+            pointers.write_data_addr(0, data_ref, 3);
+            pointers.write_function_addr(8, func_ref);
+            define_inventory_data(&mut module, &mut inventory, tls, &pointers).unwrap();
+            let error = define_inventory_data(&mut module, &mut inventory, local, &plain)
+                .unwrap_err()
+                .to_string();
+            if let Some(captured) = &inventory {
+                assert_eq!(captured.len(), 2, "a failed definition is not coverage");
+                assert_eq!(captured[0].0, local);
+                assert_eq!(captured[0].1.init, plain.init);
+                assert_eq!(captured[1].0, tls);
+                assert_eq!(captured[1].1.data_relocs, pointers.data_relocs);
+                assert_eq!(captured[1].1.function_relocs, pointers.function_relocs);
+                let user_target = |target: &ModuleRelocTarget| match target {
+                    ModuleRelocTarget::User { namespace, index } => (*namespace, *index),
+                    other => panic!("expected exact user relocation target, got {other:?}"),
+                };
+                for description in [&captured[1].1, &pointers] {
+                    assert_eq!(user_target(&description.data_decls[data_ref]), (1, local.as_u32()));
+                    assert_eq!(
+                        user_target(&description.function_decls[func_ref]),
+                        (0, function.as_u32())
+                    );
+                }
+                assert_eq!(captured[1].1.align, Some(8));
+                assert!(captured[1].1.used);
+                let declaration = module.declarations().get_data_decl(tls);
+                assert!(declaration.writable && declaration.tls);
+            }
+            (write_object(module.finish()).unwrap(), error)
+        };
+        assert_eq!(build(false), build(true));
+    }
 
     /// A `link_name` that starts with `\u{1}` is the object's symbol: the object writer's
     /// prefix comes off it, so that the symbol is not prefixed twice.
