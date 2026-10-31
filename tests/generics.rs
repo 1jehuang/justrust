@@ -420,6 +420,18 @@ fn sync_native_check_build_run_workers_1_8() {
 
 const MANUALLY_DROP_VALID: &[(&str, &str)] = &[
     (
+        "shared_payload_reference_return",
+        r#"use core::mem::ManuallyDrop;fn read(x:&ManuallyDrop<i32>)->&i32{&**x}fn main(){let x=ManuallyDrop::new(7);println!("{}",*read(&x));}"#,
+    ),
+    (
+        "mutable_payload_reference_return",
+        r#"use core::mem::ManuallyDrop;fn write(x:&mut ManuallyDrop<i32>)->&mut i32{&mut **x}fn main(){let mut x=ManuallyDrop::new(1);*write(&mut x)=7;println!("{}",*x);}"#,
+    ),
+    (
+        "nominal_deref_original_payload_return",
+        r#"struct G<T>{value:core::mem::ManuallyDrop<T>}impl<T>core::ops::Deref for G<T>{type Target=T;fn deref(&self)->&T{&*self.value}}fn main(){let guard=G{value:core::mem::ManuallyDrop::new(7i32)};println!("{}",*guard);}"#,
+    ),
+    (
         "inherent_original_parameter_sized",
         r#"struct G<T>{v:core::mem::ManuallyDrop<T>}impl<T>G<T>{fn new(v:T)->Self{G{v:core::mem::ManuallyDrop::new(v)}}fn take(self)->T{core::mem::ManuallyDrop::into_inner(self.v)}}fn main(){let x=G::<i32>::new(7);println!("{}",x.take());}"#,
     ),
@@ -473,6 +485,14 @@ const MANUALLY_DROP_VALID: &[(&str, &str)] = &[
     ),
 ];
 const MANUALLY_DROP_INVALID: &[(&str, &str)] = &[
+    (
+        "shared_payload_cannot_return_mutable_reference",
+        "use core::mem::ManuallyDrop;fn bad(x:&ManuallyDrop<i32>)->&mut i32{&mut **x}fn main(){}",
+    ),
+    (
+        "local_payload_cannot_escape_in_unused_function",
+        "use core::mem::ManuallyDrop;fn bad<'a>()->&'a i32{let value=ManuallyDrop::new(7i32);&*value}fn main(){}",
+    ),
     (
         "unsafe_drop_unused_safe_body",
         "use core::mem::ManuallyDrop;fn bad(x:&mut ManuallyDrop<i32>){ManuallyDrop::drop(x);}fn main(){}",

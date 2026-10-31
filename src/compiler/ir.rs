@@ -8723,7 +8723,12 @@ fn stored_candidate_work(contract: &RefContract, budget: &PlanBudget) -> Result<
                         return Err("reference depth resource limit exceeded".into());
                     }
                     if path.projection.iter().any(|step| {
-                        !matches!(step, Projection::Field(_) | Projection::ConstantIndex(_))
+                        !matches!(
+                            step,
+                            Projection::Field(_)
+                                | Projection::ConstantIndex(_)
+                                | Projection::ManuallyDropPayload
+                        )
                     }) {
                         return Err("forbidden input path projection or reference position".into());
                     }
@@ -9397,6 +9402,8 @@ fn collect_input_paths(
         }
         let (step, child) = if let Ty::Array { element, .. } = ty {
             (Projection::ConstantIndex(index), element.as_ref().clone())
+        } else if let Ty::ManuallyDrop(wrapper) = ty {
+            (Projection::ManuallyDropPayload, wrapper.argument().clone())
         } else {
             (
                 Projection::Field(index),
@@ -14211,6 +14218,175 @@ mod tests {
             Ty::Bool
         );
         assert!(projected_ty(&ty, &[Projection::Field(0)], &budget).is_err());
+        let input = InputReference {
+            param: 0,
+            position: ReferencePosition { depth: 1 },
+        };
+        let mut paths = Vec::new();
+        collect_input_paths(
+            &ty,
+            &Ty::Bool,
+            input,
+            &mut Vec::new(),
+            &mut paths,
+            &mut (0, 0, 0),
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].input, input);
+        assert_eq!(
+            paths[0].projection.as_ref(),
+            &[Projection::ManuallyDropPayload]
+        );
+        assert_eq!(
+            projected_ty(&ty, &paths[0].projection, &budget).unwrap(),
+            Ty::Bool
+        );
+        let reference = |kind, referent| Ty::Ref {
+            kind,
+            referent: Arc::new(referent),
+        };
+        let input = fixture_input(0);
+        let contract_for = |kind, projection: Vec<Projection>| RefContract {
+            region_count: 1,
+            input_regions: Arc::from([InputRegion {
+                input,
+                region: RegionParamId(0),
+            }]),
+            results: fixture_result_regions(
+                Some(RegionParamId(0)),
+                match kind {
+                    BorrowKind::Shared => {
+                        ReturnContract::SharedInputPaths(Arc::from([InputPath {
+                            input,
+                            projection: projection.into(),
+                        }]))
+                    }
+                    BorrowKind::Mut => ReturnContract::MutInputPaths(Arc::from([InputPath {
+                        input,
+                        projection: projection.into(),
+                    }])),
+                },
+            ),
+            outlives: Arc::from([]),
+            static_regions: 0,
+        };
+        let shared = contract_for(BorrowKind::Shared, vec![Projection::ManuallyDropPayload]);
+        let mutable = contract_for(BorrowKind::Mut, vec![Projection::ManuallyDropPayload]);
+        let shared_params = [reference(BorrowKind::Shared, ty.clone())];
+        let mutable_params = [reference(BorrowKind::Mut, ty.clone())];
+        let shared_result = reference(BorrowKind::Shared, Ty::Bool);
+        let mutable_result = reference(BorrowKind::Mut, Ty::Bool);
+        validate_stored_ref_contract(&shared_params, &shared_result, &shared, &budget).unwrap();
+        validate_stored_ref_contract(&mutable_params, &mutable_result, &mutable, &budget).unwrap();
+        assert!(
+            validate_stored_ref_contract(&shared_params, &mutable_result, &mutable, &budget)
+                .unwrap_err()
+                .contains("kind or region mismatch")
+        );
+        assert!(
+            validate_stored_ref_contract(
+                &shared_params,
+                &reference(BorrowKind::Shared, Ty::Char),
+                &shared,
+                &budget
+            )
+            .unwrap_err()
+            .contains("path type mismatch")
+        );
+        let public_field = contract_for(BorrowKind::Shared, vec![Projection::Field(0)]);
+        assert!(
+            validate_stored_ref_contract(&shared_params, &shared_result, &public_field, &budget)
+                .unwrap_err()
+                .contains("requires canonical projection")
+        );
+        let modules = fixture_modules();
+        let user_wrapper = Ty::Struct(nominal(
+            &modules,
+            NominalAppId {
+                snapshot: catalog.snapshot(),
+                index: NominalIndex::SourceSlot(999),
+            },
+            "ManuallyDrop",
+            vec![Ty::Bool],
+        ));
+        for nonwrapper in [Ty::Bool, user_wrapper] {
+            assert!(
+                validate_stored_ref_contract(
+                    &[reference(BorrowKind::Shared, nonwrapper)],
+                    &shared_result,
+                    &shared,
+                    &budget
+                )
+                .unwrap_err()
+                .contains("requires canonical wrapper")
+            );
+        }
+        let repeated = contract_for(
+            BorrowKind::Shared,
+            vec![
+                Projection::ManuallyDropPayload,
+                Projection::ManuallyDropPayload,
+            ],
+        );
+        assert!(
+            validate_stored_ref_contract(&shared_params, &shared_result, &repeated, &budget)
+                .unwrap_err()
+                .contains("requires canonical wrapper")
+        );
+        for forbidden in [
+            Projection::Deref,
+            Projection::DynamicIndex(LocalId(0)),
+            Projection::Downcast(VariantId {
+                owner: NominalAppId {
+                    snapshot: catalog.snapshot(),
+                    index: NominalIndex::SourceSlot(1000),
+                },
+                index: 0,
+            }),
+        ] {
+            let forged = contract_for(BorrowKind::Shared, vec![forbidden]);
+            assert!(
+                validate_stored_ref_contract(&shared_params, &shared_result, &forged, &budget)
+                    .unwrap_err()
+                    .contains("forbidden input path")
+            );
+        }
+        let too_deep = contract_for(
+            BorrowKind::Shared,
+            vec![Projection::ManuallyDropPayload; MAX_PATTERN_PROJECTION_DEPTH + 1],
+        );
+        assert!(
+            validate_stored_ref_contract(&shared_params, &shared_result, &too_deep, &budget)
+                .unwrap_err()
+                .contains("path depth resource limit")
+        );
+        let denied = PlanBudget::new(PlanLimits {
+            work: 0,
+            ..PlanLimits::default()
+        });
+        assert!(
+            collect_input_paths(
+                &ty,
+                &Ty::Bool,
+                input,
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut (0, 0, 0),
+                &denied
+            )
+            .unwrap_err()
+            .contains("resource")
+        );
+        let failure = denied.first_resource_failure().unwrap();
+        assert!(projected_ty(&ty, &[Projection::ManuallyDropPayload], &denied).is_err());
+        assert!(
+            validate_stored_ref_contract(&shared_params, &shared_result, &shared, &denied)
+                .unwrap_err()
+                .contains("resource")
+        );
+        assert_eq!(denied.first_resource_failure(), Some(failure));
     }
     #[test]
     fn phantom_data_factory_and_metadata_reject_forged_owner_and_preserve_backing_admission() {
