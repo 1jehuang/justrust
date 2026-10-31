@@ -1,0 +1,7 @@
+{
+  "source_commit": "91220ff43",
+  "frozen_main_sha256": "a1b78692eeb5fa95b6bb43c40e2c063f82740ae5c2e07f1293b715b3b4b9ab48",
+  "source_scope": "frozen main plus build full-source hash inventory, not a compiler source redistribution",
+  "capture_scope": "raw diagnostic receipts, committed helpers/licenses, no native binaries or cache data",
+  "native_jobs_executed_by_capture": false
+}

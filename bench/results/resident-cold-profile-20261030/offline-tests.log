@@ -1,0 +1,19 @@
+test_detached_relocation (__main__.ColdProfileControls.test_detached_relocation) ... ok
+test_plain_corruption (__main__.ColdProfileControls.test_plain_corruption) ... ok
+test_positive_replay (__main__.ColdProfileControls.test_positive_replay) ... ok
+test_resigned_binary_both_copies (__main__.ColdProfileControls.test_resigned_binary_both_copies) ... ok
+test_resigned_client_time (__main__.ColdProfileControls.test_resigned_client_time) ... ok
+test_resigned_cpu_phase_time (__main__.ColdProfileControls.test_resigned_cpu_phase_time) ... ok
+test_resigned_empty_filter (__main__.ColdProfileControls.test_resigned_empty_filter) ... ok
+test_resigned_failed_native_status (__main__.ColdProfileControls.test_resigned_failed_native_status) ... ok
+test_resigned_quiet_machine_claim (__main__.ColdProfileControls.test_resigned_quiet_machine_claim) ... ok
+test_resigned_renamed_test_same_count (__main__.ColdProfileControls.test_resigned_renamed_test_same_count) ... ok
+test_resigned_source_both_copies (__main__.ColdProfileControls.test_resigned_source_both_copies) ... ok
+test_resigned_std_root_count (__main__.ColdProfileControls.test_resigned_std_root_count) ... ok
+test_resigned_test_count (__main__.ColdProfileControls.test_resigned_test_count) ... ok
+test_resigned_toolchain_both_copies (__main__.ColdProfileControls.test_resigned_toolchain_both_copies) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 0.431s
+
+OK

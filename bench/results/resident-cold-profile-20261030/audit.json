@@ -1,0 +1,34 @@
+{
+  "status": "passed",
+  "immutable_files": 29,
+  "source_files": 63,
+  "full_source_inventory_entries": 3757,
+  "actual_cold_calls": 2,
+  "actual_tests_per_call": 4,
+  "candidate_source_commit": "91220ff43",
+  "total_ms": 26338.5,
+  "daemon_ms": 22983.0,
+  "planning_ms": 3337.5,
+  "eager_std": {
+    "crates": 17,
+    "roots_compiled": 25924,
+    "roots_total": 25960,
+    "instances": 16200,
+    "seconds": 9.1
+  },
+  "project": {
+    "roots_compiled": 3990,
+    "instances": 40606,
+    "seconds": 5.1
+  },
+  "source_check": {
+    "files": 31,
+    "seconds": 1.4
+  },
+  "cpu_phases_additive": false,
+  "comparison": false,
+  "savings_claimed": false,
+  "quiet_machine_proven": false,
+  "v31_validation_claimed": false,
+  "scope": "one profiled cold diagnostic only"
+}
