@@ -1,0 +1,398 @@
+{
+  "comprehensive_benchmark": false,
+  "decision": "REJECT/no promotion",
+  "native_gates": [
+    {
+      "exit": 101,
+      "run": "20261030-193235022-1108438",
+      "tests": 0
+    },
+    {
+      "exit": 0,
+      "run": "20261030-193349060-1115269",
+      "tests": 0
+    },
+    {
+      "exit": 0,
+      "run": "20261030-193358765-1116580",
+      "tests": 0
+    },
+    {
+      "exit": 0,
+      "run": "20261030-193454710-1123257",
+      "tests": 48
+    },
+    {
+      "exit": 0,
+      "run": "20261030-193455033-1123390",
+      "tests": 368
+    },
+    {
+      "exit": 0,
+      "run": "20261030-194529038-1208104",
+      "tests": 0
+    },
+    {
+      "exit": 0,
+      "run": "20261030-194538026-1209299",
+      "tests": 0
+    },
+    {
+      "exit": 0,
+      "run": "20261030-194634388-1215832",
+      "tests": 48
+    },
+    {
+      "exit": 0,
+      "run": "20261030-194634654-1215942",
+      "tests": 369
+    }
+  ],
+  "new_native_calls": 0,
+  "noise": "unknown/uncontrolled",
+  "paired": {
+    "first": {
+      "assert-failure": {
+        "off_seconds": 1.5691584700107342,
+        "on_seconds": 1.596156372994301,
+        "percent_change": 1.7205338721067553
+      },
+      "assert-recovery": {
+        "off_seconds": 0.3409928350010887,
+        "on_seconds": 0.4170051719993353,
+        "percent_change": 22.291476299789093
+      },
+      "cold-prepare": {
+        "off_seconds": 15.860179251001682,
+        "on_seconds": 16.21850919901044,
+        "percent_change": 2.2593057892843715
+      },
+      "manifest-feature-add": {
+        "off_seconds": 7.408009026999935,
+        "on_seconds": 7.33661581701017,
+        "percent_change": -0.963730062012047
+      },
+      "repeated-noop-1": {
+        "off_seconds": 0.031281403003958985,
+        "on_seconds": 0.03403851199254859,
+        "percent_change": 8.813891717838441
+      },
+      "type-error": {
+        "off_seconds": 8.113641998003004,
+        "on_seconds": 7.3255307439976605,
+        "percent_change": -9.713409270452411
+      },
+      "type-recovery": {
+        "off_seconds": 7.343489941995358,
+        "on_seconds": 7.187614021997433,
+        "percent_change": -2.1226408864062574
+      }
+    },
+    "reverse": {
+      "assert-failure": {
+        "off_seconds": 1.5987090290000197,
+        "on_seconds": 1.6778265649918467,
+        "percent_change": 4.948839004262995
+      },
+      "assert-recovery": {
+        "off_seconds": 0.3419718649965944,
+        "on_seconds": 0.3762678299972322,
+        "percent_change": 10.02888497887957
+      },
+      "cold-prepare": {
+        "off_seconds": 15.931100835005054,
+        "on_seconds": 16.27880056599679,
+        "percent_change": 2.182521688819783
+      },
+      "manifest-feature-add": {
+        "off_seconds": 7.622189187008189,
+        "on_seconds": 7.383024035007111,
+        "percent_change": -3.137748829545306
+      },
+      "repeated-noop-1": {
+        "off_seconds": 0.042982965998817235,
+        "on_seconds": 0.03219670298858546,
+        "percent_change": -25.09427341642404
+      },
+      "type-error": {
+        "off_seconds": 7.918235675999313,
+        "on_seconds": 7.48065587200108,
+        "percent_change": -5.526228593126692
+      },
+      "type-recovery": {
+        "off_seconds": 7.003079486996285,
+        "on_seconds": 7.005241073988145,
+        "percent_change": 0.030866235287985155
+      }
+    }
+  },
+  "runtime": {
+    "v40-off": [
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "cold-prepare",
+        "seconds": 16.08209758400335
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "repeated-noop-1",
+        "seconds": 0.033315501001197845
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "manifest-feature-add",
+        "seconds": 7.629410620997078
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-error",
+        "seconds": 8.26187193300575
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-recovery",
+        "seconds": 7.291746287999558
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-failure",
+        "seconds": 1.6624596129986458
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-recovery",
+        "seconds": 0.31625986500876024
+      }
+    ],
+    "v40-on": [
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 21,
+        "phase": "cold-prepare",
+        "seconds": 16.101951983000617
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "repeated-noop-1",
+        "seconds": 0.03721212799428031
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "manifest-feature-add",
+        "seconds": 7.827787576999981
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-error",
+        "seconds": 7.874832433997653
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-recovery",
+        "seconds": 7.0536365309963
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-failure",
+        "seconds": 1.59579212499375
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-recovery",
+        "seconds": 0.3180529179953737
+      }
+    ],
+    "v41-off": [
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "cold-prepare",
+        "seconds": 15.860179251001682
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "repeated-noop-1",
+        "seconds": 0.031281403003958985
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "manifest-feature-add",
+        "seconds": 7.408009026999935
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-error",
+        "seconds": 8.113641998003004
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-recovery",
+        "seconds": 7.343489941995358
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-failure",
+        "seconds": 1.5691584700107342
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-recovery",
+        "seconds": 0.3409928350010887
+      }
+    ],
+    "v41-off-repeat": [
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "cold-prepare",
+        "seconds": 15.931100835005054
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "repeated-noop-1",
+        "seconds": 0.042982965998817235
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "manifest-feature-add",
+        "seconds": 7.622189187008189
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-error",
+        "seconds": 7.918235675999313
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "type-recovery",
+        "seconds": 7.003079486996285
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-failure",
+        "seconds": 1.5987090290000197
+      },
+      {
+        "native_hits_cumulative": 0,
+        "native_hits_new": 0,
+        "phase": "assert-recovery",
+        "seconds": 0.3419718649965944
+      }
+    ],
+    "v41-on": [
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 21,
+        "phase": "cold-prepare",
+        "seconds": 16.21850919901044
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "repeated-noop-1",
+        "seconds": 0.03403851199254859
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "manifest-feature-add",
+        "seconds": 7.33661581701017
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "type-error",
+        "seconds": 7.3255307439976605
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "type-recovery",
+        "seconds": 7.187614021997433
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "assert-failure",
+        "seconds": 1.596156372994301
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "assert-recovery",
+        "seconds": 0.4170051719993353
+      }
+    ],
+    "v41-on-repeat": [
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 21,
+        "phase": "cold-prepare",
+        "seconds": 16.27880056599679
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "repeated-noop-1",
+        "seconds": 0.03219670298858546
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "manifest-feature-add",
+        "seconds": 7.383024035007111
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "type-error",
+        "seconds": 7.48065587200108
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "type-recovery",
+        "seconds": 7.005241073988145
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "assert-failure",
+        "seconds": 1.6778265649918467
+      },
+      {
+        "native_hits_cumulative": 21,
+        "native_hits_new": 0,
+        "phase": "assert-recovery",
+        "seconds": 0.3762678299972322
+      }
+    ]
+  },
+  "runtime_rows": 42,
+  "scope": "Offline retention and semantic replay only. 21 hits are cumulative daemon-history markers, all first observed at cold state, not 21 new hits at each transition.",
+  "v41_rows": 28
+}

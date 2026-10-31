@@ -1,0 +1,39 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: 368 tests passed in 60.8s
+  time    startup 0.22s | compile 43.90s | tests 16.60s | after 0.03s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 428 fresh. Rebuilt because: ra-jit changed (ra-jit)
+          jr_engine (test)                  43.90s  cpu 170.2s   2612 MB
+  tests   368 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 16.60s
+          slowest tests (368 timed, 24.3s summed; a suite cannot finish before its slowest test):
+             16.52s  remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times
+              1.81s  remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked
+  cpu     176.6s total, avg 2.9/peak 9.3 of 16 cores; others used 3.1 cores
+  memory  peak 2719 MB build, 2612 MB largest rustc, 47.7 GB free; stalls cpu 0.56s mem 0.01s io 0.06s
+  output  3 warnings shown, 250 hidden; 435 progress and 368 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~ 32.9s  43.9s went to recompiling oversized crates: jr_engine (80k lines, 43.9s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 16.6s  tests in jr_engine-93ff5023e9192f9b took 16.6s to run; the slowest test alone took 16.5s (remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times). Speed it up or split it, or filter to the tests you changed
+          ~ 13.2s  build averaged 2.9 of 16 cores: jr_engine (test) ran 43.9s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-193455033-1123390` full output, `justrust show 20261030-193455033-1123390` full profile

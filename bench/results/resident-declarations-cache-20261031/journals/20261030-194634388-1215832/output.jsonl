@@ -1,0 +1,1627 @@
+{"t":1793414794.4180255,"s":"e","l":"warning: unused workspace dependency `arrayvec`"}
+{"t":1793414794.4180307,"s":"e","l":"   --> Cargo.toml:154:1"}
+{"t":1793414794.4180336,"s":"e","l":"    |"}
+{"t":1793414794.4180362,"s":"e","l":"154 | arrayvec = \"0.7.6\""}
+{"t":1793414794.4180388,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793414794.418074,"s":"e","l":"    |"}
+{"t":1793414794.418077,"s":"e","l":"    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default"}
+{"t":1793414794.4180796,"s":"e","l":"help: consider removing the workspace dependency `arrayvec`"}
+{"t":1793414794.4180822,"s":"e","l":"warning: unused workspace dependency `bitflags`"}
+{"t":1793414794.4180849,"s":"e","l":"   --> Cargo.toml:155:1"}
+{"t":1793414794.4180872,"s":"e","l":"    |"}
+{"t":1793414794.4180896,"s":"e","l":"155 | bitflags = \"2.9.1\""}
+{"t":1793414794.418092,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793414794.4180944,"s":"e","l":"    |"}
+{"t":1793414794.418097,"s":"e","l":"help: consider removing the workspace dependency `bitflags`"}
+{"t":1793414794.4180994,"s":"e","l":"warning: unused workspace dependency `camino`"}
+{"t":1793414794.418102,"s":"e","l":"   --> Cargo.toml:157:1"}
+{"t":1793414794.4181046,"s":"e","l":"    |"}
+{"t":1793414794.4181144,"s":"e","l":"157 | camino = \"1.2.2\""}
+{"t":1793414794.418117,"s":"e","l":"    | ^^^^^^"}
+{"t":1793414794.4181194,"s":"e","l":"    |"}
+{"t":1793414794.4181218,"s":"e","l":"help: consider removing the workspace dependency `camino`"}
+{"t":1793414794.4181225,"s":"e","l":"warning: unused workspace dependency `crossbeam-channel`"}
+{"t":1793414794.418123,"s":"e","l":"   --> Cargo.toml:158:1"}
+{"t":1793414794.4181235,"s":"e","l":"    |"}
+{"t":1793414794.4181237,"s":"e","l":"158 | crossbeam-channel = \"0.5.15\""}
+{"t":1793414794.4181242,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.4181247,"s":"e","l":"    |"}
+{"t":1793414794.4181252,"s":"e","l":"help: consider removing the workspace dependency `crossbeam-channel`"}
+{"t":1793414794.4181304,"s":"e","l":"warning: unused workspace dependency `dashmap`"}
+{"t":1793414794.4181309,"s":"e","l":"   --> Cargo.toml:217:1"}
+{"t":1793414794.418131,"s":"e","l":"    |"}
+{"t":1793414794.4181316,"s":"e","l":"217 | dashmap = { version = \"=6.2.1\", features = [\"raw-api\", \"inline\"] }"}
+{"t":1793414794.4181328,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793414794.418133,"s":"e","l":"    |"}
+{"t":1793414794.4181335,"s":"e","l":"help: consider removing the workspace dependency `dashmap`"}
+{"t":1793414794.4181468,"s":"e","l":"warning: unused workspace dependency `dissimilar`"}
+{"t":1793414794.4181473,"s":"e","l":"   --> Cargo.toml:159:1"}
+{"t":1793414794.4181478,"s":"e","l":"    |"}
+{"t":1793414794.4181483,"s":"e","l":"159 | dissimilar = \"1.0.10\""}
+{"t":1793414794.4181519,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793414794.4181523,"s":"e","l":"    |"}
+{"t":1793414794.4181528,"s":"e","l":"help: consider removing the workspace dependency `dissimilar`"}
+{"t":1793414794.4181669,"s":"e","l":"warning: unused workspace dependency `dot`"}
+{"t":1793414794.4181674,"s":"e","l":"   --> Cargo.toml:160:1"}
+{"t":1793414794.4181714,"s":"e","l":"    |"}
+{"t":1793414794.4181716,"s":"e","l":"160 | dot = \"0.1.4\""}
+{"t":1793414794.4181721,"s":"e","l":"    | ^^^"}
+{"t":1793414794.4181724,"s":"e","l":"    |"}
+{"t":1793414794.4181728,"s":"e","l":"help: consider removing the workspace dependency `dot`"}
+{"t":1793414794.4181917,"s":"e","l":"warning: unused workspace dependency `edition`"}
+{"t":1793414794.4181921,"s":"e","l":"   --> Cargo.toml:134:1"}
+{"t":1793414794.4181962,"s":"e","l":"    |"}
+{"t":1793414794.4181967,"s":"e","l":"134 | edition = { path = \"vendor/rust-analyzer/crates/edition\", version = \"0.0.0\" }"}
+{"t":1793414794.4181974,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793414794.4181979,"s":"e","l":"    |"}
+{"t":1793414794.4181983,"s":"e","l":"help: consider removing the workspace dependency `edition`"}
+{"t":1793414794.4182148,"s":"e","l":"warning: unused workspace dependency `hashbrown`"}
+{"t":1793414794.4182153,"s":"e","l":"   --> Cargo.toml:212:1"}
+{"t":1793414794.4182193,"s":"e","l":"    |"}
+{"t":1793414794.4182198,"s":"e","l":"212 | hashbrown = { version = \"0.17.0\", features = ["}
+{"t":1793414794.4182203,"s":"e","l":"    | ^^^^^^^^^"}
+{"t":1793414794.4182208,"s":"e","l":"    |"}
+{"t":1793414794.4182212,"s":"e","l":"help: consider removing the workspace dependency `hashbrown`"}
+{"t":1793414794.4182384,"s":"e","l":"warning: unused workspace dependency `hir-ide`"}
+{"t":1793414794.4182396,"s":"e","l":"   --> Cargo.toml:108:1"}
+{"t":1793414794.4182434,"s":"e","l":"    |"}
+{"t":1793414794.418244,"s":"e","l":"108 | hir-ide = { path = \"vendor/rust-analyzer/crates/hir-ide\", version = \"0.0.0\" }"}
+{"t":1793414794.4182444,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793414794.4182446,"s":"e","l":"    |"}
+{"t":1793414794.418245,"s":"e","l":"help: consider removing the workspace dependency `hir-ide`"}
+{"t":1793414794.4182642,"s":"e","l":"warning: unused workspace dependency `hir-ty-wfcheck`"}
+{"t":1793414794.4182646,"s":"e","l":"  --> Cargo.toml:93:1"}
+{"t":1793414794.418269,"s":"e","l":"   |"}
+{"t":1793414794.4182696,"s":"e","l":"93 | hir-ty-wfcheck = { path = \"vendor/rust-analyzer/crates/hir-ty-wfcheck\", version = \"0.0.0\" }"}
+{"t":1793414794.4182703,"s":"e","l":"   | ^^^^^^^^^^^^^^"}
+{"t":1793414794.4182706,"s":"e","l":"   |"}
+{"t":1793414794.4182725,"s":"e","l":"help: consider removing the workspace dependency `hir-ty-wfcheck`"}
+{"t":1793414794.4182873,"s":"e","l":"warning: unused workspace dependency `ide`"}
+{"t":1793414794.4182878,"s":"e","l":"   --> Cargo.toml:109:1"}
+{"t":1793414794.4182916,"s":"e","l":"    |"}
+{"t":1793414794.418292,"s":"e","l":"109 | ide = { path = \"vendor/rust-analyzer/crates/ide\", version = \"0.0.0\" }"}
+{"t":1793414794.4182925,"s":"e","l":"    | ^^^"}
+{"t":1793414794.4182928,"s":"e","l":"    |"}
+{"t":1793414794.4182932,"s":"e","l":"help: consider removing the workspace dependency `ide`"}
+{"t":1793414794.4183104,"s":"e","l":"warning: unused workspace dependency `ide-assists`"}
+{"t":1793414794.4183145,"s":"e","l":"   --> Cargo.toml:110:1"}
+{"t":1793414794.4183147,"s":"e","l":"    |"}
+{"t":1793414794.4183152,"s":"e","l":"110 | ide-assists = { path = \"vendor/rust-analyzer/crates/ide-assists\", version = \"0.0.0\" }"}
+{"t":1793414794.418316,"s":"e","l":"    | ^^^^^^^^^^^"}
+{"t":1793414794.4183187,"s":"e","l":"    |"}
+{"t":1793414794.4183192,"s":"e","l":"help: consider removing the workspace dependency `ide-assists`"}
+{"t":1793414794.4183345,"s":"e","l":"warning: unused workspace dependency `ide-completion`"}
+{"t":1793414794.4183388,"s":"e","l":"   --> Cargo.toml:111:1"}
+{"t":1793414794.418339,"s":"e","l":"    |"}
+{"t":1793414794.4183395,"s":"e","l":"111 | ide-completion = { path = \"vendor/rust-analyzer/crates/ide-completion\", version = \"0.0.0\" }"}
+{"t":1793414794.4183402,"s":"e","l":"    | ^^^^^^^^^^^^^^"}
+{"t":1793414794.418343,"s":"e","l":"    |"}
+{"t":1793414794.4183435,"s":"e","l":"help: consider removing the workspace dependency `ide-completion`"}
+{"t":1793414794.418358,"s":"e","l":"warning: unused workspace dependency `ide-ssr`"}
+{"t":1793414794.4183617,"s":"e","l":"   --> Cargo.toml:114:1"}
+{"t":1793414794.418362,"s":"e","l":"    |"}
+{"t":1793414794.4183624,"s":"e","l":"114 | ide-ssr = { path = \"vendor/rust-analyzer/crates/ide-ssr\", version = \"0.0.0\" }"}
+{"t":1793414794.4183629,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793414794.4183657,"s":"e","l":"    |"}
+{"t":1793414794.4183662,"s":"e","l":"help: consider removing the workspace dependency `ide-ssr`"}
+{"t":1793414794.4183807,"s":"e","l":"warning: unused workspace dependency `line-index`"}
+{"t":1793414794.4183843,"s":"e","l":"   --> Cargo.toml:148:1"}
+{"t":1793414794.4183848,"s":"e","l":"    |"}
+{"t":1793414794.418385,"s":"e","l":"148 | line-index = { version = \"0.1.2\" }"}
+{"t":1793414794.4183855,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793414794.418386,"s":"e","l":"    |"}
+{"t":1793414794.4183886,"s":"e","l":"help: consider removing the workspace dependency `line-index`"}
+{"t":1793414794.4184027,"s":"e","l":"warning: unused workspace dependency `lsp-server`"}
+{"t":1793414794.4184062,"s":"e","l":"   --> Cargo.toml:150:1"}
+{"t":1793414794.4184065,"s":"e","l":"    |"}
+{"t":1793414794.4184067,"s":"e","l":"150 | lsp-server = { version = \"0.7.9\" }"}
+{"t":1793414794.4184072,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793414794.41841,"s":"e","l":"    |"}
+{"t":1793414794.4184103,"s":"e","l":"help: consider removing the workspace dependency `lsp-server`"}
+{"t":1793414794.4184265,"s":"e","l":"warning: unused workspace dependency `macros`"}
+{"t":1793414794.4184303,"s":"e","l":"  --> Cargo.toml:85:1"}
+{"t":1793414794.4184308,"s":"e","l":"   |"}
+{"t":1793414794.4184313,"s":"e","l":"85 | macros = { path = \"vendor/rust-analyzer/crates/macros\", version = \"0.0.0\" }"}
+{"t":1793414794.418432,"s":"e","l":"   | ^^^^^^"}
+{"t":1793414794.4184349,"s":"e","l":"   |"}
+{"t":1793414794.4184353,"s":"e","l":"help: consider removing the workspace dependency `macros`"}
+{"t":1793414794.4184496,"s":"e","l":"warning: unused workspace dependency `mbe`"}
+{"t":1793414794.4184532,"s":"e","l":"   --> Cargo.toml:117:1"}
+{"t":1793414794.4184542,"s":"e","l":"    |"}
+{"t":1793414794.4184546,"s":"e","l":"117 | mbe = { path = \"vendor/rust-analyzer/crates/mbe\", version = \"0.0.0\" }"}
+{"t":1793414794.4184551,"s":"e","l":"    | ^^^"}
+{"t":1793414794.418458,"s":"e","l":"    |"}
+{"t":1793414794.4184597,"s":"e","l":"help: consider removing the workspace dependency `mbe`"}
+{"t":1793414794.4184718,"s":"e","l":"warning: unused workspace dependency `nohash-hasher`"}
+{"t":1793414794.4184752,"s":"e","l":"   --> Cargo.toml:166:1"}
+{"t":1793414794.4184754,"s":"e","l":"    |"}
+{"t":1793414794.4184759,"s":"e","l":"166 | nohash-hasher = \"0.2.0\""}
+{"t":1793414794.4184763,"s":"e","l":"    | ^^^^^^^^^^^^^"}
+{"t":1793414794.4184792,"s":"e","l":"    |"}
+{"t":1793414794.4184797,"s":"e","l":"help: consider removing the workspace dependency `nohash-hasher`"}
+{"t":1793414794.4184933,"s":"e","l":"warning: unused workspace dependency `oorandom`"}
+{"t":1793414794.4184966,"s":"e","l":"   --> Cargo.toml:167:1"}
+{"t":1793414794.4184968,"s":"e","l":"    |"}
+{"t":1793414794.4184973,"s":"e","l":"167 | oorandom = \"11.1.5\""}
+{"t":1793414794.4184976,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793414794.4185004,"s":"e","l":"    |"}
+{"t":1793414794.418501,"s":"e","l":"help: consider removing the workspace dependency `oorandom`"}
+{"t":1793414794.418518,"s":"e","l":"warning: unused workspace dependency `proc-macro-srv`"}
+{"t":1793414794.418522,"s":"e","l":"   --> Cargo.toml:121:1"}
+{"t":1793414794.4185221,"s":"e","l":"    |"}
+{"t":1793414794.4185226,"s":"e","l":"121 | proc-macro-srv = { path = \"vendor/rust-analyzer/crates/proc-macro-srv\", version = \"0.0.0\" }"}
+{"t":1793414794.4185233,"s":"e","l":"    | ^^^^^^^^^^^^^^"}
+{"t":1793414794.4185262,"s":"e","l":"    |"}
+{"t":1793414794.4185264,"s":"e","l":"help: consider removing the workspace dependency `proc-macro-srv`"}
+{"t":1793414794.4185414,"s":"e","l":"warning: unused workspace dependency `process-wrap`"}
+{"t":1793414794.418545,"s":"e","l":"   --> Cargo.toml:169:1"}
+{"t":1793414794.4185452,"s":"e","l":"    |"}
+{"t":1793414794.4185457,"s":"e","l":"169 | process-wrap = { version = \"9.1.0\", features = [\"std\"] }"}
+{"t":1793414794.4185462,"s":"e","l":"    | ^^^^^^^^^^^^"}
+{"t":1793414794.418549,"s":"e","l":"    |"}
+{"t":1793414794.4185495,"s":"e","l":"help: consider removing the workspace dependency `process-wrap`"}
+{"t":1793414794.418565,"s":"e","l":"warning: unused workspace dependency `profile`"}
+{"t":1793414794.4185684,"s":"e","l":"   --> Cargo.toml:122:1"}
+{"t":1793414794.4185686,"s":"e","l":"    |"}
+{"t":1793414794.418569,"s":"e","l":"122 | profile = { path = \"vendor/rust-analyzer/crates/profile\", version = \"0.0.0\" }"}
+{"t":1793414794.4185696,"s":"e","l":"    | ^^^^^^^"}
+{"t":1793414794.4185724,"s":"e","l":"    |"}
+{"t":1793414794.4185727,"s":"e","l":"help: consider removing the workspace dependency `profile`"}
+{"t":1793414794.4185889,"s":"e","l":"warning: unused workspace dependency `pulldown-cmark-to-cmark`"}
+{"t":1793414794.4185922,"s":"e","l":"   --> Cargo.toml:170:1"}
+{"t":1793414794.4185927,"s":"e","l":"    |"}
+{"t":1793414794.418593,"s":"e","l":"170 | pulldown-cmark-to-cmark = \"10.0.4\""}
+{"t":1793414794.4185934,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.4185967,"s":"e","l":"    |"}
+{"t":1793414794.4185972,"s":"e","l":"help: consider removing the workspace dependency `pulldown-cmark-to-cmark`"}
+{"t":1793414794.4186146,"s":"e","l":"warning: unused workspace dependency `ra-ap-rustc_next_trait_solver`"}
+{"t":1793414794.4186182,"s":"e","l":"   --> Cargo.toml:143:1"}
+{"t":1793414794.4186184,"s":"e","l":"    |"}
+{"t":1793414794.418619,"s":"e","l":"143 | ra-ap-rustc_next_trait_solver = { version = \"0.166\", default-features = false }"}
+{"t":1793414794.4186196,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.4186227,"s":"e","l":"    |"}
+{"t":1793414794.4186232,"s":"e","l":"help: consider removing the workspace dependency `ra-ap-rustc_next_trait_solver`"}
+{"t":1793414794.4186387,"s":"e","l":"warning: unused workspace dependency `ra-ap-rustc_parse_format`"}
+{"t":1793414794.4186423,"s":"e","l":"   --> Cargo.toml:137:1"}
+{"t":1793414794.4186425,"s":"e","l":"    |"}
+{"t":1793414794.418643,"s":"e","l":"137 | ra-ap-rustc_parse_format = { version = \"0.166\", default-features = false }"}
+{"t":1793414794.4186435,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.4186478,"s":"e","l":"    |"}
+{"t":1793414794.4186482,"s":"e","l":"help: consider removing the workspace dependency `ra-ap-rustc_parse_format`"}
+{"t":1793414794.4186633,"s":"e","l":"warning: unused workspace dependency `ra-ap-rustc_pattern_analysis`"}
+{"t":1793414794.418667,"s":"e","l":"   --> Cargo.toml:140:1"}
+{"t":1793414794.4186676,"s":"e","l":"    |"}
+{"t":1793414794.418668,"s":"e","l":"140 | ra-ap-rustc_pattern_analysis = { version = \"0.166\", default-features = false }"}
+{"t":1793414794.4186685,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.418672,"s":"e","l":"    |"}
+{"t":1793414794.4186726,"s":"e","l":"help: consider removing the workspace dependency `ra-ap-rustc_pattern_analysis`"}
+{"t":1793414794.418685,"s":"e","l":"warning: unused workspace dependency `rowan`"}
+{"t":1793414794.4186883,"s":"e","l":"   --> Cargo.toml:173:1"}
+{"t":1793414794.4186888,"s":"e","l":"    |"}
+{"t":1793414794.418689,"s":"e","l":"173 | rowan = \"0.17.0\""}
+{"t":1793414794.4186895,"s":"e","l":"    | ^^^^^"}
+{"t":1793414794.4186924,"s":"e","l":"    |"}
+{"t":1793414794.4186928,"s":"e","l":"help: consider removing the workspace dependency `rowan`"}
+{"t":1793414794.418708,"s":"e","l":"warning: unused workspace dependency `rustc-literal-escaper`"}
+{"t":1793414794.4187114,"s":"e","l":"   --> Cargo.toml:188:1"}
+{"t":1793414794.4187117,"s":"e","l":"    |"}
+{"t":1793414794.4187121,"s":"e","l":"188 | rustc-literal-escaper = \"0.0.7\""}
+{"t":1793414794.4187126,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.4187155,"s":"e","l":"    |"}
+{"t":1793414794.418716,"s":"e","l":"help: consider removing the workspace dependency `rustc-literal-escaper`"}
+{"t":1793414794.4187384,"s":"e","l":"warning: unused workspace dependency `smallvec`"}
+{"t":1793414794.4187396,"s":"e","l":"   --> Cargo.toml:189:1"}
+{"t":1793414794.4187403,"s":"e","l":"    |"}
+{"t":1793414794.418746,"s":"e","l":"189 | smallvec = { version = \"1.15.1\", features = ["}
+{"t":1793414794.418747,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793414794.4187472,"s":"e","l":"    |"}
+{"t":1793414794.418748,"s":"e","l":"help: consider removing the workspace dependency `smallvec`"}
+{"t":1793414794.4187653,"s":"e","l":"warning: unused workspace dependency `smol_str`"}
+{"t":1793414794.4187665,"s":"e","l":"   --> Cargo.toml:194:1"}
+{"t":1793414794.418767,"s":"e","l":"    |"}
+{"t":1793414794.4187677,"s":"e","l":"194 | smol_str = \"0.3.2\""}
+{"t":1793414794.4187682,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793414794.4187686,"s":"e","l":"    |"}
+{"t":1793414794.418773,"s":"e","l":"help: consider removing the workspace dependency `smol_str`"}
+{"t":1793414794.4187846,"s":"e","l":"warning: unused workspace dependency `syntax-bridge`"}
+{"t":1793414794.4187853,"s":"e","l":"   --> Cargo.toml:127:1"}
+{"t":1793414794.4187856,"s":"e","l":"    |"}
+{"t":1793414794.4187899,"s":"e","l":"127 | syntax-bridge = { path = \"vendor/rust-analyzer/crates/syntax-bridge\", version = \"0.0.0\" }"}
+{"t":1793414794.4187908,"s":"e","l":"    | ^^^^^^^^^^^^^"}
+{"t":1793414794.418791,"s":"e","l":"    |"}
+{"t":1793414794.4187915,"s":"e","l":"help: consider removing the workspace dependency `syntax-bridge`"}
+{"t":1793414794.4188073,"s":"e","l":"warning: unused workspace dependency `test-utils`"}
+{"t":1793414794.4188116,"s":"e","l":"   --> Cargo.toml:129:1"}
+{"t":1793414794.4188118,"s":"e","l":"    |"}
+{"t":1793414794.4188125,"s":"e","l":"129 | test-utils = { path = \"vendor/rust-analyzer/crates/test-utils\", version = \"0.0.0\" }"}
+{"t":1793414794.418813,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793414794.4188135,"s":"e","l":"    |"}
+{"t":1793414794.4188163,"s":"e","l":"help: consider removing the workspace dependency `test-utils`"}
+{"t":1793414794.4188287,"s":"e","l":"warning: unused workspace dependency `text-size`"}
+{"t":1793414794.4188323,"s":"e","l":"   --> Cargo.toml:195:1"}
+{"t":1793414794.4188325,"s":"e","l":"    |"}
+{"t":1793414794.418833,"s":"e","l":"195 | text-size = \"1.1.1\""}
+{"t":1793414794.4188335,"s":"e","l":"    | ^^^^^^^^^"}
+{"t":1793414794.4188337,"s":"e","l":"    |"}
+{"t":1793414794.4188364,"s":"e","l":"help: consider removing the workspace dependency `text-size`"}
+{"t":1793414794.4188492,"s":"e","l":"warning: unused workspace dependency `thin-vec`"}
+{"t":1793414794.4188528,"s":"e","l":"   --> Cargo.toml:211:1"}
+{"t":1793414794.418853,"s":"e","l":"    |"}
+{"t":1793414794.4188533,"s":"e","l":"211 | thin-vec = \"0.2.16\""}
+{"t":1793414794.4188538,"s":"e","l":"    | ^^^^^^^^"}
+{"t":1793414794.4188566,"s":"e","l":"    |"}
+{"t":1793414794.4188569,"s":"e","l":"help: consider removing the workspace dependency `thin-vec`"}
+{"t":1793414794.418935,"s":"e","l":"warning: unused workspace dependency `tracing-subscriber`"}
+{"t":1793414794.4189367,"s":"e","l":"   --> Cargo.toml:199:1"}
+{"t":1793414794.4189374,"s":"e","l":"    |"}
+{"t":1793414794.4189382,"s":"e","l":"199 | tracing-subscriber = { version = \"0.3.20\", default-features = false, features = ["}
+{"t":1793414794.4189408,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.4189413,"s":"e","l":"    |"}
+{"t":1793414794.418942,"s":"e","l":"help: consider removing the workspace dependency `tracing-subscriber`"}
+{"t":1793414794.4189425,"s":"e","l":"warning: unused workspace dependency `tracing-tree`"}
+{"t":1793414794.4189432,"s":"e","l":"   --> Cargo.toml:198:1"}
+{"t":1793414794.4189436,"s":"e","l":"    |"}
+{"t":1793414794.4189441,"s":"e","l":"198 | tracing-tree = \"0.4.0\""}
+{"t":1793414794.4189446,"s":"e","l":"    | ^^^^^^^^^^^^"}
+{"t":1793414794.4189448,"s":"e","l":"    |"}
+{"t":1793414794.4189453,"s":"e","l":"help: consider removing the workspace dependency `tracing-tree`"}
+{"t":1793414794.418946,"s":"e","l":"warning: unused workspace dependency `unicode-width`"}
+{"t":1793414794.4189465,"s":"e","l":"   --> Cargo.toml:208:1"}
+{"t":1793414794.4189472,"s":"e","l":"    |"}
+{"t":1793414794.4189475,"s":"e","l":"208 | unicode-width = \"0.2.2\""}
+{"t":1793414794.418948,"s":"e","l":"    | ^^^^^^^^^^^^^"}
+{"t":1793414794.4189656,"s":"e","l":"    |"}
+{"t":1793414794.418966,"s":"e","l":"help: consider removing the workspace dependency `unicode-width`"}
+{"t":1793414794.4189668,"s":"e","l":"warning: unused workspace dependency `vfs-notify`"}
+{"t":1793414794.4189672,"s":"e","l":"   --> Cargo.toml:132:1"}
+{"t":1793414794.4189677,"s":"e","l":"    |"}
+{"t":1793414794.4189682,"s":"e","l":"132 | vfs-notify = { path = \"vendor/rust-analyzer/crates/vfs-notify\", version = \"0.0.0\" }"}
+{"t":1793414794.418969,"s":"e","l":"    | ^^^^^^^^^^"}
+{"t":1793414794.4189694,"s":"e","l":"    |"}
+{"t":1793414794.4189696,"s":"e","l":"help: consider removing the workspace dependency `vfs-notify`"}
+{"t":1793414794.41897,"s":"e","l":"warning: unused workspace dependency `xshell`"}
+{"t":1793414794.4189708,"s":"e","l":"   --> Cargo.toml:210:1"}
+{"t":1793414794.418971,"s":"e","l":"    |"}
+{"t":1793414794.4189818,"s":"e","l":"210 | xshell = \"0.2.7\""}
+{"t":1793414794.4189823,"s":"e","l":"    | ^^^^^^"}
+{"t":1793414794.4189827,"s":"e","l":"    |"}
+{"t":1793414794.418983,"s":"e","l":"help: consider removing the workspace dependency `xshell`"}
+{"t":1793414794.419041,"s":"e","l":"warning: unused field `categories` in `workspace.package`"}
+{"t":1793414794.419042,"s":"e","l":"  --> Cargo.toml:24:1"}
+{"t":1793414794.4190428,"s":"e","l":"   |"}
+{"t":1793414794.4190433,"s":"e","l":"24 | categories = [\"development-tools\", \"development-tools::build-utils\"]"}
+{"t":1793414794.4190443,"s":"e","l":"   | ^^^^^^^^^^"}
+{"t":1793414794.4190447,"s":"e","l":"   |"}
+{"t":1793414794.4190452,"s":"e","l":"   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default"}
+{"t":1793414794.419046,"s":"e","l":"help: consider removing the field `workspace.package.categories`"}
+{"t":1793414794.4190469,"s":"e","l":"warning: workspace (manifest) generated 42 warnings"}
+{"t":1793414794.4190788,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793414794.4190798,"s":"e","l":"  --> crates/ra-jit-live/Cargo.toml"}
+{"t":1793414794.419087,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793414794.4190874,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793414794.4190912,"s":"e","l":"   |"}
+{"t":1793414794.4190917,"s":"e","l":"14 ~ [dependencies]"}
+{"t":1793414794.4190922,"s":"e","l":"15 + [lints]"}
+{"t":1793414794.4190927,"s":"e","l":"16 + workspace = true"}
+{"t":1793414794.419093,"s":"e","l":"   |"}
+{"t":1793414794.4190936,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793414794.419094,"s":"e","l":"   |"}
+{"t":1793414794.4190943,"s":"e","l":"14 ~ [dependencies]"}
+{"t":1793414794.4190981,"s":"e","l":"15 + [lints]"}
+{"t":1793414794.4190986,"s":"e","l":"   |"}
+{"t":1793414794.4190993,"s":"e","l":"warning: `ra-jit-live` (manifest) generated 1 warning"}
+{"t":1793414794.419175,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793414794.4191797,"s":"e","l":"  --> crates/ra-jit-cache/Cargo.toml"}
+{"t":1793414794.4191802,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793414794.4191806,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793414794.419181,"s":"e","l":"   |"}
+{"t":1793414794.4191816,"s":"e","l":"24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }"}
+{"t":1793414794.4191864,"s":"e","l":"25 + [lints]"}
+{"t":1793414794.4191866,"s":"e","l":"26 + workspace = true"}
+{"t":1793414794.419187,"s":"e","l":"   |"}
+{"t":1793414794.4191875,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793414794.4191878,"s":"e","l":"   |"}
+{"t":1793414794.4191883,"s":"e","l":"24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }"}
+{"t":1793414794.4191887,"s":"e","l":"25 + [lints]"}
+{"t":1793414794.4191892,"s":"e","l":"   |"}
+{"t":1793414794.419192,"s":"e","l":"warning: `ra-jit-cache` (manifest) generated 1 warning"}
+{"t":1793414794.4192631,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793414794.4192674,"s":"e","l":"  --> crates/ra-jit-cache-macros/Cargo.toml"}
+{"t":1793414794.419268,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793414794.4192686,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793414794.4192688,"s":"e","l":"   |"}
+{"t":1793414794.419269,"s":"e","l":"14 ~ proc-macro = true"}
+{"t":1793414794.4192736,"s":"e","l":"15 + [lints]"}
+{"t":1793414794.4192739,"s":"e","l":"16 + workspace = true"}
+{"t":1793414794.419274,"s":"e","l":"   |"}
+{"t":1793414794.4192746,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793414794.4192748,"s":"e","l":"   |"}
+{"t":1793414794.419275,"s":"e","l":"14 ~ proc-macro = true"}
+{"t":1793414794.4192755,"s":"e","l":"15 + [lints]"}
+{"t":1793414794.4192758,"s":"e","l":"   |"}
+{"t":1793414794.4192789,"s":"e","l":"warning: `ra-jit-cache-macros` (manifest) generated 1 warning"}
+{"t":1793414794.4193287,"s":"e","l":"warning: crates/ra-jit/Cargo.toml: file `/home/jeremy/justrust/toolchain/resident/crates/ra-jit/src/main.rs` found to be present in multiple build targets:"}
+{"t":1793414794.4193294,"s":"e","l":"  * `bin` target `jr-engine`"}
+{"t":1793414794.41933,"s":"e","l":"  * `bin` target `ra-jit`"}
+{"t":1793414794.4193497,"s":"e","l":"warning: `ra-jit` (manifest) generated 1 warning"}
+{"t":1793414794.5933187,"s":"e","l":"       Fresh allocator-api2 v0.2.21"}
+{"t":1793414794.5933757,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793414794.5933764,"s":"e","l":"       Fresh proc-macro2 v1.0.106"}
+{"t":1793414794.593377,"s":"e","l":"       Fresh cfg-if v1.0.4"}
+{"t":1793414794.5933776,"s":"e","l":"       Fresh quote v1.0.45"}
+{"t":1793414794.5933778,"s":"e","l":"       Fresh serde_core v1.0.228"}
+{"t":1793414794.5933783,"s":"e","l":"       Fresh shlex v2.0.1"}
+{"t":1793414794.5933788,"s":"e","l":"       Fresh find-msvc-tools v0.1.11"}
+{"t":1793414794.5933793,"s":"e","l":"       Fresh syn v2.0.117"}
+{"t":1793414794.5933795,"s":"e","l":"       Fresh once_cell v1.21.4"}
+{"t":1793414794.593421,"s":"e","l":"       Fresh serde_derive v1.0.228"}
+{"t":1793414794.5934217,"s":"e","l":"       Fresh jobserver v0.1.35"}
+{"t":1793414794.593422,"s":"e","l":"       Fresh libc v0.2.186"}
+{"t":1793414794.5934632,"s":"e","l":"       Fresh tracing-core v0.1.36"}
+{"t":1793414794.5934637,"s":"e","l":"       Fresh rustc-hash v2.1.2"}
+{"t":1793414794.5934641,"s":"e","l":"       Fresh serde v1.0.228"}
+{"t":1793414794.5934646,"s":"e","l":"       Fresh cc v1.4.3"}
+{"t":1793414794.5935013,"s":"e","l":"       Fresh crossbeam-utils v0.8.21"}
+{"t":1793414794.5935018,"s":"e","l":"       Fresh indexmap v2.14.0"}
+{"t":1793414794.5935392,"s":"e","l":"       Fresh smallvec v1.15.1"}
+{"t":1793414794.5935397,"s":"e","l":"       Fresh tracing-attributes v0.1.31"}
+{"t":1793414794.5935402,"s":"e","l":"       Fresh pin-project-lite v0.2.17"}
+{"t":1793414794.5935755,"s":"e","l":"       Fresh memchr v2.8.1"}
+{"t":1793414794.593576,"s":"e","l":"       Fresh tracing v0.1.44"}
+{"t":1793414794.5936098,"s":"e","l":"       Fresh object v0.39.1"}
+{"t":1793414794.5936103,"s":"e","l":"       Fresh either v1.16.0"}
+{"t":1793414794.5936108,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793414794.593643,"s":"e","l":"       Fresh ar_archive_writer v0.5.3"}
+{"t":1793414794.5936742,"s":"e","l":"       Fresh crossbeam-epoch v0.9.18"}
+{"t":1793414794.5936747,"s":"e","l":"       Fresh scopeguard v1.2.0"}
+{"t":1793414794.5937057,"s":"e","l":"       Fresh crossbeam-deque v0.8.6"}
+{"t":1793414794.5937061,"s":"e","l":"       Fresh lock_api v0.4.14"}
+{"t":1793414794.593737,"s":"e","l":"       Fresh parking_lot_core v0.9.12"}
+{"t":1793414794.5937374,"s":"e","l":"       Fresh memoffset v0.9.1"}
+{"t":1793414794.5937684,"s":"e","l":"       Fresh stable_deref_trait v1.2.1"}
+{"t":1793414794.5937688,"s":"e","l":"       Fresh unicode-ident v1.0.24"}
+{"t":1793414794.5937998,"s":"e","l":"       Fresh psm v0.1.32"}
+{"t":1793414794.5938,"s":"e","l":"       Fresh hashbrown v0.14.5"}
+{"t":1793414794.5938308,"s":"e","l":"       Fresh unicode-properties v0.1.4"}
+{"t":1793414794.5938313,"s":"e","l":"       Fresh triomphe v0.1.15"}
+{"t":1793414794.5938623,"s":"e","l":"       Fresh ra-ap-rustc_lexer v0.166.0"}
+{"t":1793414794.5938625,"s":"e","l":"       Fresh stacker v0.1.25"}
+{"t":1793414794.593863,"s":"e","l":"       Fresh rayon-core v1.13.0"}
+{"t":1793414794.593894,"s":"e","l":"       Fresh itertools v0.15.0"}
+{"t":1793414794.5938945,"s":"e","l":"       Fresh crossbeam-channel v0.5.15"}
+{"t":1793414794.593895,"s":"e","l":"       Fresh jod-thread v1.0.0"}
+{"t":1793414794.593939,"s":"e","l":"       Fresh thin-vec v0.2.18"}
+{"t":1793414794.5939696,"s":"e","l":"       Fresh rustc-literal-escaper v0.0.7"}
+{"t":1793414794.59397,"s":"e","l":"       Fresh version_check v0.9.5"}
+{"t":1793414794.594001,"s":"e","l":"       Fresh stdx v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/stdx)"}
+{"t":1793414794.5940018,"s":"e","l":"       Fresh rayon v1.12.0"}
+{"t":1793414794.5940325,"s":"e","l":"       Fresh camino v1.2.2"}
+{"t":1793414794.594033,"s":"e","l":"       Fresh syn v3.0.3"}
+{"t":1793414794.5940638,"s":"e","l":"       Fresh arrayvec v0.7.6"}
+{"t":1793414794.5940642,"s":"e","l":"       Fresh foldhash v0.2.0"}
+{"t":1793414794.5940952,"s":"e","l":"       Fresh edition v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/edition)"}
+{"t":1793414794.5940957,"s":"e","l":"       Fresh winnow v0.7.15"}
+{"t":1793414794.5940962,"s":"e","l":"       Fresh cranelift-srcgen v0.136.2"}
+{"t":1793414794.5941281,"s":"e","l":"       Fresh rustc-hash v1.1.0"}
+{"t":1793414794.5941286,"s":"e","l":"       Fresh countme v3.0.1"}
+{"t":1793414794.594129,"s":"e","l":"       Fresh text-size v1.1.1"}
+{"t":1793414794.5941613,"s":"e","l":"       Fresh drop_bomb v0.1.5"}
+{"t":1793414794.5941617,"s":"e","l":"       Fresh rowan v0.17.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/lib/rowan)"}
+{"t":1793414794.5941622,"s":"e","l":"       Fresh cranelift-assembler-x64-meta v0.136.2"}
+{"t":1793414794.5941932,"s":"e","l":"       Fresh salsa-macros v0.28.5 (/home/jeremy/justrust/toolchain/resident/vendor/salsa-macros)"}
+{"t":1793414794.594194,"s":"e","l":"       Fresh paths v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/paths)"}
+{"t":1793414794.5942264,"s":"e","l":"       Fresh parser v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/parser)"}
+{"t":1793414794.5942268,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793414794.5942273,"s":"e","l":"       Fresh typeid v1.0.3"}
+{"t":1793414794.5942588,"s":"e","l":"       Fresh portable-atomic v1.13.1"}
+{"t":1793414794.5942593,"s":"e","l":"       Fresh fst v0.4.7"}
+{"t":1793414794.5942595,"s":"e","l":"       Fresh intrusive-collections v0.10.1"}
+{"t":1793414794.5942898,"s":"e","l":"       Fresh parking_lot v0.12.5"}
+{"t":1793414794.5942903,"s":"e","l":"       Fresh crossbeam-queue v0.3.12"}
+{"t":1793414794.5942907,"s":"e","l":"       Fresh hashlink v0.12.0"}
+{"t":1793414794.5943215,"s":"e","l":"       Fresh nohash-hasher v0.2.0"}
+{"t":1793414794.594322,"s":"e","l":"       Fresh bitflags v2.12.1"}
+{"t":1793414794.5943532,"s":"e","l":"       Fresh inventory v0.3.24"}
+{"t":1793414794.5943537,"s":"e","l":"       Fresh smol_str v0.3.6"}
+{"t":1793414794.5943542,"s":"e","l":"       Fresh salsa-macro-rules v0.28.5 (/home/jeremy/justrust/toolchain/resident/vendor/salsa-macro-rules)"}
+{"t":1793414794.5943851,"s":"e","l":"       Fresh typenum v1.20.1"}
+{"t":1793414794.5943854,"s":"e","l":"       Fresh boxcar v0.2.14"}
+{"t":1793414794.5943859,"s":"e","l":"       Fresh syntax v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/syntax)"}
+{"t":1793414794.594391,"s":"e","l":"warning: function `is_range_pat_op` is never used"}
+{"t":1793414794.5943916,"s":"e","l":"    --> vendor/rust-analyzer/crates/syntax/src/ast/node_ext.rs:1066:4"}
+{"t":1793414794.594392,"s":"e","l":"     |"}
+{"t":1793414794.5943925,"s":"e","l":"1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {"}
+{"t":1793414794.594393,"s":"e","l":"     |    ^^^^^^^^^^^^^^^"}
+{"t":1793414794.5943933,"s":"e","l":"     |"}
+{"t":1793414794.5943937,"s":"e","l":"     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.594425,"s":"e","l":"       Fresh vfs v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/vfs)"}
+{"t":1793414794.5944564,"s":"e","l":"       Fresh libm v0.2.16"}
+{"t":1793414794.5944574,"s":"e","l":"warning: `syntax` (lib) generated 1 warning"}
+{"t":1793414794.5944579,"s":"e","l":"       Fresh salsa v0.28.5 (/home/jeremy/justrust/toolchain/resident/vendor/salsa)"}
+{"t":1793414794.5944884,"s":"e","l":"       Fresh generic-array v0.14.7"}
+{"t":1793414794.5944889,"s":"e","l":"       Fresh dashmap v6.2.1"}
+{"t":1793414794.59452,"s":"e","l":"       Fresh pulley-macros v49.0.2"}
+{"t":1793414794.5945203,"s":"e","l":"       Fresh la-arena v0.3.1"}
+{"t":1793414794.5945518,"s":"e","l":"       Fresh intern v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/intern)"}
+{"t":1793414794.5945525,"s":"e","l":"       Fresh span v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/span)"}
+{"t":1793414794.594553,"s":"e","l":"       Fresh wasmtime-internal-core v49.0.2"}
+{"t":1793414794.5945837,"s":"e","l":"       Fresh log v0.4.31"}
+{"t":1793414794.5946143,"s":"e","l":"       Fresh tt v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/tt)"}
+{"t":1793414794.5946147,"s":"e","l":"       Fresh cranelift-bitset v0.136.2"}
+{"t":1793414794.5946472,"s":"e","l":"       Fresh block-buffer v0.10.4"}
+{"t":1793414794.5946476,"s":"e","l":"       Fresh crypto-common v0.1.7"}
+{"t":1793414794.5946782,"s":"e","l":"       Fresh thiserror-impl v2.0.18"}
+{"t":1793414794.5946786,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793414794.5947096,"s":"e","l":"       Fresh pkg-config v0.3.34"}
+{"t":1793414794.59471,"s":"e","l":"       Fresh digest v0.10.7"}
+{"t":1793414794.5947404,"s":"e","l":"       Fresh cranelift-codegen-meta v0.136.2"}
+{"t":1793414794.5947409,"s":"e","l":"       Fresh thiserror v2.0.18"}
+{"t":1793414794.5947413,"s":"e","l":"       Fresh cranelift-isle v0.136.2"}
+{"t":1793414794.5947714,"s":"e","l":"       Fresh ra-ap-rustc_index_macros v0.166.0"}
+{"t":1793414794.5948021,"s":"e","l":"       Fresh cpufeatures v0.2.17"}
+{"t":1793414794.5948036,"s":"e","l":"       Fresh rustc-stable-hash v0.1.2"}
+{"t":1793414794.5948346,"s":"e","l":"       Fresh sha2 v0.10.9"}
+{"t":1793414794.594835,"s":"e","l":"       Fresh ra-ap-rustc_hashes v0.166.0"}
+{"t":1793414794.5948656,"s":"e","l":"       Fresh ra-ap-rustc_index v0.166.0"}
+{"t":1793414794.5948966,"s":"e","l":"       Fresh cobs v0.3.0"}
+{"t":1793414794.594897,"s":"e","l":"       Fresh cranelift-entity v0.136.2"}
+{"t":1793414794.5948973,"s":"e","l":"       Fresh synstructure v0.13.2"}
+{"t":1793414794.59493,"s":"e","l":"       Fresh hashbrown v0.16.1"}
+{"t":1793414794.5949304,"s":"e","l":"       Fresh bumpalo v3.20.3"}
+{"t":1793414794.5949616,"s":"e","l":"       Fresh arbitrary v1.4.2"}
+{"t":1793414794.5949621,"s":"e","l":"       Fresh fnv v1.0.7"}
+{"t":1793414794.5949624,"s":"e","l":"       Fresh powerfmt v0.2.0"}
+{"t":1793414794.5949628,"s":"e","l":"       Fresh cranelift-bforest v0.136.2"}
+{"t":1793414794.594993,"s":"e","l":"       Fresh cranelift-assembler-x64 v0.136.2"}
+{"t":1793414794.5949936,"s":"e","l":"       Fresh postcard v1.1.3"}
+{"t":1793414794.5950243,"s":"e","l":"       Fresh gimli v0.33.0"}
+{"t":1793414794.5950248,"s":"e","l":"       Fresh deranged v0.5.8"}
+{"t":1793414794.595025,"s":"e","l":"       Fresh cranelift-control v0.136.2"}
+{"t":1793414794.5950565,"s":"e","l":"       Fresh regalloc2 v0.15.2"}
+{"t":1793414794.595057,"s":"e","l":"       Fresh target-lexicon v0.13.5"}
+{"t":1793414794.5950575,"s":"e","l":"       Fresh ra-ap-rustc_abi v0.166.0 (/home/jeremy/justrust/toolchain/resident/vendor/rustc_abi)"}
+{"t":1793414794.5950887,"s":"e","l":"       Fresh crc32fast v1.5.0"}
+{"t":1793414794.5950894,"s":"e","l":"       Fresh syntax-bridge v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/syntax-bridge)"}
+{"t":1793414794.59509,"s":"e","l":"       Fresh cfg v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/cfg)"}
+{"t":1793414794.5951214,"s":"e","l":"       Fresh pulley-interpreter v49.0.2"}
+{"t":1793414794.5951219,"s":"e","l":"       Fresh semver v1.0.28"}
+{"t":1793414794.595122,"s":"e","l":"       Fresh cranelift-codegen-shared v0.136.2"}
+{"t":1793414794.5951543,"s":"e","l":"       Fresh cov-mark v2.2.0"}
+{"t":1793414794.595185,"s":"e","l":"       Fresh time-core v0.1.8"}
+{"t":1793414794.5951855,"s":"e","l":"       Fresh num-conv v0.2.2"}
+{"t":1793414794.595186,"s":"e","l":"       Fresh num_threads v0.1.7"}
+{"t":1793414794.595219,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793414794.5952194,"s":"e","l":"       Fresh lazy_static v1.5.0"}
+{"t":1793414794.5952551,"s":"e","l":"       Fresh cranelift-codegen v0.136.2"}
+{"t":1793414794.5952556,"s":"e","l":"       Fresh mbe v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/mbe)"}
+{"t":1793414794.5952563,"s":"e","l":"       Fresh time v0.3.47"}
+{"t":1793414794.5952868,"s":"e","l":"       Fresh sharded-slab v0.1.7"}
+{"t":1793414794.5952876,"s":"e","l":"       Fresh base-db v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/base-db)"}
+{"t":1793414794.595288,"s":"e","l":"       Fresh ra-ap-rustc_type_ir_macros v0.166.0"}
+{"t":1793414794.595319,"s":"e","l":"       Fresh zstd-sys v2.1.1+zstd.1.5.7"}
+{"t":1793414794.5953195,"s":"e","l":"       Fresh tracing-log v0.2.0"}
+{"t":1793414794.59532,"s":"e","l":"       Fresh ena v0.14.4"}
+{"t":1793414794.5953536,"s":"e","l":"       Fresh derive-where v1.6.1"}
+{"t":1793414794.5953538,"s":"e","l":"       Fresh thread_local v1.1.9"}
+{"t":1793414794.5953543,"s":"e","l":"       Fresh ra-ap-rustc_ast_ir v0.166.0"}
+{"t":1793414794.5954165,"s":"e","l":"       Fresh zstd-safe v7.3.0"}
+{"t":1793414794.5954168,"s":"e","l":"       Fresh tracing-subscriber v0.3.23"}
+{"t":1793414794.5954173,"s":"e","l":"       Fresh hir-expand v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/hir-expand)"}
+{"t":1793414794.595418,"s":"e","l":"warning: unused variable: `span`"}
+{"t":1793414794.5954185,"s":"e","l":"   --> vendor/rust-analyzer/crates/hir-expand/src/builtin/derive_macro.rs:134:27"}
+{"t":1793414794.5954196,"s":"e","l":"    |"}
+{"t":1793414794.5954201,"s":"e","l":"134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {"}
+{"t":1793414794.5954223,"s":"e","l":"    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`"}
+{"t":1793414794.5954227,"s":"e","l":"    |"}
+{"t":1793414794.5954232,"s":"e","l":"    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5954564,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793414794.595457,"s":"e","l":"warning: `hir-expand` (lib) generated 1 warning (run `cargo fix --lib -p hir-expand` to apply 1 suggestion)"}
+{"t":1793414794.5954578,"s":"e","l":"       Fresh ra-ap-rustc_type_ir v0.166.0 (/home/jeremy/justrust/toolchain/resident/vendor/rustc_type_ir)"}
+{"t":1793414794.5954583,"s":"e","l":"       Fresh rustc_apfloat v0.2.3+llvm-462a31f5a5ab"}
+{"t":1793414794.595489,"s":"e","l":"       Fresh ra-ap-rustc_parse_format v0.166.0"}
+{"t":1793414794.5954895,"s":"e","l":"       Fresh foldhash v0.1.5"}
+{"t":1793414794.5955203,"s":"e","l":"       Fresh nu-ansi-term v0.50.3"}
+{"t":1793414794.5955207,"s":"e","l":"       Fresh hashbrown v0.15.5"}
+{"t":1793414794.5955212,"s":"e","l":"       Fresh ra-ap-rustc_next_trait_solver v0.166.0 (/home/jeremy/justrust/toolchain/resident/vendor/rustc_next_trait_solver)"}
+{"t":1793414794.5955267,"s":"e","l":"warning: unreachable statement"}
+{"t":1793414794.595527,"s":"e","l":"   --> vendor/rustc_next_trait_solver/src/solve/normalizes_to/mod.rs:342:21"}
+{"t":1793414794.5955274,"s":"e","l":"    |"}
+{"t":1793414794.595528,"s":"e","l":"341 |                     ecx.opaque_accesses.rerun_always(RerunReason::FetchEligibleAssocItem)?;"}
+{"t":1793414794.5955284,"s":"e","l":"    |                                                                                          - any code following this expression is unreachable"}
+{"t":1793414794.595529,"s":"e","l":"342 |                     return Err(NoSolution.into());"}
+{"t":1793414794.5955296,"s":"e","l":"    |                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement"}
+{"t":1793414794.5955298,"s":"e","l":"    |"}
+{"t":1793414794.5955303,"s":"e","l":"    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.595531,"s":"e","l":"warning: unreachable statement"}
+{"t":1793414794.5955346,"s":"e","l":"   --> vendor/rustc_next_trait_solver/src/solve/trait_goals.rs:242:17"}
+{"t":1793414794.5955348,"s":"e","l":"    |"}
+{"t":1793414794.5955353,"s":"e","l":"241 |                 ecx.opaque_accesses.rerun_always(RerunReason::AutoTraitLeakage)?;"}
+{"t":1793414794.5955358,"s":"e","l":"    |                                                                                - any code following this expression is unreachable"}
+{"t":1793414794.5955362,"s":"e","l":"242 |                 return Err(NoSolution.into());"}
+{"t":1793414794.5955367,"s":"e","l":"    |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ unreachable statement"}
+{"t":1793414794.5955791,"s":"e","l":"       Fresh wasmparser v0.236.1"}
+{"t":1793414794.5956101,"s":"e","l":"       Fresh hir-def v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/hir-def)"}
+{"t":1793414794.5956109,"s":"e","l":"warning: `ra-ap-rustc_next_trait_solver` (lib) generated 2 warnings"}
+{"t":1793414794.5956113,"s":"e","l":"       Fresh tracing-tree v0.4.1"}
+{"t":1793414794.5956426,"s":"e","l":"       Fresh cranelift-module v0.136.2"}
+{"t":1793414794.5956428,"s":"e","l":"       Fresh zstd v0.13.3"}
+{"t":1793414794.5956433,"s":"e","l":"       Fresh object v0.40.0"}
+{"t":1793414794.5956755,"s":"e","l":"       Fresh macros v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/macros)"}
+{"t":1793414794.595676,"s":"e","l":"       Fresh memmap2 v0.9.11"}
+{"t":1793414794.5956764,"s":"e","l":"       Fresh leb128fmt v0.1.0"}
+{"t":1793414794.5957074,"s":"e","l":"       Fresh unicode-width v0.2.2"}
+{"t":1793414794.5957077,"s":"e","l":"       Fresh oorandom v11.1.5"}
+{"t":1793414794.595709,"s":"e","l":"       Fresh cranelift-object v0.136.2 (/home/jeremy/justrust/toolchain/resident/vendor/cranelift-object)"}
+{"t":1793414794.5957415,"s":"e","l":"       Fresh ra-jit-store v0.20261027.0 (/home/jeremy/justrust/toolchain/resident/crates/ra-jit-store)"}
+{"t":1793414794.5957422,"s":"e","l":"warning: function `open_pack` is never used"}
+{"t":1793414794.5957425,"s":"e","l":"   --> crates/ra-jit-store/src/lib.rs:782:4"}
+{"t":1793414794.595743,"s":"e","l":"    |"}
+{"t":1793414794.5957434,"s":"e","l":"782 | fn open_pack(path: &Path) -> io::Result<File> {"}
+{"t":1793414794.595744,"s":"e","l":"    |    ^^^^^^^^^"}
+{"t":1793414794.5957441,"s":"e","l":"    |"}
+{"t":1793414794.5957446,"s":"e","l":"    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.595777,"s":"e","l":"warning: `ra-jit-store` (lib) generated 1 warning"}
+{"t":1793414794.5957775,"s":"e","l":"       Fresh hir-ty v0.0.0 (/home/jeremy/justrust/toolchain/resident/vendor/rust-analyzer/crates/hir-ty)"}
+{"t":1793414794.595778,"s":"e","l":"warning: unused import: `StoredTy`"}
+{"t":1793414794.5957782,"s":"e","l":"  --> vendor/rust-analyzer/crates/hir-ty/src/mir/lower.rs:65:9"}
+{"t":1793414794.595779,"s":"e","l":"   |"}
+{"t":1793414794.5957792,"s":"e","l":"65 |         StoredTy, TyKind, TypingMode, UnevaluatedConst,"}
+{"t":1793414794.5957797,"s":"e","l":"   |         ^^^^^^^^"}
+{"t":1793414794.59578,"s":"e","l":"   |"}
+{"t":1793414794.5957806,"s":"e","l":"   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5957892,"s":"e","l":"warning: unnecessary parentheses around pattern"}
+{"t":1793414794.5957897,"s":"e","l":"    --> vendor/rust-analyzer/crates/hir-ty/src/mir/lower.rs:2558:20"}
+{"t":1793414794.5957901,"s":"e","l":"     |"}
+{"t":1793414794.5957906,"s":"e","l":"2558 |             if let (OperandKind::Copy(place) | OperandKind::Move(place)) = &operand.kind"}
+{"t":1793414794.595791,"s":"e","l":"     |                    ^                                                   ^"}
+{"t":1793414794.5957913,"s":"e","l":"     |"}
+{"t":1793414794.5957918,"s":"e","l":"     = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5957923,"s":"e","l":"help: remove these parentheses"}
+{"t":1793414794.5957928,"s":"e","l":"     |"}
+{"t":1793414794.595793,"s":"e","l":"2558 -             if let (OperandKind::Copy(place) | OperandKind::Move(place)) = &operand.kind"}
+{"t":1793414794.5957935,"s":"e","l":"2558 +             if let OperandKind::Copy(place) | OperandKind::Move(place) = &operand.kind"}
+{"t":1793414794.595794,"s":"e","l":"     |"}
+{"t":1793414794.5957944,"s":"e","l":"warning: hidden lifetime parameters in types are deprecated"}
+{"t":1793414794.595795,"s":"e","l":"    --> vendor/rust-analyzer/crates/hir-ty/src/mir/lower.rs:5158:33"}
+{"t":1793414794.5957954,"s":"e","l":"     |"}
+{"t":1793414794.5957956,"s":"e","l":"5158 | pub fn is_builtin_index(infer: &InferenceResult, base: ExprId, index: ExprId) -> bool {"}
+{"t":1793414794.595796,"s":"e","l":"     |                                 ^^^^^^^^^^^^^^^ expected lifetime parameter"}
+{"t":1793414794.5957966,"s":"e","l":"     |"}
+{"t":1793414794.5957968,"s":"e","l":"     = note: requested on the command line with `-W elided-lifetimes-in-paths`"}
+{"t":1793414794.5957973,"s":"e","l":"help: indicate the anonymous lifetime"}
+{"t":1793414794.5957975,"s":"e","l":"     |"}
+{"t":1793414794.595798,"s":"e","l":"5158 | pub fn is_builtin_index(infer: &InferenceResult<'_>, base: ExprId, index: ExprId) -> bool {"}
+{"t":1793414794.5957983,"s":"e","l":"     |                                                ++++"}
+{"t":1793414794.5958025,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793414794.595803,"s":"e","l":"   --> vendor/rust-analyzer/crates/hir-ty/src/solver_errors.rs:130:66"}
+{"t":1793414794.5958035,"s":"e","l":"    |"}
+{"t":1793414794.5958037,"s":"e","l":"130 |             args.as_closure().sig().map_bound(|sig| sig.inputs().as_slice()[0])"}
+{"t":1793414794.595805,"s":"e","l":"    |                                                                  ^^^^^^^^"}
+{"t":1793414794.5958054,"s":"e","l":"    |"}
+{"t":1793414794.595806,"s":"e","l":"    = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793414794.5958107,"s":"e","l":"    = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793414794.5958111,"s":"e","l":"    = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793414794.5958118,"s":"e","l":"    = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default"}
+{"t":1793414794.5958123,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793414794.5958128,"s":"e","l":"   --> vendor/rust-analyzer/crates/hir-ty/src/lib.rs:14:1"}
+{"t":1793414794.595813,"s":"e","l":"    |"}
+{"t":1793414794.5958133,"s":"e","l":" 14 + #![feature(str_as_str)]"}
+{"t":1793414794.5958138,"s":"e","l":"    |"}
+{"t":1793414794.5958161,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793414794.5958166,"s":"e","l":"   --> vendor/rust-analyzer/crates/hir-ty/src/next_solver/solver.rs:140:13"}
+{"t":1793414794.5958188,"s":"e","l":"    |"}
+{"t":1793414794.5958192,"s":"e","l":"140 |         let mut constraints = inner.unwrap_region_constraints();"}
+{"t":1793414794.5958216,"s":"e","l":"    |             ----^^^^^^^^^^^"}
+{"t":1793414794.5958219,"s":"e","l":"    |             |"}
+{"t":1793414794.5958223,"s":"e","l":"    |             help: remove this `mut`"}
+{"t":1793414794.5958245,"s":"e","l":"    |"}
+{"t":1793414794.595825,"s":"e","l":"    = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.595838,"s":"e","l":"warning: method `resolve_mir_span` is never used"}
+{"t":1793414794.5958385,"s":"e","l":"   --> vendor/rust-analyzer/crates/hir-ty/src/mir/eval.rs:678:8"}
+{"t":1793414794.5958388,"s":"e","l":"    |"}
+{"t":1793414794.595839,"s":"e","l":"589 | impl<'db> Evaluator<'db> {"}
+{"t":1793414794.5958395,"s":"e","l":"    | ------------------------ method in this implementation"}
+{"t":1793414794.5958428,"s":"e","l":"..."}
+{"t":1793414794.595843,"s":"e","l":"678 |     fn resolve_mir_span("}
+{"t":1793414794.5958436,"s":"e","l":"    |        ^^^^^^^^^^^^^^^^"}
+{"t":1793414794.5958438,"s":"e","l":"    |"}
+{"t":1793414794.595844,"s":"e","l":"    = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.595885,"s":"e","l":"       Fresh wasm-encoder v0.244.0"}
+{"t":1793414794.595921,"s":"e","l":"       Fresh object v0.37.3"}
+{"t":1793414794.5959215,"s":"e","l":"       Fresh cranelift-frontend v0.136.2"}
+{"t":1793414794.595922,"s":"e","l":"       Fresh rustc-demangle v0.1.28"}
+{"t":1793414794.5959532,"s":"e","l":"warning: `hir-ty` (lib) generated 6 warnings (run `cargo fix --lib -p hir-ty` to apply 3 suggestions)"}
+{"t":1793414794.5959537,"s":"e","l":"       Fresh ra-jit-fuzz v0.20261027.0 (/home/jeremy/justrust/toolchain/resident/crates/ra-jit-fuzz)"}
+{"t":1793414794.5959544,"s":"e","l":"       Fresh hir-ty-codegen v0.20261027.0 (/home/jeremy/justrust/toolchain/resident/crates/hir-ty-codegen)"}
+{"t":1793414794.5959609,"s":"e","l":"warning: unnecessary parentheses around pattern"}
+{"t":1793414794.595961,"s":"e","l":"   --> crates/hir-ty-codegen/avx512.rs:125:15"}
+{"t":1793414794.5959616,"s":"e","l":"    |"}
+{"t":1793414794.5959618,"s":"e","l":"125 |         Some(&(last @ (\"128\" | \"256\" | \"512\"))) => {"}
+{"t":1793414794.5959623,"s":"e","l":"    |               ^                              ^"}
+{"t":1793414794.5959628,"s":"e","l":"    |"}
+{"t":1793414794.595963,"s":"e","l":"    = note: `#[warn(unused_parens)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5959635,"s":"e","l":"help: remove these parentheses"}
+{"t":1793414794.5959637,"s":"e","l":"    |"}
+{"t":1793414794.595964,"s":"e","l":"125 -         Some(&(last @ (\"128\" | \"256\" | \"512\"))) => {"}
+{"t":1793414794.5959651,"s":"e","l":"125 +         Some(&last @ (\"128\" | \"256\" | \"512\")) => {"}
+{"t":1793414794.5959656,"s":"e","l":"    |"}
+{"t":1793414794.595966,"s":"e","l":"warning: unused import: `GenericArgs as _`"}
+{"t":1793414794.5959663,"s":"e","l":"  --> crates/hir-ty-codegen/sve.rs:31:31"}
+{"t":1793414794.5959668,"s":"e","l":"   |"}
+{"t":1793414794.595967,"s":"e","l":"31 | use rustc_type_ir::inherent::{GenericArgs as _, IntoKind, SliceLike as _};"}
+{"t":1793414794.5959675,"s":"e","l":"   |                               ^^^^^^^^^^^^^^^^"}
+{"t":1793414794.595968,"s":"e","l":"   |"}
+{"t":1793414794.5959682,"s":"e","l":"   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5959733,"s":"e","l":"warning: hidden lifetime parameters in types are deprecated"}
+{"t":1793414794.5959737,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:11631:28"}
+{"t":1793414794.5959742,"s":"e","l":"      |"}
+{"t":1793414794.5959744,"s":"e","l":"11631 |         let rva = |b: &mut FunctionBuilder, address: Value| {"}
+{"t":1793414794.595975,"s":"e","l":"      |                            ^^^^^^^^^^^^^^^ expected lifetime parameter"}
+{"t":1793414794.5959754,"s":"e","l":"      |"}
+{"t":1793414794.5959756,"s":"e","l":"      = note: requested on the command line with `-W elided-lifetimes-in-paths`"}
+{"t":1793414794.595976,"s":"e","l":"help: indicate the anonymous lifetime"}
+{"t":1793414794.5959766,"s":"e","l":"      |"}
+{"t":1793414794.5959768,"s":"e","l":"11631 |         let rva = |b: &mut FunctionBuilder<'_>, address: Value| {"}
+{"t":1793414794.5959773,"s":"e","l":"      |                                           ++++"}
+{"t":1793414794.59598,"s":"e","l":"warning: hidden lifetime parameters in types are deprecated"}
+{"t":1793414794.5959802,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13096:33"}
+{"t":1793414794.5959806,"s":"e","l":"      |"}
+{"t":1793414794.5959835,"s":"e","l":"13096 |     fn names_are_written(body: &MirBody) -> bool {"}
+{"t":1793414794.595984,"s":"e","l":"      |                                 ^^^^^^^ expected lifetime parameter"}
+{"t":1793414794.5959842,"s":"e","l":"      |"}
+{"t":1793414794.5959847,"s":"e","l":"help: indicate the anonymous lifetime"}
+{"t":1793414794.595987,"s":"e","l":"      |"}
+{"t":1793414794.5959873,"s":"e","l":"13096 |     fn names_are_written(body: &MirBody<'_>) -> bool {"}
+{"t":1793414794.5959878,"s":"e","l":"      |                                        ++++"}
+{"t":1793414794.5959964,"s":"e","l":"warning: hidden lifetime parameters in types are deprecated"}
+{"t":1793414794.5959969,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13103:48"}
+{"t":1793414794.5959997,"s":"e","l":"      |"}
+{"t":1793414794.596,"s":"e","l":"13103 |     fn note_passed_in_memory(&mut self, body: &MirBody, local: LocalId, addr: Value) {"}
+{"t":1793414794.5960007,"s":"e","l":"      |                                                ^^^^^^^ expected lifetime parameter"}
+{"t":1793414794.5960033,"s":"e","l":"      |"}
+{"t":1793414794.5960035,"s":"e","l":"help: indicate the anonymous lifetime"}
+{"t":1793414794.5960038,"s":"e","l":"      |"}
+{"t":1793414794.5960042,"s":"e","l":"13103 |     fn note_passed_in_memory(&mut self, body: &MirBody<'_>, local: LocalId, addr: Value) {"}
+{"t":1793414794.5960064,"s":"e","l":"      |                                                       ++++"}
+{"t":1793414794.5960133,"s":"e","l":"warning: hidden lifetime parameters in types are deprecated"}
+{"t":1793414794.5960162,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16625:32"}
+{"t":1793414794.5960164,"s":"e","l":"      |"}
+{"t":1793414794.596017,"s":"e","l":"16625 |         let combine = |b: &mut FunctionBuilder, l: Value, r: Value| match &op[..op.len() - 1] {"}
+{"t":1793414794.5960193,"s":"e","l":"      |                                ^^^^^^^^^^^^^^^ expected lifetime parameter"}
+{"t":1793414794.5960197,"s":"e","l":"      |"}
+{"t":1793414794.59602,"s":"e","l":"help: indicate the anonymous lifetime"}
+{"t":1793414794.5960202,"s":"e","l":"      |"}
+{"t":1793414794.5960238,"s":"e","l":"16625 |         let combine = |b: &mut FunctionBuilder<'_>, l: Value, r: Value| match &op[..op.len() - 1] {"}
+{"t":1793414794.596024,"s":"e","l":"      |                                               ++++"}
+{"t":1793414794.596032,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960352,"s":"e","l":"   --> crates/hir-ty-codegen/f16_f128.rs:477:39"}
+{"t":1793414794.5960355,"s":"e","l":"    |"}
+{"t":1793414794.5960357,"s":"e","l":"477 |         let wide = self.builder.ins().ishl_imm(wide, 16);"}
+{"t":1793414794.5960362,"s":"e","l":"    |                                       ^^^^^^^^"}
+{"t":1793414794.5960383,"s":"e","l":"    |"}
+{"t":1793414794.5960386,"s":"e","l":"    = note: `#[warn(deprecated)]` on by default"}
+{"t":1793414794.5960453,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960486,"s":"e","l":"    --> crates/hir-ty-codegen/sve.rs:1460:52"}
+{"t":1793414794.5960488,"s":"e","l":"     |"}
+{"t":1793414794.5960493,"s":"e","l":"1460 |                     let place = self.builder.ins().iadd_imm(dst, at as i64 * DATA_MAX as i64);"}
+{"t":1793414794.5960498,"s":"e","l":"     |                                                    ^^^^^^^^"}
+{"t":1793414794.5960534,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960557,"s":"e","l":"    --> crates/hir-ty-codegen/sve.rs:1477:48"}
+{"t":1793414794.596056,"s":"e","l":"     |"}
+{"t":1793414794.5960581,"s":"e","l":"1477 | ...                   self.builder.ins().iadd_imm(*tuple, index as i64 * DATA_MAX as i64);"}
+{"t":1793414794.5960586,"s":"e","l":"     |                                          ^^^^^^^^"}
+{"t":1793414794.5960639,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960667,"s":"e","l":"    --> crates/hir-ty-codegen/sve.rs:1487:48"}
+{"t":1793414794.596067,"s":"e","l":"     |"}
+{"t":1793414794.5960674,"s":"e","l":"1487 | ...                   self.builder.ins().iadd_imm(dst, index as i64 * DATA_MAX as i64);"}
+{"t":1793414794.5960693,"s":"e","l":"     |                                          ^^^^^^^^"}
+{"t":1793414794.5960748,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960774,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:8461:47"}
+{"t":1793414794.5960777,"s":"e","l":"     |"}
+{"t":1793414794.596078,"s":"e","l":"8461 |                 let size = self.builder.ins().imul_imm(meta, elem.size.bytes() as i64);"}
+{"t":1793414794.59608,"s":"e","l":"     |                                               ^^^^^^^^"}
+{"t":1793414794.596083,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960858,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:8508:39"}
+{"t":1793414794.5960858,"s":"e","l":"     |"}
+{"t":1793414794.5960863,"s":"e","l":"8508 |         let mask = self.builder.ins().iadd_imm(align, -1);"}
+{"t":1793414794.5960882,"s":"e","l":"     |                                       ^^^^^^^^"}
+{"t":1793414794.5960937,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5960963,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:8529:42"}
+{"t":1793414794.5960977,"s":"e","l":"     |"}
+{"t":1793414794.596098,"s":"e","l":"8529 |             return Ok(self.builder.ins().iadd_imm(addr, offset.bytes() as i64));"}
+{"t":1793414794.5961,"s":"e","l":"     |                                          ^^^^^^^^"}
+{"t":1793414794.5961027,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961032,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9531:47"}
+{"t":1793414794.5961056,"s":"e","l":"     |"}
+{"t":1793414794.596106,"s":"e","l":"9531 |                 let rest = self.builder.ins().iadd_imm(addr, 8);"}
+{"t":1793414794.5961063,"s":"e","l":"     |                                               ^^^^^^^^"}
+{"t":1793414794.5961142,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961146,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9540:51"}
+{"t":1793414794.5961199,"s":"e","l":"     |"}
+{"t":1793414794.59612,"s":"e","l":"9540 |                     let part = self.builder.ins().iadd_imm(addr, (index * step) as i64);"}
+{"t":1793414794.5961206,"s":"e","l":"     |                                                   ^^^^^^^^"}
+{"t":1793414794.596155,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961556,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9575:60"}
+{"t":1793414794.596156,"s":"e","l":"     |"}
+{"t":1793414794.5961564,"s":"e","l":"9575 | ...                   values.push(self.builder.ins().iadd_imm(addr, at as i64));"}
+{"t":1793414794.5961568,"s":"e","l":"     |                                                      ^^^^^^^^"}
+{"t":1793414794.5961576,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961583,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9632:47"}
+{"t":1793414794.5961585,"s":"e","l":"     |"}
+{"t":1793414794.596159,"s":"e","l":"9632 |                 let rest = self.builder.ins().iadd_imm(addr, 8);"}
+{"t":1793414794.5961592,"s":"e","l":"     |                                               ^^^^^^^^"}
+{"t":1793414794.59616,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961607,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9642:51"}
+{"t":1793414794.596161,"s":"e","l":"     |"}
+{"t":1793414794.5961614,"s":"e","l":"9642 |                     let part = self.builder.ins().iadd_imm(addr, (index * step) as i64);"}
+{"t":1793414794.5961618,"s":"e","l":"     |                                                   ^^^^^^^^"}
+{"t":1793414794.5961626,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596163,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9894:41"}
+{"t":1793414794.5961633,"s":"e","l":"     |"}
+{"t":1793414794.5961637,"s":"e","l":"9894 |         let bumped = self.builder.ins().iadd_imm(base, align as i64 - 1);"}
+{"t":1793414794.5961642,"s":"e","l":"     |                                         ^^^^^^^^"}
+{"t":1793414794.5961692,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961697,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:9895:28"}
+{"t":1793414794.59617,"s":"e","l":"     |"}
+{"t":1793414794.5961704,"s":"e","l":"9895 |         self.builder.ins().band_imm(bumped, -(align as i64))"}
+{"t":1793414794.5961707,"s":"e","l":"     |                            ^^^^^^^^"}
+{"t":1793414794.5961714,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961719,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10020:44"}
+{"t":1793414794.5961723,"s":"e","l":"      |"}
+{"t":1793414794.5961728,"s":"e","l":"10020 |             let first = self.builder.ins().iadd_imm(stack, first);"}
+{"t":1793414794.596173,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5961769,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961773,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10060:48"}
+{"t":1793414794.5961776,"s":"e","l":"      |"}
+{"t":1793414794.5961778,"s":"e","l":"10060 |                 let stack = self.builder.ins().iadd_imm(frame, 16 + i64::from(named.stack));"}
+{"t":1793414794.5961783,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5961812,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961816,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10061:51"}
+{"t":1793414794.5961819,"s":"e","l":"      |"}
+{"t":1793414794.5961843,"s":"e","l":"10061 |                 let ints_end = self.builder.ins().iadd_imm(saved, i64::from(int_count * 8));"}
+{"t":1793414794.5961847,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.596188,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961907,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10063:40"}
+{"t":1793414794.596191,"s":"e","l":"      |"}
+{"t":1793414794.5961914,"s":"e","l":"10063 |                     self.builder.ins().iadd_imm(saved, i64::from(int_count * 8 + floats_bytes));"}
+{"t":1793414794.5961936,"s":"e","l":"      |                                        ^^^^^^^^"}
+{"t":1793414794.596197,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5961993,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10096:44"}
+{"t":1793414794.5961995,"s":"e","l":"      |"}
+{"t":1793414794.596218,"s":"e","l":"10096 |             let stack = self.builder.ins().iadd_imm(frame, 16 + i64::from(named));"}
+{"t":1793414794.5962236,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5962243,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962248,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10134:32"}
+{"t":1793414794.596225,"s":"e","l":"      |"}
+{"t":1793414794.5962255,"s":"e","l":"10134 |             this.builder.ins().iadd_imm(*addr, layout.fields.offset(field).bytes() as i64)"}
+{"t":1793414794.5962257,"s":"e","l":"      |                                ^^^^^^^^"}
+{"t":1793414794.5962265,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596227,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10200:47"}
+{"t":1793414794.5962272,"s":"e","l":"      |"}
+{"t":1793414794.5962274,"s":"e","l":"10200 |                 let addr = self.builder.ins().iadd_imm(*frame_addr, offset as i64);"}
+{"t":1793414794.596228,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5962315,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596232,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10210:47"}
+{"t":1793414794.5962322,"s":"e","l":"      |"}
+{"t":1793414794.5962324,"s":"e","l":"10210 |                 let addr = self.builder.ins().iadd_imm(*frame_addr, offset.bytes() as i64);"}
+{"t":1793414794.596233,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5962365,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596237,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10699:44"}
+{"t":1793414794.5962372,"s":"e","l":"      |"}
+{"t":1793414794.5962374,"s":"e","l":"10699 |                         self.builder.ins().iadd_imm(len, -(*offset as i64))"}
+{"t":1793414794.596238,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5962403,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962408,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10709:47"}
+{"t":1793414794.5962431,"s":"e","l":"      |"}
+{"t":1793414794.5962436,"s":"e","l":"10709 |                     addr = self.builder.ins().iadd_imm(addr, (*from * size) as i64);"}
+{"t":1793414794.5962439,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5962498,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962524,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10712:53"}
+{"t":1793414794.5962527,"s":"e","l":"      |"}
+{"t":1793414794.596253,"s":"e","l":"10712 | ...                   Some(self.builder.ins().iadd_imm(len, -((*from + *to) as i64)))"}
+{"t":1793414794.596255,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.59626,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962627,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:10746:41"}
+{"t":1793414794.596263,"s":"e","l":"      |"}
+{"t":1793414794.5962632,"s":"e","l":"10746 |         let offset = self.builder.ins().imul_imm(index, size as i64);"}
+{"t":1793414794.596265,"s":"e","l":"      |                                         ^^^^^^^^"}
+{"t":1793414794.596271,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962737,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:11635:43"}
+{"t":1793414794.596274,"s":"e","l":"      |"}
+{"t":1793414794.5962744,"s":"e","l":"11635 |         let (array, catchable) = (b.ins().iadd_imm(info, 16), b.ins().iadd_imm(info, 24));"}
+{"t":1793414794.5962763,"s":"e","l":"      |                                           ^^^^^^^^"}
+{"t":1793414794.5962813,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962837,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:11635:71"}
+{"t":1793414794.596284,"s":"e","l":"      |"}
+{"t":1793414794.5962842,"s":"e","l":"11635 |         let (array, catchable) = (b.ins().iadd_imm(info, 16), b.ins().iadd_imm(info, 24));"}
+{"t":1793414794.5962863,"s":"e","l":"      |                                                                       ^^^^^^^^"}
+{"t":1793414794.596291,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5962934,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:11782:45"}
+{"t":1793414794.5962937,"s":"e","l":"      |"}
+{"t":1793414794.5962942,"s":"e","l":"11782 |                 let to = self.builder.ins().iadd_imm(slot, *offset as i64);"}
+{"t":1793414794.596296,"s":"e","l":"      |                                             ^^^^^^^^"}
+{"t":1793414794.596301,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963035,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:11804:47"}
+{"t":1793414794.5963037,"s":"e","l":"      |"}
+{"t":1793414794.596304,"s":"e","l":"11804 |                 let from = self.builder.ins().iadd_imm(slot, *offset as i64);"}
+{"t":1793414794.596306,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5963106,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963132,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12039:48"}
+{"t":1793414794.5963135,"s":"e","l":"      |"}
+{"t":1793414794.5963137,"s":"e","l":"12039 |                     value = self.builder.ins().ishl_imm(value, (i * bits) as i64);"}
+{"t":1793414794.5963156,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5963206,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596323,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12179:58"}
+{"t":1793414794.5963233,"s":"e","l":"      |"}
+{"t":1793414794.5963237,"s":"e","l":"12179 |                         let element = self.builder.ins().iadd_imm(dst, (i * size.bytes()) as i64);"}
+{"t":1793414794.5963259,"s":"e","l":"      |                                                          ^^^^^^^^"}
+{"t":1793414794.5963311,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963335,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12192:44"}
+{"t":1793414794.5963337,"s":"e","l":"      |"}
+{"t":1793414794.596334,"s":"e","l":"12192 |                         self.builder.ins().icmp_imm(IntCC::UnsignedLessThan, index, len as i64);"}
+{"t":1793414794.5963361,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.596341,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963433,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12195:53"}
+{"t":1793414794.5963435,"s":"e","l":"      |"}
+{"t":1793414794.5963438,"s":"e","l":"12195 |                     let offset = self.builder.ins().imul_imm(index, size.bytes() as i64);"}
+{"t":1793414794.596346,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.5963497,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596352,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12198:51"}
+{"t":1793414794.5963523,"s":"e","l":"      |"}
+{"t":1793414794.5963526,"s":"e","l":"12198 |                     let next = self.builder.ins().iadd_imm(index, 1);"}
+{"t":1793414794.5963545,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5963595,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::bxor_imm`: use `bxor_imm_s` (sign-extends the immediate) or `bxor_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963619,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12224:64"}
+{"t":1793414794.596362,"s":"e","l":"      |"}
+{"t":1793414794.5963624,"s":"e","l":"12224 |                     UnOp::Not if is_bool => self.builder.ins().bxor_imm(value, 1),"}
+{"t":1793414794.5963645,"s":"e","l":"      |                                                                ^^^^^^^^"}
+{"t":1793414794.5963695,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596372,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12278:48"}
+{"t":1793414794.5963721,"s":"e","l":"      |"}
+{"t":1793414794.5963745,"s":"e","l":"12278 | ...                   self.builder.ins().iadd_imm(dst, (i as u64 * size.bytes()) as i64);"}
+{"t":1793414794.5963748,"s":"e","l":"      |                                          ^^^^^^^^"}
+{"t":1793414794.5963798,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963821,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12449:59"}
+{"t":1793414794.5963824,"s":"e","l":"      |"}
+{"t":1793414794.5963826,"s":"e","l":"12449 |                         let is_niche = self.builder.ins().icmp_imm("}
+{"t":1793414794.5963845,"s":"e","l":"      |                                                           ^^^^^^^^"}
+{"t":1793414794.5963902,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5963929,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12464:56"}
+{"t":1793414794.596393,"s":"e","l":"      |"}
+{"t":1793414794.5963933,"s":"e","l":"12464 |                         let niche = self.builder.ins().iadd_imm(relative, first as i64);"}
+{"t":1793414794.5963953,"s":"e","l":"      |                                                        ^^^^^^^^"}
+{"t":1793414794.5964,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964026,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12544:44"}
+{"t":1793414794.596403,"s":"e","l":"      |"}
+{"t":1793414794.5964031,"s":"e","l":"12544 |             let field = self.builder.ins().iadd_imm(dst, layout.fields.offset(i).bytes() as i64);"}
+{"t":1793414794.596405,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.59641,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964124,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:12725:41"}
+{"t":1793414794.5964127,"s":"e","l":"      |"}
+{"t":1793414794.596413,"s":"e","l":"12725 |         let beyond = self.builder.ins().icmp_imm(IntCC::NotEqual, high, 0);"}
+{"t":1793414794.596415,"s":"e","l":"      |                                         ^^^^^^^^"}
+{"t":1793414794.5964198,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964222,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13266:53"}
+{"t":1793414794.5964224,"s":"e","l":"      |"}
+{"t":1793414794.5964227,"s":"e","l":"13266 |                     let failed = self.builder.ins().icmp_imm(cc, holds, 0);"}
+{"t":1793414794.5964246,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.596429,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964315,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13401:49"}
+{"t":1793414794.5964317,"s":"e","l":"      |"}
+{"t":1793414794.5964322,"s":"e","l":"13401 |                 values.push((self.builder.ins().iadd_imm(tuple_addr, offset), ty));"}
+{"t":1793414794.596434,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.596439,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964408,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13516:49"}
+{"t":1793414794.5964413,"s":"e","l":"      |"}
+{"t":1793414794.5964434,"s":"e","l":"13516 | ...                   (self.builder.ins().iadd_imm(tuple, offset), field)"}
+{"t":1793414794.596444,"s":"e","l":"      |                                           ^^^^^^^^"}
+{"t":1793414794.5964503,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964532,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13539:41"}
+{"t":1793414794.5964534,"s":"e","l":"      |"}
+{"t":1793414794.5964537,"s":"e","l":"13539 |                     (self.builder.ins().iadd_imm(tuple, offset), field)"}
+{"t":1793414794.5964556,"s":"e","l":"      |                                         ^^^^^^^^"}
+{"t":1793414794.5964606,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964632,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13579:60"}
+{"t":1793414794.5964637,"s":"e","l":"      |"}
+{"t":1793414794.596464,"s":"e","l":"13579 | ...                   let field = self.builder.ins().iadd_imm(dst, offset);"}
+{"t":1793414794.596466,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.5964706,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596473,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13652:52"}
+{"t":1793414794.5964732,"s":"e","l":"      |"}
+{"t":1793414794.5964735,"s":"e","l":"13652 |                     let field = self.builder.ins().iadd_imm(tuple, offset);"}
+{"t":1793414794.5964756,"s":"e","l":"      |                                                    ^^^^^^^^"}
+{"t":1793414794.5964804,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964828,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13690:45"}
+{"t":1793414794.596483,"s":"e","l":"      |"}
+{"t":1793414794.5964832,"s":"e","l":"13690 |             fields.push((self.builder.ins().iadd_imm(closure, offset), ty));"}
+{"t":1793414794.5964854,"s":"e","l":"      |                                             ^^^^^^^^"}
+{"t":1793414794.5964901,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5964925,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13694:44"}
+{"t":1793414794.5964928,"s":"e","l":"      |"}
+{"t":1793414794.5964932,"s":"e","l":"13694 |             let field = self.builder.ins().iadd_imm(dst, layout.fields.offset(i).bytes() as i64);"}
+{"t":1793414794.5964952,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5965,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5965023,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13708:40"}
+{"t":1793414794.5965025,"s":"e","l":"      |"}
+{"t":1793414794.5965028,"s":"e","l":"13708 |         let state = self.builder.ins().iadd_imm(dst, state as i64);"}
+{"t":1793414794.5965047,"s":"e","l":"      |                                        ^^^^^^^^"}
+{"t":1793414794.5965095,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5965118,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13859:44"}
+{"t":1793414794.596512,"s":"e","l":"      |"}
+{"t":1793414794.5965126,"s":"e","l":"13859 |                         self.builder.ins().iadd_imm(src, from.fields.offset(i).bytes() as i64);"}
+{"t":1793414794.5965142,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5965202,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5965223,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:13860:50"}
+{"t":1793414794.5965226,"s":"e","l":"      |"}
+{"t":1793414794.596523,"s":"e","l":"13860 |                     let dst = self.builder.ins().iadd_imm(dst, to.fields.offset(i).bytes() as i64);"}
+{"t":1793414794.596525,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.59653,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596532,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14228:60"}
+{"t":1793414794.5965323,"s":"e","l":"      |"}
+{"t":1793414794.5965345,"s":"e","l":"14228 | ...                   let field = self.builder.ins().iadd_imm(dst, offset);"}
+{"t":1793414794.596535,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.5965464,"s":"e","l":"warning: a method with this name may be added to the standard library in the future"}
+{"t":1793414794.5965488,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14286:78"}
+{"t":1793414794.596549,"s":"e","l":"      |"}
+{"t":1793414794.5965493,"s":"e","l":"14286 |         let &[main_param, argc_ty, argv_ty, sigpipe_ty] = start_sig.inputs().as_slice() else {"}
+{"t":1793414794.596552,"s":"e","l":"      |                                                                              ^^^^^^^^"}
+{"t":1793414794.5965521,"s":"e","l":"      |"}
+{"t":1793414794.5965526,"s":"e","l":"      = help: call with fully qualified syntax `rustc_type_ir::inherent::SliceLike::as_slice(...)` to keep using the current method"}
+{"t":1793414794.596556,"s":"e","l":"      = warning: once this associated item is added to the standard library, the ambiguity may cause an error or change in behavior!"}
+{"t":1793414794.5965567,"s":"e","l":"      = note: for more information, see issue #48919 <https://github.com/rust-lang/rust/issues/48919>"}
+{"t":1793414794.5965571,"s":"e","l":"      = note: `#[warn(unstable_name_collisions)]` (part of `#[warn(future_incompatible)]`) on by default"}
+{"t":1793414794.5965576,"s":"e","l":"help: add `#![feature(str_as_str)]` to the crate attributes to enable `core::slice::<impl [T]>::as_slice`"}
+{"t":1793414794.596558,"s":"e","l":"      |"}
+{"t":1793414794.59656,"s":"e","l":"    6 + #![feature(str_as_str)]"}
+{"t":1793414794.5965602,"s":"e","l":"      |"}
+{"t":1793414794.5965626,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596563,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14479:49"}
+{"t":1793414794.5965655,"s":"e","l":"      |"}
+{"t":1793414794.596566,"s":"e","l":"14479 |                     let at = self.builder.ins().iadd_imm(tuple, offset);"}
+{"t":1793414794.5965664,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5965724,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5965748,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14679:50"}
+{"t":1793414794.596575,"s":"e","l":"      |"}
+{"t":1793414794.5965753,"s":"e","l":"14679 |                     let src = self.builder.ins().iadd_imm(src, offset);"}
+{"t":1793414794.5965774,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.5965827,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5965831,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14680:51"}
+{"t":1793414794.5965858,"s":"e","l":"      |"}
+{"t":1793414794.596586,"s":"e","l":"14680 |                     let part = self.builder.ins().iadd_imm(dst, offset);"}
+{"t":1793414794.5965865,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5965917,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5965943,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14686:63"}
+{"t":1793414794.5965946,"s":"e","l":"      |"}
+{"t":1793414794.596595,"s":"e","l":"14686 | ...                   let done = this.builder.ins().iadd_imm(dst, offset);"}
+{"t":1793414794.596597,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.5966022,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5966048,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14708:49"}
+{"t":1793414794.596605,"s":"e","l":"      |"}
+{"t":1793414794.5966053,"s":"e","l":"14708 |                 let offset = self.builder.ins().imul_imm(index, size);"}
+{"t":1793414794.5966072,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5966108,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596613,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:14715:47"}
+{"t":1793414794.5966132,"s":"e","l":"      |"}
+{"t":1793414794.5966136,"s":"e","l":"14715 |                 let next = self.builder.ins().iadd_imm(index, 1);"}
+{"t":1793414794.5966156,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966208,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5966232,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15248:47"}
+{"t":1793414794.5966234,"s":"e","l":"      |"}
+{"t":1793414794.596624,"s":"e","l":"15248 |                 let slot = self.builder.ins().iadd_imm(after, bytes - 1);"}
+{"t":1793414794.5966258,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966315,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596634,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15249:47"}
+{"t":1793414794.5966341,"s":"e","l":"      |"}
+{"t":1793414794.5966346,"s":"e","l":"15249 |                 let slot = self.builder.ins().band_imm(slot, -bytes);"}
+{"t":1793414794.5966363,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966399,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5966423,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15250:47"}
+{"t":1793414794.5966423,"s":"e","l":"      |"}
+{"t":1793414794.5966427,"s":"e","l":"15250 |                 let next = self.builder.ins().iadd_imm(slot, bytes);"}
+{"t":1793414794.5966444,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966492,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5966513,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15276:47"}
+{"t":1793414794.5966516,"s":"e","l":"      |"}
+{"t":1793414794.596652,"s":"e","l":"15276 |                     slot = self.builder.ins().iadd_imm(slot, bytes - 1);"}
+{"t":1793414794.596661,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966618,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5966623,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15277:47"}
+{"t":1793414794.5966625,"s":"e","l":"      |"}
+{"t":1793414794.5966628,"s":"e","l":"15277 |                     slot = self.builder.ins().band_imm(slot, -bytes);"}
+{"t":1793414794.5966966,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966973,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5966978,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15280:47"}
+{"t":1793414794.596698,"s":"e","l":"      |"}
+{"t":1793414794.5966985,"s":"e","l":"15280 |                 let next = self.builder.ins().iadd_imm(slot, step);"}
+{"t":1793414794.596699,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5966995,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15320:44"}
+{"t":1793414794.5967004,"s":"e","l":"      |"}
+{"t":1793414794.5967007,"s":"e","l":"15320 |                         self.builder.ins().icmp_imm(IntCC::SignedGreaterThanOrEqual, offset, 0);"}
+{"t":1793414794.5967011,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5967019,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967026,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15327:57"}
+{"t":1793414794.5967028,"s":"e","l":"      |"}
+{"t":1793414794.596703,"s":"e","l":"15327 | ...                   let up = self.builder.ins().iadd_imm(offset, 15);"}
+{"t":1793414794.5967035,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.596704,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967083,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15328:48"}
+{"t":1793414794.5967085,"s":"e","l":"      |"}
+{"t":1793414794.596709,"s":"e","l":"15328 | ...                   self.builder.ins().band_imm(up, -16)"}
+{"t":1793414794.5967093,"s":"e","l":"      |                                          ^^^^^^^^"}
+{"t":1793414794.59671,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967104,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15332:51"}
+{"t":1793414794.596711,"s":"e","l":"      |"}
+{"t":1793414794.5967112,"s":"e","l":"15332 |                     let next = self.builder.ins().iadd_imm(offset, i64::from(step));"}
+{"t":1793414794.5967116,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.596715,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967155,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15334:51"}
+{"t":1793414794.5967157,"s":"e","l":"      |"}
+{"t":1793414794.596716,"s":"e","l":"15334 |                     let fits = self.builder.ins().icmp_imm(IntCC::SignedLessThanOrEqual, next, 0);"}
+{"t":1793414794.5967164,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5967193,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.59672,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15352:51"}
+{"t":1793414794.59672,"s":"e","l":"      |"}
+{"t":1793414794.5967205,"s":"e","l":"15352 |                     let fits = self.builder.ins().icmp_imm("}
+{"t":1793414794.5967224,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5967252,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967278,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15363:51"}
+{"t":1793414794.596728,"s":"e","l":"      |"}
+{"t":1793414794.5967283,"s":"e","l":"15363 |                     let next = self.builder.ins().iadd_imm(offset, i64::from(step));"}
+{"t":1793414794.5967305,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5967357,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967383,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15373:53"}
+{"t":1793414794.5967386,"s":"e","l":"      |"}
+{"t":1793414794.596739,"s":"e","l":"15373 |                         let up = self.builder.ins().iadd_imm(from, 15);"}
+{"t":1793414794.596741,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.5967522,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596753,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15374:44"}
+{"t":1793414794.5967531,"s":"e","l":"      |"}
+{"t":1793414794.5967562,"s":"e","l":"15374 |                         self.builder.ins().band_imm(up, -16)"}
+{"t":1793414794.5967567,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5967574,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967605,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15378:47"}
+{"t":1793414794.5967607,"s":"e","l":"      |"}
+{"t":1793414794.5967612,"s":"e","l":"15378 |                 let next = self.builder.ins().iadd_imm(from, if wide { 16 } else { 8 });"}
+{"t":1793414794.5967617,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5967643,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596765,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15511:48"}
+{"t":1793414794.5967674,"s":"e","l":"      |"}
+{"t":1793414794.5967677,"s":"e","l":"15511 |                 let bytes = self.builder.ins().imul_imm(count, size);"}
+{"t":1793414794.5967681,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5967724,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967748,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15540:48"}
+{"t":1793414794.596775,"s":"e","l":"      |"}
+{"t":1793414794.5967755,"s":"e","l":"15540 |                 let bytes = self.builder.ins().imul_imm(count, size);"}
+{"t":1793414794.5967774,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5967882,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967886,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15575:48"}
+{"t":1793414794.5967917,"s":"e","l":"      |"}
+{"t":1793414794.5967922,"s":"e","l":"15575 |                     value = self.builder.ins().icmp_imm(IntCC::Equal, value, 0);"}
+{"t":1793414794.5967925,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5967958,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5967963,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15718:53"}
+{"t":1793414794.5967965,"s":"e","l":"      |"}
+{"t":1793414794.596797,"s":"e","l":"15718 |                     let chosen = self.builder.ins().icmp_imm(IntCC::SignedLessThan, chosen, 0);"}
+{"t":1793414794.5967972,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.596808,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968084,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15735:54"}
+{"t":1793414794.5968122,"s":"e","l":"      |"}
+{"t":1793414794.5968125,"s":"e","l":"15735 |                         let bit = self.builder.ins().ushr_imm(byte, (i % 8) as i64);"}
+{"t":1793414794.596813,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.5968137,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968165,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15736:54"}
+{"t":1793414794.5968168,"s":"e","l":"      |"}
+{"t":1793414794.5968173,"s":"e","l":"15736 |                         let bit = self.builder.ins().band_imm(bit, 1);"}
+{"t":1793414794.5968175,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.5968206,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596821,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15785:49"}
+{"t":1793414794.5968213,"s":"e","l":"      |"}
+{"t":1793414794.5968235,"s":"e","l":"15785 |                 let offset = self.builder.ins().imul_imm(index, lane.ty.bytes() as i64);"}
+{"t":1793414794.596824,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5968347,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968354,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15798:49"}
+{"t":1793414794.5968387,"s":"e","l":"      |"}
+{"t":1793414794.596839,"s":"e","l":"15798 |                 let offset = self.builder.ins().imul_imm(index, lane.ty.bytes() as i64);"}
+{"t":1793414794.5968394,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5968401,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596843,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15818:48"}
+{"t":1793414794.5968432,"s":"e","l":"      |"}
+{"t":1793414794.5968437,"s":"e","l":"15818 |                 let upper = self.builder.ins().iadd_imm(both, layout.size.bytes() as i64);"}
+{"t":1793414794.5968442,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.596847,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968475,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15824:53"}
+{"t":1793414794.5968478,"s":"e","l":"      |"}
+{"t":1793414794.59685,"s":"e","l":"15824 |                     let offset = self.builder.ins().imul_imm(index, lane_size as i64);"}
+{"t":1793414794.5968504,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.596862,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968626,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15882:26"}
+{"t":1793414794.5968628,"s":"e","l":"      |"}
+{"t":1793414794.596863,"s":"e","l":"15882 |                         .ishl_imm(top, i64::from(chunk) * i64::from(vector.lane_count()));"}
+{"t":1793414794.5968635,"s":"e","l":"      |                          ^^^^^^^^"}
+{"t":1793414794.5968661,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968668,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15888:50"}
+{"t":1793414794.596867,"s":"e","l":"      |"}
+{"t":1793414794.5968692,"s":"e","l":"15888 |                     let top = self.builder.ins().ushr_imm(value, lane.ty.bits() as i64 - 1);"}
+{"t":1793414794.5968697,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.596873,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968754,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:15894:50"}
+{"t":1793414794.5968757,"s":"e","l":"      |"}
+{"t":1793414794.5968761,"s":"e","l":"15894 |                     let top = self.builder.ins().ishl_imm(top, i as i64);"}
+{"t":1793414794.5968783,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.5968833,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596886,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16047:41"}
+{"t":1793414794.5968862,"s":"e","l":"      |"}
+{"t":1793414794.5968864,"s":"e","l":"16047 |                         let s = b.ins().band_imm(s, bits - 1);"}
+{"t":1793414794.5968883,"s":"e","l":"      |                                         ^^^^^^^^"}
+{"t":1793414794.5968924,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::bxor_imm`: use `bxor_imm_s` (sign-extends the immediate) or `bxor_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5968947,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16048:44"}
+{"t":1793414794.596895,"s":"e","l":"      |"}
+{"t":1793414794.5968955,"s":"e","l":"16048 |                         let rest = b.ins().bxor_imm(s, bits - 1);"}
+{"t":1793414794.5968974,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5969021,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969043,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16050:45"}
+{"t":1793414794.5969045,"s":"e","l":"      |"}
+{"t":1793414794.5969067,"s":"e","l":"16050 | ...                   let l = b.ins().ushr_imm(l, 1);"}
+{"t":1793414794.5969071,"s":"e","l":"      |                                       ^^^^^^^^"}
+{"t":1793414794.5969286,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596929,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16053:45"}
+{"t":1793414794.5969293,"s":"e","l":"      |"}
+{"t":1793414794.5969298,"s":"e","l":"16053 | ...                   let h = b.ins().ishl_imm(h, 1);"}
+{"t":1793414794.59693,"s":"e","l":"      |                                       ^^^^^^^^"}
+{"t":1793414794.5969307,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969312,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16071:50"}
+{"t":1793414794.5969315,"s":"e","l":"      |"}
+{"t":1793414794.596932,"s":"e","l":"16071 |                     let set = self.builder.ins().icmp_imm(IntCC::NotEqual, value, 0);"}
+{"t":1793414794.5969322,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.5969362,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969367,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16122:44"}
+{"t":1793414794.596937,"s":"e","l":"      |"}
+{"t":1793414794.5969372,"s":"e","l":"16122 |                         self.builder.ins().icmp_imm(IntCC::SignedLessThan, chosen, 0)"}
+{"t":1793414794.5969377,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5969398,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969427,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16327:49"}
+{"t":1793414794.596943,"s":"e","l":"      |"}
+{"t":1793414794.5969431,"s":"e","l":"16327 |                 let offset = self.builder.ins().imul_imm(index, size);"}
+{"t":1793414794.5969453,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5969505,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969532,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16404:53"}
+{"t":1793414794.5969534,"s":"e","l":"      |"}
+{"t":1793414794.5969536,"s":"e","l":"16404 |                     let object = self.builder.ins().iadd_imm(exception, unwind::seh::OBJECT);"}
+{"t":1793414794.5969558,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.5969608,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969632,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16551:50"}
+{"t":1793414794.5969634,"s":"e","l":"      |"}
+{"t":1793414794.5969636,"s":"e","l":"16551 |                     let sum = self.builder.ins().iadd_imm(sum, 1);"}
+{"t":1793414794.5969656,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.596971,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969734,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16552:51"}
+{"t":1793414794.5969734,"s":"e","l":"      |"}
+{"t":1793414794.596974,"s":"e","l":"16552 |                     let half = self.builder.ins().ushr_imm(sum, 1);"}
+{"t":1793414794.5969758,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5969808,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.596983,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16564:51"}
+{"t":1793414794.5969832,"s":"e","l":"      |"}
+{"t":1793414794.5969837,"s":"e","l":"16564 |                     let high = self.builder.ins().ushr_imm(product, bits);"}
+{"t":1793414794.5969856,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5969903,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5969925,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16576:44"}
+{"t":1793414794.5969927,"s":"e","l":"      |"}
+{"t":1793414794.5969932,"s":"e","l":"16576 |                         self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThanOrEqual, r, bits);"}
+{"t":1793414794.596995,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.597,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::sshr_imm`: use `sshr_imm_s` (sign-extends the immediate) or `sshr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970023,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16674:55"}
+{"t":1793414794.5970025,"s":"e","l":"      |"}
+{"t":1793414794.597003,"s":"e","l":"16674 |                         let high = self.builder.ins().sshr_imm(product, bits - 1);"}
+{"t":1793414794.597005,"s":"e","l":"      |                                                       ^^^^^^^^"}
+{"t":1793414794.59701,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970123,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16746:58"}
+{"t":1793414794.5970125,"s":"e","l":"      |"}
+{"t":1793414794.5970137,"s":"e","l":"16746 |                         let l_least = self.builder.ins().icmp_imm(IntCC::Equal, l, least);"}
+{"t":1793414794.5970159,"s":"e","l":"      |                                                          ^^^^^^^^"}
+{"t":1793414794.5970182,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970206,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16747:58"}
+{"t":1793414794.5970209,"s":"e","l":"      |"}
+{"t":1793414794.597021,"s":"e","l":"16747 |                         let r_least = self.builder.ins().icmp_imm(IntCC::Equal, r, least);"}
+{"t":1793414794.597023,"s":"e","l":"      |                                                          ^^^^^^^^"}
+{"t":1793414794.597029,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970314,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16752:56"}
+{"t":1793414794.5970316,"s":"e","l":"      |"}
+{"t":1793414794.5970318,"s":"e","l":"16752 |                         let twice = self.builder.ins().ishl_imm(product, 1);"}
+{"t":1793414794.5970337,"s":"e","l":"      |                                                        ^^^^^^^^"}
+{"t":1793414794.5970385,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597041,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16778:55"}
+{"t":1793414794.5970411,"s":"e","l":"      |"}
+{"t":1793414794.5970414,"s":"e","l":"16778 |                         let slot = self.builder.ins().band_imm(index, 0x0f);"}
+{"t":1793414794.5970433,"s":"e","l":"      |                                                       ^^^^^^^^"}
+{"t":1793414794.5970483,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970502,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16787:48"}
+{"t":1793414794.5970504,"s":"e","l":"      |"}
+{"t":1793414794.5970526,"s":"e","l":"16787 | ...                   self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, index, 15);"}
+{"t":1793414794.597053,"s":"e","l":"      |                                          ^^^^^^^^"}
+{"t":1793414794.597058,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970604,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17130:41"}
+{"t":1793414794.5970607,"s":"e","l":"      |"}
+{"t":1793414794.5970612,"s":"e","l":"17130 |             let to = self.builder.ins().iadd_imm(slot, i64::from(at));"}
+{"t":1793414794.597063,"s":"e","l":"      |                                         ^^^^^^^^"}
+{"t":1793414794.5970678,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970702,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17195:51"}
+{"t":1793414794.5970707,"s":"e","l":"      |"}
+{"t":1793414794.597071,"s":"e","l":"17195 |                     let slot = self.builder.ins().band_imm(index, 0x0f);"}
+{"t":1793414794.5970728,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5970778,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970802,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17200:54"}
+{"t":1793414794.5970805,"s":"e","l":"      |"}
+{"t":1793414794.5970807,"s":"e","l":"17200 |                     let cleared = self.builder.ins().icmp_imm(IntCC::SignedLessThan, index, 0);"}
+{"t":1793414794.5970829,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.5970879,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5970902,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17222:55"}
+{"t":1793414794.5970905,"s":"e","l":"      |"}
+{"t":1793414794.597091,"s":"e","l":"17222 |                         let slot = self.builder.ins().band_imm(index, lanes - 1);"}
+{"t":1793414794.5970929,"s":"e","l":"      |                                                       ^^^^^^^^"}
+{"t":1793414794.5970976,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17227:57"}
+{"t":1793414794.5971003,"s":"e","l":"      |"}
+{"t":1793414794.5971007,"s":"e","l":"17227 |                         let offset = self.builder.ins().imul_imm(slot, bytes);"}
+{"t":1793414794.5971026,"s":"e","l":"      |                                                         ^^^^^^^^"}
+{"t":1793414794.5971074,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971098,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17243:55"}
+{"t":1793414794.59711,"s":"e","l":"      |"}
+{"t":1793414794.5971105,"s":"e","l":"17243 |                         let slot = self.builder.ins().band_imm(index, 7);"}
+{"t":1793414794.5971124,"s":"e","l":"      |                                                       ^^^^^^^^"}
+{"t":1793414794.5971174,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971196,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17245:57"}
+{"t":1793414794.5971198,"s":"e","l":"      |"}
+{"t":1793414794.59712,"s":"e","l":"17245 |                         let offset = self.builder.ins().ishl_imm(slot, 2);"}
+{"t":1793414794.597122,"s":"e","l":"      |                                                         ^^^^^^^^"}
+{"t":1793414794.5971267,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597129,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17392:47"}
+{"t":1793414794.5971293,"s":"e","l":"      |"}
+{"t":1793414794.5971296,"s":"e","l":"17392 |                 let over = self.builder.ins().icmp_imm(IntCC::UnsignedGreaterThan, count, 15);"}
+{"t":1793414794.5971315,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.597136,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971384,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17539:57"}
+{"t":1793414794.5971386,"s":"e","l":"      |"}
+{"t":1793414794.597139,"s":"e","l":"17539 |                         let chosen = self.builder.ins().ushr_imm(table, minterm);"}
+{"t":1793414794.5971408,"s":"e","l":"      |                                                         ^^^^^^^^"}
+{"t":1793414794.5971456,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597148,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17540:57"}
+{"t":1793414794.5971482,"s":"e","l":"      |"}
+{"t":1793414794.5971484,"s":"e","l":"17540 |                         let chosen = self.builder.ins().band_imm(chosen, 1);"}
+{"t":1793414794.5971503,"s":"e","l":"      |                                                         ^^^^^^^^"}
+{"t":1793414794.5971558,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971596,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17563:48"}
+{"t":1793414794.5971599,"s":"e","l":"      |"}
+{"t":1793414794.59716,"s":"e","l":"17563 |                     let x = self.builder.ins().band_imm(x, LOW_52);"}
+{"t":1793414794.5971606,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5971644,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971668,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17564:48"}
+{"t":1793414794.597167,"s":"e","l":"      |"}
+{"t":1793414794.5971673,"s":"e","l":"17564 |                     let y = self.builder.ins().band_imm(y, LOW_52);"}
+{"t":1793414794.5971692,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.5971727,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971754,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17568:56"}
+{"t":1793414794.5971756,"s":"e","l":"      |"}
+{"t":1793414794.597176,"s":"e","l":"17568 |                         let upper = self.builder.ins().ishl_imm(upper, 12);"}
+{"t":1793414794.597178,"s":"e","l":"      |                                                        ^^^^^^^^"}
+{"t":1793414794.5971825,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597185,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17569:56"}
+{"t":1793414794.5971851,"s":"e","l":"      |"}
+{"t":1793414794.5971854,"s":"e","l":"17569 |                         let lower = self.builder.ins().ushr_imm(low, 52);"}
+{"t":1793414794.5971873,"s":"e","l":"      |                                                        ^^^^^^^^"}
+{"t":1793414794.597192,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5971944,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17572:44"}
+{"t":1793414794.5971947,"s":"e","l":"      |"}
+{"t":1793414794.597195,"s":"e","l":"17572 |                         self.builder.ins().band_imm(low, LOW_52)"}
+{"t":1793414794.5971968,"s":"e","l":"      |                                            ^^^^^^^^"}
+{"t":1793414794.5972023,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972044,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17636:51"}
+{"t":1793414794.5972047,"s":"e","l":"      |"}
+{"t":1793414794.597205,"s":"e","l":"17636 |                     let chosen = fx.builder.ins().ushr_imm(halves, bit);"}
+{"t":1793414794.5972068,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.597212,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972145,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17637:51"}
+{"t":1793414794.5972147,"s":"e","l":"      |"}
+{"t":1793414794.597215,"s":"e","l":"17637 |                     let chosen = fx.builder.ins().band_imm(chosen, 1);"}
+{"t":1793414794.5972168,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5972216,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597224,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17639:38"}
+{"t":1793414794.5972242,"s":"e","l":"      |"}
+{"t":1793414794.5972245,"s":"e","l":"17639 |                     fx.builder.ins().ishl_imm(chosen, 3)"}
+{"t":1793414794.5972264,"s":"e","l":"      |                                      ^^^^^^^^"}
+{"t":1793414794.597231,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972333,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17651:54"}
+{"t":1793414794.5972335,"s":"e","l":"      |"}
+{"t":1793414794.5972338,"s":"e","l":"17651 |                         let set = self.builder.ins().ushr_imm(r, bit);"}
+{"t":1793414794.5972357,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.597241,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972435,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17652:54"}
+{"t":1793414794.5972438,"s":"e","l":"      |"}
+{"t":1793414794.5972443,"s":"e","l":"17652 |                         let set = self.builder.ins().band_imm(set, 1);"}
+{"t":1793414794.5972462,"s":"e","l":"      |                                                      ^^^^^^^^"}
+{"t":1793414794.5972497,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ishl_imm`: use `ishl_imm_s` (sign-extends the immediate) or `ishl_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972524,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17654:55"}
+{"t":1793414794.5972526,"s":"e","l":"      |"}
+{"t":1793414794.5972528,"s":"e","l":"17654 |                         let part = self.builder.ins().ishl_imm(l, bit);"}
+{"t":1793414794.597255,"s":"e","l":"      |                                                       ^^^^^^^^"}
+{"t":1793414794.5972588,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::ushr_imm`: use `ushr_imm_s` (sign-extends the immediate) or `ushr_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972614,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17658:59"}
+{"t":1793414794.5972617,"s":"e","l":"      |"}
+{"t":1793414794.597262,"s":"e","l":"17658 | ...                   let part = self.builder.ins().ushr_imm(l, 64 - bit);"}
+{"t":1793414794.5972638,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.5972693,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972714,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17685:56"}
+{"t":1793414794.5972717,"s":"e","l":"      |"}
+{"t":1793414794.5972722,"s":"e","l":"17685 |                         let index = self.builder.ins().band_imm(index, 2 * lanes - 1);"}
+{"t":1793414794.5972981,"s":"e","l":"      |                                                        ^^^^^^^^"}
+{"t":1793414794.5972989,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5972993,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17691:57"}
+{"t":1793414794.5972996,"s":"e","l":"      |"}
+{"t":1793414794.5973,"s":"e","l":"17691 |                         let second = self.builder.ins().icmp_imm("}
+{"t":1793414794.5973005,"s":"e","l":"      |                                                         ^^^^^^^^"}
+{"t":1793414794.597301,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::band_imm`: use `band_imm_s` (sign-extends the immediate) or `band_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973017,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17697:55"}
+{"t":1793414794.597302,"s":"e","l":"      |"}
+{"t":1793414794.5973024,"s":"e","l":"17697 |                         let slot = self.builder.ins().band_imm(index, lanes - 1);"}
+{"t":1793414794.5973039,"s":"e","l":"      |                                                       ^^^^^^^^"}
+{"t":1793414794.5973043,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597305,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17698:57"}
+{"t":1793414794.597309,"s":"e","l":"      |"}
+{"t":1793414794.5973094,"s":"e","l":"17698 |                         let offset = self.builder.ins().imul_imm(slot, width);"}
+{"t":1793414794.5973098,"s":"e","l":"      |                                                         ^^^^^^^^"}
+{"t":1793414794.5973105,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::bxor_imm`: use `bxor_imm_s` (sign-extends the immediate) or `bxor_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597311,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:17853:50"}
+{"t":1793414794.5973113,"s":"e","l":"      |"}
+{"t":1793414794.5973115,"s":"e","l":"17853 |                 let flipped = self.builder.ins().bxor_imm(bits, 0x8000);"}
+{"t":1793414794.597312,"s":"e","l":"      |                                                  ^^^^^^^^"}
+{"t":1793414794.5973155,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597316,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18012:43"}
+{"t":1793414794.5973163,"s":"e","l":"      |"}
+{"t":1793414794.5973165,"s":"e","l":"18012 |         let overflow = self.builder.ins().icmp_imm(IntCC::NotEqual, overflow, 0);"}
+{"t":1793414794.597317,"s":"e","l":"      |                                           ^^^^^^^^"}
+{"t":1793414794.5973198,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973203,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18081:47"}
+{"t":1793414794.5973206,"s":"e","l":"      |"}
+{"t":1793414794.5973227,"s":"e","l":"18081 |             let negative = self.builder.ins().icmp_imm(IntCC::SignedLessThan, l, 0);"}
+{"t":1793414794.5973232,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5973284,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597331,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18316:36"}
+{"t":1793414794.5973313,"s":"e","l":"      |"}
+{"t":1793414794.5973318,"s":"e","l":"18316 |                 self.builder.ins().iadd_imm(addr, layout.fields.offset(i).bytes() as i64);"}
+{"t":1793414794.5973337,"s":"e","l":"      |                                    ^^^^^^^^"}
+{"t":1793414794.597337,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973394,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18524:52"}
+{"t":1793414794.5973396,"s":"e","l":"      |"}
+{"t":1793414794.5973399,"s":"e","l":"18524 |                     let bytes = self.builder.ins().imul_imm(len, size);"}
+{"t":1793414794.5973418,"s":"e","l":"      |                                                    ^^^^^^^^"}
+{"t":1793414794.5973465,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::icmp_imm`: use `icmp_imm_s` (sign-extends the immediate) or `icmp_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973492,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18526:51"}
+{"t":1793414794.5973494,"s":"e","l":"      |"}
+{"t":1793414794.5973496,"s":"e","l":"18526 |                     let same = self.builder.ins().icmp_imm(IntCC::Equal, order, 0);"}
+{"t":1793414794.5973516,"s":"e","l":"      |                                                   ^^^^^^^^"}
+{"t":1793414794.5973551,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973573,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18541:49"}
+{"t":1793414794.5973575,"s":"e","l":"      |"}
+{"t":1793414794.5973577,"s":"e","l":"18541 |                 let offset = self.builder.ins().imul_imm(index, size);"}
+{"t":1793414794.5973597,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5973647,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973668,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18545:47"}
+{"t":1793414794.597367,"s":"e","l":"      |"}
+{"t":1793414794.5973673,"s":"e","l":"18545 |                 let next = self.builder.ins().iadd_imm(index, 1);"}
+{"t":1793414794.5973692,"s":"e","l":"      |                                               ^^^^^^^^"}
+{"t":1793414794.5973744,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973766,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18554:48"}
+{"t":1793414794.5973768,"s":"e","l":"      |"}
+{"t":1793414794.597377,"s":"e","l":"18554 |                     let l = self.builder.ins().iadd_imm(l, offset);"}
+{"t":1793414794.597379,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.597384,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973861,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18555:48"}
+{"t":1793414794.5973864,"s":"e","l":"      |"}
+{"t":1793414794.5973866,"s":"e","l":"18555 |                     let r = self.builder.ins().iadd_imm(r, offset);"}
+{"t":1793414794.5973885,"s":"e","l":"      |                                                ^^^^^^^^"}
+{"t":1793414794.597393,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5973954,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18718:40"}
+{"t":1793414794.5973957,"s":"e","l":"      |"}
+{"t":1793414794.597396,"s":"e","l":"18718 |             let l = self.builder.ins().iadd_imm(l, offset);"}
+{"t":1793414794.5973978,"s":"e","l":"      |                                        ^^^^^^^^"}
+{"t":1793414794.5974026,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597405,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18719:40"}
+{"t":1793414794.5974052,"s":"e","l":"      |"}
+{"t":1793414794.5974054,"s":"e","l":"18719 |             let r = self.builder.ins().iadd_imm(r, offset);"}
+{"t":1793414794.5974076,"s":"e","l":"      |                                        ^^^^^^^^"}
+{"t":1793414794.5974123,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597415,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18883:53"}
+{"t":1793414794.5974152,"s":"e","l":"      |"}
+{"t":1793414794.5974154,"s":"e","l":"18883 |                 let field_addr = this.builder.ins().iadd_imm(addr, offset.bytes() as i64);"}
+{"t":1793414794.5974174,"s":"e","l":"      |                                                     ^^^^^^^^"}
+{"t":1793414794.597421,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597423,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18897:49"}
+{"t":1793414794.5974233,"s":"e","l":"      |"}
+{"t":1793414794.5974247,"s":"e","l":"18897 |             let field_addr = this.builder.ins().iadd_imm(addr, offset);"}
+{"t":1793414794.5974267,"s":"e","l":"      |                                                 ^^^^^^^^"}
+{"t":1793414794.5974295,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.597432,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:18981:43"}
+{"t":1793414794.5974321,"s":"e","l":"      |"}
+{"t":1793414794.5974324,"s":"e","l":"18981 |             let rest = self.builder.ins().iadd_imm(index, 1);"}
+{"t":1793414794.5974343,"s":"e","l":"      |                                           ^^^^^^^^"}
+{"t":1793414794.5974393,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::imul_imm`: use `imul_imm_s` (sign-extends the immediate) or `imul_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5974417,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:19022:41"}
+{"t":1793414794.597442,"s":"e","l":"      |"}
+{"t":1793414794.5974422,"s":"e","l":"19022 |         let offset = self.builder.ins().imul_imm(index, size);"}
+{"t":1793414794.597444,"s":"e","l":"      |                                         ^^^^^^^^"}
+{"t":1793414794.5974488,"s":"e","l":"warning: use of deprecated method `cranelift_codegen::ir::InstBuilder::iadd_imm`: use `iadd_imm_s` (sign-extends the immediate) or `iadd_imm_u` (zero-extends the immediate) instead"}
+{"t":1793414794.5974512,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:19031:39"}
+{"t":1793414794.5974514,"s":"e","l":"      |"}
+{"t":1793414794.597452,"s":"e","l":"19031 |         let next = self.builder.ins().iadd_imm(index, 1);"}
+{"t":1793414794.5974538,"s":"e","l":"      |                                       ^^^^^^^^"}
+{"t":1793414794.5974584,"s":"e","l":"warning: unused import: `SliceLike`"}
+{"t":1793414794.5974607,"s":"e","l":"  --> crates/hir-ty-codegen/sve.rs:31:59"}
+{"t":1793414794.597461,"s":"e","l":"   |"}
+{"t":1793414794.5974615,"s":"e","l":"31 | use rustc_type_ir::inherent::{GenericArgs as _, IntoKind, SliceLike as _};"}
+{"t":1793414794.5974636,"s":"e","l":"   |                                                           ^^^^^^^^^"}
+{"t":1793414794.5974722,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793414794.5974746,"s":"e","l":"    --> crates/hir-ty-codegen/wasm.rs:1098:13"}
+{"t":1793414794.597475,"s":"e","l":"     |"}
+{"t":1793414794.5974753,"s":"e","l":"1098 |         let mut local_of = |this: &mut Self, class: Class| {"}
+{"t":1793414794.5974774,"s":"e","l":"     |             ----^^^^^^^^"}
+{"t":1793414794.597478,"s":"e","l":"     |             |"}
+{"t":1793414794.59748,"s":"e","l":"     |             help: remove this `mut`"}
+{"t":1793414794.5974805,"s":"e","l":"     |"}
+{"t":1793414794.5974808,"s":"e","l":"     = note: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5974882,"s":"e","l":"warning: variable does not need to be mutable"}
+{"t":1793414794.5974905,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:11598:13"}
+{"t":1793414794.5974905,"s":"e","l":"      |"}
+{"t":1793414794.597491,"s":"e","l":"11598 |         let mut function = |this: &mut Self, operand: &Operand| -> Result<Value> {"}
+{"t":1793414794.5974932,"s":"e","l":"      |             ----^^^^^^^^"}
+{"t":1793414794.5974934,"s":"e","l":"      |             |"}
+{"t":1793414794.597495,"s":"e","l":"      |             help: remove this `mut`"}
+{"t":1793414794.5975056,"s":"e","l":"warning: unreachable pattern"}
+{"t":1793414794.5975082,"s":"e","l":"     --> crates/hir-ty-codegen/mod.rs:16266:13"}
+{"t":1793414794.5975084,"s":"e","l":"      |"}
+{"t":1793414794.5975087,"s":"e","l":"16194 |             (\"powif32\" | \"powif64\" | \"powi\", [base, power]) => {"}
+{"t":1793414794.5975115,"s":"e","l":"      |             ----------------------------------------------- matches all the relevant values"}
+{"t":1793414794.597512,"s":"e","l":"..."}
+{"t":1793414794.5975122,"s":"e","l":"16266 |             (\"powif32\" | \"powif64\", [base, power]) => {"}
+{"t":1793414794.5975149,"s":"e","l":"      |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no value can reach this"}
+{"t":1793414794.597515,"s":"e","l":"      |"}
+{"t":1793414794.5975156,"s":"e","l":"      = note: `#[warn(unreachable_patterns)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.597525,"s":"e","l":"warning: type `codeview::CodeView` is more private than the item `DebugContext::CodeView::0`"}
+{"t":1793414794.5975275,"s":"e","l":"   --> crates/hir-ty-codegen/debuginfo.rs:376:14"}
+{"t":1793414794.597528,"s":"e","l":"    |"}
+{"t":1793414794.5975282,"s":"e","l":"376 |     CodeView(CodeView),"}
+{"t":1793414794.597531,"s":"e","l":"    |              ^^^^^^^^ field `DebugContext::CodeView::0` is reachable at visibility `pub(crate)`"}
+{"t":1793414794.5975316,"s":"e","l":"    |"}
+{"t":1793414794.597532,"s":"e","l":"note: but type `codeview::CodeView` is only usable at visibility `pub(in crate::debuginfo)`"}
+{"t":1793414794.5975323,"s":"e","l":"   --> crates/hir-ty-codegen/debuginfo/codeview.rs:63:1"}
+{"t":1793414794.597535,"s":"e","l":"    |"}
+{"t":1793414794.5975354,"s":"e","l":" 63 | pub(super) struct CodeView {"}
+{"t":1793414794.5975356,"s":"e","l":"    | ^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.597536,"s":"e","l":"    = note: `#[warn(private_interfaces)]` on by default"}
+{"t":1793414794.597541,"s":"e","l":"warning: constant `LARGE` is never used"}
+{"t":1793414794.5975435,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:2655:7"}
+{"t":1793414794.597544,"s":"e","l":"     |"}
+{"t":1793414794.5975442,"s":"e","l":"2655 | const LARGE: usize = 50_000;"}
+{"t":1793414794.5975466,"s":"e","l":"     |       ^^^^^"}
+{"t":1793414794.597547,"s":"e","l":"     |"}
+{"t":1793414794.5975473,"s":"e","l":"     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793414794.5975525,"s":"e","l":"warning: function `inline_of` is never used"}
+{"t":1793414794.597555,"s":"e","l":"   --> crates/hir-ty-codegen/asm.rs:966:15"}
+{"t":1793414794.5975554,"s":"e","l":"    |"}
+{"t":1793414794.5975556,"s":"e","l":"966 | pub(super) fn inline_of(text: &str) -> Option<Arc<Inline>> {"}
+{"t":1793414794.5975578,"s":"e","l":"    |               ^^^^^^^^^"}
+{"t":1793414794.5975637,"s":"e","l":"warning: field `builder_ctx` is never read"}
+{"t":1793414794.5975673,"s":"e","l":"   --> crates/hir-ty-codegen/fragment.rs:350:16"}
+{"t":1793414794.5975676,"s":"e","l":"    |"}
+{"t":1793414794.5975678,"s":"e","l":"335 | pub(super) struct Recorder<'db> {"}
+{"t":1793414794.5975704,"s":"e","l":"    |                   -------- field in this struct"}
+{"t":1793414794.597571,"s":"e","l":"..."}
+{"t":1793414794.5975714,"s":"e","l":"350 |     pub(super) builder_ctx: FunctionBuilderContext,"}
+{"t":1793414794.5975716,"s":"e","l":"    |                ^^^^^^^^^^^"}
+{"t":1793414794.5975778,"s":"e","l":"warning: function `share_escaping` is never used"}
+{"t":1793414794.597578,"s":"e","l":"  --> crates/hir-ty-codegen/overlap.rs:43:15"}
+{"t":1793414794.5975807,"s":"e","l":"   |"}
+{"t":1793414794.597581,"s":"e","l":"43 | pub(super) fn share_escaping("}
+{"t":1793414794.5975811,"s":"e","l":"   |               ^^^^^^^^^^^^^^"}
+{"t":1793414794.5975862,"s":"e","l":"warning: function `escaping` is never used"}
+{"t":1793414794.5975888,"s":"e","l":"  --> crates/hir-ty-codegen/overlap.rs:56:4"}
+{"t":1793414794.5975893,"s":"e","l":"   |"}
+{"t":1793414794.5975895,"s":"e","l":"56 | fn escaping(func: &ir::Function) -> rustc_hash::FxHashSet<ir::StackSlot> {"}
+{"t":1793414794.5975914,"s":"e","l":"   |    ^^^^^^^^"}
+{"t":1793414794.5976002,"s":"e","l":"warning: calls to `std::mem::drop` with a value that implements `Copy` does nothing"}
+{"t":1793414794.597603,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:4315:52"}
+{"t":1793414794.5976033,"s":"e","l":"     |"}
+{"t":1793414794.5976036,"s":"e","l":"4315 |                 body.walk_pats(arm.pat, &mut |pat| drop(tried.insert(pat, expr)));"}
+{"t":1793414794.597606,"s":"e","l":"     |                                                    ^^^^^-----------------------^"}
+{"t":1793414794.5976064,"s":"e","l":"     |                                                         |"}
+{"t":1793414794.5976098,"s":"e","l":"     |                                                         argument has type `std::option::Option<la_arena::Idx<hir_def::hir::Expr>>`"}
+{"t":1793414794.5976102,"s":"e","l":"     |"}
+{"t":1793414794.5976107,"s":"e","l":"     = note: use `let _ = ...` to ignore the expression or result"}
+{"t":1793414794.597611,"s":"e","l":"     = note: `#[warn(dropping_copy_types)]` on by default"}
+{"t":1793414794.5976193,"s":"e","l":"warning: unreachable `pub` item"}
+{"t":1793414794.597622,"s":"e","l":"   --> crates/hir-ty-codegen/fragment.rs:153:1"}
+{"t":1793414794.5976222,"s":"e","l":"    |"}
+{"t":1793414794.5976226,"s":"e","l":"153 | pub struct CompiledFunction {"}
+{"t":1793414794.5976276,"s":"e","l":"    | ---^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.5976279,"s":"e","l":"    | |"}
+{"t":1793414794.5976284,"s":"e","l":"    | help: consider restricting its visibility: `pub(crate)`"}
+{"t":1793414794.5976286,"s":"e","l":"    |"}
+{"t":1793414794.597629,"s":"e","l":"    = help: or consider exporting it for use by other crates"}
+{"t":1793414794.5976622,"s":"e","l":"    = note: requested on the command line with `-W unreachable-pub`"}
+{"t":1793414794.597663,"s":"e","l":"warning: unreachable `pub` item"}
+{"t":1793414794.5976632,"s":"e","l":"   --> crates/hir-ty-codegen/fragment.rs:239:1"}
+{"t":1793414794.5976636,"s":"e","l":"    |"}
+{"t":1793414794.5976639,"s":"e","l":"239 | pub struct CompiledStatic {"}
+{"t":1793414794.597664,"s":"e","l":"    | ---^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.5976646,"s":"e","l":"    | |"}
+{"t":1793414794.597665,"s":"e","l":"    | help: consider restricting its visibility: `pub(crate)`"}
+{"t":1793414794.5976653,"s":"e","l":"    |"}
+{"t":1793414794.5976655,"s":"e","l":"    = help: or consider exporting it for use by other crates"}
+{"t":1793414794.5976663,"s":"e","l":"warning: unreachable `pub` item"}
+{"t":1793414794.5976665,"s":"e","l":"   --> crates/hir-ty-codegen/home.rs:140:1"}
+{"t":1793414794.5976667,"s":"e","l":"    |"}
+{"t":1793414794.5976672,"s":"e","l":"140 | pub fn body_files(db: &dyn HirDatabase, instance: &Instance) -> Option<Box<[FileId]>> {"}
+{"t":1793414794.5976677,"s":"e","l":"    | ---^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^"}
+{"t":1793414794.597668,"s":"e","l":"    | |"}
+{"t":1793414794.5976684,"s":"e","l":"    | help: consider restricting its visibility: `pub(crate)`"}
+{"t":1793414794.5976686,"s":"e","l":"    |"}
+{"t":1793414794.597669,"s":"e","l":"    = help: or consider exporting it for use by other crates"}
+{"t":1793414794.5976725,"s":"e","l":"warning: this lint expectation is unfulfilled"}
+{"t":1793414794.5976727,"s":"e","l":"    --> crates/hir-ty-codegen/mod.rs:3156:46"}
+{"t":1793414794.597673,"s":"e","l":"     |"}
+{"t":1793414794.5976734,"s":"e","l":"3156 |     #[cfg_attr(not(feature = \"llvm\"), expect(dead_code))]"}
+{"t":1793414794.597674,"s":"e","l":"     |                                              ^^^^^^^^^"}
+{"t":1793414794.5976744,"s":"e","l":"     |"}
+{"t":1793414794.5976746,"s":"e","l":"     = note: `#[warn(unfulfilled_lint_expectations)]` on by default"}
+{"t":1793414794.5976899,"s":"e","l":"warning: `hir-ty-codegen` (lib test) generated 171 warnings (run `cargo fix --lib -p hir-ty-codegen --tests` to apply 7 suggestions)"}
+{"t":1793414794.5979125,"s":"e","l":"    Finished `release` profile [optimized] target(s) in 0.19s"}
+{"t":1793414794.6084032,"s":"e","l":"     Running `/home/jeremy/.cargo/bin/justrust __test-runner /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-ty-codegen/d85c581ce11daf8e/out/hir_ty_codegen-d85c581ce11daf8e`"}
+{"t":1793414794.6111953,"s":"o","l":"running 48 tests"}
+{"t":1793414794.617101,"s":"o","l":"test cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name ... ok <0.000s>"}
+{"t":1793414794.617103,"s":"o","l":"test asm::tests::a_dollar_is_nothing_in_intel_syntax ... ok <0.000s>"}
+{"t":1793414794.6171057,"s":"o","l":"test asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture ... ok <0.000s>"}
+{"t":1793414794.6171067,"s":"o","l":"test asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads ... ok <0.000s>"}
+{"t":1793414794.6171079,"s":"o","l":"test avx512::tests::each_intrinsic_is_the_instruction_llvm_selects ... ok <0.000s>"}
+{"t":1793414794.6171777,"s":"o","l":"test debuginfo::set::tests::a_set_is_what_it_was_made_of ... ok <0.000s>"}
+{"t":1793414794.61718,"s":"o","l":"test cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory ... ok <0.000s>"}
+{"t":1793414794.617185,"s":"o","l":"test cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it ... ok <0.000s>"}
+{"t":1793414794.6171865,"s":"o","l":"test cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home ... ok <0.000s>"}
+{"t":1793414794.6171887,"s":"o","l":"test cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed ... ok <0.000s>"}
+{"t":1793414794.6171908,"s":"o","l":"test cached::tests::an_entry_is_read_back_as_it_was_written ... ok <0.000s>"}
+{"t":1793414794.6172194,"s":"o","l":"test cached::tests::an_entry_that_names_what_it_lacks_is_no_entry ... ok <0.000s>"}
+{"t":1793414794.617221,"s":"o","l":"test debuginfo::set::tests::a_type_in_a_set_twice_is_one ... ok <0.000s>"}
+{"t":1793414794.6175756,"s":"o","l":"test f16_f128::tests::quad_bounds ... ok <0.000s>"}
+{"t":1793414794.6175864,"s":"o","l":"test neon::tests::a_generic_intrinsic_on_halves_is_one_instruction ... ok <0.000s>"}
+{"t":1793414794.6175983,"s":"o","l":"test neon::tests::a_fused_multiply_add_is_the_instruction_of_its_factors ... ok <0.000s>"}
+{"t":1793414794.617613,"s":"o","l":"test fncache::tests::the_hash_of_code_is_the_same_in_every_run ... ok <0.000s>"}
+{"t":1793414794.6176622,"s":"o","l":"test neon::tests::the_bodies_that_splat_c_are_known ... ok <0.000s>"}
+{"t":1793414794.6176631,"s":"o","l":"test debuginfo::set::tests::a_type_made_of_itself_through_a_parameter ... ok <0.000s>"}
+{"t":1793414794.6176653,"s":"o","l":"test float_pair::tests::a_pair_of_floats_is_returned_and_read_as_two_integers_of_the_same_widths ... ok <0.000s>"}
+{"t":1793414794.6176796,"s":"o","l":"test neon::tests::the_lanes_a_name_says_are_the_registers_the_instruction_names ... ok <0.000s>"}
+{"t":1793414794.6176932,"s":"o","l":"test fncache::tests::code_moved_to_other_lines_has_the_same_hash_and_other_code_another ... ok <0.000s>"}
+{"t":1793414794.622768,"s":"o","l":"test fncache::tests::what_is_below_a_sealed_node_reads_back_as_it_was_written ... ok <0.000s>"}
+{"t":1793414794.62277,"s":"o","l":"test patch::tests::a_program_started_again_keeps_what_rustcs_copies_are_of ... ok <0.000s>"}
+{"t":1793414794.622771,"s":"o","l":"test patch::tests::a_probe_that_is_interrupted_goes_on_unwinding_and_one_that_panics_finds_nothing ... ok <0.000s>"}
+{"t":1793414794.622772,"s":"o","l":"test sve::tests::images_of_full_vectors_are_one ... ok <0.000s>"}
+{"t":1793414794.6227727,"s":"o","l":"test neon::tests::an_immediate_is_named_in_the_text_and_not_loaded ... ok <0.000s>"}
+{"t":1793414794.6227734,"s":"o","l":"test sve::tests::loads_and_stores_of_unpacked_vectors_take_the_lane_size ... ok <0.000s>"}
+{"t":1793414794.622774,"s":"o","l":"test sve::tests::predicate_conversion_clears_the_bits_between_lanes ... ok <0.000s>"}
+{"t":1793414794.6227746,"s":"o","l":"test sve::tests::insertion_of_a_neon_vector_loads_its_128_bits ... ok <0.000s>"}
+{"t":1793414794.6227753,"s":"o","l":"test sve::tests::select_of_words ... ok <0.000s>"}
+{"t":1793414794.6227758,"s":"o","l":"test neon::tests::fused_multiply_adds_keep_the_factors_llvm_keeps ... ok <0.000s>"}
+{"t":1793414794.6227765,"s":"o","l":"test sve::tests::whilerw_takes_two_addresses ... ok <0.000s>"}
+{"t":1793414794.622777,"s":"o","l":"test tests::a_link_name_written_as_the_symbol_is_not_prefixed_again ... ok <0.000s>"}
+{"t":1793414794.6227777,"s":"o","l":"test tests::demand_inventory_requires_the_exact_separate_opt_in ... ok <0.000s>"}
+{"t":1793414794.6227798,"s":"o","l":"test wasm::v128::tests::pairs_pick_the_even_and_the_odd_lanes_of_both ... ok <0.000s>"}
+{"t":1793414794.6227806,"s":"o","l":"test wasm_simd::tests::every_vector_intrinsic_of_core_arch ... ok <0.000s>"}
+{"t":1793414794.622781,"s":"o","l":"test x86::tests::each_name_is_the_instruction_llvm_selects_for_it ... ok <0.000s>"}
+{"t":1793414794.6227818,"s":"o","l":"test tests::emit_compiles_a_function_with_debug_assertions_on ... ok <0.000s>"}
+{"t":1793414794.6227822,"s":"o","l":"test tests::a_slot_at_the_bottom_of_the_frame_has_its_place_from_the_cache_too ... ok <0.000s>"}
+{"t":1793414794.622783,"s":"o","l":"test sve::tests::counts_take_their_pattern ... ok <0.000s>"}
+{"t":1793414794.6227837,"s":"o","l":"test tests::demand_inventory_data_capture_does_not_change_native_output_or_errors ... ok <0.000s>"}
+{"t":1793414794.6227841,"s":"o","l":"test debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once ... ok <0.001s>"}
+{"t":1793414794.6227849,"s":"o","l":"test tests::statics_of_one_section_share_it_in_a_mach_o_object ... ok <0.001s>"}
+{"t":1793414794.6227856,"s":"o","l":"test tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone ... ok <0.002s>"}
+{"t":1793414794.622786,"s":"o","l":"test sve::tests::stubs_are_what_llvm_selects ... ok <0.005s>"}
+{"t":1793414794.6293657,"s":"o","l":"test cached::tests::no_bytes_break_the_reading_of_an_entry ... ok <0.017s>"}
+{"t":1793414794.632609,"s":"o","l":"test cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end ... ok <0.020s>"}
+{"t":1793414794.6326578,"s":"o","l":"test result: ok. 48 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"}

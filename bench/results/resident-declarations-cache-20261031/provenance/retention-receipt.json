@@ -1,0 +1,12 @@
+{
+  "gate_runs": 9,
+  "scope": "Existing frozen files and historical Git object only. No native jobs, binary/target/private-home copy or ambient environment recapture.",
+  "sessions": [
+    "v40-off",
+    "v40-on",
+    "v41-on",
+    "v41-off",
+    "v41-off-repeat",
+    "v41-on-repeat"
+  ]
+}

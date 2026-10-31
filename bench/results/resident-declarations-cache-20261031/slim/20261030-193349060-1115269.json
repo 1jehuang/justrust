@@ -1,0 +1,31 @@
+{
+  "args": [
+    "check",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--tests",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "exit": 0,
+  "id": "20261030-193349060-1115269",
+  "route": "JUSTRUST_REMOTE=off",
+  "scope": "Derived path-free receipt. Full original journals retained, never native re-execution.",
+  "start": 1793414029.0777643,
+  "subcommand": "check",
+  "tests": {
+    "binaries": [],
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 0,
+    "libtest_secs": 0.0,
+    "passed": 0,
+    "timed": 0,
+    "timed_secs": 0.0
+  },
+  "wall": 9.672138452529907
+}

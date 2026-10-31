@@ -1,0 +1,7 @@
+test_relocated_and_resigned_corruption (__main__.Controls.test_relocated_and_resigned_corruption) ... ok
+
+----------------------------------------------------------------------
+Ran 1 test in 3.326s
+
+OK
+PASS relocation, empty HOME/PATH, forbidden subprocess/network, 17 resigned semantic controls, final positive replay

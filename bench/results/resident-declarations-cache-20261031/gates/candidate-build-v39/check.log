@@ -1,0 +1,88 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+error[E0277]: the `?` operator can only be applied to values that implement `std::ops::Try`
+    --> crates/ra-jit/src/frozen.rs:128:14
+     |
+ 128 |             &declarations_root(db, ide_db::base_db::InternedSourceRootId::new(db, root))?,
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the `?` operator cannot be applied to type `&std::option::Option<[u8; 32]>`
+     |
+     = help: the nightly-only, unstable trait `std::ops::Try` is not implemented for `&std::option::Option<[u8; 32]>`
+help: the trait `std::ops::Try` is implemented for `std::option::Option<T>`
+    --> /home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/option.rs:2865:1
+     |
+2865 | const impl<T> ops::Try for Option<T> {
+     | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[E0277]: the `?` operator can only be used in a function that returns `Result` or `Option` (or another type that implements `FromResidual`)
+   --> crates/ra-jit/src/frozen.rs:128:14
+    |
+112 | fn declarations_certificate(db: &ide_db::RootDatabase, closure: &[Crate]) -> Option<[u8; 32]> {
+    | --------------------------------------------------------------------------------------------- this function should return `Result` or `Option` to accept `?`
+...
+128 |             &declarations_root(db, ide_db::base_db::InternedSourceRootId::new(db, root))?,
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ cannot use the `?` operator in a function that returns `&std::option::Option<[u8; 32]>`
+
+error[E0277]: the size for values of type `[u8]` cannot be known at compilation time
+   --> crates/ra-jit/src/frozen.rs:128:14
+    |
+128 |             &declarations_root(db, ide_db::base_db::InternedSourceRootId::new(db, root))?,
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ doesn't have a size known at compile-time
+    |
+    = help: the trait `std::marker::Sized` is not implemented for `[u8]`
+    = note: all local variables must have a statically known size
+
+error[E0283]: type annotations needed
+   --> crates/ra-jit/src/frozen.rs:416:77
+    |
+416 |             value.bodies.extend(value.functions.iter().take(2).copied().map(Into::into));
+    |                          ------ type must be known at this point            ^^^^^^^^^^ cannot infer type of the type parameter `T` declared on the trait `Into`
+    |
+    = note: multiple `impl`s satisfying `Vec<hir_def::DefWithBodyId>: Extend<_>` found in the `alloc` crate:
+            - impl<'a, T, A> Extend<&'a T> for Vec<T, A>
+              where T: std::marker::Copy, T: 'a, A: Allocator;
+            - impl<T, A> Extend<T> for Vec<T, A>
+              where A: Allocator;
+help: consider specifying a concrete type for the type parameter `T`
+    |
+416 |             value.bodies.extend(value.functions.iter().take(2).copied().map(Into::</* Type */>::into));
+    |                                                                                 ++++++++++++++
+
+Some errors have detailed explanations: E0277, E0283.
+For more information about an error, try `rustc --explain E0277`.
+error: could not compile `ra-jit` (bin "ra-jit" test) due to 4 previous errors; 1 warning emitted
+
+error: could not compile `ra-jit` (bin "jr-engine" test) due to 4 previous errors; 1 warning emitted
+
+
+justrust: FAILED to compile (4 errors) in 11.1s
+  time    startup 1.30s | compile 9.74s | after 0.02s
+  units   7 compiled (7 local, 0 deps, 0 build scripts), 429 fresh. Rebuilt because: edited crates (ra-jit)
+          jr_engine (test)                   5.43s  cpu   9.7s   1391 MB
+          ra_jit (test)                      4.29s  cpu   8.6s   1389 MB
+  cpu     19.9s total, avg 1.8/peak 2.1 of 16 cores; others used 3.2 cores
+  memory  peak 2773 MB build, 1391 MB largest rustc, 47.8 GB free; stalls cpu 0.07s mem 0.00s io 0.00s
+  output  3 warnings shown, 250 hidden; 443 progress and 0 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  4.1s  5.4s went to recompiling oversized crates: jr_engine (80k lines, 5.4s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+  more    `justrust log 20261030-193235022-1108438` full output, `justrust show 20261030-193235022-1108438` full profile

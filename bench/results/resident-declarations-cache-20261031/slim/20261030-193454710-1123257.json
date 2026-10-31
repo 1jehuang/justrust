@@ -1,0 +1,159 @@
+{
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "exit": 0,
+  "id": "20261030-193454710-1123257",
+  "route": "JUSTRUST_REMOTE=off",
+  "scope": "Derived path-free receipt. Full original journals retained, never native re-execution.",
+  "start": 1793414094.726123,
+  "subcommand": "test",
+  "tests": {
+    "binaries": [
+      {
+        "failed": 0,
+        "filtered_out": 0,
+        "name": "hir_ty_codegen-d85c581ce11daf8e",
+        "passed": 48,
+        "start": 0.25650644302368164,
+        "wall": 0.02681565284729004
+      }
+    ],
+    "failed": 0,
+    "filtered_out": 0,
+    "ignored": 0,
+    "libtest_secs": 0.02,
+    "passed": 48,
+    "slowest": [
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+        "passed": true,
+        "secs": 0.022
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+        "passed": true,
+        "secs": 0.019
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "sve::tests::stubs_are_what_llvm_selects",
+        "passed": true,
+        "secs": 0.005
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+        "passed": true,
+        "secs": 0.002
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "tests::demand_inventory_data_capture_does_not_change_native_output_or_errors",
+        "passed": true,
+        "secs": 0.002
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+        "passed": true,
+        "secs": 0.001
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::an_entry_is_read_back_as_it_was_written",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "cached::tests::an_entry_that_names_what_it_lacks_is_no_entry",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "debuginfo::set::tests::a_set_is_what_it_was_made_of",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "debuginfo::set::tests::a_type_in_a_set_twice_is_one",
+        "passed": true,
+        "secs": 0.0
+      },
+      {
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "name": "debuginfo::set::tests::a_type_made_of_itself_through_a_parameter",
+        "passed": true,
+        "secs": 0.0
+      }
+    ],
+    "timed": 48,
+    "timed_secs": 0.051
+  },
+  "wall": 0.29263949394226074
+}

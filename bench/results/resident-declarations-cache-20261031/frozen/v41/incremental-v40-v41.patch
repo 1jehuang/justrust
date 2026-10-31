@@ -1,0 +1,489 @@
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/declarations-cache-v41/frozen.v40-original.rs b/toolchain/resident/crates/ra-jit/src/frozen.rs
+index eb98da22d..5a92651c3 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/declarations-cache-v41/frozen.v40-original.rs
++++ b/toolchain/resident/crates/ra-jit/src/frozen.rs
+@@ -79,42 +79,56 @@ fn declarations_closure(db: &ide_db::RootDatabase, krate: Crate) -> Vec<Crate> {
+ /// Strict initial eligibility: actual language-library origins and their non-local,
+ /// non-proc-macro dependencies, all loaded under the same toolchain source directory.
+ /// Paths only decide eligibility. Full contents, cfg and environment decide identity.
++#[cfg(test)]
+ fn declarations_eligible(db: &ide_db::RootDatabase, closure: &[Crate]) -> bool {
+-    let Some(&krate) = closure.first() else { return false };
++    declarations_eligibility(db, closure).is_ok()
++}
++
++fn declarations_eligibility(
++    db: &ide_db::RootDatabase,
++    closure: &[Crate],
++) -> Result<(), &'static str> {
++    let Some(&krate) = closure.first() else { return Err("empty-closure") };
+     if !krate.data(db).origin.is_lang() {
+-        return false;
++        return Err("not-language-library");
+     }
+-    let Some(root) = crate::crate_root_file(db, krate.into()) else { return false };
+-    let Some(root) = root.to_str() else { return false };
++    let Some(root) = crate::crate_root_file(db, krate.into()) else { return Err("no-real-root") };
++    let Some(root) = root.to_str() else { return Err("non-utf8-root") };
+     let marker = "/lib/rustlib/src/rust/";
+-    let Some(at) = root.find(marker) else { return false };
++    let Some(at) = root.find(marker) else { return Err("not-toolchain-source") };
+     let toolchain_source = std::path::Path::new(&root[..at + marker.len()]);
+-    closure.iter().all(|&krate| {
++    for &krate in closure {
+         let data = krate.data(db);
+-        if data.origin.is_local() || data.target_kind.is_proc_macro() {
+-            return false;
++        if data.origin.is_local() {
++            return Err("local-dependency");
++        }
++        if data.target_kind.is_proc_macro() {
++            return Err("proc-macro-dependency");
+         }
+         let source = db.file_source_root(data.root_file_id).source_root_id(db);
+         let source = db.source_root(source).source_root(db);
+         if !source.is_library {
+-            return false;
++            return Err("non-library-source-root");
+         }
+-        source.iter().all(|file| {
++        if !source.iter().all(|file| {
+             source.path_for_file(&file).and_then(|path| path.as_path()).is_some_and(|path| {
+                 std::path::Path::new(path.as_str()).starts_with(toolchain_source)
+             })
+-        })
+-    })
++        }) {
++            return Err("mixed-or-virtual-source-path");
++        }
++    }
++    Ok(())
+ }
+ 
+ /// Complete current DB source/config/dependency certificate. Absolute paths and exact
+ /// environment values intentionally sacrifice cross-checkout reuse for exactness.
+ fn declarations_certificate(db: &ide_db::RootDatabase, closure: &[Crate]) -> Option<[u8; 32]> {
+     let mut hash = Sha256::new();
+-    declaration_field(&mut hash, b"ra-jit exact declarations 39.1");
++    declaration_field(&mut hash, b"ra-jit exact declarations 41.1");
+     declaration_field(&mut hash, &(closure.len() as u64).to_le_bytes());
+-    let process = ide_db::base_db::ProcessEnv::try_get(db).map(|env| env.vars(db));
+-    declaration_field(&mut hash, format!("{process:?}").as_bytes());
++    // Process inputs are validated by the complete actual-read witness in the record.
++    // Unobserved runtime nonce variables must not invalidate an otherwise exact source key.
+     for &krate in closure {
+         let data = krate.data(db);
+         let root = db.file_source_root(data.root_file_id).source_root_id(db);
+@@ -164,11 +178,89 @@ fn declarations_reads_supported(db: &ide_db::RootDatabase, closure: &[Crate]) ->
+         && db.included_sources().is_empty()
+ }
+ 
++/// Only the effective value actually seen by the native builtin macro matters. None is
++/// distinct from an empty value. Hashes keep values out of records and diagnostic output.
++fn declarations_env_digest(db: &ide_db::RootDatabase, krate: Crate, name: &str) -> [u8; 32] {
++    let value = krate.env(db).get(name).or_else(|| ide_db::base_db::process_env_var(db, name));
++    let mut hash = Sha256::new();
++    declaration_field(&mut hash, b"native macro effective env 1");
++    declaration_field(&mut hash, &[value.is_some() as u8]);
++    if let Some(value) = value {
++        declaration_field(&mut hash, value.as_bytes());
++    }
++    hash.finalize().into()
++}
++
+ fn encode_declarations(
+     db: &ide_db::RootDatabase,
+     krate: Crate,
+     certificate: &[u8; 32],
+     value: &crate::Declared,
++) -> Result<Vec<u8>, String> {
++    // Encode first: locating block owners may discover additional real macro reads.
++    let payload = encode_declarations_payload(db, krate, certificate, value)?;
++    let closure = declarations_closure(db, krate);
++    let mut reads: Vec<_> =
++        db.env_read().into_iter().filter(|(of, _)| closure.contains(of)).collect();
++    reads.sort_unstable_by(|a, b| {
++        closure
++            .iter()
++            .position(|it| *it == a.0)
++            .cmp(&closure.iter().position(|it| *it == b.0))
++            .then_with(|| a.1.cmp(&b.1))
++    });
++    let mut enc = hir_frozen::Enc::new(db, krate);
++    enc.str("exact declarations observed inputs 41.1")?;
++    enc.usize(reads.len())?;
++    for (of, name) in reads {
++        enc.krate(of)?;
++        enc.str(&name)?;
++        for byte in declarations_env_digest(db, of, &name) {
++            enc.u8(byte);
++        }
++    }
++    enc.usize(payload.len())?;
++    for byte in payload {
++        enc.u8(byte);
++    }
++    enc.finish()
++}
++
++fn decode_declarations(
++    db: &ide_db::RootDatabase,
++    krate: Crate,
++    certificate: &[u8; 32],
++    bytes: &[u8],
++) -> Result<crate::Declared, String> {
++    let mut dec = hir_frozen::Dec::new_checked(db, krate, bytes)?;
++    if dec.str()? != "exact declarations observed inputs 41.1" {
++        return Err("declaration observed-input format".into());
++    }
++    // Validate every actual native environment read before decoding any definitions.
++    // Under exact source/cfg/dependency identity, a changed branch must first change one
++    // of these observed reads. Proc macros and external filesystem reads remain refused.
++    for _ in 0..dec.len()? {
++        let of = dec.krate()?;
++        let name = dec.str()?.to_owned();
++        for byte in declarations_env_digest(db, of, &name) {
++            if dec.u8()? != byte {
++                return Err("declaration observed environment changed".into());
++            }
++        }
++    }
++    let mut payload = Vec::new();
++    for _ in 0..dec.len()? {
++        payload.push(dec.u8()?);
++    }
++    dec.finish()?;
++    decode_declarations_payload(db, krate, certificate, &payload)
++}
++
++fn encode_declarations_payload(
++    db: &ide_db::RootDatabase,
++    krate: Crate,
++    certificate: &[u8; 32],
++    value: &crate::Declared,
+ ) -> Result<Vec<u8>, String> {
+     let mut enc = hir_frozen::Enc::new(db, krate);
+     enc.str("exact declarations 39.1")?;
+@@ -216,7 +308,7 @@ fn encode_declarations(
+     enc.finish()
+ }
+ 
+-fn decode_declarations(
++fn decode_declarations_payload(
+     db: &ide_db::RootDatabase,
+     krate: Crate,
+     certificate: &[u8; 32],
+@@ -277,12 +369,40 @@ fn decode_declarations(
+ 
+ static DECLARATIONS_HITS: AtomicUsize = AtomicUsize::new(0);
+ 
+-fn declarations_fallback(why: &str) {
++fn declarations_fallback(db: &ide_db::RootDatabase, krate: hir::Crate, why: &str) {
+     if std::env::var_os("RA_JIT_STATS").is_some() {
+-        eprintln!("declarations-cache: fallback={why}");
++        let of: Crate = krate.into();
++        let name =
++            of.extra_data(db).display_name.as_ref().map(|it| it.to_string()).unwrap_or_default();
++        let closure = declarations_closure(db, of);
++        let external_reads: usize = closure.iter().map(|&it| db.included_by(it).len()).sum();
++        let pending_sources = db.included_sources().len();
++        eprintln!(
++            "declarations-cache: crate={name:?} origin={:?} event={why} external_reads={external_reads} pending_sources={pending_sources}",
++            of.data(db).origin
++        );
+     }
+ }
+ 
++fn declarations_codec_error(db: &ide_db::RootDatabase, krate: hir::Crate, phase: &str, why: &str) {
++    if std::env::var_os("RA_JIT_STATS").is_none() {
++        return;
++    }
++    // Never echo error text, which can contain paths substituted from environment values.
++    // Give an actionable codec category and stable fingerprint without exposing those values.
++    let kind =
++        ["environment", "block", "file", "macro", "literal", "module", "body", "format", "input"]
++            .into_iter()
++            .find(|kind| why.contains(kind))
++            .unwrap_or("other");
++    let hash = Sha256::digest(why.as_bytes());
++    declarations_fallback(
++        db,
++        krate,
++        &format!("{phase}-error kind={kind} reason_sha256={}", crate::content::hex(&hash)),
++    );
++}
++
+ #[cfg(test)]
+ mod declaration_tests {
+     use super::*;
+@@ -486,7 +606,53 @@ static TOP: u8 = { fn top_static_body() {} 0 };
+         let mut process = ide_db::base_db::Env::default();
+         process.set("NEW_PROCESS_INPUT", "new value");
+         ide_db::base_db::set_process_env(&mut db, process);
+-        assert_ne!(certificate(&db, target), before_process);
++        assert_eq!(
++            certificate(&db, target),
++            before_process,
++            "unused process inputs are validated by the observed-read witness, not source identity"
++        );
++    }
++
++    #[test]
++    fn declarations_observed_env_witness_allows_nonce_changes_but_rejects_changed_reads() {
++        let source = format!(
++            "{SOURCE}\n#[rustc_builtin_macro]\nmacro_rules! env {{ () => {{}} }}\nfn process_input() {{ let _ = env!(\"OBSERVED_INPUT\"); }}\n"
++        );
++        let (mut writer, target, _) = fixture(&source);
++        let mut vars = ide_db::base_db::Env::default();
++        vars.set("OBSERVED_INPUT", "original");
++        vars.set("UNOBSERVED_NONCE", "writer");
++        ide_db::base_db::set_process_env(&mut writer, vars);
++        let (key, bytes) = hir::attach_db(&writer, || {
++            let value = crate::declared_in_original(&writer, target);
++            assert!(writer.env_read().contains(&(target.into(), "OBSERVED_INPUT".into())));
++            let key = certificate(&writer, target);
++            (key, encode_declarations(&writer, target.into(), &key, &value).unwrap())
++        });
++        let (mut reader, target, _) = fixture(&source);
++        let mut vars = ide_db::base_db::Env::default();
++        vars.set("OBSERVED_INPUT", "original");
++        vars.set("UNOBSERVED_NONCE", "reader");
++        ide_db::base_db::set_process_env(&mut reader, vars.clone());
++        assert_eq!(certificate(&reader, target), key);
++        hir::attach_db(&reader, || {
++            let read = decode_declarations(&reader, target.into(), &key, &bytes).unwrap();
++            assert!(read == crate::declared_in_original(&reader, target));
++        });
++        vars.set("OBSERVED_INPUT", "changed");
++        ide_db::base_db::set_process_env(&mut reader, vars);
++        assert_eq!(certificate(&reader, target), key);
++        hir::attach_db(&reader, || {
++            let error = decode_declarations(&reader, target.into(), &key, &bytes).err().unwrap();
++            assert_eq!(error, "declaration observed environment changed");
++        });
++        let absent = ide_db::base_db::Env::default();
++        ide_db::base_db::set_process_env(&mut reader, absent);
++        let missing = declarations_env_digest(&reader, target.into(), "OBSERVED_INPUT");
++        let mut empty = ide_db::base_db::Env::default();
++        empty.set("OBSERVED_INPUT", "");
++        ide_db::base_db::set_process_env(&mut reader, empty);
++        assert_ne!(missing, declarations_env_digest(&reader, target.into(), "OBSERVED_INPUT"));
+     }
+ 
+     #[test]
+@@ -537,50 +703,70 @@ pub(crate) fn declarations_or_walk(
+     krate: hir::Crate,
+ ) -> crate::Declared {
+     if mode() != Some(Mode::Serve) {
+-        declarations_fallback("frozen-mode");
++        declarations_fallback(db, krate, "frozen-mode");
+         return crate::declared_in_original(db, krate);
+     }
+     let Some(store) = ra_jit_store::Store::global() else {
+-        declarations_fallback("no-store");
++        declarations_fallback(db, krate, "no-store");
+         return crate::declared_in_original(db, krate);
+     };
+     let closure = declarations_closure(db, krate.into());
+-    if !declarations_eligible(db, &closure) {
+-        declarations_fallback("unsupported-origin-or-source-root");
++    if let Err(why) = declarations_eligibility(db, &closure) {
++        declarations_fallback(db, krate, why);
+         return crate::declared_in_original(db, krate);
+     }
+     if !declarations_reads_supported(db, &closure) {
+-        declarations_fallback("unsupported-external-or-pending-read");
++        declarations_fallback(db, krate, "unsupported-external-or-pending-read");
+         return crate::declared_in_original(db, krate);
+     }
+     let Some(key) = declarations_certificate(db, &closure) else {
+-        declarations_fallback("uncertifiable-input");
++        declarations_fallback(db, krate, "uncertifiable-input");
+         return crate::declared_in_original(db, krate);
+     };
+-    if let Some(bytes) = store.get(&key) {
+-        if let Ok(value) = decode_declarations(db, krate.into(), &key, &bytes)
+-            && declarations_reads_supported(db, &closure)
+-        {
+-            let hits = DECLARATIONS_HITS.fetch_add(1, Relaxed) + 1;
+-            if std::env::var_os("RA_JIT_STATS").is_some() {
+-                eprintln!("declarations-cache: native_hit=1 native_hits={hits}");
++    match store.get(&key) {
++        Some(bytes) => match decode_declarations(db, krate.into(), &key, &bytes) {
++            Ok(value) if declarations_reads_supported(db, &closure) => {
++                let hits = DECLARATIONS_HITS.fetch_add(1, Relaxed) + 1;
++                if std::env::var_os("RA_JIT_STATS").is_some() {
++                    let of: Crate = krate.into();
++                    let name = of
++                        .extra_data(db)
++                        .display_name
++                        .as_ref()
++                        .map(|it| it.to_string())
++                        .unwrap_or_default();
++                    eprintln!(
++                        "declarations-cache: native_hit=1 native_hits={hits} crate={name:?} origin={:?}",
++                        of.data(db).origin
++                    );
++                }
++                return value;
+             }
+-            return value;
+-        }
++            Ok(_) => declarations_fallback(db, krate, "decode-discovered-unsupported-read"),
++            Err(why) => declarations_codec_error(db, krate, "decode", &why),
++        },
++        None => declarations_fallback(db, krate, "store-miss"),
+     }
+-    declarations_fallback("miss-or-unreadable");
+     let value = crate::declared_in_original(db, krate);
+-    // Includes can load new source or discover external reads while walking. Certify again
+-    // and write only if the full original inputs remained the ones looked up above.
+-    if declarations_reads_supported(db, &closure)
+-        && declarations_eligible(db, &closure)
+-        && declarations_certificate(db, &closure) == Some(key)
+-    {
+-        if let Ok(bytes) = encode_declarations(db, krate.into(), &key, &value)
+-            && declarations_reads_supported(db, &closure)
+-            && declarations_certificate(db, &closure) == Some(key)
+-        {
+-            store.insert(&key, &bytes);
++    // Both walking and encoding may discover new native reads. Attribute each refusal,
++    // and never publish a record under inputs different from its lookup certificate.
++    if !declarations_reads_supported(db, &closure) {
++        declarations_fallback(db, krate, "walk-discovered-unsupported-read");
++    } else if declarations_certificate(db, &closure) != Some(key) {
++        declarations_fallback(db, krate, "walk-certificate-changed");
++    } else {
++        match encode_declarations(db, krate.into(), &key, &value) {
++            Err(why) => declarations_codec_error(db, krate, "encode", &why),
++            Ok(_) if !declarations_reads_supported(db, &closure) => {
++                declarations_fallback(db, krate, "encode-discovered-unsupported-read");
++            }
++            Ok(_) if declarations_certificate(db, &closure) != Some(key) => {
++                declarations_fallback(db, krate, "encode-certificate-changed");
++            }
++            Ok(bytes) => {
++                store.insert(&key, &bytes);
++                declarations_fallback(db, krate, "write-attempt=1");
++            }
+         }
+     }
+     value
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/declarations-cache-v41/resident-declarations-cache.v40-original.md b/docs/resident-declarations-cache.md
+index 74f894544..e9f878f86 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/declarations-cache-v41/resident-declarations-cache.v40-original.md
++++ b/docs/resident-declarations-cache.md
+@@ -1,4 +1,16 @@
+-# Resident exact declarations cache (v39, default off)
++# Resident exact declarations cache (v41, default off)
++
++## v40 evidence and bounded v41 followup
++
++Coordinator reports v40 actual check/build, 48 codegen tests, 368 resident tests,
++and all seven strict runtime transitions passed. The fresh-j1 runtime sequence
++was 42.5 s under `ROOT/declarations-cache-v40-on`, but produced zero native hit
++markers. This is correctness evidence for v40, not a performance improvement.
++The v41 source below is unvalidated until the coordinator repeats native gates.
++Only `frozen.rs` and this document changed in the followup. Exact v40 originals,
++v41 full candidates, incremental patch and hashes live under
++`ROOT/declarations-cache-v41`.
++
+ 
+ This is licensed Blaze-derived resident source, not the clean-room compiler.
+ 
+@@ -38,7 +50,7 @@ necessary but is not itself a complete discovery-input certificate.
+ 
+ ## Additional exact certificate
+ 
+-The separate `ra-jit exact declarations 39.1` namespace certifies the current
++The separate `ra-jit exact declarations 41.1` namespace certifies the current
+ native database inputs before any lookup:
+ 
+ - Breadth-first dependency closure, preserving every dependency's order,
+@@ -51,8 +63,13 @@ native database inputs before any lookup:
+ - Exact crate root path, edition, origin, attributes, target kind, proc-macro
+   working directory, workspace/target/toolchain metadata, extra crate metadata,
+   sorted cfg, and full unnormalized crate environment including OUT_DIR.
+-- Full native `ProcessEnv`, including absence versus presence. This deliberately
+-  over-invalidates instead of guessing which future macro reads matter.
++- Process inputs are certified by a complete **actual observed-read witness**
++  in the record, validated before any portable declaration definitions decode.
++  For every native `env_read` in the closure, store its portable crate index,
++  variable name and SHA-256 of the effective Option(value), respecting crate
++  environment precedence and distinguishing missing from empty. Raw process
++  values are neither stored in this witness nor printed. Unlike v40, an unused
++  nonce variable changing does not invalidate the source/configuration key.
+ 
+ Each field and variable-length inventory is length-framed before SHA-256.
+ Whole-root hashing is a native Salsa query keyed by `InternedSourceRootId`,
+@@ -67,7 +84,11 @@ and real source paths all below the same toolchain source directory. Paths
+ only decide eligibility. The entire content/configuration/dependency inventory
+ decides identity. Local, registry, git, mixed-root, virtual, binary/no-text,
+ and unsupported input cases retain the original walk. Absolute paths and full
+-environment values sacrifice cross-checkout reuse for exactness.
++environment values sacrifice cross-checkout reuse for exactness. Observed
++process-value changes reject the old record even though its source key matches.
++An old record is not overwritten by `Store::insert`, so a new observed process
++value may continue falling through until its former value is restored. This
++bounded prototype prioritizes safe reuse over a multivariant cache index.
+ 
+ This inventory describes the current loaded DB snapshot, as the uncached walk
+ does. Normal VFS loading and watching remain responsible for reflecting disk
+@@ -77,7 +98,14 @@ crate display name certifies its contents.
+ ## Actual discovered macro inputs and diagnostics
+ 
+ Native `db.env_read()` and `db.env_unset()` sets for the complete dependency
+-closure are retained in the portable record. On a complete successful decode,
++closure are retained in the portable record. The inner declaration payload is
++encoded first, allowing codec block-owner queries to discover more reads.
++An outer checked Enc/Dec envelope then captures the complete actual read witness
++and embeds the checked inner payload. All witness values must validate before
++decoding the inner definitions. With unchanged exact source/configuration and
++only deterministic native builtin macros, a discovery branch can change only
++when an already observed read changes. Proc macros/external reads remain refused.
++On a complete successful decode,
+ `SourceDatabase::env_is_read` and `env_is_unset` replay those actual effects,
+ preserving process-input watching and unset-environment diagnostics. No text
+ scan or function-name heuristic is involved.
+@@ -112,14 +140,19 @@ With `RA_JIT_STATS`, the positive signal is:
+ declarations-cache: native_hit=1 native_hits=N
+ ```
+ 
+-Fallback reasons are also printed under stats. Absence of traversal output
++Fallback attribution now includes actual crate name/origin, exact eligibility
++reason, store miss, decode/encode error category plus SHA-256 fingerprint,
++walk/encode certificate changes, unsupported read discovery, external-read and
++pending-source counts, and write attempts. Codec errors are not echoed verbatim,
++so substituted environment values cannot leak through error text.
++Absence of traversal output
+ is not hit evidence. Store availability or successful writes alone are not
+ hit evidence. An unreadable existing record may remain in the store, but it
+ always falls through safely rather than changing build results.
+ 
+ ## Native fixture and release status
+ 
+-Eight source fixtures under `frozen::declaration_tests` cover:
++Nine source fixtures under `frozen::declaration_tests` cover:
+ 
+ 1. Original walk versus portable decode in fresh `RootDatabase` instances,
+    intentionally resolving unrelated functions first to force ID remapping.
+@@ -134,6 +167,9 @@ Eight source fixtures under `frozen::declaration_tests` cover:
+ 6. Local-origin refusal and actual real-path include-source request refusal.
+ 7. Dependency content and graph-edge changes.
+ 8. Actual native external-byte input registration and conservative refusal.
++9. Fresh native databases with actual builtin env reads: unused nonce changes
++   permit checked decode, observed-value changes reject it, and absent versus
++   empty values have distinct witness digests.
+ 
+ **Source-ready, not native-validated.** This owner ran rustfmt and
+ `git diff --check` only, no builds, tests, native workloads, or commits.
+@@ -143,6 +179,8 @@ Positive native hits and useful correctness/performance results are release
+ gates, not yet claimed outcomes.
+ 
+ HEAD originals, original working copies, full candidates, source/doc patch,
+-and SHA-256 hashes are preserved under `ROOT/declarations-cache-v39`.
++and SHA-256 hashes are preserved under `ROOT/declarations-cache-v39`, with
++root-validated v40 originals and the incremental v41 followup separately under
++`ROOT/declarations-cache-v41`.
+ The unchanged `stable.rs` SHA-256 is
+ `9f2299fe8a5a17f55dee3f5ab48c09f4166029b7b520f370131da6d3ee3df8b9`.

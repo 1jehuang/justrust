@@ -1,0 +1,235 @@
+{
+  "id": "20261030-194634388-1215832",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "679d34ffa0f5",
+    "dirty_files": 4
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793414794.404104,
+  "wall": 0.23614907264709473,
+  "exit": 0,
+  "cpu_secs": 0.509471,
+  "measurement_coverage": {
+    "samples": 3,
+    "processes": 2,
+    "sample_span_secs": 0.23508691787719727,
+    "max_sample_gap_secs": 0.21113157272338867
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.2042992115020752,
+    "lock_wait": 0.0,
+    "compile": 0.0,
+    "build_gaps": 0.0,
+    "test_run": 0.024254560470581055,
+    "tail": 0.0075953006744384766
+  },
+  "units": {
+    "compiled": 0,
+    "local": 0,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 183,
+    "rustc_cpu_secs": -0.0,
+    "rustc_wall_sum": -0.0,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "hir_ty_codegen-d85c581ce11daf8e",
+        "start": 0.2042992115020752,
+        "wall": 0.024254560470581055,
+        "passed": 48,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 48,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.02,
+    "slowest": [
+      {
+        "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.02,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.017,
+        "passed": true
+      },
+      {
+        "name": "sve::tests::stubs_are_what_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.005,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::a_set_is_what_it_was_made_of",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::an_entry_is_read_back_as_it_was_written",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::an_entry_that_names_what_it_lacks_is_no_entry",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::a_type_in_a_set_twice_is_one",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "f16_f128::tests::quad_bounds",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.046,
+    "timed": 48
+  },
+  "resources": {
+    "avg_build_cores": 2.1574126643358125,
+    "peak_build_cores": 0.9946404381457851,
+    "peak_build_rss_mb": 138.0546875,
+    "peak_unit_rss_mb": 0.0,
+    "min_mem_available_mb": 44955,
+    "avg_other_cores": 4.024723948988974,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.003392,
+    "psi_mem_secs": 0.0,
+    "psi_io_secs": 8e-6
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 228,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [],
+  "all_units": 0,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-194634388-1215832.scope",
+    "final_weight": 1000,
+    "setup_secs": 0.014604437,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}
