@@ -1,0 +1,41 @@
+bench/results/resident-builder-context-pool-20261031/frozen/v52/candidate.patch:8: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v52/candidate.patch:168: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v53/candidate.patch:8: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v53/candidate.patch:178: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v53/incremental.patch:37: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v53/incremental.patch:45: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v53/incremental.patch:48: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/frozen/v53/incremental.patch:51: trailing whitespace.
++ 
+bench/results/resident-builder-context-pool-20261031/licenses/cranelift-frontend-LICENSE:220: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off-repeat/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off-repeat/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off-repeat/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off-repeat/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off-repeat/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off-repeat/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-off/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on-repeat/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on-repeat/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on-repeat/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on-repeat/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on-repeat/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on-repeat/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-builder-context-pool-20261031/raw/builder-context-v53-on/06-assert-recovery.stdout:10: new blank line at EOF.

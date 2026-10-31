@@ -1,0 +1,8 @@
+FROZEN_READY v53 marker-only
+Full v52 preserved unchanged, manifest verified.
+Full v53 original/source/doc, incremental/full patches and SHA256SUMS verified.
+No native jobs/tests/builds/benchmarks/commits. Debug finalize-panic remains unexecuted by release gate.
+Ownership released exactly:
+toolchain/resident/crates/hir-ty-codegen/mod.rs
+docs/resident-builder-context-pool.md
+No further edits by this worker after this marker.

@@ -1,0 +1,133 @@
+{
+  "status": "PASS",
+  "relocation": {
+    "status": "PASS",
+    "isolated_python": true,
+    "empty_home_path": true,
+    "audited_external_reads": true,
+    "native_network_forbidden": true
+  },
+  "negative_controls": 24,
+  "controls": [
+    {
+      "control": "stale runtime nonce",
+      "rejection": "original semantic oracle: ['fresh invocation marker/count mismatch']",
+      "resealed": true
+    },
+    {
+      "control": "duplicate runtime challenge",
+      "rejection": "original semantic oracle: ['fresh invocation marker/count mismatch']",
+      "resealed": true
+    },
+    {
+      "control": "wrong exact test identity",
+      "rejection": "original semantic oracle: ['exact reference test names/status/counts/filtered mismatch']",
+      "resealed": true
+    },
+    {
+      "control": "missing diagnostic code",
+      "rejection": "original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "type error must not run",
+      "rejection": "original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "type error wrong exit",
+      "rejection": "original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "stale assertion freshness",
+      "rejection": "original semantic oracle: ['fresh assertion failure oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "assertion wrong exit",
+      "rejection": "original semantic oracle: ['fresh assertion failure oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "source edit recipe drift",
+      "rejection": "actual phase input recipe",
+      "resealed": true
+    },
+    {
+      "control": "positive reuse removed",
+      "rejection": "fixed successful reuse marker ON1 OFF0",
+      "resealed": true
+    },
+    {
+      "control": "disabled reuse invented",
+      "rejection": "fixed successful reuse marker ON1 OFF0",
+      "resealed": true
+    },
+    {
+      "control": "duplicate per-process marker",
+      "rejection": "fixed successful reuse marker ON1 OFF0",
+      "resealed": true
+    },
+    {
+      "control": "marker not fixed line",
+      "rejection": "fixed successful reuse marker ON1 OFF0",
+      "resealed": true
+    },
+    {
+      "control": "coherent toolchain mutation",
+      "rejection": "exact whole4020 pinned toolchain anchor",
+      "resealed": true
+    },
+    {
+      "control": "native differential fixture renamed",
+      "rejection": "actual pool fixtures and debug-only absence",
+      "resealed": true
+    },
+    {
+      "control": "coherent frozen source mutation",
+      "rejection": "frozen candidate source anchor",
+      "resealed": true
+    },
+    {
+      "control": "phase order drift",
+      "rejection": "exact seven phase order",
+      "resealed": true
+    },
+    {
+      "control": "noise certainty invented",
+      "rejection": "finite elapsed/unknown noise boundary",
+      "resealed": true
+    },
+    {
+      "control": "promotion invented",
+      "rejection": "rejection/no claim/debug limitation boundary",
+      "resealed": true
+    },
+    {
+      "control": "speed claim invented",
+      "rejection": "rejection/no claim/debug limitation boundary",
+      "resealed": true
+    },
+    {
+      "control": "zero overhead claim invented",
+      "rejection": "rejection/no claim/debug limitation boundary",
+      "resealed": true
+    },
+    {
+      "control": "debug gate pass invented",
+      "rejection": "rejection/no claim/debug limitation boundary",
+      "resealed": true
+    },
+    {
+      "control": "restoration claim corrupted",
+      "rejection": "exact scoped source restoration receipt",
+      "resealed": true
+    },
+    {
+      "control": "original analysis rewritten",
+      "rejection": "exact original runtime analysis",
+      "resealed": true
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "decision": "REJECTED",
+  "promotion": false,
+  "latency_claim": false,
+  "zero_overhead_claim": false,
+  "noise": "unknown",
+  "strict_rows": 28,
+  "debug_finalize_panic_executed": false,
+  "worker_snapshots_are_cumulative": true
+}

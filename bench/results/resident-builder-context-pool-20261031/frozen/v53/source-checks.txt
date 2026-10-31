@@ -1,0 +1,12 @@
+v53 marker-only source checks
+PASS rustfmt and rustfmt --check with resident edition2024 config and skip_children=true.
+PASS git diff --check for two owned paths.
+PASS read-only comparison: gate, build, return/discard path, and all native fixtures byte-identical to v52.
+PASS preserved v52 SHA256SUMS verified, all artifacts unchanged.
+Marker is fixed: resident: builder-context-pool reused\n
+Only an actual cached take can announce. Pool-local bool avoids repeated process Once access on that thread. IO occurs after TLS borrow ends, at most one write_all attempt/process, result ignored. Disabled path has zero marker attempts.
+No native builds, tests, jobs, benchmarks, or commits by this worker.
+Coordinator reports v52 task7412117wol 214.61s exit0 native correctness gates PASS. This is not v53 execution evidence or speed proof.
+Debug-only finalize-panic fixture remains unexecuted by the release gate.
+Original source/doc are exact v52 candidate/doc. incremental.patch is v52->v53. candidate.patch is full baseline->v53.
+Released exactly toolchain/resident/crates/hir-ty-codegen/mod.rs and docs/resident-builder-context-pool.md.

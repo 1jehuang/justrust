@@ -1,0 +1,32 @@
+[
+  {
+    "pid": 2607572,
+    "comm": "cargo",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/cargo --config target.'cfg(all())'.runner=[\"/home/jeremy/.cargo/bin/justrust\",\"__test-runner\"] --config term.progress.when=\"always\" --config term.progress.width=200 test --release --locked -p hir-ty-codegen -j 6",
+    "kind": "cargo",
+    "first_seen": 1793426221.9069765,
+    "last_seen": 1793426241.973984,
+    "cpu_secs": 0.21,
+    "max_rss_mb": 111.7890625
+  },
+  {
+    "pid": 2607593,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v53/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name hir_ty_codegen --edition=2024 crates/hir-ty-codegen/mod.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref",
+    "kind": "rustc",
+    "first_seen": 1793426222.3280334,
+    "last_seen": 1793426241.973984,
+    "cpu_secs": 0.01,
+    "max_rss_mb": 4.92578125
+  },
+  {
+    "pid": 2607594,
+    "comm": "rustc",
+    "cmdline": "/home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/bin/rustc --crate-name hir_ty_codegen --edition=2024 crates/hir-ty-codegen/mod.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no --warn=clippy::suspicious --warn=clippy::style --allow=clippy::restriction --deny=clippy::perf --deny=clippy::correctness --warn=clippy::complexity --allow=clippy::wrong_self_convention --allow=clippy::vec_init_then_push --allow=clippy::useless_asref --warn=unused_lifetimes --warn=unuse",
+    "kind": "rustc",
+    "first_seen": 1793426222.3280334,
+    "last_seen": 1793426241.973984,
+    "cpu_secs": 64.67,
+    "max_rss_mb": 1562.3828125
+  }
+]

@@ -1,0 +1,13 @@
+SOURCE-ONLY CHECKS
+rustfmt owned mod.rs with edition 2024, resident config, skip_children=true: PASS
+rustfmt --check same flags: PASS
+git diff --check restricted to released paths: PASS
+Read-only source comparison: original semantic tests unchanged byte-for-byte: PASS
+Read-only source comparison: unrelated prefix and middle source regions unchanged: PASS
+Inspected primary registry frontend.rs 0.136.2 finalize consumes self and clears private state preserving buffers.
+Original doc: absent (new path).
+No native builds, native tests, jobs, benchmarks, commits, or speed claims.
+Remaining: coordinator must compile fixtures, run unchanged semantic suite and varied matched-state workflows with positive reuse activation. Lazy gate latches on first native build, not before main.
+Released paths:
+toolchain/resident/crates/hir-ty-codegen/mod.rs
+docs/resident-builder-context-pool.md

@@ -1,0 +1,13 @@
+{
+  "status": "RESTORED",
+  "observed": "2026-10-31T06:11:49Z",
+  "released": "2026-10-31T06:12:01Z",
+  "base_head": "ee8514056c696c88c764b741bba63d00da61a9ad",
+  "files": {
+    "toolchain/resident/crates/hir-ty-codegen/mod.rs": {
+      "sha256": "ec08cb7a35fa6c4bcdfbf3514e7fceb367a84eb3958817ef9f803703100a7b14",
+      "cmp_original": true,
+      "cmp_head": true
+    }
+  }
+}

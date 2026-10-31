@@ -1,0 +1,35 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 0.39s
+     Running unittests src/lib.rs (/home/jeremy/bp4/engine/target/debug/deps/justrust-901a6640a86ad2b5)
+blaze time: 400.6 ms: worker build-rest 171.6 (43%), worker roots 74.6 (19%), worker check 68.2 (17%), worker apply 28.7 (7%), client planning 26.6 (7%), client command 5.8 (1%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.0%
+blaze    client command                     5.8 ms   1.5%
+blaze    client test                        0.3 ms   0.1%
+blaze    client metadata                    0.6 ms   0.1%
+blaze    client planning                   26.6 ms   6.6%
+blaze    client checkout                    0.4 ms   0.1%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      0.4 ms   0.1%
+blaze    daemon read request                0.2 ms   0.0%
+blaze    daemon                             0.3 ms   0.1%
+blaze    daemon↔worker                      0.6 ms   0.2%
+blaze    worker wait                        0.5 ms   0.1%
+blaze    worker settle                      0.0 ms   0.0%
+blaze    worker read                        3.9 ms   1.0%
+blaze    worker apply                      28.7 ms   7.2%
+blaze    worker roots                      74.6 ms  18.6%
+blaze    worker check                      68.2 ms  17.0%
+blaze    worker reach                       0.5 ms   0.1%
+blaze    worker object                      0.2 ms   0.1%
+blaze    worker statics                     1.9 ms   0.5%
+blaze    worker setup                       5.0 ms   1.2%
+blaze    worker compile-rest                1.0 ms   0.3%
+blaze    worker write                       0.0 ms   0.0%
+blaze    worker build-rest                171.6 ms  42.8%
+blaze    worker report                      0.1 ms   0.0%
+blaze    worker refuse                      4.7 ms   1.2%
+blaze    worker link                        1.1 ms   0.3%
+blaze    client install artifacts           0.2 ms   0.0%
+blaze    client test execution              3.3 ms   0.8%
+blaze    total                            400.6 ms 100.0%

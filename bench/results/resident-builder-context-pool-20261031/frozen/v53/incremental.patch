@@ -1,0 +1,53 @@
+--- a/toolchain/resident/crates/hir-ty-codegen/mod.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/mod.rs
+@@ -4969,6 +4969,7 @@
+ #[derive(Default)]
+ struct BuilderPool {
+     available: Option<FunctionBuilderContext>,
++    announced: bool,
+     #[cfg(test)]
+     reused: usize,
+     #[cfg(test)]
+@@ -4988,9 +4989,18 @@
+             if cached.is_some() {
+                 pool.reused += 1;
+             }
+-            cached
++            let announce = cached.is_some() && !pool.announced;
++            pool.announced |= announce;
++            Some((cached, announce))
+         });
+-        if let Ok(Some(context)) = cached {
++        if let Ok(Some((Some(context), announce))) = cached {
++            if announce {
++                static ANNOUNCED: std::sync::Once = std::sync::Once::new();
++                ANNOUNCED.call_once(|| {
++                    use std::io::Write as _;
++                    let _ = std::io::stderr().write_all(b"resident: builder-context-pool reused\n");
++                });
++            }
+             return context;
+         }
+     }
+--- a/docs/resident-builder-context-pool.md
++++ b/docs/resident-builder-context-pool.md
+@@ -48,11 +48,17 @@
+ 3. Run representative varied native workflows and matched before/after states, inspecting regressions and correctness before considering promotion. Keep the default off pending those results.
+ 4. Do not infer a general speedup from the pool implementation or from a single allocation-sensitive microcase.
+ 
++## v53 positive reuse marker
++
++This marker-only revision preserves the gate, reuse/discard semantics, and all native fixtures from v52. After an actual cached context is taken, the pool's thread-local `announced` flag permits one process-wide `Once` check per thread. Subsequent reuse on that thread does not touch the global marker guard. The first successful guard writes the fixed stderr line `resident: builder-context-pool reused`. There is at most one write attempt per process, outside the RefCell borrow. Its I/O result is ignored. Disabled operation produces zero marker attempts. A missing line is not positive activation evidence.
++
++The coordinator reported v52 native task `7412117wol` completed in 214.61 seconds with exit 0 and check/build/full-codegen/full-resident/source-hash gates passing. This is a coordinator-reported correctness result, not a speed claim or evidence that v53 has run. The release-mode gate did not execute the debug-only finalize-panic fixture. That fixture and v53 native validation remain for the coordinator.
++
+ ## Frozen handoff
+ 
+-Evidence directory: `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/builder-context-pool-v52`.
++Evidence directory: `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/builder-context-pool-v53`.
+ 
+-It contains the full original, candidate, this document, the two-path patch, SHA256 manifest, source-check notes, and `FROZEN_READY`. The released ownership paths are exactly:
++The complete v52 evidence directory remains unchanged. v53 contains full original source/doc copied from v52, full candidate source/doc, an incremental v52-to-v53 patch, the full baseline patch, SHA256 manifest, source-check notes, and `FROZEN_READY`. The released ownership paths are exactly:
+ 
+ * `toolchain/resident/crates/hir-ty-codegen/mod.rs`
+ * `docs/resident-builder-context-pool.md`

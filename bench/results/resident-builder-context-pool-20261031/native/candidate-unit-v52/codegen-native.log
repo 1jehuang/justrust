@@ -1,0 +1,35 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: 57 tests passed in 21.8s
+  time    startup 0.20s | compile 21.52s | tests 0.06s | after 0.03s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 182 fresh. Rebuilt because: edited crates/hir-ty-codegen/mod.rs (hir-ty-codegen)
+          hir_ty_codegen (test)             21.52s  cpu  65.1s   1560 MB
+  tests   57 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 0.06s
+  cpu     65.7s total, avg 3.0/peak 6.3 of 16 cores; others used 3.4 cores
+  memory  peak 1668 MB build, 1560 MB largest rustc, 48.7 GB free; stalls cpu 0.19s mem 0.00s io 0.01s
+  output  3 warnings shown, 229 hidden; 189 progress and 57 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  6.5s  build averaged 3.0 of 16 cores: hir_ty_codegen (test) ran 21.5s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-225042159-2565632` full output, `justrust show 20261030-225042159-2565632` full profile

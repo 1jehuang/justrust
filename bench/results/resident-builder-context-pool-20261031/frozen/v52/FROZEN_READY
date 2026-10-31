@@ -1,0 +1,7 @@
+FROZEN_READY
+Source-only candidate. Native correctness and measurement are NOT executed.
+Artifacts: original.rs candidate.rs doc.md candidate.patch SHA256SUMS source-checks.txt
+Ownership released, exactly:
+toolchain/resident/crates/hir-ty-codegen/mod.rs
+docs/resident-builder-context-pool.md
+No more edits by this worker after this marker.
