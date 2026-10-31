@@ -1,6 +1,78 @@
 //! Graph reads of exact encountered hidden representations, never a program map.
 use super::*;
 
+/// Consumer-local discovery coordinates, not another source authority. The full
+/// existing graph encoding retains owner/site, ordered actuals and all metadata.
+#[derive(Clone)]
+struct OpaqueIdentity(Arc<[u64]>);
+
+impl OpaqueIdentity {
+    fn from_words(words: &[u64], budget: &ir::PlanBudget) -> Result<Self, Error> {
+        let bytes = words
+            .len()
+            .checked_mul(std::mem::size_of::<u64>())
+            .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
+            .ok_or_else(|| Error::new("opaque discovery coordinate size overflow"))?;
+        budget.retain_bytes(bytes).map_err(Error::new)?;
+        Ok(Self(Arc::from(words)))
+    }
+
+    fn of(opaque: &Arc<ir::OpaqueTy>, budget: &ir::PlanBudget) -> Result<Self, Error> {
+        let words = instances::graph_key::encode_opaque(opaque, budget).map_err(Error::new)?;
+        Self::from_words(&words, budget)
+    }
+
+    fn matches(&self, words: &[u64], budget: &ir::PlanBudget) -> Result<bool, Error> {
+        let work = self
+            .0
+            .len()
+            .min(words.len())
+            .checked_add(1)
+            .ok_or_else(|| Error::new("opaque discovery comparison work overflow"))?;
+        budget.charge_work(work).map_err(Error::new)?;
+        Ok(self.0.as_ref() == words)
+    }
+}
+
+fn has_identity(
+    identities: &[OpaqueIdentity],
+    words: &[u64],
+    budget: &ir::PlanBudget,
+) -> Result<bool, Error> {
+    for identity in identities {
+        if identity.matches(words, budget)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn acyclic(
+    node: &OpaqueIdentity,
+    edges: &[(OpaqueIdentity, Vec<OpaqueIdentity>)],
+    path: &mut Vec<OpaqueIdentity>,
+    budget: &ir::PlanBudget,
+) -> Result<(), Error> {
+    budget.check_depth(path.len()).map_err(Error::new)?;
+    budget.charge_work(1).map_err(Error::new)?;
+    if has_identity(path, &node.0, budget)? {
+        return Err(Error::new(
+            "unsupported: recursive opaque representation dependency",
+        ));
+    }
+    path.push(node.clone());
+    for (owner, children) in edges {
+        if owner.matches(&node.0, budget)? {
+            for child in children {
+                acyclic(child, edges, path, budget)?;
+            }
+            break;
+        }
+    }
+    path.pop();
+    Ok(())
+}
+
 /// Decode opaque coordinates using only canonical provider templates read from
 /// the graph. Each frontier requests every missing provider before awaiting it.
 /// Nested owner actuals discover subsequent frontiers without a global join.
@@ -376,11 +448,11 @@ pub(super) async fn read(
         }
         let mut frontier = Vec::new();
         for opaque in std::mem::take(&mut pending) {
-            if demanded.contains(&opaque) {
+            let key = instances::graph_key::encode_opaque(&opaque, budget).map_err(Error::new)?;
+            if has_identity(&demanded, &key, budget)? {
                 continue;
             }
-            budget.charge_work(demanded.len()).map_err(Error::new)?;
-            let key = instances::graph_key::encode_opaque(&opaque, budget).map_err(Error::new)?;
+            let identity = OpaqueIdentity::from_words(&key, budget)?;
             let handle = facts
                 .cx
                 .request(crate::compiler::keys::words(OPAQUE_REPRESENTATION, key)?)
@@ -390,8 +462,21 @@ pub(super) async fn read(
                 .cx
                 .request(crate::compiler::keys::item(TEMPLATE_BODY, source))
                 .get(0);
-            demanded.push(opaque.clone());
-            frontier.push((opaque, handle, template));
+            budget
+                .retain_bytes(std::mem::size_of::<OpaqueIdentity>())
+                .map_err(Error::new)?;
+            demanded.try_reserve_exact(1).map_err(|_| {
+                Error::new("infrastructure: opaque discovery demand allocation failed")
+            })?;
+            demanded.push(identity.clone());
+            let entry = (opaque, identity, handle, template);
+            budget
+                .retain_bytes(std::mem::size_of_val(&entry))
+                .map_err(Error::new)?;
+            frontier.try_reserve_exact(1).map_err(|_| {
+                Error::new("infrastructure: opaque discovery frontier allocation failed")
+            })?;
+            frontier.push(entry);
         }
         for (provider, handle) in closure_frontier {
             let body: Arc<TemplateBodyFact> = facts.cx.read_fact(handle).await?;
@@ -407,7 +492,7 @@ pub(super) async fn read(
                 .map_err(Error::new)?;
             closures.insert(provider, closure.ty.clone());
         }
-        for (opaque, handle, template) in frontier {
+        for (opaque, identity, handle, template) in frontier {
             let record: Arc<OpaqueRepresentationFact> = facts.cx.read_fact(handle).await?;
             let template: Arc<TemplateBodyFact> = facts.cx.read_fact(template).await?;
             let publication = template.publication.as_ref().ok_or_else(|| {
@@ -444,37 +529,61 @@ pub(super) async fn read(
             let mut children = Vec::new();
             collect(record.record.hidden(), &mut children, budget, 0)?;
             collect_closures(record.record.hidden(), &mut pending_closures, budget, 0)?;
-            edges.push((opaque, children.clone()));
+            budget
+                .retain_bytes(
+                    children
+                        .len()
+                        .checked_mul(std::mem::size_of::<OpaqueIdentity>())
+                        .and_then(|bytes| {
+                            bytes.checked_add(std::mem::size_of::<(
+                                OpaqueIdentity,
+                                Vec<OpaqueIdentity>,
+                            )>())
+                        })
+                        .ok_or_else(|| Error::new("opaque discovery edge size overflow"))?,
+                )
+                .map_err(Error::new)?;
+            let mut child_identities = Vec::new();
+            child_identities
+                .try_reserve_exact(children.len())
+                .map_err(|_| {
+                    Error::new("infrastructure: opaque discovery children allocation failed")
+                })?;
+            for child in &children {
+                child_identities.push(OpaqueIdentity::of(child, budget)?);
+            }
+            edges.try_reserve_exact(1).map_err(|_| {
+                Error::new("infrastructure: opaque discovery edges allocation failed")
+            })?;
+            edges.push((identity, child_identities));
+            budget
+                .retain_bytes(
+                    children
+                        .len()
+                        .checked_mul(std::mem::size_of::<Arc<ir::OpaqueTy>>())
+                        .ok_or_else(|| Error::new("opaque discovery pending size overflow"))?,
+                )
+                .map_err(Error::new)?;
+            pending.try_reserve_exact(children.len()).map_err(|_| {
+                Error::new("infrastructure: opaque discovery pending allocation failed")
+            })?;
             pending.extend(children);
             records.push(record);
         }
     }
-    fn acyclic(
-        node: &Arc<ir::OpaqueTy>,
-        edges: &[(Arc<ir::OpaqueTy>, Vec<Arc<ir::OpaqueTy>>)],
-        path: &mut Vec<Arc<ir::OpaqueTy>>,
-        budget: &ir::PlanBudget,
-    ) -> Result<(), Error> {
-        budget.check_depth(path.len()).map_err(Error::new)?;
-        budget
-            .charge_work(edges.len() + path.len())
-            .map_err(Error::new)?;
-        if path.contains(node) {
-            return Err(Error::new(
-                "unsupported: recursive opaque representation dependency",
-            ));
-        }
-        path.push(node.clone());
-        if let Some((_, children)) = edges.iter().find(|(owner, _)| owner == node) {
-            for child in children {
-                acyclic(child, edges, path, budget)?;
-            }
-        }
-        path.pop();
-        Ok(())
-    }
+    budget
+        .retain_bytes(
+            demanded
+                .len()
+                .checked_mul(std::mem::size_of::<OpaqueIdentity>())
+                .ok_or_else(|| Error::new("opaque discovery path size overflow"))?,
+        )
+        .map_err(Error::new)?;
+    let mut path = Vec::new();
+    path.try_reserve_exact(demanded.len())
+        .map_err(|_| Error::new("infrastructure: opaque discovery path allocation failed"))?;
     for root in &demanded {
-        acyclic(root, &edges, &mut Vec::new(), budget)?;
+        acyclic(root, &edges, &mut path, budget)?;
     }
     let mut representations = Representations {
         engine: facts.cx.authority(),
@@ -625,9 +734,15 @@ fn collect(
     budget.charge_work(1).map_err(Error::new)?;
     match ty {
         ir::Ty::Opaque(opaque) => {
-            if !output.contains(opaque) {
-                output.push(opaque.clone());
-            }
+            // This is occurrence inventory only. The demand frontier dedups
+            // complete canonical coordinates, never allocation-local nominal IDs.
+            budget
+                .retain_bytes(std::mem::size_of::<Arc<ir::OpaqueTy>>())
+                .map_err(Error::new)?;
+            output.try_reserve_exact(1).map_err(|_| {
+                Error::new("infrastructure: opaque discovery inventory allocation failed")
+            })?;
+            output.push(opaque.clone());
         }
         ir::Ty::Ref { referent, .. } => collect(referent, output, budget, depth + 1)?,
         ir::Ty::RawPtr { pointee, .. } => collect(pointee, output, budget, depth + 1)?,
@@ -683,6 +798,179 @@ fn collect(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn opaque_discovery_coordinates_preserve_graph_identity_authority_and_cycles() {
+        use crate::compiler::{
+            instances::graph_key,
+            keys::closed_domain::ClosedDomain,
+            memory_layout::domain::compact::{closed, closed_engine_fixture},
+        };
+        use crate::engine::ItemKey;
+        let (engine, budget, plan, root) = closed_engine_fixture(
+            "trait Inspect{fn width(&self)->usize;}struct V;impl Inspect for V{fn width(&self)->usize{std::mem::align_of::<u16>()}}struct S;struct R;fn make<T,U>()->impl Inspect{V}fn other<T,U>()->impl Inspect{V}fn main(){let _n=make::<S,R>().width();}",
+            "main",
+            Arc::from([]),
+        );
+        let header = engine
+            .fact_of::<closed::Header>(&ClosedDomain::header(&root, &budget).unwrap().key(), 0)
+            .unwrap();
+        let named = |name: &str| {
+            (0..plan.callable_count())
+                .map(|index| plan.callable_decl(index).unwrap())
+                .find(|id| matches!(plan.persistent_decl_path(*id).unwrap().item(), frontend::PersistentDeclItem::Name(found) if found == name))
+                .unwrap()
+        };
+        // The caller retains the exact receiver descriptor from its source
+        // occurrence. The independently computed producer header decodes the
+        // same canonical coordinates into its own nominal realization. Merely
+        // decoding a selected target again would reuse its already canonical IDs.
+        let target = header
+            .opaque_calls()
+            .first()
+            .unwrap()
+            .owner_target()
+            .unwrap();
+        assert_eq!(target.declaration, named("make"));
+        let words = graph_key::encode(&target, &budget).unwrap();
+        let producer = engine
+            .fact_of::<closed::Header>(&ClosedDomain::Header(words.clone()).key(), 0)
+            .unwrap();
+        let decoded = producer.target().clone();
+        assert_eq!(graph_key::encode(&decoded, &budget).unwrap(), words);
+        assert_ne!(
+            target, decoded,
+            "fixture must cross genuine graph nominal identities"
+        );
+        let opaque = |target: &ir::CallTarget| {
+            let schema = plan.sema_schema(target.declaration).unwrap();
+            let facts = plan.instance_facts(target).unwrap();
+            let ty = ir::substitute_ty(
+                &schema.signature.result,
+                &schema.env,
+                &target.type_args,
+                ir::FactsCtx::Validated(&facts),
+                &mut plan.as_ref().clone(),
+                &budget,
+            )
+            .unwrap();
+            let ir::Ty::Opaque(opaque) = ty else {
+                panic!("genuine opaque result")
+            };
+            opaque
+        };
+        let original = opaque(&target);
+        let reconstructed = opaque(&decoded);
+        assert_ne!(original, reconstructed);
+        let original_key = OpaqueIdentity::of(&original, &budget).unwrap();
+        let reconstructed_key = OpaqueIdentity::of(&reconstructed, &budget).unwrap();
+        assert!(
+            has_identity(
+                std::slice::from_ref(&original_key),
+                &reconstructed_key.0,
+                &budget
+            )
+            .unwrap()
+        );
+        let mut reordered_target = target.clone();
+        Arc::make_mut(&mut reordered_target.type_args).swap(0, 1);
+        let reordered = OpaqueIdentity::of(&opaque(&reordered_target), &budget).unwrap();
+        let foreign = OpaqueIdentity::of(
+            &opaque(&ir::CallTarget {
+                declaration: named("other"),
+                type_args: target.type_args.clone(),
+            }),
+            &budget,
+        )
+        .unwrap();
+        for distinct in [&reordered, &foreign] {
+            assert!(
+                !has_identity(std::slice::from_ref(&original_key), &distinct.0, &budget).unwrap()
+            );
+            let edges = vec![
+                (reconstructed_key.clone(), vec![distinct.clone()]),
+                (distinct.clone(), Vec::new()),
+            ];
+            acyclic(&original_key, &edges, &mut Vec::with_capacity(2), &budget).unwrap();
+        }
+        let edges = vec![
+            (reconstructed_key.clone(), vec![foreign.clone()]),
+            (foreign, vec![reconstructed_key.clone()]),
+        ];
+        let error =
+            acyclic(&original_key, &edges, &mut Vec::with_capacity(2), &budget).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("recursive opaque representation dependency")
+        );
+        let self_cycle = vec![(reconstructed_key.clone(), vec![reconstructed_key])];
+        assert!(
+            acyclic(
+                &original_key,
+                &self_cycle,
+                &mut Vec::with_capacity(1),
+                &budget
+            )
+            .is_err()
+        );
+
+        // Invalid descriptors remain distinct coordinates, never aliases of a
+        // genuine demanded representation. Their later source replay still fails.
+        for forged in [
+            ir::OpaqueTy::new(
+                original.owner(),
+                original.owner_args().into(),
+                original.site().checked_add(1).unwrap(),
+                original.bounds().into(),
+                original.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                original.owner(),
+                original.owner_args().into(),
+                original.site(),
+                Arc::from([]),
+                original.captured_regions().into(),
+            ),
+            ir::OpaqueTy::new(
+                original.owner(),
+                original.owner_args().into(),
+                original.site(),
+                original.bounds().into(),
+                Arc::from([ir::SourceRegionId {
+                    declaration: original.owner(),
+                    index: 0,
+                }]),
+            ),
+        ] {
+            let forged = OpaqueIdentity::of(&Arc::new(forged), &budget).unwrap();
+            assert!(
+                !has_identity(std::slice::from_ref(&original_key), &forged.0, &budget).unwrap()
+            );
+        }
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..Default::default()
+        });
+        assert!(OpaqueIdentity::from_words(&original_key.0, &denied).is_err());
+        let exhausted = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            has_identity(
+                std::slice::from_ref(&original_key),
+                &original_key.0,
+                &exhausted
+            )
+            .is_err()
+        );
+        let shallow = ir::PlanBudget::new(ir::PlanLimits {
+            depth: 0,
+            ..Default::default()
+        });
+        assert!(acyclic(&original_key, &edges, &mut Vec::with_capacity(2), &shallow).is_err());
+    }
 
     #[test]
     fn physical_closure_normalization_rejects_sealed_descriptor_forgery() {
