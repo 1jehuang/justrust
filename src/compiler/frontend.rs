@@ -25514,6 +25514,107 @@ impl tr::SchemaCx for SchemaAdapter {
             region_contract_mode: tr::RegionContractMode::Positioned,
         })
     }
+    fn impl_parameter_sized_predicate(
+        &self,
+        parameter: ir::ParamId,
+    ) -> Result<Option<ir::Predicate>, tr::FactsError> {
+        self.budget.charge_work(2).map_err(|e| self.error(e))?;
+        if !Arc::ptr_eq(&self.program, &self.registry.program) {
+            return Err(
+                self.error("implementation parameter changed the original source program".into())
+            );
+        }
+        let info = self
+            .registry
+            .declaration(parameter.owner.declaration)
+            .map_err(|e| self.error(e))?;
+        if info.kind != ir::DeclKind::Impl
+            || info.owner.is_some()
+            || info.param_env.binder() != parameter.owner
+            || !info.param_env.contains(parameter)
+            || !info.env.contains(parameter)
+            || info.env.scopes().len() != 1
+            || !Arc::ptr_eq(&info.env.scopes()[0], &info.param_env)
+            || self.registry.impl_ids.get(info.source_index) != Some(&info.id)
+        {
+            return Err(self.error(
+                "Sized parameter requires its exact original inherent implementation".into(),
+            ));
+        }
+        let block = self
+            .registry
+            .program
+            .impls
+            .get(info.source_index)
+            .ok_or_else(|| self.error("missing original inherent implementation".into()))?;
+        if block.trait_path.is_some()
+            || block.module != info.path.module
+            || block.type_params.len() != info.param_env.arity()
+            || info.type_params.len() != block.type_params.len()
+        {
+            return Err(
+                self.error("original inherent implementation parameter declaration changed".into())
+            );
+        }
+        let original = block.type_params[parameter.index as usize];
+        let key = self
+            .registry
+            .parameter_key(original)
+            .map_err(|e| self.error(e))?;
+        if self
+            .registry
+            .parameter_key(info.type_params[parameter.index as usize])
+            .map_err(|e| self.error(e))?
+            != key
+        {
+            return Err(self.error("original inherent parameter occurrence changed".into()));
+        }
+        let sized = self.catalog.id(tr::CatalogItem::Sized);
+        let mut original_relaxed = false;
+        let mut explicit_sized = false;
+        // A method's stronger bounds cannot authorize this parameter. Only an
+        // explicit bound on this original implementation may restore Sized.
+        for bound in &block.bounds {
+            self.budget.charge_work(1).map_err(|e| self.error(e))?;
+            let Type::Param(subject) = &bound.subject else {
+                continue;
+            };
+            if self
+                .registry
+                .parameter_key(*subject)
+                .map_err(|e| self.error(e))?
+                != key
+            {
+                continue;
+            }
+            original_relaxed |= bound.maybe_unsized;
+            for path in &bound.traits {
+                self.budget.charge_work(1).map_err(|e| self.error(e))?;
+                if self
+                    .registry
+                    .resolve_trait_path(path)
+                    .map_err(|e| self.error(e))?
+                    == sized
+                {
+                    explicit_sized = true;
+                }
+            }
+        }
+        if info.param_env.relaxed_sized(parameter) != original_relaxed
+            || info.env.relaxed_sized(parameter) != original_relaxed
+        {
+            return Err(
+                self.error("original inherent parameter relaxed Sized evidence changed".into())
+            );
+        }
+        Ok((!original_relaxed || explicit_sized).then(|| {
+            ir::Predicate::Implements(ir::TraitRef {
+                declaration: sized,
+                self_ty: ir::Ty::Param(parameter),
+                args: Arc::from([]),
+            })
+        }))
+    }
     fn impl_trait_safety(
         &self,
         implementation: ir::DeclId,

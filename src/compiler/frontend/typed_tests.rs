@@ -1,6 +1,135 @@
 use super::*;
 
 #[test]
+fn inherent_parameter_sized_service_uses_only_original_impl_declaration() {
+    for (source, expected) in [
+        ("struct G<T>{x:T}impl<T>G<T>{fn f(self){}}fn main(){}", true),
+        (
+            "struct G<T:?Sized>{p:*const T}impl<T:?Sized>G<T>{fn f(self)where T:Sized{}}fn main(){}",
+            false,
+        ),
+        (
+            "struct G<T:?Sized>{p:*const T}impl<T:?Sized>G<T>where T:Sized{fn f(self){}}fn main(){}",
+            true,
+        ),
+        (
+            "trait Sized{}struct G<T:?Sized>{p:*const T}impl<T:?Sized>G<T>where T:Sized{fn f(self)where T:core::marker::Sized{}}fn main(){}",
+            false,
+        ),
+    ] {
+        let program = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let mut adapter = SchemaAdapter {
+            program: plan.program.clone(),
+            catalog: plan.catalog.clone(),
+            registry: plan.registry.clone(),
+            nominal_schemas: plan.nominal_schemas.clone(),
+            nominals: plan.nominals.clone(),
+            contexts: plan.contexts.clone(),
+            source_schemas: plan.source_schemas.clone(),
+            budget: budget.clone(),
+        };
+        let owner = plan.registry.impl_ids[0];
+        let parameter = ir::ParamId {
+            owner: plan.registry.declaration(owner).unwrap().param_env.binder(),
+            index: 0,
+        };
+        let predicate = tr::SchemaCx::impl_parameter_sized_predicate(&adapter, parameter).unwrap();
+        assert_eq!(predicate.is_some(), expected, "{source}");
+        if let Some(ir::Predicate::Implements(goal)) = predicate {
+            assert_eq!(goal.declaration, plan.catalog.id(tr::CatalogItem::Sized));
+            assert_eq!(goal.self_ty, ir::Ty::Param(parameter));
+            assert!(goal.args.is_empty());
+        }
+        let out_of_range = ir::ParamId {
+            index: 1,
+            ..parameter
+        };
+        assert!(tr::SchemaCx::impl_parameter_sized_predicate(&adapter, out_of_range).is_err());
+        let method = plan.registry.associated_ids[0][0];
+        let foreign_owner = ir::ParamId {
+            owner: ir::BinderId {
+                declaration: method,
+            },
+            index: 0,
+        };
+        assert!(tr::SchemaCx::impl_parameter_sized_predicate(&adapter, foreign_owner).is_err());
+        let foreign_program =
+            parse("struct G<T>{x:T}impl<T>G<T>{fn f(self){}}fn main(){}").unwrap();
+        let foreign_plan =
+            PlanCtx::from_program(&foreign_program, &ir::PlanBudget::default()).unwrap();
+        let foreign_parameter = ir::ParamId {
+            owner: foreign_plan
+                .registry
+                .declaration(foreign_plan.registry.impl_ids[0])
+                .unwrap()
+                .param_env
+                .binder(),
+            index: 0,
+        };
+        assert!(tr::SchemaCx::impl_parameter_sized_predicate(&adapter, foreign_parameter).is_err());
+        let mut changed = plan.program.as_ref().clone();
+        changed.impls[0].bounds.clear();
+        adapter.program = Arc::new(changed);
+        assert!(tr::SchemaCx::impl_parameter_sized_predicate(&adapter, parameter).is_err());
+        adapter.program = plan.program.clone();
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining - 1).unwrap();
+        let limited =
+            tr::SchemaCx::impl_parameter_sized_predicate(&adapter, parameter).unwrap_err();
+        assert_eq!(limited.kind(), tr::FactsErrorKind::Resource);
+        let first = budget.first_resource_failure().unwrap();
+        assert_eq!(first.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(first.requested, 2);
+        let repeated =
+            tr::SchemaCx::impl_parameter_sized_predicate(&adapter, parameter).unwrap_err();
+        assert_eq!(repeated.kind(), tr::FactsErrorKind::Resource);
+        assert_eq!(budget.first_resource_failure(), Some(first));
+    }
+}
+
+#[test]
+fn inherent_parameter_sized_service_replays_source_relaxation_against_forged_registry() {
+    for (source, forged_relaxed) in [
+        ("struct G<T>{x:T}impl<T>G<T>{fn f(self){}}fn main(){}", 1),
+        (
+            "struct G<T:?Sized>{p:*const T}impl<T:?Sized>G<T>{fn f(self)where T:Sized{}}fn main(){}",
+            0,
+        ),
+    ] {
+        let program = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let mut adapter = SchemaAdapter {
+            program: plan.program.clone(),
+            catalog: plan.catalog.clone(),
+            registry: plan.registry.clone(),
+            nominal_schemas: plan.nominal_schemas.clone(),
+            nominals: plan.nominals.clone(),
+            contexts: plan.contexts.clone(),
+            source_schemas: plan.source_schemas.clone(),
+            budget: budget.clone(),
+        };
+        let owner = plan.registry.impl_ids[0];
+        let parameter = ir::ParamId {
+            owner: plan.registry.declaration(owner).unwrap().param_env.binder(),
+            index: 0,
+        };
+        drop(plan);
+        let registry = Arc::get_mut(&mut adapter.registry)
+            .expect("fixture registry has no published alias after dropping plan");
+        let slot = registry.slots[&owner];
+        let fake =
+            Arc::new(ir::ParamEnv::with_relaxed_sized(parameter.owner, 1, forged_relaxed).unwrap());
+        registry.declarations[slot].param_env = fake.clone();
+        registry.declarations[slot].env = Arc::new(ir::GenericEnv::new(&[fake], &budget).unwrap());
+        let error = tr::SchemaCx::impl_parameter_sized_predicate(&adapter, parameter).unwrap_err();
+        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+    }
+}
+
+#[test]
 fn manually_drop_aliases_preserve_source_owner_and_owned_argument() {
     let source = parse("use core::mem::ManuallyDrop as M;fn a(x:core::mem::ManuallyDrop<i32>){}fn b(x:std::mem::ManuallyDrop<i32>){}fn c(x:M<i32>){}fn main(){let x:M<i32>=M::new(7);}").unwrap();
     let budget = ir::PlanBudget::default();

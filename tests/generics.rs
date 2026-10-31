@@ -191,6 +191,10 @@ fn sync_native_check_build_run_workers_1_8() {
 
 const MANUALLY_DROP_VALID: &[(&str, &str)] = &[
     (
+        "inherent_original_parameter_sized",
+        r#"struct G<T>{v:core::mem::ManuallyDrop<T>}impl<T>G<T>{fn new(v:T)->Self{G{v:core::mem::ManuallyDrop::new(v)}}fn take(self)->T{core::mem::ManuallyDrop::into_inner(self.v)}}fn main(){let x=G::<i32>::new(7);println!("{}",x.take());}"#,
+    ),
+    (
         "canonical_core_std",
         r#"fn take(x:core::mem::ManuallyDrop<i32>)->i32{std::mem::ManuallyDrop::into_inner(x)}fn main(){println!("{}",take(core::mem::ManuallyDrop::new(7)));}"#,
     ),

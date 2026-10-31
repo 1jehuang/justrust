@@ -688,6 +688,14 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    /// An exact original inherent-impl parameter's declared Sized predicate.
+    /// No caller or unrelated method may supply this source declaration fact.
+    /// Missing original declaration authority is a denial, never a default.
+    fn impl_parameter_sized_predicate(&self, parameter: ParamId) -> Result<Option<Predicate>> {
+        let _ = parameter;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        Ok(None)
+    }
     /// Original declaration safety, never a caller-supplied header flag. A
     /// source adapter authenticates the exact implementation/declared-trait
     /// pair. An omitted service cannot erase an unsafe source obligation.
@@ -3705,6 +3713,34 @@ impl ValidatedTraitWorld {
                     DeclKind::Function | DeclKind::AssociatedFunction | DeclKind::TraitItem => {
                         let schema = self.schema.declaration_schema(owner)?;
                         self.predicates_prove_sized(*parameter, &schema.predicates)?
+                    }
+                    DeclKind::Impl => {
+                        if info.own_env.binder() != parameter.owner
+                            || !info.own_env.contains(*parameter)
+                            || !info.env.contains(*parameter)
+                        {
+                            return Err(FactsError::invalid(
+                                &self.budget,
+                                "inherent implementation Sized parameter has foreign binder authority",
+                            ));
+                        }
+                        match self.schema.impl_parameter_sized_predicate(*parameter)? {
+                            Some(predicate) => {
+                                let expected = Predicate::Implements(TraitRef {
+                                    declaration: self.catalog.id(CatalogItem::Sized),
+                                    self_ty: Ty::Param(*parameter),
+                                    args: Arc::from([]),
+                                });
+                                if !self.eq_predicate(&predicate, &expected)? {
+                                    return Err(FactsError::invalid(
+                                        &self.budget,
+                                        "original inherent implementation Sized predicate changed owner or canonical identity",
+                                    ));
+                                }
+                                true
+                            }
+                            None => false,
+                        }
                     }
                     DeclKind::TraitImpl => {
                         let position = self
@@ -12316,6 +12352,225 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn inherent_impl_manually_drop_fields_use_exact_original_parameter_sized() {
+        let program = crate::compiler::frontend::parse(
+            "struct G<T>{v:core::mem::ManuallyDrop<T>}impl<T> G<T>{fn make(v:T)->Self{G{v:core::mem::ManuallyDrop::new(v)}}}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let parameter = world
+            .headers
+            .callables
+            .iter()
+            .flat_map(|header| header.schema.env.ordered_params())
+            .find(|parameter| {
+                world.info(parameter.owner.declaration).unwrap().kind == DeclKind::Impl
+            })
+            .unwrap();
+        let expected = Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Sized),
+            self_ty: Ty::Param(parameter),
+            args: Arc::from([]),
+        });
+        let declared = world
+            .schema
+            .impl_parameter_sized_predicate(parameter)
+            .unwrap()
+            .unwrap();
+        assert!(world.eq_predicate(&declared, &expected).unwrap());
+        world
+            .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+            .unwrap();
+        let invalid = ParamId {
+            index: parameter.index + 1,
+            ..parameter
+        };
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(invalid), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let foreign = ParamId {
+            owner: BinderId {
+                declaration: DeclId {
+                    snapshot: SnapshotId::standalone().unwrap(),
+                    index: parameter.owner.declaration.index,
+                },
+            },
+            ..parameter
+        };
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(foreign), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+
+        struct ReturnedPredicate {
+            raw: Arc<dyn SchemaCx + Send + Sync>,
+            response: Option<Predicate>,
+        }
+        impl SchemaCx for ReturnedPredicate {
+            fn budget(&self) -> &PlanBudget {
+                self.raw.budget()
+            }
+            fn registry_snapshot(&self) -> SnapshotId {
+                self.raw.registry_snapshot()
+            }
+            fn core_catalog(&self) -> &Arc<CoreCatalog> {
+                self.raw.core_catalog()
+            }
+            fn declaration_info(&self, declaration: DeclId) -> Result<SchemaDecl> {
+                self.raw.declaration_info(declaration)
+            }
+            fn declaration_schema(&self, declaration: DeclId) -> Result<GenericSchema> {
+                self.raw.declaration_schema(declaration)
+            }
+            fn source_region_env(&self, declaration: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
+                self.raw.source_region_env(declaration)
+            }
+            fn nominal_declaration_schema(
+                &self,
+                declaration: DeclId,
+            ) -> Result<NominalDeclarationSchema> {
+                self.raw.nominal_declaration_schema(declaration)
+            }
+            fn instantiate_schema(
+                &self,
+                schema: &GenericSchema,
+                args: &[Ty],
+                caller: &GenericEnv,
+                budget: &PlanBudget,
+            ) -> Result<InstantiatedSchema> {
+                self.raw.instantiate_schema(schema, args, caller, budget)
+            }
+            fn validate_nominal(
+                &self,
+                ty: &Ty,
+                env: &GenericEnv,
+                budget: &PlanBudget,
+            ) -> Result<()> {
+                self.raw.validate_nominal(ty, env, budget)
+            }
+            fn impl_trait_safety(
+                &self,
+                implementation: DeclId,
+                declaration: DeclId,
+            ) -> Result<(bool, bool)> {
+                self.raw.impl_trait_safety(implementation, declaration)
+            }
+            fn impl_parameter_sized_predicate(
+                &self,
+                _parameter: ParamId,
+            ) -> Result<Option<Predicate>> {
+                charged(self.budget(), self.budget().charge_work(1))?;
+                Ok(self.response.clone())
+            }
+        }
+        for (response, expected_error) in [
+            (None, FactsErrorKind::Unsupported),
+            (
+                Some(Predicate::Implements(TraitRef {
+                    declaration: world.catalog.id(CatalogItem::Copy),
+                    self_ty: Ty::Param(parameter),
+                    args: Arc::from([]),
+                })),
+                FactsErrorKind::InvalidMetadata,
+            ),
+            (
+                Some(Predicate::Implements(TraitRef {
+                    declaration: world.catalog.id(CatalogItem::Sized),
+                    self_ty: Ty::Param(foreign),
+                    args: Arc::from([]),
+                })),
+                FactsErrorKind::InvalidMetadata,
+            ),
+            (
+                Some(Predicate::Implements(TraitRef {
+                    declaration: world.catalog.id(CatalogItem::Sized),
+                    self_ty: Ty::Param(parameter),
+                    args: Arc::from([Ty::Bool]),
+                })),
+                FactsErrorKind::InvalidMetadata,
+            ),
+        ] {
+            let adapter = Arc::new(ReturnedPredicate {
+                raw: world.schema.clone(),
+                response,
+            });
+            let error =
+                ValidatedTraitWorld::build(world.headers.clone(), adapter, &budget).unwrap_err();
+            assert_eq!(error.kind(), expected_error);
+        }
+        let fixture = case().build().unwrap();
+        assert!(
+            fixture
+                .schema
+                .impl_parameter_sized_predicate(parameter)
+                .unwrap()
+                .is_none()
+        );
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining).unwrap();
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Resource
+        );
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(failure.used, failure.limit);
+        assert!(budget.charge_work(1).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(failure));
+    }
+
+    #[test]
+    fn inherent_impl_relaxed_owner_cannot_borrow_method_only_sized_bound() {
+        let program = crate::compiler::frontend::parse(
+            "struct G<T:?Sized>{p:*const T}impl<T:?Sized>G<T>{fn only_sized(self)where T:Sized{}}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let method = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                header.schema.env.ordered_params().any(|parameter| {
+                    world.info(parameter.owner.declaration).unwrap().kind == DeclKind::Impl
+                })
+            })
+            .unwrap();
+        let parameter = method.schema.env.ordered_params().next().unwrap();
+        assert!(
+            world
+                .predicates_prove_sized(parameter, &method.schema.predicates)
+                .unwrap()
+        );
+        assert!(
+            world
+                .schema
+                .impl_parameter_sized_predicate(parameter)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Unsupported
+        );
+    }
+
     #[test]
     fn impl_owned_phantom_sized_uses_original_parameter_evidence_not_default_assumptions() {
         let program = crate::compiler::frontend::parse(
