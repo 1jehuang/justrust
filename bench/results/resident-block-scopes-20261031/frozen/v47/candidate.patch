@@ -1,0 +1,1333 @@
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs
+index 3442da927..6bafac47a 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs
+@@ -11,9 +11,11 @@ use syntax::{
+ use triomphe::Arc;
+ 
+ use crate::{
+-    DefWithBodyId, ExpressionStoreOwnerId, HasModule,
++    BlockId, DefWithBodyId, ExpressionStoreOwnerId, HasModule,
+     expr_store::{
+-        ExpressionStore, ExpressionStoreSourceMap, Move, SelfParamPtr, lower::lower_body, pretty,
++        ExpressionStore, ExpressionStoreSourceMap, Move, SelfParamPtr,
++        lower::{lower_body, lower_body_scopes},
++        pretty,
+     },
+     hir::{BindingId, ExprId, PatId},
+     src::HasSource,
+@@ -147,33 +149,18 @@ impl Body {
+         def: DefWithBodyId,
+     ) -> Option<(Arc<Body>, BodySourceMap)> {
+         let _p = tracing::info_span!("body_relative_query").entered();
+-        let syntax = body_syntax(db, def).as_ref()?;
+-        let node = syntax.item.to_node(&syntax.root(db));
+-        let (mut params, mut is_async_fn, mut is_gen_fn) = (None, false, false);
+-        let body = match def {
+-            DefWithBodyId::FunctionId(_) => {
+-                let it = ast::Fn::cast(node.clone())?;
+-                params = it.param_list();
+-                is_async_fn = it.async_token().is_some();
+-                is_gen_fn = it.gen_token().is_some();
+-                it.body().map(ast::Expr::from)
+-            }
+-            DefWithBodyId::ConstId(_) => ast::Const::cast(node.clone())?.body(),
+-            DefWithBodyId::StaticId(_) => ast::Static::cast(node.clone())?.body(),
+-            DefWithBodyId::VariantId(_) => ast::Variant::cast(node.clone())?.const_arg()?.expr(),
+-        };
+-        let maps = Some((&syntax.span_map, &syntax.ast_id_map));
++        let input = relative_input(db, def)?;
+         let (body, source_map) = lower_body(
+             db,
+             def,
+-            syntax.item,
+-            syntax.file_id,
++            input.syntax_node,
++            input.file_id,
+             def.module(db),
+-            params,
+-            body,
+-            is_async_fn,
+-            is_gen_fn,
+-            maps,
++            input.parts.params,
++            input.parts.body,
++            input.parts.is_async_fn,
++            input.parts.is_gen_fn,
++            input.maps,
+         );
+         Some((Arc::new(body), source_map))
+     }
+@@ -185,6 +172,76 @@ impl Body {
+             None => Self::with_source_map(db, def).0.clone(),
+         }
+     }
++
++    /// Current item-bearing blocks, in the original lowering visit order. This query uses
++    /// the authoritative collector with an output sink, not `Body::of` or an AstId guess.
++    #[salsa::tracked(returns(ref))]
++    pub(crate) fn block_scopes(db: &dyn SourceDatabase, def: DefWithBodyId) -> Vec<BlockId> {
++        let input = relative_input(db, def).unwrap_or_else(|| file_input(db, def));
++        lower_body_scopes(
++            db,
++            def,
++            input.syntax_node,
++            input.file_id,
++            def.module(db),
++            input.parts.params,
++            input.parts.body,
++            input.parts.is_async_fn,
++            input.parts.is_gen_fn,
++            input.maps,
++        )
++    }
++
++    /// Independent original whole-file input selection and full materializing traversal.
++    /// Do not replace this with the candidate's input helper or scope-query output.
++    #[cfg(test)]
++    #[salsa::tracked(returns(ref))]
++    pub(crate) fn original_fullwalk_blocks(
++        db: &dyn SourceDatabase,
++        def: DefWithBodyId,
++    ) -> Vec<BlockId> {
++        let mut params = None;
++        let mut is_async_fn = false;
++        let mut is_gen_fn = false;
++        let (InFile { file_id, value: body }, syntax_node) = match def {
++            DefWithBodyId::FunctionId(f) => {
++                let src = f.lookup(db).source(db);
++                params = src.value.param_list();
++                is_async_fn = src.value.async_token().is_some();
++                is_gen_fn = src.value.gen_token().is_some();
++                let syntax_node = SyntaxNodePtr::new(src.syntax().value);
++                (src.map(|it| it.body().map(ast::Expr::from)), syntax_node)
++            }
++            DefWithBodyId::ConstId(c) => {
++                let src = c.lookup(db).source(db);
++                let syntax_node = SyntaxNodePtr::new(src.syntax().value);
++                (src.map(|it| it.body()), syntax_node)
++            }
++            DefWithBodyId::StaticId(s) => {
++                let src = s.lookup(db).source(db);
++                let syntax_node = SyntaxNodePtr::new(src.syntax().value);
++                (src.map(|it| it.body()), syntax_node)
++            }
++            DefWithBodyId::VariantId(v) => {
++                let src = v.lookup(db).source(db);
++                let syntax_node = SyntaxNodePtr::new(src.syntax().value);
++                (src.map(|it| it.const_arg()?.expr()), syntax_node)
++            }
++        };
++        let (body, _) = lower_body(
++            db,
++            def,
++            syntax_node,
++            file_id,
++            def.module(db),
++            params,
++            body,
++            is_async_fn,
++            is_gen_fn,
++            None,
++        );
++        body.blocks(db).map(|(block, _)| block).collect()
++    }
+ }
+ 
+ impl Body {
+@@ -220,36 +277,77 @@ fn def_syntax(db: &dyn SourceDatabase, def: DefWithBodyId) -> InFile<SyntaxNode>
+ /// Lowers the body of `def` from the whole file it is in. What a body written by a macro is
+ /// lowered with, and what [`check_relative`] checks the others against.
+ fn lower_in_file(db: &dyn SourceDatabase, def: DefWithBodyId) -> (Body, BodySourceMap) {
+-    let mut params = None;
+-    let mut is_async_fn = false;
+-    let mut is_gen_fn = false;
+-    let (InFile { file_id, value: body }, syntax_node) = match def {
+-        DefWithBodyId::FunctionId(f) => {
+-            let src = f.lookup(db).source(db);
+-            params = src.value.param_list();
+-            is_async_fn = src.value.async_token().is_some();
+-            is_gen_fn = src.value.gen_token().is_some();
+-            let syntax_node = SyntaxNodePtr::new(src.syntax().value);
+-            (src.map(|it| it.body().map(ast::Expr::from)), syntax_node)
+-        }
+-        DefWithBodyId::ConstId(c) => {
+-            let src = c.lookup(db).source(db);
+-            let syntax_node = SyntaxNodePtr::new(src.syntax().value);
+-            (src.map(|it| it.body()), syntax_node)
+-        }
+-        DefWithBodyId::StaticId(s) => {
+-            let src = s.lookup(db).source(db);
+-            let syntax_node = SyntaxNodePtr::new(src.syntax().value);
+-            (src.map(|it| it.body()), syntax_node)
+-        }
+-        DefWithBodyId::VariantId(v) => {
+-            let src = v.lookup(db).source(db);
+-            let syntax_node = SyntaxNodePtr::new(src.syntax().value);
+-            (src.map(|it| it.const_arg()?.expr()), syntax_node)
++    let input = file_input(db, def);
++    lower_body(
++        db,
++        def,
++        input.syntax_node,
++        input.file_id,
++        def.module(db),
++        input.parts.params,
++        input.parts.body,
++        input.parts.is_async_fn,
++        input.parts.is_gen_fn,
++        input.maps,
++    )
++}
++
++struct BodyParts {
++    params: Option<ast::ParamList>,
++    body: Option<ast::Expr>,
++    is_async_fn: bool,
++    is_gen_fn: bool,
++}
++
++/// Selection only: parameter *types* are not Body inputs. Closure types are visited later
++/// by the collector. Keeping this shared prevents scope discovery from scanning signatures.
++fn body_parts(def: DefWithBodyId, node: SyntaxNode) -> Option<BodyParts> {
++    let mut parts = BodyParts { params: None, body: None, is_async_fn: false, is_gen_fn: false };
++    parts.body = match def {
++        DefWithBodyId::FunctionId(_) => {
++            let it = ast::Fn::cast(node)?;
++            parts.params = it.param_list();
++            parts.is_async_fn = it.async_token().is_some();
++            parts.is_gen_fn = it.gen_token().is_some();
++            it.body().map(ast::Expr::from)
+         }
++        DefWithBodyId::ConstId(_) => ast::Const::cast(node)?.body(),
++        DefWithBodyId::StaticId(_) => ast::Static::cast(node)?.body(),
++        DefWithBodyId::VariantId(_) => ast::Variant::cast(node)?.const_arg()?.expr(),
+     };
+-    let module = def.module(db);
+-    lower_body(db, def, syntax_node, file_id, module, params, body, is_async_fn, is_gen_fn, None)
++    Some(parts)
++}
++
++struct BodyInput<'db> {
++    syntax_node: SyntaxNodePtr,
++    file_id: HirFileId,
++    parts: BodyParts,
++    maps: Option<(&'db RealSpanMap, &'db AstIdMap)>,
++}
++
++fn relative_input(db: &dyn SourceDatabase, def: DefWithBodyId) -> Option<BodyInput<'_>> {
++    let syntax = body_syntax(db, def).as_ref()?;
++    Some(BodyInput {
++        syntax_node: syntax.item,
++        file_id: syntax.file_id,
++        parts: body_parts(def, syntax.item.to_node(&syntax.root(db)))?,
++        maps: Some((&syntax.span_map, &syntax.ast_id_map)),
++    })
++}
++
++fn file_input(db: &dyn SourceDatabase, def: DefWithBodyId) -> BodyInput<'_> {
++    let src = def_syntax(db, def);
++    // A variant without a const argument has no body. The relative route falls back here.
++    let parts = body_parts(def, src.value.clone()).unwrap_or_else(|| {
++        assert!(matches!(def, DefWithBodyId::VariantId(_)), "body source has the wrong kind");
++        BodyParts { params: None, body: None, is_async_fn: false, is_gen_fn: false }
++    });
++    BodyInput {
++        syntax_node: SyntaxNodePtr::new(&src.value),
++        file_id: src.file_id,
++        parts,
++        maps: None,
++    }
+ }
+ 
+ /// Whether [`Body::with_source_map`] checks the source map of each body lowered alone, moved,
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower.rs
+index f93d5e112..3240e7c4f 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower.rs
+@@ -82,6 +82,79 @@ pub(super) fn lower_body(
+     is_gen_fn: bool,
+     maps: Option<(&RealSpanMap, &AstIdMap)>,
+ ) -> (Body, BodySourceMap) {
++    let (collector, params, self_param, source_map_self_param) = collect_body(
++        db,
++        owner,
++        syntax_node,
++        current_file_id,
++        module,
++        parameters,
++        body,
++        is_async_fn,
++        is_gen_fn,
++        maps,
++        false,
++    );
++    assert!(!collector.scope_only, "scope sink cannot publish a Body");
++    let (store, source_map) = collector.store.finish();
++    (
++        Body { store, params: params.into_boxed_slice(), self_param },
++        BodySourceMap { self_param: source_map_self_param, store: source_map },
++    )
++}
++
++/// Runs the same semantic traversal without materializing expression, pattern or type HIR.
++/// Sink IDs never leave this function and must never be dereferenced by this traversal.
++pub(super) fn lower_body_scopes(
++    db: &dyn SourceDatabase,
++    owner: DefWithBodyId,
++    syntax_node: SyntaxNodePtr,
++    current_file_id: HirFileId,
++    module: ModuleId,
++    parameters: Option<ast::ParamList>,
++    body: Option<ast::Expr>,
++    is_async_fn: bool,
++    is_gen_fn: bool,
++    maps: Option<(&RealSpanMap, &AstIdMap)>,
++) -> Vec<BlockId> {
++    let (collector, _, _, _) = collect_body(
++        db,
++        owner,
++        syntax_node,
++        current_file_id,
++        module,
++        parameters,
++        body,
++        is_async_fn,
++        is_gen_fn,
++        maps,
++        true,
++    );
++    assert!(collector.scope_only);
++    assert!(collector.store.exprs.is_empty(), "scope traversal materialized expressions");
++    assert!(collector.store.pats.is_empty(), "scope traversal materialized patterns");
++    assert!(collector.store.types.is_empty(), "scope traversal materialized types");
++    collector.store.block_scopes
++}
++
++fn collect_body<'db>(
++    db: &'db dyn SourceDatabase,
++    owner: DefWithBodyId,
++    syntax_node: SyntaxNodePtr,
++    current_file_id: HirFileId,
++    module: ModuleId,
++    parameters: Option<ast::ParamList>,
++    body: Option<ast::Expr>,
++    is_async_fn: bool,
++    is_gen_fn: bool,
++    maps: Option<(&'db RealSpanMap, &'db AstIdMap)>,
++    scope_only: bool,
++) -> (
++    ExprCollector<'db>,
++    Vec<Param<PatId>>,
++    Option<Param<BindingId>>,
++    Option<InFile<AstPtr<ast::SelfParam>>>,
++) {
+     // We cannot leave the root span map empty and let any identifier from it be treated as root,
+     // because when inside nested macros `SyntaxContextId`s from the outer macro will be interleaved
+     // with the inner macro, and that will cause confusion because they won't be the same as `ROOT`
+@@ -93,6 +166,7 @@ pub(super) fn lower_body(
+     let mut params = vec![];
+     let mut collector =
+         ExprCollector::with_maps(db, module, current_file_id, LoweringMode::Analysis, maps);
++    collector.scope_only = scope_only;
+ 
+     let skip_body = AttrFlags::query(
+         db,
+@@ -133,11 +207,7 @@ pub(super) fn lower_body(
+ 
+             collector.missing_expr()
+         });
+-        let (store, source_map) = collector.store.finish();
+-        return (
+-            Body { store, params: params.into_boxed_slice(), self_param },
+-            BodySourceMap { self_param: source_map_self_param, store: source_map },
+-        );
++        return (collector, params, self_param, source_map_self_param);
+     }
+     validate_required_body(db, owner, current_file_id, syntax_node, body.as_ref(), &mut collector);
+     collector.with_expr_root(|collector| {
+@@ -205,11 +275,7 @@ pub(super) fn lower_body(
+         )
+     });
+ 
+-    let (store, source_map) = collector.store.finish();
+-    (
+-        Body { store, params: params.into_boxed_slice(), self_param },
+-        BodySourceMap { self_param: source_map_self_param, store: source_map },
+-    )
++    (collector, params, self_param, source_map_self_param)
+ }
+ 
+ fn validate_required_body(
+@@ -511,6 +577,8 @@ pub(crate) fn lower_function(
+ }
+ 
+ pub struct ExprCollector<'db> {
++    /// Private output sink. The zero IDs returned in this mode are never published or read.
++    scope_only: bool,
+     db: &'db dyn SourceDatabase,
+     cfg_options: &'db CfgOptions,
+     expander: Expander<'db>,
+@@ -739,6 +807,7 @@ impl<'db> ExprCollector<'db> {
+         };
+         let krate = module.krate(db);
+         let mut result = ExprCollector {
++            scope_only: false,
+             db,
+             cfg_options: krate.cfg_options(db),
+             module,
+@@ -967,6 +1036,9 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_type_ref(&mut self, type_ref: TypeRef, node: TypePtr) -> TypeRefId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         let plain = matches!(&type_ref, TypeRef::Path(path) if path.type_anchor().is_none()
+             && path.mod_path().is_some_and(|it| it.kind == PathKind::Plain));
+         let id = self.store.types.alloc(type_ref);
+@@ -999,6 +1071,9 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_type_ref_desugared(&mut self, type_ref: TypeRef) -> TypeRefId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         self.store.types.alloc(type_ref)
+     }
+ 
+@@ -1007,7 +1082,7 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_error_type(&mut self) -> TypeRefId {
+-        self.store.types.alloc(TypeRef::Error)
++        self.alloc_type_ref_desugared(TypeRef::Error)
+     }
+ 
+     pub fn lower_path(
+@@ -1174,6 +1249,7 @@ impl<'db> ExprCollector<'db> {
+         kind: CoroutineKind,
+         coroutine_source: CoroutineSource,
+     ) -> ExprId {
++        assert!(!self.scope_only, "scope sink must not read coroutine HIR");
+         // Async function parameters are lowered into the closure body so that they are
+         // captured and so that the drop order matches the equivalent non-async functions.
+         //
+@@ -1343,6 +1419,9 @@ impl<'db> ExprCollector<'db> {
+         self.awaitable_context.replace(awaitable);
+         self.with_label_rib(RibKind::Closure, |this| {
+             let body = this.collect_expr_opt(expr);
++            if this.scope_only {
++                return body;
++            }
+             if is_async_fn || is_gen_fn {
+                 let kind = match (is_async_fn, is_gen_fn) {
+                     (true, true) => CoroutineKind::AsyncGen,
+@@ -1856,6 +1935,11 @@ impl<'db> ExprCollector<'db> {
+                     };
+                     let mut body = this
+                         .with_awaitable_block(awaitable, |this| this.collect_expr_opt(e.body()));
++                    if this.scope_only {
++                        this.is_lowering_coroutine = prev_is_lowering_coroutine;
++                        this.current_try_block = prev_try_block;
++                        return (body, body);
++                    }
+                     let kind = {
+                         if e.async_token().is_some() && e.gen_token().is_some() {
+                             Some(CoroutineKind::AsyncGen)
+@@ -1919,6 +2003,7 @@ impl<'db> ExprCollector<'db> {
+                 });
+ 
+                 if is_coroutine_closure {
++                    assert!(!this.scope_only, "scope sink must not inspect closure HIR");
+                     let Expr::Closure { args, .. } = &this.store.exprs[closure] else {
+                         unreachable!()
+                     };
+@@ -2178,7 +2263,7 @@ impl<'db> ExprCollector<'db> {
+             let src = self.expander.in_file(AstPtr::new(&expr).wrap_left());
+             let expr = self.collect_expr(expr);
+             // Do not use `alloc_pat_from_expr()` here, it will override the entry in `expr_map`.
+-            let id = self.store.pats.alloc(Pat::Expr(expr));
++            let id = self.alloc_pat_desugared(Pat::Expr(expr));
+             self.store.pat_map_back.insert(id, src);
+             id
+         })
+@@ -2423,6 +2508,14 @@ impl<'db> ExprCollector<'db> {
+             (btail, block)
+         });
+ 
++        if self.scope_only {
++            self.current_try_block = old_try_block;
++            if let Some(ty) = result_type {
++                self.lower_type_ref_disallow_impl_trait(ty);
++            }
++            return expr_id;
++        }
++
+         let callee = self
+             .alloc_expr_desugared_with_ptr(try_from_output.map_or(Expr::Missing, Expr::Path), ptr);
+         let next_tail = match btail {
+@@ -2437,10 +2530,12 @@ impl<'db> ExprCollector<'db> {
+                 )
+             }
+         };
+-        let Expr::Block { tail, .. } = &mut self.store.exprs[expr_id] else {
+-            unreachable!("block was lowered to non-block");
+-        };
+-        *tail = Some(next_tail);
++        if !self.scope_only {
++            let Expr::Block { tail, .. } = &mut self.store.exprs[expr_id] else {
++                unreachable!("block was lowered to non-block");
++            };
++            *tail = Some(next_tail);
++        }
+         self.current_try_block = old_try_block;
+         match result_type {
+             Some(ty) => {
+@@ -2518,6 +2613,9 @@ impl<'db> ExprCollector<'db> {
+             }),
+             None => self.collect_expr_opt(e.condition()),
+         };
++        if self.scope_only {
++            return condition;
++        }
+ 
+         let break_expr = self.alloc_expr(Expr::Break { expr: None, label: None }, syntax_ptr);
+         let if_expr = self.alloc_expr(
+@@ -2582,6 +2680,9 @@ impl<'db> ExprCollector<'db> {
+             guard: None,
+             expr: self.with_opt_labeled_rib(label, |this| this.collect_expr_opt(loop_body)),
+         };
++        if self.scope_only {
++            return some_arm.expr;
++        }
+         let iter_name = self.generate_new_name();
+         let iter_expr = self
+             .alloc_expr_desugared_with_ptr(Expr::Path(Path::from(iter_name.clone())), syntax_ptr);
+@@ -2653,6 +2754,9 @@ impl<'db> ExprCollector<'db> {
+             return self.missing_expr();
+         };
+         let operand = self.collect_expr_opt(e.expr());
++        if self.scope_only {
++            return operand;
++        }
+         let try_branch = self.alloc_expr(Expr::Path(try_branch), syntax_ptr);
+         let expr = self
+             .alloc_expr(Expr::Call { callee: try_branch, args: Box::new([operand]) }, syntax_ptr);
+@@ -3038,6 +3142,13 @@ impl<'db> ExprCollector<'db> {
+             None
+         });
+ 
++        if self.scope_only {
++            self.def_map = prev_def_map;
++            self.module = prev_local_module;
++            self.current_block_legacy_macro_defs_count = prev_legacy_macros_count;
++            return self.sink_id();
++        }
++
+         let written_in = block
+             .stmt_list()
+             .and_then(|it| it.l_curly_token())
+@@ -3765,6 +3876,9 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_expr(&mut self, expr: Expr, ptr: ExprPtr) -> ExprId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         let src = self.expander.in_file(ptr);
+         let id = self.store.exprs.alloc(expr);
+         self.store.expr_map_back.insert(id, src.map(AstPtr::wrap_left));
+@@ -3774,9 +3888,15 @@ impl<'db> ExprCollector<'db> {
+     // FIXME: desugared exprs don't have ptr, that's wrong and should be fixed.
+     // Migrate to alloc_expr_desugared_with_ptr and then rename back
+     fn alloc_expr_desugared(&mut self, expr: Expr) -> ExprId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         self.store.exprs.alloc(expr)
+     }
+     fn alloc_expr_desugared_with_ptr(&mut self, expr: Expr, ptr: ExprPtr) -> ExprId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         let src = self.expander.in_file(ptr);
+         let id = self.store.exprs.alloc(expr);
+         self.store.expr_map_back.insert(id, src.map(AstPtr::wrap_left));
+@@ -3800,6 +3920,9 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_pat_from_expr(&mut self, pat: Pat, ptr: ExprPtr) -> PatId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         let src = self.expander.in_file(ptr);
+         let id = self.store.pats.alloc(pat);
+         self.store.expr_map.insert(src, id.into());
+@@ -3808,6 +3931,9 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_expr_from_pat(&mut self, expr: Expr, ptr: PatPtr) -> ExprId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         let src = self.expander.in_file(ptr);
+         let id = self.store.exprs.alloc(expr);
+         self.store.pat_map.insert(src, id.into());
+@@ -3816,6 +3942,9 @@ impl<'db> ExprCollector<'db> {
+     }
+ 
+     fn alloc_pat(&mut self, pat: Pat, ptr: PatPtr) -> PatId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         let src = self.expander.in_file(ptr);
+         let id = self.store.pats.alloc(pat);
+         self.store.pat_map_back.insert(id, src.map(AstPtr::wrap_right));
+@@ -3824,10 +3953,20 @@ impl<'db> ExprCollector<'db> {
+     }
+     // FIXME: desugared pats don't have ptr, that's wrong and should be fixed somehow.
+     fn alloc_pat_desugared(&mut self, pat: Pat) -> PatId {
++        if self.scope_only {
++            return self.sink_id();
++        }
+         self.store.pats.alloc(pat)
+     }
+     fn missing_pat(&mut self) -> PatId {
+-        self.store.pats.alloc(Pat::Missing)
++        self.alloc_pat_desugared(Pat::Missing)
++    }
++
++    /// Sink handles are placeholders for output-only edges. They may only be passed back
++    /// into output constructors, never indexed, published in a Body or returned as HIR.
++    fn sink_id<T>(&self) -> la_arena::Idx<T> {
++        assert!(self.scope_only, "sink ID requested by materializing lowering");
++        la_arena::Idx::from_raw(la_arena::RawIdx::from_u32(0))
+     }
+ 
+     fn alloc_label(&mut self, label: Label, ptr: AstPtr<ast::Label>) -> LabelId {
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/format_args.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/format_args.rs
+index 74b847e68..4d0830db5 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/format_args.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/format_args.rs
+@@ -53,9 +53,15 @@ impl<'db> ExprCollector<'db> {
+             _ => None,
+         });
+         let mut mappings = vec![];
+-        let (mut fmt, hygiene) = match template.and_then(|template| {
++        let template = template.and_then(|template| {
+             self.expand_macros_to_string(template.clone()).map(|it| (it, template))
+-        }) {
++        });
++        // All input expressions and template macro calls have been visited in the original
++        // order. Parsing/optimizing the format output below only reads materialized HIR.
++        if self.scope_only {
++            return self.missing_expr();
++        }
++        let (mut fmt, hygiene) = match template {
+             Some(((s, is_direct_literal), template)) => {
+                 let call_ctx = SyntaxContext::root(self.def_map.edition());
+                 let hygiene = self.hygiene_id_for(s.syntax().text_range());
+@@ -117,6 +123,7 @@ impl<'db> ExprCollector<'db> {
+         syntax_ptr: AstPtr<ast::Expr>,
+         fmt: FormatArgs,
+     ) -> ExprId {
++        assert!(!self.scope_only, "scope sink cannot materialize formatting output");
+         let lang_items = self.lang_items();
+ 
+         // Create a list of all _unique_ (argument, format trait) combinations.
+@@ -481,6 +488,7 @@ impl<'db> ExprCollector<'db> {
+     /// integer no larger than its type holds, an unsuffixed one taken as `i32` and `isize` and
+     /// `usize` as 64 bits wide (larger ones do not compile for a narrower target).
+     fn inlinable_literal(&self, mut expr: ExprId) -> Option<Symbol> {
++        assert!(!self.scope_only, "scope sink must not inspect formatting HIR");
+         while let Expr::Ref { expr: inner, rawness: Rawness::Ref, .. } = &self.store.exprs[expr] {
+             expr = *inner;
+         }
+@@ -544,6 +552,7 @@ impl<'db> ExprCollector<'db> {
+         arg: ExprId,
+         ty: ArgumentType,
+     ) -> ExprId {
++        assert!(!self.scope_only, "scope sink cannot allocate formatting arguments");
+         use ArgumentType::*;
+         use FormatTrait::*;
+ 
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/lib.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/lib.rs
+index a9e45a43f..49dc883fa 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/lib.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/lib.rs
+@@ -519,7 +519,7 @@ impl<'db> BlockIdLt<'db> {
+         token: TrackedStructToken,
+     ) -> Self {
+         _ = token;
+-        BlockIdLt::new_(db, ast_id, module)
++        canonical_block_id(db, ast_id, module)
+     }
+ 
+     /// # Safety
+@@ -529,6 +529,18 @@ impl<'db> BlockIdLt<'db> {
+         unsafe { std::mem::transmute(self) }
+     }
+ }
++
++/// The single creation site for tracked block identities. The key includes the immediate
++/// allocated lexical module, not merely the module of the body owner. Callers recovering
++/// persisted identities must establish current body membership before using this query.
++#[salsa::tracked(returns(copy))]
++pub(crate) fn canonical_block_id<'db>(
++    db: &'db dyn SourceDatabase,
++    ast_id: AstId<ast::BlockExpr>,
++    module: ModuleIdLt<'db>,
++) -> BlockIdLt<'db> {
++    BlockIdLt::new_(db, ast_id, module)
++}
+ impl BlockId {
+     /// # Safety
+     ///
+diff --git a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs
+index 02114dfce..754c300f5 100644
+--- a/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs
++++ b/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs
+@@ -155,8 +155,13 @@ pub(super) fn served(db: &dyn SourceDatabase, krate: Crate) -> Option<(DefMap, L
+     if frozen.mode == Mode::Check {
+         return None;
+     }
+-    let (def_map, local) = decode(db, krate, &frozen.bytes)
+-        .unwrap_or_else(|why| panic!("a frozen def map does not read: {why}"));
++    let (def_map, local) = match decode(db, krate, &frozen.bytes) {
++        Ok(it) => it,
++        // Stale membership is a cache miss, not permission to synthesize a tracked block.
++        // Verification remains strict so an oracle mismatch can never be hidden by fallback.
++        Err(_) if frozen.mode == Mode::Serve => return None,
++        Err(why) => panic!("a frozen def map does not read: {why}"),
++    };
+     if frozen.mode == Mode::Verify {
+         match encode_maps(db, krate, &def_map, &local) {
+             Ok(written) if *written == *frozen.bytes => {}
+@@ -424,6 +429,22 @@ fn body_owners(db: &dyn SourceDatabase, module: ModuleId) -> Vec<DefWithBodyId>
+     owners
+ }
+ 
++/// Full file/expansion identity plus current semantic body membership. In particular, do
++/// not reconstruct a block with `owner.module(db)`: nested blocks have different parents.
++fn current_block(
++    db: &dyn SourceDatabase,
++    owner: DefWithBodyId,
++    ast_id: AstId<ast::BlockExpr>,
++) -> R<BlockId> {
++    let mut found =
++        Body::block_scopes(db, owner).iter().copied().filter(|it| it.ast_id(db) == ast_id);
++    let block = found.next().ok_or("a block not in its body")?;
++    if found.next().is_some() {
++        return Err("ambiguous blocks with the same AstId in one body".to_owned());
++    }
++    Ok(block)
++}
++
+ const NEW: u8 = 0;
+ const SEEN: u8 = 1;
+ 
+@@ -1008,7 +1029,7 @@ impl Enc<'_> {
+     pub fn module(&mut self, it: ModuleId) -> R {
+         let db = self.db;
+         if let Some(block) = it.block(db) {
+-            // A block is made as its body is lowered: it is named by that body.
++            // A block is named by its body, but finding its identity need not materialize HIR.
+             let block = unsafe { block.to_static() };
+             let owner = self.block_owner(block)?;
+             self.u8(1);
+@@ -1044,7 +1065,7 @@ impl Enc<'_> {
+         let module = unsafe { block.module(db).to_static() };
+         if self.searched.insert(module) {
+             for owner in body_owners(db, module) {
+-                for (found, _) in Body::of(db, owner).blocks(db) {
++                for &found in Body::block_scopes(db, owner) {
+                     self.block_owners.entry(found).or_insert(owner);
+                 }
+             }
+@@ -1055,7 +1076,7 @@ impl Enc<'_> {
+         let outer = module.block(db).map(|it| unsafe { it.to_static() });
+         let owner = outer.ok_or("a block in no body of its module")?;
+         let owner = self.block_owner(owner)?;
+-        if !Body::of(db, owner).blocks(db).any(|(it, _)| it == block) {
++        if !Body::block_scopes(db, owner).contains(&block) {
+             return Err("a block in no body of the block it is in".to_owned());
+         }
+         self.block_owners.insert(block, owner);
+@@ -2352,10 +2373,8 @@ impl Dec<'_> {
+             let owner = self.body_owner()?;
+             let block: AstId<ast::BlockExpr> = self.ast_id()?;
+             let index = self.len()?;
+-            let (_, def_map) = Body::of(db, owner)
+-                .blocks(db)
+-                .find(|(it, _)| it.ast_id(db) == block)
+-                .ok_or("a block not in its body")?;
++            let found = current_block(db, owner, block)?;
++            let def_map = super::block_def_map(db, found);
+             let module = def_map.table(db).keys().nth(index).copied();
+             return module.ok_or_else(|| format!("module {index} of a block"));
+         }
+@@ -2979,10 +2998,434 @@ impl Dec<'_> {
+ 
+ #[cfg(test)]
+ mod tests {
++    use syntax::ast::HasName;
+     use test_fixture::WithFixture;
+ 
+     use super::*;
+     use crate::test_db::TestDB;
++    use crate::{HasModule, src::HasSource};
++
++    fn resident_scope_owner(db: &TestDB, name: &str) -> DefWithBodyId {
++        let root = super::super::crate_def_map(db, crate_named(db, "main")).root_module_id();
++        body_owners(db, root)
++            .into_iter()
++            .find(|owner| {
++                let DefWithBodyId::FunctionId(function) = owner else { return false };
++                function.lookup(db).source(db).value.name().is_some_and(|it| it.text() == name)
++            })
++            .unwrap_or_else(|| panic!("missing fixture function {name}"))
++    }
++
++    fn resident_no_body_providers(events: &[String]) {
++        for forbidden in ["Body::of", "Body::relative", "Body::with_source_map"] {
++            assert_eq!(
++                events.iter().filter(|it| it.as_str() == forbidden).count(),
++                0,
++                "candidate executed materializing provider {forbidden}: {events:?}"
++            );
++        }
++    }
++
++    fn resident_scope_oracle(db: &TestDB, owner: DefWithBodyId, expected: usize) -> Vec<BlockId> {
++        let mut scopes = Vec::new();
++        let events = db.log_executed(|| scopes = Body::block_scopes(db, owner).clone());
++        resident_no_body_providers(&events);
++        assert_eq!(scopes.len(), expected, "unexpected scope membership");
++        // Full materialization and independently preserved whole-file input selection.
++        let original: Vec<_> = Body::of(db, owner).blocks(db).map(|(it, _)| it).collect();
++        assert_eq!(scopes, original, "scope sink differs from original Body traversal");
++        assert_eq!(
++            &scopes,
++            Body::original_fullwalk_blocks(db, owner),
++            "scope sink differs from independent original whole-file selection"
++        );
++        let repeated = Body::block_scopes(db, owner);
++        assert_eq!(&scopes, repeated, "same-revision tracked identity changed");
++        for &block in &scopes {
++            assert_eq!(current_block(db, owner, block.ast_id(db)), Ok(block));
++            let parent = block.module(db);
++            assert_eq!(crate::canonical_block_id(db, block.ast_id(db), parent), block);
++            assert_eq!(super::super::block_def_map(db, block).block.unwrap().parent, unsafe {
++                parent.to_static()
++            });
++        }
++        scopes
++    }
++
++    const RESIDENT_SCOPES: &str = r#"
++//- /main.rs crate:main
++macro_rules! emit { () => {{ struct Macro; { struct Deep; } }} }
++macro_rules! outer { () => { emit!() } }
++fn target() {
++    struct Root;
++    { struct Local; { struct Deep; } }
++    emit!(); emit!(); outer!();
++    macro_rules! emit { () => {{ struct Shadow; }} }
++    emit!();
++    let _ = async |p: [u8; { struct Param; 1 }]| -> [u8; { struct Ret; 1 }] {
++        struct Closure;
++        [0]
++    };
++}
++"#;
++
++    #[test]
++    fn resident_block_scopes_nested_macros_and_closures() {
++        let db = TestDB::with_files(RESIDENT_SCOPES);
++        let owner = resident_scope_owner(&db, "target");
++        let mut first = Vec::new();
++        let events = db.log_executed(|| first = Body::block_scopes(&db, owner).clone());
++        resident_no_body_providers(&events);
++        assert_eq!(
++            events.iter().filter(|it| it.as_str() == "Body::block_scopes").count(),
++            1,
++            "cold candidate did not execute exactly once: {events:?}"
++        );
++        let blocks = resident_scope_oracle(&db, owner, 13);
++        assert_eq!(blocks, first);
++        assert_eq!(blocks[0].module(&db), unsafe { owner.module(&db).to_db(&db) });
++        assert_ne!(blocks[1].module(&db), blocks[0].module(&db));
++        assert_ne!(blocks[2].module(&db), blocks[1].module(&db));
++        let macro_files: FxHashSet<_> = blocks
++            .iter()
++            .map(|it| it.ast_id(&db).file_id)
++            .filter(|it| matches!(it, HirFileId::MacroFile(_)))
++            .collect();
++        assert_eq!(macro_files.len(), 4, "repeated macro call identities collapsed");
++    }
++
++    #[test]
++    fn resident_block_scopes_codec_identity_without_body_providers() {
++        let source = TestDB::with_files(RESIDENT_SCOPES);
++        let krate = crate_named(&source, "main");
++        let owner = resident_scope_owner(&source, "target");
++        let blocks = resident_scope_oracle(&source, owner, 13);
++        let mut enc = Enc::new(&source, krate);
++        enc.usize(blocks.len()).unwrap();
++        for block in &blocks {
++            enc.module(super::super::block_def_map(&source, *block).root_module_id()).unwrap();
++        }
++        let bytes = enc.finish().unwrap();
++        let fresh = TestDB::with_files(RESIDENT_SCOPES);
++        let fresh_crate = crate_named(&fresh, "main");
++        let mut decoded = Vec::new();
++        let events = fresh.log_executed(|| {
++            let mut dec = Dec::new_checked(&fresh, fresh_crate, &bytes).unwrap();
++            assert_eq!(dec.len().unwrap(), 13);
++            for _ in 0..13 {
++                decoded.push(dec.module().unwrap());
++            }
++            dec.finish().unwrap();
++        });
++        resident_no_body_providers(&events);
++        assert_eq!(
++            events.iter().filter(|it| it.as_str() == "Body::block_scopes").count(),
++            1,
++            "decoder must execute exactly one cold owner scope provider: {events:?}"
++        );
++        let fresh_owner = resident_scope_owner(&fresh, "target");
++        let original: Vec<_> = Body::original_fullwalk_blocks(&fresh, fresh_owner)
++            .iter()
++            .map(|&block| super::super::block_def_map(&fresh, block).root_module_id())
++            .collect();
++        assert_eq!(decoded, original, "decoded modules are not original tracked identities");
++    }
++
++    #[test]
++    fn resident_block_scopes_semantic_early_exit_and_signature_traps() {
++        for (source, count) in [
++            (
++                r#"fn target() {
++                for _ in { struct HiddenHead; [] } { struct HiddenBody; }
++                let _ = ({ struct HiddenTry; 0 })?;
++                #[cfg(any())] { struct Inactive; }
++                { struct Kept; }
++            }"#,
++                1,
++            ),
++            (
++                r#"fn target(_: [u8; { struct SignatureOnly; 1 }]) {
++                { struct Body; }
++            }"#,
++                1,
++            ),
++            (
++                r#"fn target() {
++                let _: [u8; { struct InType; 1 }];
++                { struct Body; }
++            }"#,
++                2,
++            ),
++            (r#"#[rust_analyzer::skip] fn target() { struct Skipped; { struct Nested; } }"#, 0),
++            (
++                r#"fn target() {
++                let _ = crate::self::Bad { x: { struct Hidden; 0 } };
++                { struct Kept; }
++            }"#,
++                1,
++            ),
++            (
++                r#"fn target() {
++                let (x, y) = (0, 0);
++                (x, y) = ({ struct First; 1 }, { struct Second; 2 });
++                let _ = const { struct ConstBlock; 0 };
++            }"#,
++                3,
++            ),
++        ] {
++            let fixture = format!("//- /main.rs crate:main\n{source}\n");
++            let db = TestDB::with_files(&fixture);
++            let owner = resident_scope_owner(&db, "target");
++            resident_scope_oracle(&db, owner, count);
++        }
++    }
++
++    #[test]
++    fn resident_block_scopes_moves_edits_reparent_and_removal() {
++        const START: &str = "fn target() { struct Root; { struct Child; } }\n";
++        let fixture = format!("//- /main.rs crate:main\n$0{START}");
++        let (mut db, position) = TestDB::with_position(&fixture);
++        let file = position.file_id.file_id(&db);
++        let owner = resident_scope_owner(&db, "target");
++        let initial = resident_scope_oracle(&db, owner, 2);
++        let child_ast = initial[1].ast_id(&db);
++
++        for text in [
++            format!("// source moved\n\n{START}"),
++            START.replace("struct Child;", "struct Child; let _ = 42;"),
++            START.replace("target()", "target(argument: u8)"),
++        ] {
++            db.set_file_text(file, &text);
++            let current_owner = resident_scope_owner(&db, "target");
++            let current = resident_scope_oracle(&db, current_owner, 2);
++            assert_eq!(current, initial, "nonstructural edit changed canonical identities");
++        }
++
++        db.set_file_text(
++            file,
++            "fn target() { struct Root; { struct Parent; { struct Child; } } }\n",
++        );
++        let owner = resident_scope_owner(&db, "target");
++        let reparented = resident_scope_oracle(&db, owner, 3);
++        assert_ne!(reparented[2], initial[1], "reparented child reused old tracked identity");
++        assert_eq!(reparented[2].module(&db), unsafe {
++            super::super::block_def_map(&db, reparented[1]).root_module_id().to_db(&db)
++        });
++        // Preserve a real codec descriptor, then remove every block so no stale AstId can
++        // be synthesized or mistaken for current membership on the next revision.
++        let mut enc = Enc::new(&db, crate_named(&db, "main"));
++        enc.module(super::super::block_def_map(&db, reparented[2]).root_module_id()).unwrap();
++        let stale = enc.finish().unwrap();
++        db.set_file_text(file, "fn target() {}\n");
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 0);
++        assert!(current_block(&db, owner, child_ast).is_err(), "removed block resurrected");
++        let mut dec = Dec::new_checked(&db, crate_named(&db, "main"), &stale).unwrap();
++        assert_eq!(dec.module().unwrap_err(), "a block not in its body");
++    }
++
++    #[test]
++    fn resident_block_scopes_macro_written_and_macro_revision() {
++        let fixture = r#"
++//- /main.rs crate:main
++macro_rules! make { () => { fn target() { struct Root; { struct Child; } } } }
++make!();
++"#;
++        let db = TestDB::with_files(fixture);
++        let owner = resident_scope_owner(&db, "target");
++        let blocks = resident_scope_oracle(&db, owner, 2);
++        assert!(blocks.iter().all(|it| matches!(it.ast_id(&db).file_id, HirFileId::MacroFile(_))));
++
++        let (mut db, pos) = TestDB::with_position(
++            r#"
++//- /main.rs crate:main
++$0macro_rules! make { () => {{ struct First; }} }
++fn target() { struct Root; make!(); }
++"#,
++        );
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 2);
++        db.set_file_text(pos.file_id.file_id(&db),
++            "macro_rules! make { () => {{ struct First; { struct Added; } }} }\nfn target() { struct Root; make!(); }\n");
++        let owner = resident_scope_owner(&db, "target");
++        let expanded = resident_scope_oracle(&db, owner, 3);
++        let removed_ast = expanded[2].ast_id(&db);
++        db.set_file_text(
++            pos.file_id.file_id(&db),
++            "macro_rules! make { () => { 1 } }\nfn target() { struct Root; make!(); }\n",
++        );
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 1);
++        assert!(
++            current_block(&db, owner, removed_ast).is_err(),
++            "removed expansion block survived"
++        );
++    }
++
++    #[test]
++    fn resident_block_scopes_cfg_and_skip_revision_dependencies() {
++        const BODY: &str = "fn target() { #[cfg(any())] { struct Conditional; } }\n";
++        let fixture = format!("//- /main.rs crate:main\n$0{BODY}");
++        let (mut db, pos) = TestDB::with_position(&fixture);
++        let file = pos.file_id.file_id(&db);
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 0);
++        let enabled = BODY.replace("any()", "all()");
++        db.set_file_text(file, &enabled);
++        let owner = resident_scope_owner(&db, "target");
++        let blocks = resident_scope_oracle(&db, owner, 1);
++        let ast = blocks[0].ast_id(&db);
++        db.set_file_text(file, &format!("#[rust_analyzer::skip]\n{enabled}"));
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 0);
++        assert!(
++            current_block(&db, owner, ast).is_err(),
++            "skip attribute failed to invalidate scopes"
++        );
++        db.set_file_text(file, &enabled);
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 1);
++    }
++
++    #[test]
++    fn resident_block_scopes_serving_decode_errors_fail_open() {
++        let fixture = "//- /main.rs crate:main\npub fn target() {}\n";
++        let live = TestDB::with_files(fixture);
++        let expected = super::super::crate_def_map(&live, crate_named(&live, "main")).dump(&live);
++        let mut db = TestDB::with_files(fixture);
++        let krate = crate_named(&db, "main");
++        set(
++            &mut db,
++            [(krate, Frozen { bytes: Arc::from([]), mode: Mode::Serve })].into_iter().collect(),
++        );
++        assert_eq!(super::super::crate_def_map(&db, krate).dump(&db), expected);
++    }
++
++    #[test]
++    #[should_panic(expected = "a frozen def map does not read")]
++    fn resident_block_scopes_verification_decode_errors_remain_strict() {
++        let mut db = TestDB::with_files("//- /main.rs crate:main\npub fn target() {}\n");
++        let krate = crate_named(&db, "main");
++        set(
++            &mut db,
++            [(krate, Frozen { bytes: Arc::from([]), mode: Mode::Verify })].into_iter().collect(),
++        );
++        super::super::crate_def_map(&db, krate);
++    }
++
++    #[test]
++    fn resident_block_scopes_format_args_visits_before_output() {
++        let db = TestDB::with_files(
++            r#"
++//- /main.rs crate:main
++macro_rules! template { () => { "{} {}" } }
++macro_rules! arg { () => {{ struct MacroArg; 1 }} }
++fn target() {
++    struct Root;
++    builtin#format_args(template!(), { struct Explicit; 0 }, arg!());
++}
++"#,
++        );
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 3);
++    }
++
++    #[test]
++    fn resident_block_scopes_const_static_variant_and_inline_module() {
++        let db = TestDB::with_files(
++            r#"
++//- /main.rs crate:main
++const C: () = { struct ConstScope; };
++static S: () = { struct StaticScope; };
++enum E { V = { struct VariantScope; 0 } }
++mod inline { pub fn target() { struct InlineScope; } }
++"#,
++        );
++        let map = super::super::crate_def_map(&db, crate_named(&db, "main"));
++        let root = map.root_module_id();
++        let owners = body_owners(&db, root);
++        assert_eq!(owners.len(), 3, "fixture lost a non-function body kind");
++        assert!(owners.iter().any(|it| matches!(it, DefWithBodyId::ConstId(_))));
++        assert!(owners.iter().any(|it| matches!(it, DefWithBodyId::StaticId(_))));
++        assert!(owners.iter().any(|it| matches!(it, DefWithBodyId::VariantId(_))));
++        for owner in owners {
++            resident_scope_oracle(&db, owner, 1);
++        }
++        let nested: Vec<_> = map.table(&db).keys().copied().filter(|it| *it != root).collect();
++        assert_eq!(nested.len(), 1);
++        let owners = body_owners(&db, nested[0]);
++        assert_eq!(owners.len(), 1);
++        let blocks = resident_scope_oracle(&db, owners[0], 1);
++        assert_eq!(blocks[0].module(&db), unsafe { nested[0].to_db(&db) });
++    }
++
++    #[test]
++    fn resident_block_scopes_positive_lang_item_gates() {
++        let db = TestDB::with_files(
++            r#"
++//- /main.rs crate:main
++#[lang = "into_iter"] fn into_iter() {}
++#[lang = "next"] fn next() {}
++#[lang = "branch"] fn branch() {}
++enum Option { #[lang = "Some"] Some, #[lang = "None"] None }
++enum ControlFlow { #[lang = "Continue"] Continue, #[lang = "Break"] Break }
++fn target() {
++    for _ in { struct Head; [] } { struct LoopBody; }
++    let _ = ({ struct TryOperand; 0 })?;
++}
++"#,
++        );
++        let owner = resident_scope_owner(&db, "target");
++        resident_scope_oracle(&db, owner, 3);
++    }
++
++    #[test]
++    fn resident_block_scopes_local_owner_descriptor_is_finite() {
++        let fixture = r#"
++//- /main.rs crate:main
++fn target() {
++    struct Outer;
++    fn local() { struct Local; { struct Nested; } }
++}
++"#;
++        let db = TestDB::with_files(fixture);
++        let outer = resident_scope_owner(&db, "target");
++        let outer_blocks = resident_scope_oracle(&db, outer, 1);
++        let module = super::super::block_def_map(&db, outer_blocks[0]).root_module_id();
++        let local = body_owners(&db, module)
++            .into_iter()
++            .find(|it| matches!(it, DefWithBodyId::FunctionId(_)))
++            .unwrap();
++        let blocks = resident_scope_oracle(&db, local, 2);
++        let mut enc = Enc::new(&db, crate_named(&db, "main"));
++        enc.module(super::super::block_def_map(&db, blocks[1]).root_module_id()).unwrap();
++        let bytes = enc.finish().unwrap();
++        let fresh = TestDB::with_files(fixture);
++        let mut decoded = None;
++        let events = fresh.log_executed(|| {
++            let mut dec = Dec::new_checked(&fresh, crate_named(&fresh, "main"), &bytes).unwrap();
++            decoded = Some(dec.module().unwrap());
++            dec.finish().unwrap();
++        });
++        resident_no_body_providers(&events);
++        assert_eq!(
++            events.iter().filter(|it| it.as_str() == "Body::block_scopes").count(),
++            2,
++            "local owner must discover exactly its outer and own scopes: {events:?}"
++        );
++        let outer = resident_scope_owner(&fresh, "target");
++        let outer_blocks = Body::original_fullwalk_blocks(&fresh, outer);
++        let module = super::super::block_def_map(&fresh, outer_blocks[0]).root_module_id();
++        let local = body_owners(&fresh, module)
++            .into_iter()
++            .find(|it| matches!(it, DefWithBodyId::FunctionId(_)))
++            .unwrap();
++        let original = Body::original_fullwalk_blocks(&fresh, local);
++        assert_eq!(
++            decoded,
++            Some(super::super::block_def_map(&fresh, original[1]).root_module_id())
++        );
++    }
+ 
+     const FIXTURE: &str = r#"
+ //- /main.rs crate:main deps:lib
+diff --git a/docs/resident-block-identity.md b/docs/resident-block-identity.md
+new file mode 100644
+index 000000000..72b70ae7e
+--- /dev/null
++++ b/docs/resident-block-identity.md
+@@ -0,0 +1,123 @@
++# Resident block identity and scope-only recovery, candidate v47
++
++## Status and artifact boundary
++
++**Source-only candidate, not accepted or promoted.** No builds, tests, native jobs, installations, commits, pushes, or performance measurements were run by this lane. Source rustfmt and diff checks are the only exercised checks. The coordinator owns native correctness and performance gates.
++
++The initial no-op investigation is preserved separately at `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-identity-v46`. The implementation is **v47**, at `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v47`. Its `original/` and `candidate/` contain complete authorized source files, with patch, hashes, source-check output, and an explicit frozen release. Do not identify v47 as the original v46 no-op.
++
++Changed Rust files, relative to `toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/`:
++
++* `lib.rs`: sole canonical tracked constructor query.
++* `expr_store/lower.rs`: one shared semantic traversal with a private output sink.
++* `expr_store/body.rs`: shared input selection, tracked scope provider, independent test-only whole-file oracle.
++* `expr_store/lower/format_args.rs`: output-only boundary after original argument/template visitation.
++* `nameres/frozen.rs`: exact scope membership recovery, encoder scope search, serving fallback, and strict native fixtures.
++
++Also authorized and preserved, but unchanged: `expr_store/lower/path.rs`, `expr_store/lower/generics.rs`, and `toolchain/resident/crates/ra-jit/src/frozen.rs`. No other source paths are edited. No declaration cache is introduced.
++
++## What the source investigation established
++
++`BlockIdLt` is a tracked struct with a full `AstId<ast::BlockExpr>` and its containing `ModuleIdLt`. Before this change, `BlockIdLt::new_` was called by body lowering's constructor wrapper, while frozen decoding recovered the identical tracked block by walking `Body::of(owner).blocks(db)`.
++
++The owner does **not** directly supply the target block's parent. For example:
++
++```rust
++fn outer() {
++    struct A;
++    {
++        struct B;
++        {
++            struct C;
++        }
++    }
++}
++```
++
++Let the item-bearing blocks have roots MA, MB, MC. The first block captures `outer.module(db)`, the second captures MA, and the third captures MB. All are in `outer`'s body. Replacing the parent with `owner.module(db)` would misidentify the second and third blocks.
++
++`collect_block_` obtains an optional AstId from the current expander. For an allocated block, it creates the identity from the **current** module, obtains that block's def map, switches to the map's root for recursive collection, and restores the previous state afterward. An item-free block without an allocated AstId leaves the module unchanged. Arbitrary nearest syntax-block ancestors are therefore not interchangeable with allocated lexical parents.
++
++Macro entry changes the expander's current file and maps, but does not replace the collector's lexical module. Consequently a macro-written block combines an expansion-file AstId with the current call-site lexical module. Repeated calls must retain distinct macro-file identities. `AstIdMap::relative_to` preserves file-local identities for relative body lowering. These facts are why a syntax-range memo or unchecked raw AstId reconstruction is insufficient.
++
++## Implementation: one constructor and one semantic traversal
++
++`canonical_block_id(db, full_ast_id, immediate_module)` is a tracked query returning a `BlockIdLt` by copy. It contains the **only** call to generated `BlockIdLt::new_`. The existing token-requiring wrapper delegates to it. Full body lowering and scope-only traversal use that same wrapper, so they create the same tracked identity under the same canonical query key instead of unrelated producer queries. `BlockIdLt` remains tracked, not interned.
++
++`Body::block_scopes(db, owner)` selects the same current source input as body lowering, then invokes the same collector in private `scope_only` mode. It returns only the ordered `Vec<BlockId>`. It never calls `Body::of`, `Body::relative`, or `Body::with_source_map`. Relative and whole-file input selection are shared with the production body paths. A separately retained test-only original whole-file selector does not use those candidate helpers.
++
++This is an output sink, **not a second copied syntax visitor**. Existing cfg decisions, skip handling, type/const/pattern traversal, macro grammar, sequential legacy macro counts, resolver decisions, and lang-item early exits execute in the original collector. It still does semantic work. The bounded hypothesis is avoided expression/type/pattern arenas and selected output-only desugaring, not elimination of all body traversal.
++
++### Output invariants and retained state
++
++In scope-only mode, expression, pattern, and type allocation helpers return private placeholder handles without inserting HIR into their arenas. These handles only connect temporary output values and must never be indexed or published. The scope entry returns only real tracked block identities. Hard assertions require all three output arenas to be empty at return. Normal `lower_body` asserts that a scope sink cannot publish a `Body`, and the placeholder constructor asserts scope-only mode.
++
++All expression/pattern/type arena operations were inventoried across lower.rs, lower/path.rs, lower/generics.rs, lower/format_args.rs, and lower/asm.rs:
++
++| Access | Scope-only boundary |
++| --- | --- |
++| Type allocation helpers | Return a private sink handle before arena insertion and source-map allocation |
++| Expression/pattern allocation helpers | Same guard, including the original direct `Pat::Expr` insertion now routed through the helper |
++| Coroutine parameter-pattern reads | `collect` returns after visiting the body, before coroutine rewriting; rewrite entry asserts materializing mode |
++| Closure coroutine expression/pattern reads | Return after exact parameter/type/return-type/body visits and restore coroutine/try state, before rewriting; read boundary asserts materializing mode |
++| Try-block tail mutation | Scope path returns after block visits and required result-type visits; materializing branch owns the arena mutation |
++| Formatting literal HIR reads | Scope returns after original explicit arguments and template macro expansion; literal reader asserts materializing mode |
++| Direct formatting argument allocation | Both formatting-output entry and argument constructor assert materializing mode |
++| Arena lengths in inference-root bookkeeping | Allowed: length observation does not dereference a placeholder |
++| asm.rs | Uses the guarded collector allocation helpers; no direct expression/type/pattern arena reads or insertions |
++| lower/path.rs and lower/generics.rs | Lifetime arena reads remain real; no expression/type/pattern arena indexing |
++
++Small binding, label and lifetime arenas remain, as do state required for exact branching: lexical module/def-map stack, expansion/maps, cfg, macro counters, binding bookkeeping, awaitable/coroutine/try state, and path/lifetime information. Temporary `Expr`/`Pat`/`TypeRef`/`Path` values, child vectors, some diagnostics and source-map bookkeeping are still constructed and discarded. The sink is deliberately bounded and makes no measured performance claim.
++
++Output-only returns occur after original child visitation. This includes while conditions, for-loop head/pattern/body, try-operator operands, closures, function bodies, block contents, and format arguments. Typed try-block result types are visited after the block and after restoring the outer try state, as in original lowering. Formatting expands template macros after explicit argument expressions, before skipping parse/materialization of formatting output.
++
++### Semantic traps preserved, not approximated
++
++* `for` lowering does not visit head, pattern or body without its four required language items.
++* `?` lowering does not visit its operand without Try/ControlFlow language items.
++* Record fields are skipped if path lowering fails.
++* Destructuring assignment consults `resolve_path_locally` and can take expression-as-pattern macro grammar.
++* Function body lowering visits parameter patterns, not ordinary parameter type annotations. Extern functions and bodyless trait functions have a bare-identifier route. Closure parameter and return types do traverse.
++* Type const arguments, type macros, pattern macros, statement macros and cfg-controlled nodes retain the original traversal choices.
++* `#[rust_analyzer::skip]` may leave a block in syntax but no collected block in the body.
++
++No fake ancestor synthesis, weakened membership check, new declaration hash cache, or global untracked block map is used.
++
++## Frozen codec and compatibility
++
++The wire remains **exactly owner + full AstId + module-table index**, with the existing block-module tag. `Dec::module` asks `current_block` for current scope membership, rejects missing or duplicate full AstIds, and queries that exact block's def map. The parent is already established by authoritative collector traversal. It is not reconstructed from `owner.module(db)` or a cached tuple. `Enc::block_owner` searches `Body::block_scopes` rather than materialized `Body::of` results.
++
++Because this shares authoritative identity discovery, no recursive parent descriptor is needed. The earlier proposed parent-only format was investigated but is not implemented. Its finite lexical-parent relation is representable, but retaining the existing body owner supplies the membership-query key without a second owner-discovery algorithm or an unnecessary format change.
++
++The cache namespace remains `field(b"ra-jit frozen def map 6")` in `ra-jit/src/frozen.rs`. No serialized field, tag, grammar, or schema key is changed. Impl and lang-item namespaces derive from that crate key and remain unchanged too. Native roundtrip/fullwalk equality remains a required gate, not an assertion that compatibility has already been tested.
++
++### Source revisions and decoder errors
++
++The canonical constructor does not independently prove current source membership. `Body::block_scopes` does: it reads the same current relative/whole-file source, expansion, cfg, attributes, lang items and resolver inputs as the shared semantic traversal. The decoder only returns an identity in that current set. Removed or skipped blocks are rejected, and reparenting uses the new immediate module. It does not cache old `(owner.module, AstId)` tuples.
++
++Raw AstIds can be reused after edits. Existing wire semantics identify a current block by its full AstId within the named body, not immutable historical source text. This candidate preserves that external behavior and does not claim to detect every historical node substitution. Strict tests compare current identities against original lowering, including structural edits, instead of assuming source offsets are permanent identities.
++
++Before v47, `served` panicked on every decode error. It now returns `None` on a decoding error in **Serve** mode so its caller can resolve the live map. **Verify** still panics, and Check's difference machinery remains unchanged. Missing/ambiguous block errors therefore cannot authorize synthesized identities or hide verification failures. This fallback handles returned decoder errors, not arbitrary panics in lower layers. Native tests must exercise this contract.
++
++## Native oracle and fixtures prepared, not run
++
++The original materializing `Body::of(...).blocks(db)` remains an independent output path. The new test-only `Body::original_fullwalk_blocks` retains original whole-file body-input selection and full materialization, without using the candidate input helper or scope output. Strict fixtures compare exact ordered `BlockId`s, immediate modules, block-map parents and decoded `ModuleId`s, not merely equal AstIds. Both materializing oracles share the canonical identity constructor but do not execute scope-only traversal.
++
++Filter: **`resident_block_scopes`**, twelve tests in existing `nameres/frozen.rs`:
++
++1. `resident_block_scopes_nested_macros_and_closures`
++2. `resident_block_scopes_codec_identity_without_body_providers`
++3. `resident_block_scopes_semantic_early_exit_and_signature_traps`
++4. `resident_block_scopes_moves_edits_reparent_and_removal`
++5. `resident_block_scopes_macro_written_and_macro_revision`
++6. `resident_block_scopes_cfg_and_skip_revision_dependencies`
++7. `resident_block_scopes_serving_decode_errors_fail_open`
++8. `resident_block_scopes_verification_decode_errors_remain_strict`
++9. `resident_block_scopes_format_args_visits_before_output`
++10. `resident_block_scopes_const_static_variant_and_inline_module`
++11. `resident_block_scopes_positive_lang_item_gates`
++12. `resident_block_scopes_local_owner_descriptor_is_finite`
++
++Hard fixture counts include 13 blocks and four macro files for the main nested/closure case, one cold owner scope execution for its decoder, and two scope executions for the block-local function owner descriptor. Cold candidate windows assert zero executions of each materializing Body provider before running the independent oracles. Tests exercise repeated same-revision reads, revision source moves, body/signature edits, reparenting, removal, macro expansion edits/removal, cfg and skip changes, formatting, positive/negative language-item gates, constants/statics/variants and inline modules. No tests are skipped, and no pre-existing assertions or fixtures are weakened.
++
++All native results, exact event-name assumptions, fixture counts, runtime correctness, and performance are still **unvalidated** until the coordinator runs the candidate gate. A source-only release is not a native pass and not a speedup claim.

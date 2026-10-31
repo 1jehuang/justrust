@@ -1,0 +1,82 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: missing `[lints]` to inherit `[workspace.lints]`
+  --> lib/rowan/Cargo.toml
+   = note: `cargo::missing_lints_inheritance` is set to `warn` by default
+help: to inherit `workspace.lints, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+29 + workspace = true
+   |
+help: to clarify your intent to not inherit, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+   |
+warning: function `is_range_pat_op` is never used
+    --> crates/syntax/src/ast/node_ext.rs:1066:4
+     |
+1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {
+     |    ^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `span`
+   --> crates/hir-expand/src/builtin/derive_macro.rs:134:27
+    |
+134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {
+    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+thread 'nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates' (2014815) panicked at crates/hir-def/src/nameres/frozen.rs:3033:9:
+assertion `left == right` failed: unexpected scope membership
+  left: 0
+ right: 3
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+thread 'nameres::frozen::tests::resident_block_scopes_verification_decode_errors_remain_strict' (2014818) panicked at crates/hir-def/src/nameres/frozen.rs:163:21:
+a frozen def map does not read: the bytes end early
+thread 'nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures' (2014814) panicked at crates/hir-def/src/nameres/frozen.rs:3079:9:
+assertion `left == right` failed: cold candidate did not execute exactly once: ["Body::block_scopes_", "body_syntax", "AttrFlags::query_", "canonical_block_id", "block_def_map", "block_item_tree_query", "Modules < 'db >::module_", "ModuleScope < 'db >::legacy_macro_", "MacroId::definition_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "ModuleScope < 'db >::legacy_macro_", "MacroId::definition_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "AstId < ast :: Macro >::decl_macro_expander_", "MacroId::definition_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "Modules < 'db >::module_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "ModuleScope < 'db >::legacy_macro_", "canonical_block_id", "block_def_map", "block_item_tree_query", "ModuleScope < 'db >::legacy_macro_", "ModuleScope < 'db >::legacy_macro_", "ModuleScope < 'db >::name_", "ModuleScope < 'db >::name_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query"]
+  left: 0
+ right: 1
+test nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates ... FAILED <0.001s>
+test nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures ... FAILED <0.002s>
+thread 'nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite' (2014811) panicked at crates/hir-def/src/nameres/frozen.rs:3411:9:
+assertion `left == right` failed: local owner must discover exactly its outer and own scopes: ["crate_local_def_map", "file_item_tree_query", "HirFileId::ast_id_map_", "EditionedFileId::parse_", "real_span_map", "Body::block_scopes_", "body_syntax", "AttrFlags::query_", "canonical_block_id", "block_def_map", "block_item_tree_query", "Body::block_scopes_", "body_syntax", "AttrFlags::query_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query"]
+  left: 0
+ right: 2
+test nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite ... FAILED <0.003s>
+thread 'nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers' (2014808) panicked at crates/hir-def/src/nameres/frozen.rs:3121:9:
+assertion `left == right` failed: decoder must execute exactly one cold owner scope provider: ["crate_local_def_map", "file_item_tree_query", "HirFileId::ast_id_map_", "EditionedFileId::parse_", "real_span_map", "AstId < ast :: Macro >::decl_macro_expander_", "AstId < ast :: Macro >::decl_macro_expander_", "Body::block_scopes_", "body_syntax", "AttrFlags::query_", "canonical_block_id", "block_def_map", "block_item_tree_query", "Modules < 'db >::module_", "ModuleScope < 'db >::legacy_macro_", "MacroId::definition_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "ModuleScope < 'db >::legacy_macro_", "MacroId::definition_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "AstId < ast :: Macro >::decl_macro_expander_", "MacroId::definition_", "file_item_tree_query", "HirFileId::ast_id_map_", "MacroCallId::parse_macro_expansion_", "MacroCallId::macro_arg_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "Modules < 'db >::module_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "ModuleScope < 'db >::legacy_macro_", "canonical_block_id", "block_def_map", "block_item_tree_query", "ModuleScope < 'db >::legacy_macro_", "ModuleScope < 'db >::legacy_macro_", "ModuleScope < 'db >::name_", "ModuleScope < 'db >::name_", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query", "canonical_block_id", "block_def_map", "block_item_tree_query"]
+  left: 0
+ right: 1
+test nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers ... FAILED <0.004s>
+
+failures:
+
+failures:
+    nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers
+    nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite
+    nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures
+    nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates
+
+test result: FAILED. 8 passed; 4 failed; 0 ignored; 0 measured; 534 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `-p hir-def --lib`
+
+justrust: FAILED: 4 of 12 tests failed in 32.6s
+  time    startup 0.17s | compile 32.39s | after 0.02s
+  units   13 compiled (13 local, 0 deps, 0 build scripts), 94 fresh
+          hir_def (test)                    22.84s  cpu  82.9s   1428 MB
+          hir_expand                         3.98s  cpu  17.7s    549 MB
+          salsa                              1.58s  cpu   4.8s    393 MB
+          base_db                            0.91s  cpu   6.5s    365 MB
+  tests   8 passed, 4 failed, 0 ignored, 534 filtered out, 1 binary in 0.01s
+  cpu     123.6s total, avg 3.8/peak 6.2 of 16 cores; others used 3.9 cores
+  memory  peak 1491 MB build, 1428 MB largest rustc, 45.4 GB free; stalls cpu 0.48s mem 0.00s io 0.03s
+  output  3 warnings shown, 0 hidden; 123 progress and 8 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 14.3s  22.8s went to recompiling oversized crates: hir_def (53k lines, 22.8s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  6.9s  build averaged 3.8 of 16 cores: hir_def (test) ran 22.8s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-213513023-2010200` full output, `justrust show 20261030-213513023-2010200` full profile

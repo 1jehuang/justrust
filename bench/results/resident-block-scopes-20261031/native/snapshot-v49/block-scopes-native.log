@@ -1,0 +1,50 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: missing `[lints]` to inherit `[workspace.lints]`
+  --> lib/rowan/Cargo.toml
+   = note: `cargo::missing_lints_inheritance` is set to `warn` by default
+help: to inherit `workspace.lints, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+29 + workspace = true
+   |
+help: to clarify your intent to not inherit, add:
+   |
+27 ~ serde1 = ["serde", "text-size/serde"]
+28 + [lints]
+   |
+warning: function `is_range_pat_op` is never used
+    --> crates/syntax/src/ast/node_ext.rs:1066:4
+     |
+1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {
+     |    ^^^^^^^^^^^^^^^
+     |
+     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `span`
+   --> crates/hir-expand/src/builtin/derive_macro.rs:134:27
+    |
+134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {
+    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+thread 'nameres::frozen::tests::resident_block_scopes_verification_decode_errors_remain_strict' (2051642) panicked at crates/hir-def/src/nameres/frozen.rs:163:21:
+a frozen def map does not read: the bytes end early
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+justrust: ok: 12 tests passed in 33.5s
+  time    startup 0.15s | compile 33.29s | after 0.02s
+  units   13 compiled (13 local, 0 deps, 0 build scripts), 94 fresh
+          hir_def (test)                    23.80s  cpu  86.2s   1421 MB
+          hir_expand                         3.94s  cpu  18.7s    556 MB
+          salsa                              1.62s  cpu   4.9s    391 MB
+          base_db                            0.90s  cpu   7.0s    365 MB
+  tests   12 passed, 0 failed, 0 ignored, 534 filtered out, 1 binary in 0.01s
+  cpu     129.1s total, avg 3.9/peak 6.1 of 16 cores; others used 3.9 cores
+  memory  peak 1491 MB build, 1421 MB largest rustc, 46.4 GB free; stalls cpu 0.45s mem 0.00s io 0.03s
+  output  3 warnings shown, 0 hidden; 124 progress and 12 passing-test lines hidden
+  waste   2 issues (estimated cost each; they can overlap):
+          ~ 14.9s  23.8s went to recompiling oversized crates: hir_def (53k lines, 23.8s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  7.1s  build averaged 3.9 of 16 cores: hir_def (test) ran 23.8s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-214133450-2047116` full output, `justrust show 20261030-214133450-2047116` full profile

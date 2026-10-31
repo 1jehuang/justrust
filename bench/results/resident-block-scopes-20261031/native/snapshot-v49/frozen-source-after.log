@@ -1,0 +1,10 @@
+./docs/resident-block-identity.md: OK
+./toolchain/resident/crates/ra-jit/src/frozen.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/format_args.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/generics.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/path.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body/block.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/lib.rs: OK
+./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs: OK

@@ -1,0 +1,482 @@
+{
+  "id": "20261030-214646807-2086833",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "ed7ba926b5b5",
+    "dirty_files": 8
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793422006.8251677,
+  "wall": 123.98286747932434,
+  "exit": 0,
+  "cpu_secs": 510.324491,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 587,
+    "processes": 31,
+    "sample_span_secs": 123.98186564445496,
+    "max_sample_gap_secs": 0.2384476661682129
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.23522710800170898,
+    "lock_wait": 0.0,
+    "compile": 107.10957717895508,
+    "build_gaps": 0.008513212203979492,
+    "test_run": 16.591675758361816,
+    "tail": 0.03787422180175781
+  },
+  "units": {
+    "compiled": 13,
+    "local": 13,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 416,
+    "rustc_cpu_secs": 503.9,
+    "rustc_wall_sum": 289.09974217414856,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "jr_engine (test)",
+      "kind": "test",
+      "local": true,
+      "start": 58.05727410316467,
+      "wall": 49.292654275894165,
+      "wall_share": 49.292654275894165,
+      "cpu": 174.417408,
+      "max_rss_mb": 2626.50390625,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 79501
+    },
+    {
+      "name": "hir_ty_codegen",
+      "kind": "lib",
+      "local": true,
+      "start": 0.24344825744628906,
+      "wall": 57.80870175361633,
+      "wall_share": 20.100356527169545,
+      "cpu": 104.507949,
+      "max_rss_mb": 1517.1953125,
+      "frontend_threads": null,
+      "rmeta_secs": 13.302542209625244,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "hir_ty_borrowck",
+      "kind": "lib",
+      "local": true,
+      "start": 1.0052425861358643,
+      "wall": 45.93425893783569,
+      "wall_share": 10.06105910539627,
+      "cpu": 64.274329,
+      "max_rss_mb": 914.796875,
+      "frontend_threads": null,
+      "rmeta_secs": 5.292999029159546,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 15771
+    },
+    {
+      "name": "ide_db",
+      "kind": "lib",
+      "local": true,
+      "start": 12.180480718612671,
+      "wall": 30.707860231399536,
+      "wall_share": 5.783066503206888,
+      "cpu": 31.501337,
+      "max_rss_mb": 656.67578125,
+      "frontend_threads": null,
+      "rmeta_secs": 3.056389093399048,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 42157
+    },
+    {
+      "name": "hir",
+      "kind": "lib",
+      "local": true,
+      "start": 6.385129451751709,
+      "wall": 24.82120966911316,
+      "wall_share": 5.7617997288703915,
+      "cpu": 32.145464000000004,
+      "max_rss_mb": 800.28125,
+      "frontend_threads": null,
+      "rmeta_secs": 5.790039777755737,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 20151
+    },
+    {
+      "name": "ide_diagnostics",
+      "kind": "lib",
+      "local": true,
+      "start": 31.213844060897827,
+      "wall": 17.78048086166382,
+      "wall_share": 3.551882421970367,
+      "cpu": 19.26495,
+      "max_rss_mb": 467.43359375,
+      "frontend_threads": null,
+      "rmeta_secs": 1.458293914794922,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 26503
+    },
+    {
+      "name": "blaze_doc",
+      "kind": "lib",
+      "local": true,
+      "start": 30.63843536376953,
+      "wall": 18.10029172897339,
+      "wall_share": 3.520235232512156,
+      "cpu": 21.103746,
+      "max_rss_mb": 478.6875,
+      "frontend_threads": null,
+      "rmeta_secs": 1.9033734798431396,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 8507
+    },
+    {
+      "name": "blaze_lints",
+      "kind": "lib",
+      "local": true,
+      "start": 28.783994436264038,
+      "wall": 16.78830337524414,
+      "wall_share": 2.8880511999130247,
+      "cpu": 16.73125,
+      "max_rss_mb": 462.4765625,
+      "frontend_threads": null,
+      "rmeta_secs": 2.2653143405914307,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 13463
+    },
+    {
+      "name": "hir_ide",
+      "kind": "lib",
+      "local": true,
+      "start": 0.2357621192932129,
+      "wall": 6.218968629837036,
+      "wall_share": 1.7485915025075278,
+      "cpu": 13.376495,
+      "max_rss_mb": 472.03515625,
+      "frontend_threads": null,
+      "rmeta_secs": 1.2978346347808838,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 40513
+    },
+    {
+      "name": "ra_jit_macro_wasm",
+      "kind": "lib",
+      "local": true,
+      "start": 22.488898038864136,
+      "wall": 8.140981197357178,
+      "wall_share": 1.4855536381403607,
+      "cpu": 8.103254,
+      "max_rss_mb": 397.60546875,
+      "frontend_threads": null,
+      "rmeta_secs": 0.9427928924560548,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 3143
+    },
+    {
+      "name": "load_cargo",
+      "kind": "lib",
+      "local": true,
+      "start": 16.018390417099,
+      "wall": 6.464075565338135,
+      "wall_share": 1.2928151130676269,
+      "cpu": 6.428808,
+      "max_rss_mb": 331.42578125,
+      "frontend_threads": null,
+      "rmeta_secs": 0.5076320171356201,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 1518
+    },
+    {
+      "name": "hir_ty_wfcheck",
+      "kind": "lib",
+      "local": true,
+      "start": 0.23522710800170898,
+      "wall": 4.608562707901001,
+      "wall_share": 1.2179463903109233,
+      "cpu": 9.63509,
+      "max_rss_mb": 378.0703125,
+      "frontend_threads": null,
+      "rmeta_secs": 0.7641961574554443,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 1581
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "jr_engine-93ff5023e9192f9b",
+        "start": 107.37635779380798,
+        "wall": 16.591675758361816,
+        "passed": 360,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 360,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 16.59,
+    "slowest": [
+      {
+        "name": "remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 16.522,
+        "passed": true
+      },
+      {
+        "name": "remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 1.878,
+        "passed": true
+      },
+      {
+        "name": "deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 1.092,
+        "passed": true
+      },
+      {
+        "name": "remote::gateway::tests::what_is_over_a_put_goes_up_in_parts_checked_whole",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.564,
+        "passed": true
+      },
+      {
+        "name": "whole::tests::read_by_a_link_is_not_removed",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.231,
+        "passed": true
+      },
+      {
+        "name": "whole::tests::packed_reads_back_as_it_was",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.23,
+        "passed": true
+      },
+      {
+        "name": "whole::tests::written_anew_leaves_nothing_of_the_last",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.23,
+        "passed": true
+      },
+      {
+        "name": "remote::gateway::tests::a_pack_goes_up_and_comes_back_in_ranges",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.229,
+        "passed": true
+      },
+      {
+        "name": "remote::tests::a_pack_that_unpacks_to_more_than_its_list_says_is_not_written",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.229,
+        "passed": true
+      },
+      {
+        "name": "deps::tests::an_archive_that_unpacks_to_more_than_is_taken_is_refused",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.21,
+        "passed": true
+      },
+      {
+        "name": "socket::tests::a_client_that_never_reads_is_given_up_on",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.209,
+        "passed": true
+      },
+      {
+        "name": "socket::tests::a_socket_let_go_of_is_free_while_processes_start",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.203,
+        "passed": true
+      },
+      {
+        "name": "splice::tests::a_program_written_in_place_starts_after_the_write",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.202,
+        "passed": true
+      },
+      {
+        "name": "remote::signed::tests::no_bytes_are_taken_for_a_list_that_was_signed",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.188,
+        "passed": true
+      },
+      {
+        "name": "cargo::closure::tests::fetched_pushed_pulled_and_laid_out",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.177,
+        "passed": true
+      },
+      {
+        "name": "remote::tests::a_manifest_longer_than_is_read_is_refused",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.166,
+        "passed": true
+      },
+      {
+        "name": "deps::tests::a_list_of_units_longer_than_is_read_is_refused",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.128,
+        "passed": true
+      },
+      {
+        "name": "remote::signed::tests::two_that_take_at_once_remember_the_later",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.115,
+        "passed": true
+      },
+      {
+        "name": "remote::gateway::tests::a_pack_the_gateway_changed_is_rejected_and_not_kept",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.114,
+        "passed": true
+      },
+      {
+        "name": "socket::tests::a_silent_or_endless_client_is_given_up_on",
+        "binary": "jr_engine-93ff5023e9192f9b",
+        "secs": 0.101,
+        "passed": true
+      }
+    ],
+    "timed_secs": 24.077999999999996,
+    "timed": 360
+  },
+  "resources": {
+    "avg_build_cores": 4.11608879013145,
+    "peak_build_cores": 9.418807858537301,
+    "peak_build_rss_mb": 3784.671875,
+    "peak_unit_rss_mb": 2626.50390625,
+    "min_mem_available_mb": 45549,
+    "avg_other_cores": 3.625947087387107,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 1.580251000000001,
+    "psi_mem_secs": 0.014671000000000002,
+    "psi_io_secs": 0.089226
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 253,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "hir-ty-wfcheck",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir-ide",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir-ty-codegen",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir-ty-borrowck",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    },
+    {
+      "package": "hir",
+      "reason": "the dependency `hir-ty-wfcheck` was rebuilt"
+    },
+    {
+      "package": "ide-db",
+      "reason": "the dependency `hir` was rebuilt"
+    },
+    {
+      "package": "load-cargo",
+      "reason": "the dependency `ide-db` was rebuilt"
+    },
+    {
+      "package": "ra-jit-macro-wasm",
+      "reason": "the dependency `load-cargo` was rebuilt"
+    },
+    {
+      "package": "ra-jit-expand",
+      "reason": "the dependency `load-cargo` was rebuilt"
+    },
+    {
+      "package": "blaze-lints",
+      "reason": "the dependency `hir` was rebuilt"
+    },
+    {
+      "package": "blaze-doc",
+      "reason": "the dependency `hir-def` was rebuilt"
+    },
+    {
+      "package": "ide-diagnostics",
+      "reason": "the dependency `hir` was rebuilt"
+    },
+    {
+      "package": "ra-jit",
+      "reason": "the dependency `ra-jit` was rebuilt"
+    }
+  ],
+  "all_units": 13,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-214646807-2086833.scope",
+    "final_weight": 104,
+    "setup_secs": 0.016558779,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

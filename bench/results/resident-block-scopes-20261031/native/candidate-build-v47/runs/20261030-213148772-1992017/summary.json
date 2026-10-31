@@ -1,0 +1,179 @@
+{
+  "id": "20261030-213148772-1992017",
+  "args": [
+    "check",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--tests",
+    "-p",
+    "hir-ty-codegen",
+    "-p",
+    "hir-def",
+    "-j",
+    "6"
+  ],
+  "subcommand": "check",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "ed7ba926b5b5",
+    "dirty_files": 7
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793421108.7890084,
+  "wall": 13.642582178115845,
+  "exit": 101,
+  "cpu_secs": 19.576465,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 67,
+    "processes": 8,
+    "sample_span_secs": 13.641130208969116,
+    "max_sample_gap_secs": 0.21103954315185547
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.1905074119567871,
+    "lock_wait": 0.0,
+    "compile": 13.416407346725464,
+    "build_gaps": 0.0,
+    "test_run": 0.0,
+    "tail": 0.03566741943359375
+  },
+  "units": {
+    "compiled": 3,
+    "local": 3,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 415,
+    "rustc_cpu_secs": 18.05,
+    "rustc_wall_sum": 18.118273973464966,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "hir_ty",
+      "kind": "check",
+      "local": true,
+      "start": 4.776743173599243,
+      "wall": 8.830171585083008,
+      "wall_share": 8.767126560211182,
+      "cpu": 8.799512,
+      "max_rss_mb": 1133.03515625,
+      "frontend_threads": null,
+      "rmeta_secs": 8.761332750320435,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 80429
+    },
+    {
+      "name": "hir_def (test)",
+      "kind": "test",
+      "local": true,
+      "start": 0.19599246978759766,
+      "wall": 4.706840753555298,
+      "wall_share": 2.355907440185547,
+      "cpu": 4.688401,
+      "max_rss_mb": 743.3671875,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 53448
+    },
+    {
+      "name": "hir_def",
+      "kind": "check",
+      "local": true,
+      "start": 0.1905074119567871,
+      "wall": 4.58126163482666,
+      "wall_share": 2.2933733463287354,
+      "cpu": 4.561083,
+      "max_rss_mb": 730.67578125,
+      "frontend_threads": null,
+      "rmeta_secs": 4.537860155105591,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 53448
+    }
+  ],
+  "link": {
+    "linker_processes": 0,
+    "linker_cpu_secs": -0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 1.434953056863585,
+    "peak_build_cores": 3.0243576472742673,
+    "peak_build_rss_mb": 1541.19140625,
+    "peak_unit_rss_mb": 1133.03515625,
+    "min_mem_available_mb": 46856,
+    "avg_other_cores": 3.1669552779226513,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.09160300000000002,
+    "psi_mem_secs": 0.00014800000000000002,
+    "psi_io_secs": 0.005942
+  },
+  "diagnostics": {
+    "compile_errors": 103,
+    "warnings": 58,
+    "first_error": "error[E0432]: unresolved import `expect_test`",
+    "compile_failed": true
+  },
+  "rebuild_reasons": [
+    {
+      "package": "hir-def",
+      "reason": "the file `vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs` has changed"
+    },
+    {
+      "package": "ra-jit",
+      "reason": "the file `crates` has changed"
+    },
+    {
+      "package": "hir-ty",
+      "reason": "the dependency `hir-def` was rebuilt"
+    }
+  ],
+  "all_units": 3,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-213148772-1992017.scope",
+    "final_weight": 752,
+    "setup_secs": 0.015397865,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

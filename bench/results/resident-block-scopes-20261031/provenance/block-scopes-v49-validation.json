@@ -1,0 +1,91 @@
+{
+  "status": "passed",
+  "decision": "REJECTED",
+  "promotion": false,
+  "raw_rows": 28,
+  "noise": "unknown",
+  "comparisons": [
+    {
+      "phase": "cold-prepare",
+      "seconds": {
+        "block-scopes-v47-baseline": 13.430578881001566,
+        "block-scopes-v49-candidate": 19.999951039004372,
+        "block-scopes-v49-candidate-repeat": 16.86028963199351,
+        "block-scopes-v49-baseline-repeat": 17.012539446004666
+      },
+      "first_candidate_relative_percent": 48.91354435433617,
+      "reverse_candidate_relative_percent": -0.8949270301143231
+    },
+    {
+      "phase": "repeated-noop-1",
+      "seconds": {
+        "block-scopes-v47-baseline": 0.03689525699883234,
+        "block-scopes-v49-candidate": 0.03793625500111375,
+        "block-scopes-v49-candidate-repeat": 0.02931821800302714,
+        "block-scopes-v49-baseline-repeat": 0.04077970499929506
+      },
+      "first_candidate_relative_percent": 2.8214954629923295,
+      "reverse_candidate_relative_percent": -28.105860492286673
+    },
+    {
+      "phase": "manifest-feature-add",
+      "seconds": {
+        "block-scopes-v47-baseline": 6.990680597999017,
+        "block-scopes-v49-candidate": 8.135931361990515,
+        "block-scopes-v49-candidate-repeat": 7.959102031993098,
+        "block-scopes-v49-baseline-repeat": 7.8825850389985135
+      },
+      "first_candidate_relative_percent": 16.382535976816204,
+      "reverse_candidate_relative_percent": 0.9707093880500173
+    },
+    {
+      "phase": "type-error",
+      "seconds": {
+        "block-scopes-v47-baseline": 7.8927151469979435,
+        "block-scopes-v49-candidate": 8.17054703598842,
+        "block-scopes-v49-candidate-repeat": 8.065977735997876,
+        "block-scopes-v49-baseline-repeat": 7.920547576009994
+      },
+      "first_candidate_relative_percent": 3.520105360652126,
+      "reverse_candidate_relative_percent": 1.8361124479368662
+    },
+    {
+      "phase": "type-recovery",
+      "seconds": {
+        "block-scopes-v47-baseline": 7.278240917992662,
+        "block-scopes-v49-candidate": 7.259435109997867,
+        "block-scopes-v49-candidate-repeat": 7.381303947986453,
+        "block-scopes-v49-baseline-repeat": 7.364895670994883
+      },
+      "first_candidate_relative_percent": -0.25838397226319865,
+      "reverse_candidate_relative_percent": 0.22279035202346087
+    },
+    {
+      "phase": "assert-failure",
+      "seconds": {
+        "block-scopes-v47-baseline": 1.424184500996489,
+        "block-scopes-v49-candidate": 1.6412236239993945,
+        "block-scopes-v49-candidate-repeat": 1.5550744920037687,
+        "block-scopes-v49-baseline-repeat": 1.728340757006663
+      },
+      "first_candidate_relative_percent": 15.239536931559439,
+      "reverse_candidate_relative_percent": -10.02500602386861
+    },
+    {
+      "phase": "assert-recovery",
+      "seconds": {
+        "block-scopes-v47-baseline": 0.39026247899164446,
+        "block-scopes-v49-candidate": 0.3991034890059382,
+        "block-scopes-v49-candidate-repeat": 0.39181240799371153,
+        "block-scopes-v49-baseline-repeat": 0.4056201100029284
+      },
+      "first_candidate_relative_percent": 2.265400977602816,
+      "reverse_candidate_relative_percent": -3.4040970032568674
+    }
+  ],
+  "limitations": [
+    "First baseline preceded candidate build by approximately24minutes, not a source-isolated attribution experiment.",
+    "Two scoped state pairs establish no significance, session-weighted default promotion or general speed claim.",
+    "Native correctness/provider fixtures passed, but runtime observations do not establish repeatable useful latency benefit."
+  ]
+}

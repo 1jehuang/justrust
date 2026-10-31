@@ -1,0 +1,115 @@
+# Resident block identity: source-only boundary, v46
+
+## Frozen release
+
+**Disposition: do not promote. Rust implementation unchanged.** This is a source-only investigation, not a performance result or a validated native optimization. No builds, tests, native jobs, installs, commits, or releases were run. The canonical tracked constructor is plausible only after its exact containing-module argument and validity dependencies are independently established. The present decoder does not directly provide that argument. Replacing its body walk with `owner.module(db)` is incorrect.
+
+Artifacts are frozen under `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-identity-v46`: full `original/` and `candidate/` trees for the three assigned Rust files and four coordinator-authorized additional Rust files, this candidate document, a patch, SHA-256 manifests, and source-check output. The identical Rust snapshots are intentional, not an omitted implementation. `rustfmt --edition 2024 --config skip_children=true --check` passed for the original three Rust files. The no-index diff check produced no whitespace diagnostics (exit 1 denotes the added document).
+
+## Exact current mechanism
+
+Source references are relative to `toolchain/resident/vendor/rust-analyzer/crates/`.
+
+* `hir-def/src/lib.rs:497-523`: `BlockIdLt` is a Salsa tracked struct with `AstId<ast::BlockExpr>` and containing `ModuleIdLt`. `new` requires `TrackedStructToken`, then calls generated `new_`. The token distinguishes Analysis from IDE lowering, not arbitrary persistent decoder validity.
+* `hir-def/src/expr_store/lower.rs:2998-3056`: the only lowering call obtains an optional block AstId from the current expander, attaches its current file identity, and constructs the block using **the collector's current module**. For an allocated block it queries `block_def_map`, records the block, and replaces `self.module` with that map's root module before recursively collecting statements and tail. It restores the previous module afterward. A block without an allocated AstId leaves the module unchanged.
+* `hir-def/src/nameres.rs:510-543`: `block_def_map` reads the tracked block's AstId and module, sets visibility relative to that module, creates `BlockInfo { block, parent: module }`, and collects the block's item tree. A wrong parent changes name resolution, not just a cache label.
+* `hir-def/src/nameres/frozen.rs:1008-1064`: an encoded block module consists of tag 1, a body-owner descriptor, the block's complete AstId, and its module-table index. `block_owner` finds the owner by enumerating lowered bodies and can recursively search an enclosing block. It does **not** encode `block.module(db)` as the block's parent descriptor.
+* `hir-def/src/nameres/frozen.rs:2349-2374`: decoding reads that owner and AstId, walks `Body::of(db, owner).blocks(db)`, selects the matching AstId, and uses the resulting live block's def-map table. The table index selects a module **inside the target block's map**, not the target block's containing module.
+* `hir-def/src/expr_store.rs:735-746`: `blocks` iterates the stored allocated block identities and queries each `block_def_map`. It is not a syntax-only index. Avoiding this walk can avoid lowering, but no speedup is measured here.
+
+## Nested-parent proof and counterexample
+
+Consider:
+
+```rust
+fn outer() {
+    struct A;
+    {
+        struct B;
+        {
+            struct C;
+        }
+    }
+}
+```
+
+Call the allocated blocks A, B, and C, with root modules MA, MB, and MC. By `collect_block_`'s replacement/restoration order:
+
+1. A's containing module is `outer.module(db)`.
+2. B's containing module is MA.
+3. C's containing module is MB.
+4. All three blocks are collected in the body of `outer`.
+
+Thus decoding B or C's `body_owner` as `outer` does not recover its immediate containing module. The tuple `(owner.module(db), target AstId)` is wrong for both. Wrapping B in an item-free block does not necessarily add a module: `AstIdMap::ast_id_for_block` is optional (`span/src/ast_id.rs:857-873`), and lower.rs changes module only for allocated blocks. A nearest arbitrary syntax-block ancestor is therefore not a valid substitute either.
+
+A function declared inside MA is a different case. Its body begins at that function's containing module MA, but its own nested allocated blocks still extend the chain. `body_owner` can itself decode an item container through `module()`. It supplies an item identity, not a lexical-parent certificate for every block in the item body.
+
+## Macro, source, and module identity
+
+`collect_macro_call` (`lower.rs:2748-2844`) resolves at the current lexical module, enters the expansion, recursively invokes the supplied collector, and exits the expansion. It does not independently replace `self.module`. A block written by a macro therefore uses the caller's current collector module, while its AstId uses the expansion's file and AstId map.
+
+`expr_store/expander.rs:152-177` restores file/map state on exit and `in_file` attaches `current_file_id`. Frozen `ast_id` (`frozen.rs:703-720,2103-2115`) serializes a real editioned file or a macro-call identity plus the raw file-local AstId. It is not a source offset or a call-site block identity. Two invocations must not be collapsed by spelling, source range, or macro-definition identity. An expansion's syntax parent alone does not establish the caller's lexical allocated-block chain.
+
+Relative lowering is also relevant: `Body::relative` (`expr_store/body.rs:144-178`) supplies body-relative maps, while `body_syntax` derives its AstId map with `relative_to` (line 478). The whole-file route is separate. `Body::with_source_map` has a relative/full-file check, but its assertions compare source maps and parameter counts, not exact block identity. This existing check is not the requested identity oracle.
+
+## Why a canonical constructor alone is insufficient
+
+A tracked query keyed by exact `(AstId, ModuleIdLt)` could own the single tracked construction and be shared by lowering and decoding. Keeping `BlockIdLt` tracked is compatible with that design. Salsa's tracked-struct implementation (`salsa/src/tracked_struct.rs:508-555`) associates construction with active-query identity/disambiguation state, so invoking `new_` from an unrelated decoder query is not evidence of identical identity.
+
+However, the proposed constructor accepts its parent, it does not derive or validate it. Merely reading the two key arguments does not establish that the target still belongs to the decoded body, remains cfg-active, still receives a tracked block, or has the same lexical parent after a source edit. The old body walk establishes membership through current lowering. A new path needs corresponding tracked source, expansion, cfg, and containment dependencies. No unsafe lifetime conversion, global map, or stale AstId-to-parent memo can replace those dependencies.
+
+The precise remaining boundary is **validating the current lexical allocated-block module chain across source, expansion, cfg, and lowering eligibility without lowering the owner body**, not the mere absence of a wire field. The parent can be represented explicitly as described below. A separately proved tracked scope-discovery algorithm can in principle validate it. No such independent algorithm was established in this investigation.
+
+### Parent-only redesign investigated
+
+A concrete replacement descriptor is `tag + module(block.module(db)) + AstId + target module-table index`, with no body-owner descriptor. This removes both encoder `block_owner` and decoder `Body::of` walks in principle. It preserves the immediate allocated lexical parent rather than guessing from an owner. The original/fullwalk path must remain independent for validation.
+
+For values created by current lowering, the parent relation is finite: the constructor captures `self.module` before the new block map root is installed, recursive descent extends this stack, and returning restores it. A named module within a block is addressed by the existing finite module-table index, and the next enclosing block descriptor names a block that already existed before the nested body's lowering. Macro entry does not change this lexical-stack rule. No edge through a body owner is required in the new representation.
+
+The AstId's macro-file subcodec also does not itself require a module descriptor: `call_loc` writes macro definition, crate, call kind, and context; `def_id` writes AstIds and expander metadata, not `ModuleId`; call kinds and syntax contexts recurse through enclosing calls/contexts. Thus the proposed change avoids introducing body-owner/module recursion. This is a structural proof about valid live values, not a parser-depth or adversarial-bytes proof. A decoder still needs conservative bounds and errors for malformed input.
+
+The actual format cache namespace is `toolchain/resident/crates/ra-jit/src/frozen.rs:109`, `field(b"ra-jit frozen def map 6")`. Any wire change must bump it to 7. `Part::key` (lines 176-186) derives impl and lang-item keys from this crate key, so that bump also invalidates their dependent module encodings. Ownership was expanded by the coordinator to that literal only, but it remains unchanged because no wire change ships here.
+
+### Why explicit parents still need an independent validity gate
+
+`span/src/ast_id.rs:908` exposes `try_get_erased`, so an unknown raw AstId can be rejected without a panicking typed lookup. This proves presence in the current AstId map only. It does not prove collection into the expected body, the immediate allocated parent, cfg eligibility, or macro-call-site lexical context. Parent AstIds encode item-relative allocation information, not the collector's complete lexical module stack (`span/src/ast_id.rs:450-461,653-737`).
+
+`lower.rs:1491-1498` checks expression cfg before collecting it, macro statements have their own cfg checks (2854), and `lower_body` handles `RUST_ANALYZER_SKIP` (roughly 98-139) by returning only signature scaffolding. A block can therefore be present in syntax but absent from the collected body. Merely checking syntax kind and walking allocated syntax ancestors would accept cases the original route rejects. Macro-written blocks additionally require recovering the call site's active lexical stack when crossing expansion roots. `Expander::within` and relative AstId maps must agree with whole-file lookup.
+
+A canonical constructor query with only tuple keys could remain green when source changes because it reads no source. Adding a text dependency merely makes it recompute the same stale tuple, which is not rejection. Explicit-parent bytes can also outlive a reparenting edit while a raw AstId remains valid or is reused. A correct shortcut needs a tracked membership certificate or independently checked discovery, including all eligibility inputs. Whole-file hashes or forced body lowering could reject/revalidate conservatively but are separate designs with costs to measure, not evidence that the bare constructor is sufficient. The requested strict stale-invalidation contract is why this unvalidated parent-only redesign is not installed.
+
+## Minimum authoritative scope-discovery factoring
+
+The next viable design is a tracked **block-scope provider**, not a declaration cache and not an unchecked constructor. It must produce current membership and immediate module identities without constructing expression/type HIR. Ordinary body lowering and the decoder then use the same canonical tracked constructor for the same proven tuples. Decoding a removed/reparented/ineligible tuple must return an error, with a deliberate live fallback. The original traversal remains a separately executed fixture oracle.
+
+Concrete production seams identified:
+
+1. **Additional ownership: `hir-def/src/expr_store/body.rs`.** Factor the body-input selection in `Body::relative` (144-178) and `lower_in_file` (222-259) into an authoritative input selector for scope discovery and lowering. Preserve relative maps for source-moved bodies and the whole-file/macro-written route. Parameters and signature patterns are inputs too, not only the body expression. `body_syntax` already supplies a tracked source anchor but does not itself enumerate scope membership.
+2. **Owned `expr_store/lower.rs`.** Extract lexical scope state: module/def-map stack, expander, cfg inputs, and sequential legacy macro counts. Share the exact eligibility decision and macro entry/exit protocol. Discovery must preserve the existing parser distinction between macro statements and expressions, including semicolon handling (2854-2894). Block entry creates the canonical block before querying its def map, then switches to that root while visiting its contents, exactly as current lowering does.
+3. **Traversal is wider than expression descendants.** Array types lower const arguments (814-839), const arguments invoke expression collection (1466-1477), type macros expand through the collector (935), and pattern macros do likewise (2260,3351). Let statements visit pattern, type, initializer and else block. Branches are visited before the condition for `if` (1506-1516). A new generic syntax walk would have to reproduce all these semantic choices, not just syntax nesting. Avoid speculatively expanding macro token trees in syntax contexts the original collector never visits.
+4. **Additional ownership if a generic traversal/sink is chosen: `hir-def/src/expr_store/lower/path.rs` and `lower/generics.rs`.** They accept concrete `ExprCollector` callbacks and return arena-backed types. Replacing only `alloc_expr` with a no-op still executes type/pattern/desugaring work and downstream code indexes previously allocated arenas. A proper scope-only backend needs traversal/output separation across these callbacks, not fake IDs or empty arena entries. `expr_store.rs` would need ownership only if the shared builder/output abstraction is changed, not for the wire format itself.
+5. **Existing owned `nameres/frozen.rs` test module.** It already uses `TestDB` and fixtures. `TestDB` has Salsa event recording, so strict tests can count provider executions without adding a global production counter. The candidate decode must not invoke `Body::of`, `Body::relative`, or `Body::with_source_map` on a cold query. A warm-body test alone would hide an accidental body dependency. The independent fullwalk oracle is executed in its own validation step, outside that measured candidate event window.
+
+### Actual semantic gates, not just existing callback types
+
+Several existing decisions determine whether nested blocks are visited at all:
+
+* `collect_for_loop` (2546-2557) returns before visiting iterable, pattern or body unless `IntoIterIntoIter`, `IteratorNext`, `OptionSome`, and `OptionNone` lang items exist.
+* `collect_try_operator` (2646-2654) skips its operand unless `TryTraitBranch`, `ControlFlowContinue`, and `ControlFlowBreak` exist.
+* Record expressions (1740-1747) skip all fields when path lowering fails. Path lowering can return early for malformed qualifiers while recursively traversing generic arguments and type anchors.
+* Function parameter traversal (148-188) visits patterns, with bare-identifier-only treatment for extern functions and bodyless trait methods. It does not traverse ordinary function parameter type annotations in `lower_body`. Closure parameter and return types do traverse (1830 onward). A scope provider must not scan all signature descendants indiscriminately.
+* Destructuring-assignment classification (2140-2167) invokes `def_map.resolve_path_locally` to choose expression-as-pattern versus ordinary expression traversal, which can invoke different macro expansion parsing routes.
+
+These dependencies are not intrinsically tied to expression/type/pattern arenas: a shared semantic frontend can retain lang-item availability, resolver decisions and path-shape outcomes while omitting HIR materialization. Therefore this investigation does **not** prove that scope-only discovery is impossible, or that it inherently requires full expression lowering. It proves that a faithful candidate needs more than syntax walking or a copied constructor. Those decisions need shared implementations plus independent fullwalk fixtures, including missing lang items and malformed/incomplete syntax, before exact membership can be claimed.
+
+A safe staged implementation first establishes exact membership against original traversal, then removes expression/type output from the discovery provider, and finally changes the wire namespace and enables the decoder path. Until source-only review and native correctness checks support that factoring, no bare parent descriptor is promoted. Task size is not the correctness boundary: the unproved traversal equivalence and validity dependencies are.
+
+## Correctness gate for a future candidate
+
+No candidate is implemented, so no identity fixtures are added or reported passing. Future work must retain an independently executed original/fullwalk route as oracle, not replace it with the same candidate scope-discovery helper. After both routes use the canonical constructor, compare exact tracked `BlockId`, its containing-module chain, module identity and table contents. AstId equality alone is insufficient. The oracle must actually execute the full traversal, not return a candidate-populated lookup.
+
+Required strict native coverage includes direct and nested allocated blocks, item-free intermediate blocks, block-local function bodies, inline modules, cfg changes, repeated and nested macro invocations, macro-written bodies, and source/macro file distinctions. Exercise repeated same-revision reads and edits across revisions: source movement, body edits, signature-only edits, adding/removing/reparenting item-bearing blocks, macro expansion changes, and stale frozen data. Expected behavior for removed or mismatched membership is conservative rejection, not synthesized identity. Assert useful diagnostics and stock/live resolution equivalence, and retain every original fixture without skipped cases or weakened assertions.
+
+Decoder failure behavior must be audited explicitly: today's `Dec::module` returns an error if a block is absent, but `served` (`frozen.rs:153-160`) currently panics on a decode error. Therefore the existing outer serving path cannot honestly be described as generally fail-open. This investigation leaves it unchanged rather than bundling an unrelated behavior change into an unproved identity mechanism. A future promoted shortcut must reject invalid descriptors and provide a deliberate live fallback at its serving boundary.
+
+No declaration cache is reintroduced. Root hashing amortization is not the target. The prospective benefit is eliminating redundant body lowering during exact block recovery, and remains unmeasured and unimplemented.

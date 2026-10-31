@@ -1,0 +1,9 @@
+3a56da21154fc171110fba607d456208d1923b89a47ba790411fa4c4dd8bac93  ./docs/resident-block-identity.md
+593a2d77f8129b9975256c934e75f52e6d5507a1257ffbde3776460fa8c6f119  ./toolchain/resident/crates/ra-jit/src/frozen.rs
+2d9d06361837f4ca05ad61580a693ce398cef87e74a1ddbe7b4ae3f4347100fa  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs
+d953598d0ad49355a9680bdb77b8aa836602dde75473dc7799c619805a1aa5cb  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/format_args.rs
+3d8b14fed32361b15b145954aaa63d91c3dfceb4235d1a755bfc0e1d6fc6e1f8  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/generics.rs
+04f487b7dac4ff391edef2c25b378c614b221b46c1cd4ab1650528358a52a0f1  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/path.rs
+41e23847ee083445bc5cb746e36918765d92c1070d0814f6f28fbf100a26ee87  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/lower.rs
+0c3ed12a5099a10f0de51622b8d24cf9eab2a9705e7acdc2cd0acf49bc42d8d6  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/lib.rs
+f42b2088a8100be8032fa03d0aede099b67c39bc9e3fd22271be30d5683f7e65  ./toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs

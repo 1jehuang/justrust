@@ -1,0 +1,18 @@
+--- original-vendor-Cargo.lock
++++ private-snapshot-Cargo.lock
+@@ -1470,6 +1470,7 @@
+ version = "0.0.0"
+ dependencies = [
+  "anyhow",
++ "cfg",
+  "crossbeam-channel",
+  "hir-expand",
+  "ide-db",
+@@ -1477,6 +1478,7 @@
+  "itertools 0.15.0",
+  "proc-macro-api",
+  "project-model",
++ "serde_json",
+  "span",
+  "tracing",
+  "triomphe",

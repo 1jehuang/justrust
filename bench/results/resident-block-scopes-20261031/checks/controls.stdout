@@ -1,0 +1,96 @@
+{
+  "status": "PASS",
+  "native_jobs": false,
+  "cases": [
+    {
+      "case": "empty-home-path-isolated-relocation",
+      "status": "PASS",
+      "forbidden_original_checkout_scratch_toolchain": true,
+      "forbidden_native_network": true
+    },
+    {
+      "case": "runtime-freshness",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh invocation marker/count mismatch']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "type-error-freshness",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "assertion-freshness",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh assertion failure oracle failed']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "missing-runtime-test",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['exact reference test names/status/counts/filtered mismatch']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "success-exit",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['process was not successful']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "failure-exit",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "exact-input-recipe",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "actual exact source input recipe",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "unknown-noise",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "retain unknown noise",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "coherent-toolchain-change",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "pinned toolchain manifest",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "exact-native-fixture",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "all12 exact native fixture identities",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "phase-order",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "seven phases in order",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "second-private-source-delta",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "only private lock differs",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "promotion-invention",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "retain rejection/noise/promotion boundary",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "restoration-receipt",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "exact original restoration",
+      "transport_checksums": "coherently resigned PASS"
+    }
+  ]
+}

@@ -1,0 +1,1128 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+error[E0432]: unresolved import `expect_test`
+   --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:821:9
+    |
+821 |     use expect_test::expect;
+    |         ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+    |
+    = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+   --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:824:9
+    |
+824 |     use test_fixture::WithFixture;
+    |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+    |
+    = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+    --> vendor/rust-analyzer/crates/hir-def/src/attrs.rs:1777:9
+     |
+1777 |     use test_fixture::WithFixture;
+     |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+     |
+     = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/item_tree/tests.rs:1:5
+  |
+1 | use expect_test::{Expect, expect};
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+ --> vendor/rust-analyzer/crates/hir-def/src/item_tree/tests.rs:3:5
+  |
+3 | use test_fixture::WithFixture;
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+  |
+  = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/path/tests.rs:1:5
+  |
+1 | use expect_test::{Expect, expect};
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/path/tests.rs:4:5
+  |
+4 | use test_fixture::WithFixture;
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+  |
+  = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+   --> vendor/rust-analyzer/crates/hir-def/src/expr_store/scope.rs:408:9
+    |
+408 |     use test_fixture::WithFixture;
+    |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+    |
+    = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_utils`
+   --> vendor/rust-analyzer/crates/hir-def/src/expr_store/scope.rs:409:9
+    |
+409 |     use test_utils::{assert_eq_text, extract_offset};
+    |         ^^^^^^^^^^ use of unresolved module or unlinked crate `test_utils`
+    |
+    = help: if you wanted to use a crate named `test_utils`, use `cargo add test_utils` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body/block.rs:2:5
+  |
+2 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body.rs:4:5
+  |
+4 | use expect_test::{Expect, expect};
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body.rs:6:5
+  |
+6 | use test_fixture::WithFixture;
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+  |
+  = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/signatures.rs:8:5
+  |
+8 | use expect_test::{Expect, expect};
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+ --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/signatures.rs:9:5
+  |
+9 | use test_fixture::WithFixture;
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+  |
+  = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+   --> vendor/rust-analyzer/crates/hir-def/src/upvars.rs:228:9
+    |
+228 |     use expect_test::{Expect, expect};
+    |         ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+    |
+    = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+   --> vendor/rust-analyzer/crates/hir-def/src/upvars.rs:231:9
+    |
+231 |     use test_fixture::WithFixture;
+    |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+    |
+    = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/collector.rs:2974:9
+     |
+2974 |     use test_fixture::WithFixture;
+     |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+     |
+     = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3002:9
+     |
+3002 |     use test_fixture::WithFixture;
+     |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+     |
+     = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:5:5
+  |
+5 | use expect_test::{Expect, expect};
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+ --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:8:5
+  |
+8 | use test_fixture::WithFixture;
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+  |
+  = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/macros.rs:2:5
+  |
+2 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests.rs:7:5
+  |
+7 | use expect_test::{Expect, expect};
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+ --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests.rs:8:5
+  |
+8 | use test_fixture::WithFixture;
+  |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+  |
+  = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+   --> vendor/rust-analyzer/crates/hir-def/src/import_map.rs:532:9
+    |
+532 |     use expect_test::{Expect, expect};
+    |         ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+    |
+    = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+   --> vendor/rust-analyzer/crates/hir-def/src/import_map.rs:533:9
+    |
+533 |     use test_fixture::WithFixture;
+    |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+    |
+    = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/builtin_derive_macro.rs:3:5
+  |
+3 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/builtin_fn_macro.rs:3:5
+  |
+3 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mbe/matching.rs:3:5
+  |
+3 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mbe/meta_syntax.rs:3:5
+  |
+3 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mbe/metavar_expr.rs:3:5
+  |
+3 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mbe/regression.rs:7:5
+  |
+7 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mbe/tt_conversion.rs:8:5
+  |
+8 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+  --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mbe.rs:10:5
+   |
+10 | use expect_test::expect;
+   |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+   |
+   = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+ --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/proc_macros.rs:6:5
+  |
+6 | use expect_test::expect;
+  |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+  |
+  = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+  --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mod.rs:20:5
+   |
+20 | use expect_test::Expect;
+   |     ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+   |
+   = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+  --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mod.rs:41:5
+   |
+41 | use test_fixture::WithFixture;
+   |     ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+   |
+   = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `expect_test`
+   --> vendor/rust-analyzer/crates/hir-def/src/find_path.rs:675:9
+    |
+675 |     use expect_test::{Expect, expect};
+    |         ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+    |
+    = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+error[E0432]: unresolved import `test_fixture`
+   --> vendor/rust-analyzer/crates/hir-def/src/find_path.rs:680:9
+    |
+680 |     use test_fixture::WithFixture;
+    |         ^^^^^^^^^^^^ use of unresolved module or unlinked crate `test_fixture`
+    |
+    = help: if you wanted to use a crate named `test_fixture`, use `cargo add test_fixture` to add it to your `Cargo.toml`
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:834:38
+    |
+834 |         let (_db, file_id) = TestDB::with_single_file("");
+    |                                      ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:1011:38
+     |
+1011 |         let (_db, file_id) = TestDB::with_single_file("");
+     |                                      ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:1040:38
+     |
+1040 |         let (_db, file_id) = TestDB::with_single_file("");
+     |                                      ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:1114:38
+     |
+1114 |         let (_db, file_id) = TestDB::with_single_file("");
+     |                                      ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/attrs.rs:1788:37
+     |
+1788 |         let (db, file_id) = TestDB::with_single_file(fixture);
+     |                                     ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/item_tree/tests.rs:8:33
+   |
+ 8 |     let (db, file_id) = TestDB::with_single_file(ra_fixture);
+   |                                 ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/expr_store/lower/path/tests.rs:21:33
+   |
+21 |     let (db, file_id) = TestDB::with_single_file("");
+   |                                 ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no method named `test_crate` found for reference `&test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/expr_store/scope.rs:419:24
+    |
+419 |         let krate = db.test_crate();
+    |                        ^^^^^^^^^^
+    |
+help: there is a method `fetch_test_crate` with a similar name
+    |
+419 |         let krate = db.fetch_test_crate();
+    |                        ++++++
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/expr_store/scope.rs:441:38
+    |
+441 |         let (db, position) = TestDB::with_position(&code);
+    |                                      ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_position` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+            candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/expr_store/scope.rs:673:38
+    |
+673 |         let (db, position) = TestDB::with_position(ra_fixture);
+    |                                      ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_position` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+            candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body.rs:11:22
+   |
+11 |     let db = TestDB::with_files(ra_fixture);
+   |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body.rs:31:22
+   |
+31 |     let db = TestDB::with_files(ra_fixture);
+   |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body.rs:50:34
+   |
+50 |     let (db, position) = TestDB::with_position(ra_fixture);
+   |                                  ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_position` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+           candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body.rs:57:34
+   |
+57 |     let (db, position) = TestDB::with_position(ra_fixture);
+   |                                  ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_position` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+           candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/signatures.rs:14:22
+   |
+14 |     let db = TestDB::with_files(ra_fixture);
+   |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/upvars.rs:240:26
+    |
+240 |         let db = TestDB::with_files(ra_fixture);
+    |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/collector.rs:2981:31
+     |
+2981 |         let (db, _) = TestDB::with_single_file(not_ra_fixture);
+     |                               ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/collector.rs:3030:31
+     |
+3030 |         let (db, _) = TestDB::with_single_file(fixture);
+     |                               ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3074:26
+     |
+3074 |         let db = TestDB::with_files(RESIDENT_SCOPES);
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3099:30
+     |
+3099 |         let source = TestDB::with_files(RESIDENT_SCOPES);
+     |                              ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3109:29
+     |
+3109 |         let fresh = TestDB::with_files(RESIDENT_SCOPES);
+     |                             ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3177:30
+     |
+3177 |             let db = TestDB::with_files(&fixture);
+     |                              ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3187:42
+     |
+3187 |         let (mut db, position) = TestDB::with_position(&fixture);
+     |                                          ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_position` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+             candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3234:26
+     |
+3234 |         let db = TestDB::with_files(fixture);
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3239:37
+     |
+3239 |         let (mut db, pos) = TestDB::with_position(
+     |                                     ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_position` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+             candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3269:37
+     |
+3269 |         let (mut db, pos) = TestDB::with_position(&fixture);
+     |                                     ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_position` not found for this struct
+     |
+     = help: items from traits can only be used if the trait is implemented and in scope
+     = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+             candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3293:28
+     |
+3293 |         let live = TestDB::with_files(fixture);
+     |                            ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3295:30
+     |
+3295 |         let mut db = TestDB::with_files(fixture);
+     |                              ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3307:30
+     |
+3307 |         let mut db = TestDB::with_files("//- /main.rs crate:main\npub fn target() {}\n");
+     |                              ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3318:26
+     |
+3318 |         let db = TestDB::with_files(
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3335:26
+     |
+3335 |         let db = TestDB::with_files(
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3364:26
+     |
+3364 |         let db = TestDB::with_files(
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3391:26
+     |
+3391 |         let db = TestDB::with_files(fixture);
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3403:29
+     |
+3403 |         let fresh = TestDB::with_files(fixture);
+     |                             ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3479:26
+     |
+3479 |         let db = TestDB::with_files(FIXTURE);
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3487:30
+     |
+3487 |         let mut db = TestDB::with_files(FIXTURE);
+     |                              ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3519:28
+     |
+3519 |         let live = TestDB::with_files(FIXTURE);
+     |                            ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3539:26
+     |
+3539 |         let db = TestDB::with_files(OUTSIDE);
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3543:31
+     |
+3543 |         let changed = TestDB::with_files(&OUTSIDE.replace("{}\n", "{}\npub fn more() {}\n"));
+     |                               ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3564:26
+     |
+3564 |         let db = TestDB::with_files(INCLUDED);
+     |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3568:34
+     |
+3568 |         let mut served = TestDB::with_files(INCLUDED);
+     |                                  ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3577:31
+     |
+3577 |         let changed = TestDB::with_files(&INCLUDED.replace("unroll {", "unroll_more {"));
+     |                               ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3583:31
+     |
+3583 |         let missing = TestDB::with_files(INCLUDED.split("//- /lib/out").next().unwrap());
+     |                               ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3606:29
+     |
+3606 |         let first = TestDB::with_files(WROTE);
+     |                             ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3607:29
+     |
+3607 |         let other = TestDB::with_files(&WROTE.replace("first", "other"));
+     |                             ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs:3617:34
+     |
+3617 |         let mut served = TestDB::with_files(&WROTE.replace("first", "other"));
+     |                                  ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:22:33
+   |
+22 |     let (mut db, pos) = TestDB::with_position(ra_fixture_initial);
+   |                                 ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_position` not found for this struct
+   |
+   = help: items from traits can only be used if the trait is implemented and in scope
+   = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+           candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_many_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:46:35
+   |
+46 |     let (mut db, files) = TestDB::with_many_files(
+   |                                   ^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_many_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:496:33
+    |
+496 |     let (mut db, pos) = TestDB::with_position(
+    |                                 ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_position` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+            candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:597:33
+    |
+597 |     let (mut db, pos) = TestDB::with_position(
+    |                                 ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_position` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+            candidate #1: `itertools::Itertools`
+
+error[E0599]: no method named `test_crate` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:616:56
+    |
+616 |             file_item_tree(&db, pos.file_id.into(), db.test_crate());
+    |                                                        ^^^^^^^^^^
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ method `test_crate` not found for this struct
+    |
+help: there is a method `fetch_test_crate` with a similar name
+    |
+616 |             file_item_tree(&db, pos.file_id.into(), db.fetch_test_crate());
+    |                                                        ++++++
+
+error[E0599]: no method named `test_crate` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:636:56
+    |
+636 |             file_item_tree(&db, pos.file_id.into(), db.test_crate());
+    |                                                        ^^^^^^^^^^
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ method `test_crate` not found for this struct
+    |
+help: there is a method `fetch_test_crate` with a similar name
+    |
+636 |             file_item_tree(&db, pos.file_id.into(), db.fetch_test_crate());
+    |                                                        ++++++
+
+error[E0599]: no associated function or constant named `with_position` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/incremental.rs:672:29
+    |
+672 |     let (db, pos) = TestDB::with_position(
+    |                             ^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_position` not found for this struct
+    |
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+            candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/macros.rs:1145:22
+     |
+1145 |     let db = TestDB::with_files(
+     |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/macros.rs:1574:22
+     |
+1574 |     let db = TestDB::with_files(
+     |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files_extra_proc_macros` found for struct `test_db::TestDB` in the current scope
+    --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests/macros.rs:1940:22
+     |
+1940 |     let db = TestDB::with_files_extra_proc_macros(
+     |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+     |
+    ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+     |
+  24 | pub(crate) struct TestDB {
+     | ------------------------ associated function or constant `with_files_extra_proc_macros` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests.rs:19:22
+   |
+19 |     let db = TestDB::with_files(ra_fixture);
+   |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/nameres/tests.rs:25:22
+   |
+25 |     let db = TestDB::with_files(ra_fixture);
+   |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: `test_db::TestDB` is not an iterator
+   --> vendor/rust-analyzer/crates/hir-def/src/find_path.rs:699:33
+    |
+699 |         let (db, pos) = TestDB::with_position(ra_fixture);
+    |                                 ^^^^^^^^^^^^^ `test_db::TestDB` is not an iterator
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_position` not found for this struct because it doesn't satisfy `test_db::TestDB: Iterator` or `test_db::TestDB: itertools::Itertools`
+    |
+    = note: the following trait bounds were not satisfied:
+            `test_db::TestDB: Iterator`
+            which is required by `test_db::TestDB: itertools::Itertools`
+            `&test_db::TestDB: Iterator`
+            which is required by `&test_db::TestDB: itertools::Itertools`
+            `test_db::TestDB: Iterator`
+            which is required by `&mut test_db::TestDB: itertools::Itertools`
+note: the trait `Iterator` must be implemented
+   --> /home/jeremy/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library/core/src/iter/traits/iterator.rs:42:1
+    |
+ 42 | pub const trait Iterator {
+    | ^^^^^^^^^^^^^^^^^^^^^^^^
+    = help: items from traits can only be used if the trait is implemented and in scope
+    = note: the following trait defines an item `with_position`, perhaps you need to implement it:
+            candidate #1: `itertools::Itertools`
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/import_map.rs:567:26
+    |
+567 |         let db = TestDB::with_files(ra_fixture);
+    |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/import_map.rs:647:26
+    |
+647 |         let db = TestDB::with_files(ra_fixture);
+    |                          ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files` found for struct `test_db::TestDB` in the current scope
+  --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mod.rs:57:22
+   |
+57 |     let db = TestDB::with_files(ra_fixture);
+   |                      ^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+   |
+  ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+   |
+24 | pub(crate) struct TestDB {
+   | ------------------------ associated function or constant `with_files` not found for this struct
+
+error[E0599]: no associated function or constant named `with_files_extra_proc_macros` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mod.rs:109:22
+    |
+109 |     let db = TestDB::with_files_extra_proc_macros(ra_fixture, extra_proc_macros);
+    |                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_files_extra_proc_macros` not found for this struct
+
+error[E0599]: no associated function or constant named `with_single_file` found for struct `test_db::TestDB` in the current scope
+   --> vendor/rust-analyzer/crates/hir-def/src/macro_expansion_tests/mod.rs:462:33
+    |
+462 |     let (db, file_id) = TestDB::with_single_file(fixture);
+    |                                 ^^^^^^^^^^^^^^^^ associated function or constant not found in `test_db::TestDB`
+    |
+   ::: vendor/rust-analyzer/crates/hir-def/src/test_db.rs:24:1
+    |
+ 24 | pub(crate) struct TestDB {
+    | ------------------------ associated function or constant `with_single_file` not found for this struct
+
+error[E0433]: cannot find module or crate `expect_test` in this scope
+    --> vendor/rust-analyzer/crates/hir-def/src/attrs/docs.rs:1067:40
+     |
+1067 |         fn check(source: &str, expect: expect_test::Expect) {
+     |                                        ^^^^^^^^^^^ use of unresolved module or unlinked crate `expect_test`
+     |
+     = help: if you wanted to use a crate named `expect_test`, use `cargo add expect_test` to add it to your `Cargo.toml`
+
+Some errors have detailed explanations: E0432, E0433, E0599.
+For more information about an error, try `rustc --explain E0432`.
+error: could not compile `hir-def` (lib test) due to 103 previous errors
+
+
+justrust: FAILED to compile (103 errors) in 13.6s
+  time    startup 0.19s | compile 13.42s | after 0.04s
+  units   3 compiled (3 local, 0 deps, 0 build scripts), 415 fresh. Rebuilt because: edited crates (ra-jit); edited vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs (hir-def); hir-def changed (hir-ty)
+          hir_ty                             8.77s  cpu   8.8s   1133 MB
+          hir_def (test)                     2.36s  cpu   4.7s    743 MB
+          hir_def                            2.29s  cpu   4.6s    731 MB
+  cpu     19.6s total, avg 1.4/peak 3.0 of 16 cores; others used 3.2 cores
+  memory  peak 1541 MB build, 1133 MB largest rustc, 45.8 GB free; stalls cpu 0.09s mem 0.00s io 0.01s
+  output  3 warnings shown, 55 hidden; 427 progress and 0 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~  8.8s  hir-ty rebuilt only because hir-def changed (edited vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs and 1 more) (8.8s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~  6.6s  8.8s went to recompiling oversized crates: hir_ty (80k lines, 8.8s, rebuilt for an upstream change). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~  2.6s  build averaged 1.4 of 16 cores: hir_ty ran 8.8s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-213148772-1992017` full output, `justrust show 20261030-213148772-1992017` full profile

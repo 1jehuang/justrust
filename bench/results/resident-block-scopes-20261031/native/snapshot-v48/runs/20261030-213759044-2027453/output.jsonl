@@ -1,0 +1,780 @@
+{"t":1793421479.0721238,"s":"e","l":"warning: missing `[lints]` to inherit `[workspace.lints]`"}
+{"t":1793421479.0721297,"s":"e","l":"  --> lib/rowan/Cargo.toml"}
+{"t":1793421479.0721333,"s":"e","l":"   = note: `cargo::missing_lints_inheritance` is set to `warn` by default"}
+{"t":1793421479.0721362,"s":"e","l":"help: to inherit `workspace.lints, add:"}
+{"t":1793421479.072139,"s":"e","l":"   |"}
+{"t":1793421479.0721438,"s":"e","l":"27 ~ serde1 = [\"serde\", \"text-size/serde\"]"}
+{"t":1793421479.072147,"s":"e","l":"28 + [lints]"}
+{"t":1793421479.0721958,"s":"e","l":"29 + workspace = true"}
+{"t":1793421479.0721984,"s":"e","l":"   |"}
+{"t":1793421479.0722013,"s":"e","l":"help: to clarify your intent to not inherit, add:"}
+{"t":1793421479.0722039,"s":"e","l":"   |"}
+{"t":1793421479.0722065,"s":"e","l":"27 ~ serde1 = [\"serde\", \"text-size/serde\"]"}
+{"t":1793421479.0722091,"s":"e","l":"28 + [lints]"}
+{"t":1793421479.0722115,"s":"e","l":"   |"}
+{"t":1793421479.0722125,"s":"e","l":"warning: `rowan` (manifest) generated 1 warning"}
+{"t":1793421479.1501005,"s":"e","l":"       Fresh proc-macro2 v1.0.106"}
+{"t":1793421479.150103,"s":"e","l":"       Fresh quote v1.0.45"}
+{"t":1793421479.1501048,"s":"e","l":"       Fresh syn v2.0.117"}
+{"t":1793421479.1501634,"s":"e","l":"       Fresh crossbeam-utils v0.8.21"}
+{"t":1793421479.1501641,"s":"e","l":"       Fresh libc v0.2.186"}
+{"t":1793421479.1501646,"s":"e","l":"       Fresh once_cell v1.21.4"}
+{"t":1793421479.1501648,"s":"e","l":"       Fresh serde_core v1.0.228"}
+{"t":1793421479.1501653,"s":"e","l":"       Fresh find-msvc-tools v0.1.11"}
+{"t":1793421479.1501658,"s":"e","l":"       Fresh shlex v2.0.1"}
+{"t":1793421479.1501663,"s":"e","l":"       Fresh cc v1.4.3"}
+{"t":1793421479.1501665,"s":"e","l":"       Fresh cfg-if v1.0.4"}
+{"t":1793421479.150167,"s":"e","l":"       Fresh object v0.39.1"}
+{"t":1793421479.1501672,"s":"e","l":"       Fresh tracing-core v0.1.36"}
+{"t":1793421479.1501677,"s":"e","l":"       Fresh ar_archive_writer v0.5.3"}
+{"t":1793421479.1502106,"s":"e","l":"       Fresh tracing-attributes v0.1.31"}
+{"t":1793421479.1502113,"s":"e","l":"       Fresh pin-project-lite v0.2.17"}
+{"t":1793421479.1502118,"s":"e","l":"       Fresh either v1.16.0"}
+{"t":1793421479.1502123,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793421479.150213,"s":"e","l":"       Fresh smallvec v1.15.1"}
+{"t":1793421479.1502137,"s":"e","l":"       Fresh tracing v0.1.44"}
+{"t":1793421479.1504316,"s":"e","l":"       Fresh crossbeam-epoch v0.9.18"}
+{"t":1793421479.150549,"s":"e","l":"       Fresh psm v0.1.32"}
+{"t":1793421479.1505497,"s":"e","l":"       Fresh serde_derive v1.0.228"}
+{"t":1793421479.1505501,"s":"e","l":"       Fresh rustc-hash v2.1.2"}
+{"t":1793421479.1505506,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793421479.150551,"s":"e","l":"       Fresh scopeguard v1.2.0"}
+{"t":1793421479.1505513,"s":"e","l":"       Fresh foldhash v0.2.0"}
+{"t":1793421479.1505516,"s":"e","l":"       Fresh allocator-api2 v0.2.21"}
+{"t":1793421479.150552,"s":"e","l":"       Fresh stacker v0.1.25"}
+{"t":1793421479.1505523,"s":"e","l":"       Fresh lock_api v0.4.14"}
+{"t":1793421479.1505527,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793421479.150553,"s":"e","l":"       Fresh serde v1.0.228"}
+{"t":1793421479.1505535,"s":"e","l":"       Fresh memoffset v0.9.1"}
+{"t":1793421479.1505537,"s":"e","l":"       Fresh parking_lot_core v0.9.12"}
+{"t":1793421479.1505542,"s":"e","l":"       Fresh crossbeam-deque v0.8.6"}
+{"t":1793421479.1505544,"s":"e","l":"       Fresh itertools v0.15.0"}
+{"t":1793421479.150555,"s":"e","l":"       Fresh crossbeam-channel v0.5.15"}
+{"t":1793421479.1505551,"s":"e","l":"       Fresh stable_deref_trait v1.2.1"}
+{"t":1793421479.1505556,"s":"e","l":"       Fresh unicode-ident v1.0.24"}
+{"t":1793421479.1505558,"s":"e","l":"       Fresh unicode-properties v0.1.4"}
+{"t":1793421479.1505563,"s":"e","l":"       Fresh jod-thread v1.0.0"}
+{"t":1793421479.1505566,"s":"e","l":"       Fresh hashbrown v0.14.5"}
+{"t":1793421479.150557,"s":"e","l":"       Fresh memchr v2.8.1"}
+{"t":1793421479.1505575,"s":"e","l":"       Fresh stdx v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/stdx)"}
+{"t":1793421479.1505582,"s":"e","l":"       Fresh triomphe v0.1.15"}
+{"t":1793421479.1505585,"s":"e","l":"       Fresh rayon-core v1.13.0"}
+{"t":1793421479.1505947,"s":"e","l":"       Fresh camino v1.2.2"}
+{"t":1793421479.1505952,"s":"e","l":"       Fresh ra-ap-rustc_lexer v0.166.0"}
+{"t":1793421479.150598,"s":"e","l":"       Fresh rustc-literal-escaper v0.0.7"}
+{"t":1793421479.1505985,"s":"e","l":"       Fresh text-size v1.1.1"}
+{"t":1793421479.150633,"s":"e","l":"       Fresh paths v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/paths)"}
+{"t":1793421479.1506336,"s":"e","l":"       Fresh rayon v1.12.0"}
+{"t":1793421479.150634,"s":"e","l":"       Fresh indexmap v2.14.0"}
+{"t":1793421479.1506648,"s":"e","l":"       Fresh syn v3.0.3"}
+{"t":1793421479.1506653,"s":"e","l":"       Fresh edition v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/edition)"}
+{"t":1793421479.1506658,"s":"e","l":"       Fresh winnow v0.7.15"}
+{"t":1793421479.1506662,"s":"e","l":"       Fresh countme v3.0.1"}
+{"t":1793421479.1506963,"s":"e","l":"       Fresh rustc-hash v1.1.0"}
+{"t":1793421479.1506968,"s":"e","l":"       Fresh drop_bomb v0.1.5"}
+{"t":1793421479.1506972,"s":"e","l":"       Fresh salsa-macros v0.28.5 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/salsa-macros)"}
+{"t":1793421479.1507275,"s":"e","l":"       Fresh rowan v0.17.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/lib/rowan)"}
+{"t":1793421479.1507282,"s":"e","l":"       Fresh parser v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/parser)"}
+{"t":1793421479.1507287,"s":"e","l":"       Fresh fst v0.4.7"}
+{"t":1793421479.1507602,"s":"e","l":"       Fresh typeid v1.0.3"}
+{"t":1793421479.1507607,"s":"e","l":"       Fresh portable-atomic v1.13.1"}
+{"t":1793421479.150761,"s":"e","l":"       Fresh hashlink v0.12.0"}
+{"t":1793421479.1507614,"s":"e","l":"       Fresh intrusive-collections v0.10.1"}
+{"t":1793421479.1507907,"s":"e","l":"       Fresh parking_lot v0.12.5"}
+{"t":1793421479.1507912,"s":"e","l":"       Fresh crossbeam-queue v0.3.12"}
+{"t":1793421479.1507916,"s":"e","l":"       Fresh inventory v0.3.24"}
+{"t":1793421479.1508212,"s":"e","l":"       Fresh nohash-hasher v0.2.0"}
+{"t":1793421479.1508217,"s":"e","l":"       Fresh salsa-macro-rules v0.28.5 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/salsa-macro-rules)"}
+{"t":1793421479.1508224,"s":"e","l":"       Fresh smol_str v0.3.6"}
+{"t":1793421479.150853,"s":"e","l":"       Fresh boxcar v0.2.14"}
+{"t":1793421479.1508534,"s":"e","l":"       Fresh thin-vec v0.2.18"}
+{"t":1793421479.1508539,"s":"e","l":"       Fresh vfs v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/vfs)"}
+{"t":1793421479.1508543,"s":"e","l":"       Fresh dashmap v6.2.1"}
+{"t":1793421479.1508827,"s":"e","l":"       Fresh syntax v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/syntax)"}
+{"t":1793421479.1509678,"s":"e","l":"warning: function `is_range_pat_op` is never used"}
+{"t":1793421479.1509717,"s":"e","l":"    --> crates/syntax/src/ast/node_ext.rs:1066:4"}
+{"t":1793421479.1509745,"s":"e","l":"     |"}
+{"t":1793421479.1509771,"s":"e","l":"1066 | fn is_range_pat_op(kind: SyntaxKind) -> bool {"}
+{"t":1793421479.15098,"s":"e","l":"     |    ^^^^^^^^^^^^^^^"}
+{"t":1793421479.1509824,"s":"e","l":"     |"}
+{"t":1793421479.1509848,"s":"e","l":"     = note: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793421479.150987,"s":"e","l":"       Fresh salsa v0.28.5 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/salsa)"}
+{"t":1793421479.1509879,"s":"e","l":"       Fresh arrayvec v0.7.6"}
+{"t":1793421479.1511605,"s":"e","l":"       Fresh la-arena v0.3.1"}
+{"t":1793421479.1511612,"s":"e","l":"       Fresh bitflags v2.12.1"}
+{"t":1793421479.151162,"s":"e","l":"       Fresh perf-event-open-sys v4.0.0"}
+{"t":1793421479.1511629,"s":"e","l":"warning: `syntax` (lib) generated 1 warning"}
+{"t":1793421479.1511695,"s":"e","l":"       Fresh intern v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/intern)"}
+{"t":1793421479.1511703,"s":"e","l":"       Fresh span v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/span)"}
+{"t":1793421479.151171,"s":"e","l":"       Fresh perf-event v0.4.8"}
+{"t":1793421479.1511712,"s":"e","l":"       Fresh semver v1.0.28"}
+{"t":1793421479.1511717,"s":"e","l":"       Fresh cov-mark v2.2.0"}
+{"t":1793421479.1511722,"s":"e","l":"       Fresh dissimilar v1.0.11"}
+{"t":1793421479.1511729,"s":"e","l":"       Fresh tt v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/tt)"}
+{"t":1793421479.1511736,"s":"e","l":"       Fresh profile v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/profile)"}
+{"t":1793421479.1511743,"s":"e","l":"       Fresh ra-ap-rustc_index_macros v0.166.0"}
+{"t":1793421479.151237,"s":"e","l":"       Fresh rustc-stable-hash v0.1.2"}
+{"t":1793421479.1512377,"s":"e","l":"       Fresh expect-test v1.5.1"}
+{"t":1793421479.1512382,"s":"e","l":"       Fresh cfg v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/cfg)"}
+{"t":1793421479.1512394,"s":"e","l":"       Fresh syntax-bridge v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/syntax-bridge)"}
+{"t":1793421479.15124,"s":"e","l":"       Fresh test-utils v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/test-utils)"}
+{"t":1793421479.1512408,"s":"e","l":"       Fresh ra-ap-rustc_hashes v0.166.0"}
+{"t":1793421479.151241,"s":"e","l":"       Fresh ra-ap-rustc_index v0.166.0"}
+{"t":1793421479.1512418,"s":"e","l":"       Fresh base-db v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/base-db)"}
+{"t":1793421479.1512423,"s":"e","l":"       Fresh mbe v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/mbe)"}
+{"t":1793421479.151243,"s":"e","l":"       Fresh rustc_apfloat v0.2.3+llvm-462a31f5a5ab"}
+{"t":1793421479.1512434,"s":"e","l":"       Fresh ra-ap-rustc_abi v0.166.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rustc_abi)"}
+{"t":1793421479.1512442,"s":"e","l":"       Fresh ra-ap-rustc_parse_format v0.166.0"}
+{"t":1793421479.1512446,"s":"e","l":"       Fresh hir-expand v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/hir-expand)"}
+{"t":1793421479.1512487,"s":"e","l":"warning: unused variable: `span`"}
+{"t":1793421479.1512527,"s":"e","l":"   --> crates/hir-expand/src/builtin/derive_macro.rs:134:27"}
+{"t":1793421479.151255,"s":"e","l":"    |"}
+{"t":1793421479.1512573,"s":"e","l":"134 |     fn field_names(&self, span: Span) -> Vec<tt::Ident> {"}
+{"t":1793421479.1512597,"s":"e","l":"    |                           ^^^^ help: if this is intentional, prefix it with an underscore: `_span`"}
+{"t":1793421479.151262,"s":"e","l":"    |"}
+{"t":1793421479.1513138,"s":"e","l":"    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default"}
+{"t":1793421479.151316,"s":"e","l":"warning: `hir-expand` (lib) generated 1 warning (run `cargo fix --lib -p hir-expand` to apply 1 suggestion)"}
+{"t":1793421479.151317,"s":"e","l":"       Fresh test-fixture v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/test-fixture)"}
+{"t":1793421479.1513178,"s":"e","l":"       Fresh hir-def v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-unit-v48-snapshot/vendor/rust-analyzer/crates/hir-def)"}
+{"t":1793421479.1514254,"s":"e","l":"    Finished `release` profile [optimized] target(s) in 0.08s"}
+{"t":1793421479.156732,"s":"e","l":"     Running `/home/jeremy/.cargo/bin/justrust __test-runner /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-build-v2/target/release/build/hir-def/0e576d0a55d7d9a9/out/hir_def-0e576d0a55d7d9a9`"}
+{"t":1793421479.159079,"s":"o","l":"running 546 tests"}
+{"t":1793421479.1602297,"s":"o","l":"test attrs::docs::tests::docs ... ok <0.001s>"}
+{"t":1793421479.1606176,"s":"o","l":"test attrs::tests::crate_attrs ... ok <0.001s>"}
+{"t":1793421479.1608508,"s":"o","l":"test attrs::docs::tests::sugared_desugared_mix ... ok <0.001s>"}
+{"t":1793421479.1608522,"s":"o","l":"test attrs::docs::tests::block_doc_comment_source_map ... ok <0.001s>"}
+{"t":1793421479.1613195,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_path_super_in_middle ... ok <0.000s>"}
+{"t":1793421479.1613212,"s":"o","l":"test expr_store::scope::tests::broken_inner_item ... ok <0.000s>"}
+{"t":1793421479.1613264,"s":"o","l":"test expr_store::scope::tests::closure_pattern_type_expr_scope ... ok <0.000s>"}
+{"t":1793421479.1615515,"s":"o","l":"test expr_store::scope::tests::array_repeat_expr_scope ... ok <0.001s>"}
+{"t":1793421479.1615534,"s":"o","l":"test expr_store::lower::path::tests::keywords_in_middle_fail_lowering2 ... ok <0.001s>"}
+{"t":1793421479.1616476,"s":"o","l":"test expr_store::lower::path::tests::keywords_in_middle_fail_lowering3 ... ok <0.001s>"}
+{"t":1793421479.1616707,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_type_anchor_path ... ok <0.001s>"}
+{"t":1793421479.1618094,"s":"o","l":"test attrs::docs::tests::doc_attr_source_map ... ok <0.002s>"}
+{"t":1793421479.1618109,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_trait_ref ... ok <0.001s>"}
+{"t":1793421479.1625366,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_crate_path ... ok <0.001s>"}
+{"t":1793421479.162539,"s":"o","l":"test expr_store::scope::tests::match_guard_if_let ... ok <0.000s>"}
+{"t":1793421479.1625397,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_super_path ... ok <0.001s>"}
+{"t":1793421479.1625402,"s":"o","l":"test expr_store::scope::tests::inline_const_expr_scope ... ok <0.001s>"}
+{"t":1793421479.162541,"s":"o","l":"test expr_store::scope::tests::test_bindings_after_at ... ok <0.000s>"}
+{"t":1793421479.1625414,"s":"o","l":"test expr_store::scope::tests::test_call_scope ... ok <0.000s>"}
+{"t":1793421479.162542,"s":"o","l":"test expr_store::lower::path::tests::keywords_in_middle_fail_lowering1 ... ok <0.001s>"}
+{"t":1793421479.1629841,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_self_path ... ok <0.001s>"}
+{"t":1793421479.1629863,"s":"o","l":"test expr_store::lower::path::tests::fn_like_path_with_coloncolon ... ok <0.002s>"}
+{"t":1793421479.1629872,"s":"o","l":"test expr_store::scope::tests::test_loop_scope ... ok <0.000s>"}
+{"t":1793421479.162988,"s":"o","l":"test expr_store::scope::tests::let_chains_can_reference_previous_lets ... ok <0.001s>"}
+{"t":1793421479.1629887,"s":"o","l":"test expr_store::scope::tests::test_match ... ok <0.000s>"}
+{"t":1793421479.1630223,"s":"o","l":"test expr_store::scope::tests::macro_inner_item ... ok <0.001s>"}
+{"t":1793421479.1630745,"s":"o","l":"test expr_store::scope::tests::test_resolve_local_name ... ok <0.000s>"}
+{"t":1793421479.163076,"s":"o","l":"test expr_store::scope::tests::pattern_type_expr_scope ... ok <0.001s>"}
+{"t":1793421479.1631413,"s":"o","l":"test expr_store::scope::tests::test_shadow_variable ... ok <0.000s>"}
+{"t":1793421479.1631434,"s":"o","l":"test expr_store::scope::tests::test_resolve_local_name_declaration ... ok <0.000s>"}
+{"t":1793421479.1631453,"s":"o","l":"test expr_store::scope::tests::test_resolve_local_name_shadow ... ok <0.000s>"}
+{"t":1793421479.1634831,"s":"o","l":"test attrs::docs::tests::block_doc_comment_stars ... ok <0.003s>"}
+{"t":1793421479.1634848,"s":"o","l":"test expr_store::lower::path::tests::hir_to_ast_plain_path ... ok <0.001s>"}
+{"t":1793421479.1634858,"s":"o","l":"test expr_store::scope::tests::ref_patterns_contribute_bindings ... ok <0.001s>"}
+{"t":1793421479.1634893,"s":"o","l":"test expr_store::scope::tests::test_lambda_scope ... ok <0.001s>"}
+{"t":1793421479.1634898,"s":"o","l":"test expr_store::scope::tests::type_anon_const_scope ... ok <0.000s>"}
+{"t":1793421479.163715,"s":"o","l":"test expr_store::tests::body::async_fn_weird_param_patterns ... ok <0.000s>"}
+{"t":1793421479.1637192,"s":"o","l":"test expr_store::tests::body::block::inner_item_smoke ... ok <0.000s>"}
+{"t":1793421479.16372,"s":"o","l":"test expr_store::scope::tests::test_method_call_scope ... ok <0.000s>"}
+{"t":1793421479.1637206,"s":"o","l":"test expr_store::tests::body::array_element_cfg ... ok <0.001s>"}
+{"t":1793421479.163727,"s":"o","l":"test expr_store::tests::body::block::is_visible_from_same_def_map_regression_9481 ... ok <0.000s>"}
+{"t":1793421479.1644309,"s":"o","l":"test expr_store::scope::tests::while_let_adds_binding ... ok <0.001s>"}
+{"t":1793421479.1644526,"s":"o","l":"test expr_store::tests::body::block::nested_module_scoping ... FAILED <0.000s>"}
+{"t":1793421479.1644533,"s":"o","l":"test expr_store::tests::body::block::legacy_macro_items ... ok <0.001s>"}
+{"t":1793421479.1644542,"s":"o","l":"test expr_store::tests::body::block::macro_exported_in_block_mod ... ok <0.001s>"}
+{"t":1793421479.164455,"s":"o","l":"test expr_store::tests::body::block::macro_resolve ... ok <0.001s>"}
+{"t":1793421479.1644554,"s":"o","l":"test expr_store::tests::body::block::merge_namespaces ... ok <0.000s>"}
+{"t":1793421479.164456,"s":"o","l":"test expr_store::tests::body::block::nested_blocks ... ok <0.000s>"}
+{"t":1793421479.1644564,"s":"o","l":"test expr_store::tests::body::block::macro_resolve_legacy ... ok <0.000s>"}
+{"t":1793421479.164457,"s":"o","l":"test expr_store::tests::body::block::nested_macro_item_decl ... ok <0.001s>"}
+{"t":1793421479.1644576,"s":"o","l":"test expr_store::tests::body::block::resolve_extern_prelude_in_block ... ok <0.000s>"}
+{"t":1793421479.1644592,"s":"o","l":"test expr_store::tests::body::block::underscore_import ... ok <0.000s>"}
+{"t":1793421479.164538,"s":"o","l":"test expr_store::tests::body::block::stmt_macro_expansion_with_trailing_expr ... ok <0.000s>"}
+{"t":1793421479.1645389,"s":"o","l":"test expr_store::tests::body::block::use_from_crate ... ok <0.000s>"}
+{"t":1793421479.1645396,"s":"o","l":"test expr_store::tests::body::destructuring_assignment_tuple_macro ... ok <0.000s>"}
+{"t":1793421479.16454,"s":"o","l":"test expr_store::tests::body::block::shadow_extern_prelude_in_block ... ok <0.001s>"}
+{"t":1793421479.1645818,"s":"o","l":"test expr_store::tests::body::block::self_imports ... ok <0.001s>"}
+{"t":1793421479.1651738,"s":"o","l":"test expr_store::tests::body::macro_resolve ... ok <0.000s>"}
+{"t":1793421479.1651762,"s":"o","l":"test expr_store::tests::body::print_hir_precedences ... ok <0.000s>"}
+{"t":1793421479.1651769,"s":"o","l":"test expr_store::tests::body::issue_3642_bad_macro_stackover ... ok <0.001s>"}
+{"t":1793421479.1651776,"s":"o","l":"test expr_store::tests::body::block::super_does_not_resolve_to_block_module ... ok <0.000s>"}
+{"t":1793421479.1651783,"s":"o","l":"test expr_store::tests::body::block::super_imports ... ok <0.000s>"}
+{"t":1793421479.1651788,"s":"o","l":"test expr_store::tests::body::range_bounds_are_hir_exprs ... ok <0.000s>"}
+{"t":1793421479.1651793,"s":"o","l":"test expr_store::tests::body::block::super_imports_2 ... ok <0.000s>"}
+{"t":1793421479.1651797,"s":"o","l":"test expr_store::tests::body::regression_pretty_print_bind_pat ... ok <0.000s>"}
+{"t":1793421479.1651804,"s":"o","l":"test expr_store::tests::body::recursion_limit ... ok <0.000s>"}
+{"t":1793421479.165182,"s":"o","l":"test expr_store::tests::body::block_tail_cfg ... ok <0.001s>"}
+{"t":1793421479.1655264,"s":"o","l":"test expr_store::tests::body::skip_skips_body ... ok <0.000s>"}
+{"t":1793421479.1656563,"s":"o","l":"test expr_store::tests::body::block::trailing_expr_macro_expands_stmts ... ok <0.001s>"}
+{"t":1793421479.1656585,"s":"o","l":"test expr_store::tests::body::shadowing_tuple_struct_with_invisible_ctor ... ok <0.000s>"}
+{"t":1793421479.1662767,"s":"o","l":"test expr_store::tests::body::shadowing_record_variant ... ok <0.001s>"}
+{"t":1793421479.1662796,"s":"o","l":"test expr_store::tests::body::unresolved_macro_at_the_end_of_a_block_is_missing ... ok <0.000s>"}
+{"t":1793421479.1662803,"s":"o","l":"test expr_store::tests::signatures::extern_block_abi ... ok <0.000s>"}
+{"t":1793421479.166286,"s":"o","l":"test expr_store::tests::body::weird_cfgs ... ok <0.001s>"}
+{"t":1793421479.1662867,"s":"o","l":"test expr_store::tests::signatures::argument_position_impl_trait_functions ... ok <0.001s>"}
+{"t":1793421479.1662874,"s":"o","l":"test expr_store::tests::signatures::functions ... ok <0.001s>"}
+{"t":1793421479.1662881,"s":"o","l":"test expr_store::tests::body::three_dot_range_pattern_is_inclusive ... ok <0.000s>"}
+{"t":1793421479.1662886,"s":"o","l":"test expr_store::tests::signatures::regression_21138 ... ok <0.000s>"}
+{"t":1793421479.1662893,"s":"o","l":"test expr_store::tests::signatures::type_alias_constrained_lifetime_with_elided_lifetime_args ... ok <0.000s>"}
+{"t":1793421479.16629,"s":"o","l":"test find_path::tests::crate_root ... ok <0.000s>"}
+{"t":1793421479.1663594,"s":"o","l":"test expr_store::tests::signatures::structs ... ok <0.001s>"}
+{"t":1793421479.1667123,"s":"o","l":"test find_path::tests::different_crate_doc_hidden ... ok <0.001s>"}
+{"t":1793421479.1669853,"s":"o","l":"test find_path::tests::builtins_are_in_scope ... ok <0.001s>"}
+{"t":1793421479.167016,"s":"o","l":"test find_path::tests::different_crate_reexport ... ok <0.001s>"}
+{"t":1793421479.1670275,"s":"o","l":"test find_path::tests::discount_private_imports ... ok <0.000s>"}
+{"t":1793421479.1670413,"s":"o","l":"test find_path::tests::different_crate_renamed ... ok <0.001s>"}
+{"t":1793421479.1670945,"s":"o","l":"test expr_store::tests::body::desugar_builtin_format_args ... ok <0.003s>"}
+{"t":1793421479.1671157,"s":"o","l":"test find_path::tests::explicit_private_imports ... ok <0.000s>"}
+{"t":1793421479.1672518,"s":"o","l":"test find_path::tests::avoids_prelude_when_prefer_prelude_false ... ok <0.001s>"}
+{"t":1793421479.1674523,"s":"o","l":"test find_path::tests::explicit_private_imports_crate ... ok <0.000s>"}
+{"t":1793421479.1675572,"s":"o","l":"test find_path::tests::from_inside_module_with_inner_items ... ok <0.000s>"}
+{"t":1793421479.1675825,"s":"o","l":"test find_path::tests::from_inside_module2 ... ok <0.000s>"}
+{"t":1793421479.1676505,"s":"o","l":"test find_path::tests::different_crate ... ok <0.002s>"}
+{"t":1793421479.1677,"s":"o","l":"test find_path::tests::from_inside_module ... ok <0.000s>"}
+{"t":1793421479.1677532,"s":"o","l":"test find_path::tests::imported_prelude ... ok <0.000s>"}
+{"t":1793421479.1678061,"s":"o","l":"test find_path::tests::extern_crate ... ok <0.001s>"}
+{"t":1793421479.1678073,"s":"o","l":"test expr_store::tests::body::regression_10300 ... ok <0.003s>"}
+{"t":1793421479.1678085,"s":"o","l":"test find_path::tests::enum_variant ... ok <0.001s>"}
+{"t":1793421479.16785,"s":"o","l":"test find_path::tests::inner_items ... ok <0.000s>"}
+{"t":1793421479.168047,"s":"o","l":"test expr_store::tests::body::your_stack_belongs_to_me2 ... ok <0.002s>"}
+{"t":1793421479.1680496,"s":"o","l":"test find_path::tests::inner_items_from_inner_module ... ok <0.000s>"}
+{"t":1793421479.1680505,"s":"o","l":"test find_path::tests::inner_items_from_outer_scope ... ok <0.000s>"}
+{"t":1793421479.168051,"s":"o","l":"test expr_store::tests::body::desugar_for_loop ... ok <0.004s>"}
+{"t":1793421479.1681316,"s":"o","l":"test find_path::tests::outer_items_with_inner_items_present ... ok <0.000s>"}
+{"t":1793421479.1684504,"s":"o","l":"test find_path::tests::partially_imported_with_prefer_absolute ... ok <0.001s>"}
+{"t":1793421479.1685162,"s":"o","l":"test find_path::tests::enum_variant_from_prelude ... ok <0.002s>"}
+{"t":1793421479.1685174,"s":"o","l":"test find_path::tests::prelude ... ok <0.000s>"}
+{"t":1793421479.1686885,"s":"o","l":"test find_path::tests::prefer_alloc_paths_over_std_with_extern_crate_std ... ok <0.001s>"}
+{"t":1793421479.1688974,"s":"o","l":"test find_path::tests::prefer_long_std_over_short_extern ... ok <0.001s>"}
+{"t":1793421479.1689,"s":"o","l":"test find_path::tests::prefer_core_paths_over_std_for_mod_reexport ... ok <0.001s>"}
+{"t":1793421479.168901,"s":"o","l":"test find_path::tests::prefer_std_paths_over_alloc ... ok <0.001s>"}
+{"t":1793421479.1689017,"s":"o","l":"test find_path::tests::import_cycle ... ok <0.002s>"}
+{"t":1793421479.1689782,"s":"o","l":"test find_path::tests::partially_imported ... ok <0.001s>"}
+{"t":1793421479.1691418,"s":"o","l":"test find_path::tests::prefer_alloc_paths_over_std ... ok <0.001s>"}
+{"t":1793421479.169143,"s":"o","l":"test find_path::tests::prefer_shorter_paths_if_not_alloc ... ok <0.001s>"}
+{"t":1793421479.1691437,"s":"o","l":"test find_path::tests::regression_17271 ... ok <0.000s>"}
+{"t":1793421479.1691573,"s":"o","l":"test find_path::tests::prelude_with_inner_items ... ok <0.001s>"}
+{"t":1793421479.1691587,"s":"o","l":"test find_path::tests::recursive_pub_mod_reexport ... ok <0.001s>"}
+{"t":1793421479.1694105,"s":"o","l":"test expr_store::tests::body::test_macro_hygiene ... ok <0.004s>"}
+{"t":1793421479.169412,"s":"o","l":"test find_path::tests::respect_segment_length ... ok <0.001s>"}
+{"t":1793421479.1694126,"s":"o","l":"test find_path::tests::respect_unstable_modules ... ok <0.001s>"}
+{"t":1793421479.169413,"s":"o","l":"test find_path::tests::same_crate ... ok <0.000s>"}
+{"t":1793421479.1695619,"s":"o","l":"test find_path::tests::same_crate_reexport ... ok <0.000s>"}
+{"t":1793421479.1696053,"s":"o","l":"test find_path::tests::same_module ... ok <0.000s>"}
+{"t":1793421479.1696064,"s":"o","l":"test find_path::tests::different_crate_renamed_through_dep ... ok <0.003s>"}
+{"t":1793421479.16967,"s":"o","l":"test find_path::tests::self_module ... ok <0.000s>"}
+{"t":1793421479.169671,"s":"o","l":"test find_path::tests::same_crate_reexport_rename ... ok <0.001s>"}
+{"t":1793421479.1706414,"s":"o","l":"test find_path::tests::respects_absolute_setting ... ok <0.001s>"}
+{"t":1793421479.170644,"s":"o","l":"test find_path::tests::shadowed_prelude ... ok <0.000s>"}
+{"t":1793421479.1706445,"s":"o","l":"test find_path::tests::sub_module ... ok <0.000s>"}
+{"t":1793421479.1706452,"s":"o","l":"test find_path::tests::respects_prelude_setting ... ok <0.001s>"}
+{"t":1793421479.1706457,"s":"o","l":"test find_path::tests::super_module ... ok <0.000s>"}
+{"t":1793421479.1706464,"s":"o","l":"test import_map::tests::cyclic_module_reexport ... ok <0.000s>"}
+{"t":1793421479.170647,"s":"o","l":"test find_path::tests::shortest_path ... ok <0.001s>"}
+{"t":1793421479.1706474,"s":"o","l":"test import_map::tests::fuzzy_import_trait_and_assoc_items ... ok <0.000s>"}
+{"t":1793421479.1706498,"s":"o","l":"test import_map::tests::name_only ... ok <0.000s>"}
+{"t":1793421479.1706502,"s":"o","l":"test import_map::tests::macro_reexport ... ok <0.001s>"}
+{"t":1793421479.170651,"s":"o","l":"test import_map::tests::private_macro ... ok <0.000s>"}
+{"t":1793421479.1706514,"s":"o","l":"test expr_store::tests::body::your_stack_belongs_to_me ... ok <0.005s>"}
+{"t":1793421479.170652,"s":"o","l":"test import_map::tests::namespacing ... ok <0.001s>"}
+{"t":1793421479.1706524,"s":"o","l":"test find_path::tests::prefer_core_paths_over_std ... ok <0.002s>"}
+{"t":1793421479.1706529,"s":"o","l":"test find_path::tests::respect_doc_hidden ... ok <0.002s>"}
+{"t":1793421479.1706533,"s":"o","l":"test import_map::tests::assoc_items_filtering ... ok <0.001s>"}
+{"t":1793421479.170654,"s":"o","l":"test item_tree::tests::crate_attrs_should_preserve_order ... ok <0.000s>"}
+{"t":1793421479.1707315,"s":"o","l":"test import_map::tests::search_casing ... ok <0.001s>"}
+{"t":1793421479.1707945,"s":"o","l":"test item_tree::tests::adts ... ok <0.000s>"}
+{"t":1793421479.170799,"s":"o","l":"test import_map::tests::module_reexport ... ok <0.001s>"}
+{"t":1793421479.1708004,"s":"o","l":"test import_map::tests::prefers_shortest_path ... ok <0.001s>"}
+{"t":1793421479.1708217,"s":"o","l":"test import_map::tests::type_reexport_cross_crate ... ok <0.000s>"}
+{"t":1793421479.1711285,"s":"o","l":"test item_tree::tests::macros ... ok <0.000s>"}
+{"t":1793421479.17116,"s":"o","l":"test item_tree::tests::misc ... ok <0.000s>"}
+{"t":1793421479.1712685,"s":"o","l":"test import_map::tests::smoke ... ok <0.001s>"}
+{"t":1793421479.1713092,"s":"o","l":"test item_tree::tests::extern_blocks ... ok <0.000s>"}
+{"t":1793421479.1713116,"s":"o","l":"test item_tree::tests::imports ... ok <0.000s>"}
+{"t":1793421479.1713507,"s":"o","l":"test item_tree::tests::modules ... ok <0.000s>"}
+{"t":1793421479.1713521,"s":"o","l":"test import_map::tests::unicode_fn_name ... ok <0.001s>"}
+{"t":1793421479.171353,"s":"o","l":"test item_tree::tests::crate_attrs_with_disabled_cfg_injected ... ok <0.000s>"}
+{"t":1793421479.171474,"s":"o","l":"test item_tree::tests::crate_attrs_with_disabled_cfg_in_source ... ok <0.001s>"}
+{"t":1793421479.1714756,"s":"o","l":"test item_tree::tests::pub_self ... ok <0.001s>"}
+{"t":1793421479.1724834,"s":"o","l":"test import_map::tests::search_mode ... ok <0.002s>"}
+{"t":1793421479.1724856,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::coerce_shared_errors ... ok <0.001s>"}
+{"t":1793421479.172621,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_clone_expand_with_associated_types ... ok <0.001s>"}
+{"t":1793421479.1726232,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::from_errors ... ok <0.001s>"}
+{"t":1793421479.1727247,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::default_enum_without_default_attr ... ok <0.001s>"}
+{"t":1793421479.1727266,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::generic_enum_default ... ok <0.001s>"}
+{"t":1793421479.173,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_clone_expand_with_const_generics ... ok <0.001s>"}
+{"t":1793421479.1730032,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_copy_expand_in_core ... ok <0.001s>"}
+{"t":1793421479.173004,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::from_expansion ... ok <0.002s>"}
+{"t":1793421479.1730049,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_clone_expand ... ok <0.002s>"}
+{"t":1793421479.1731942,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::reborrow_expansion ... ok <0.002s>"}
+{"t":1793421479.1737452,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::coerce_pointee_expansion ... ok <0.002s>"}
+{"t":1793421479.1737466,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::coerce_shared_expansion ... ok <0.002s>"}
+{"t":1793421479.1737475,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_copy_expand_simple ... ok <0.002s>"}
+{"t":1793421479.1737483,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_copy_expand_with_lifetimes ... ok <0.001s>"}
+{"t":1793421479.173749,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_copy_expand_with_type_params ... ok <0.001s>"}
+{"t":1793421479.1742778,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_default_expand_with_cfg ... ok <0.001s>"}
+{"t":1793421479.1742797,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_default_expand ... ok <0.001s>"}
+{"t":1793421479.1756024,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::cfg_select ... ok <0.001s>"}
+{"t":1793421479.175605,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_partial_eq_expand_with_derive_const ... ok <0.001s>"}
+{"t":1793421479.1756103,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::regression_15002 ... ok <0.001s>"}
+{"t":1793421479.175611,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_partial_eq_expand_fieldless_enum ... ok <0.002s>"}
+{"t":1793421479.175612,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_debug_expand_with_cfg ... ok <0.002s>"}
+{"t":1793421479.1756124,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_column_expand ... ok <0.000s>"}
+{"t":1793421479.1756132,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_partial_eq_expand ... ok <0.002s>"}
+{"t":1793421479.1756155,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::coerce_pointee_errors ... ok <0.004s>"}
+{"t":1793421479.175616,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_asm_expand ... ok <0.000s>"}
+{"t":1793421479.1756167,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::const_param_ty_expansion ... ok <0.004s>"}
+{"t":1793421479.1756175,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_compile_error_expand ... ok <0.000s>"}
+{"t":1793421479.175618,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_debug_expand ... ok <0.003s>"}
+{"t":1793421479.1756186,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_file_expand ... ok <0.000s>"}
+{"t":1793421479.1757152,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_concat_expand ... ok <0.000s>"}
+{"t":1793421479.1757176,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_concat_with_captured_expr ... ok <0.000s>"}
+{"t":1793421479.1757185,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_env_expand ... ok <0.001s>"}
+{"t":1793421479.175833,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_assert_expand ... ok <0.001s>"}
+{"t":1793421479.175835,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_format_args_expand ... ok <0.001s>"}
+{"t":1793421479.176003,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_format_args_expand_with_broken_member_access ... ok <0.000s>"}
+{"t":1793421479.1760044,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_hash_expand ... ok <0.003s>"}
+{"t":1793421479.1760051,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_format_args_expand_with_raw_strings ... ok <0.000s>"}
+{"t":1793421479.1762824,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_include_bytes_expand ... ok <0.000s>"}
+{"t":1793421479.1762846,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_format_args_expand_with_comma_exprs ... ok <0.001s>"}
+{"t":1793421479.1762862,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_line_expand ... ok <0.000s>"}
+{"t":1793421479.1764069,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_quote_string ... ok <0.000s>"}
+{"t":1793421479.1764083,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_stringify_expand ... ok <0.000s>"}
+{"t":1793421479.1767128,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::eager_recursion_limit ... ok <0.003s>"}
+{"t":1793421479.1767147,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_concat_bytes_expand ... ok <0.001s>"}
+{"t":1793421479.1767154,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_stringify_spacing ... ok <0.001s>"}
+{"t":1793421479.176716,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_option_env_expand ... ok <0.001s>"}
+{"t":1793421479.1768327,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_format_args_expand_eager ... ok <0.001s>"}
+{"t":1793421479.1768384,"s":"o","l":"test macro_expansion_tests::mbe::concat_spans ... ok <0.001s>"}
+{"t":1793421479.17684,"s":"o","l":"test macro_expansion_tests::mbe::float_field_access_macro_input ... ok <0.000s>"}
+{"t":1793421479.1768882,"s":"o","l":"test macro_expansion_tests::mbe::lifetime_repeat ... ok <0.000s>"}
+{"t":1793421479.1768913,"s":"o","l":"test macro_expansion_tests::builtin_fn_macro::test_assert_expand_2015 ... ok <0.001s>"}
+{"t":1793421479.1768923,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::test_partial_ord_expand ... ok <0.003s>"}
+{"t":1793421479.177022,"s":"o","l":"test macro_expansion_tests::mbe::match_by_first_token_literally ... ok <0.000s>"}
+{"t":1793421479.1772616,"s":"o","l":"test macro_expansion_tests::mbe::match_by_ident ... ok <0.000s>"}
+{"t":1793421479.1772637,"s":"o","l":"test macro_expansion_tests::mbe::match_by_last_token_literally ... ok <0.000s>"}
+{"t":1793421479.1772647,"s":"o","l":"test macro_expansion_tests::mbe::match_by_separator_token ... ok <0.000s>"}
+{"t":1793421479.1772656,"s":"o","l":"test macro_expansion_tests::mbe::matching::meta_fat_arrow ... ok <0.000s>"}
+{"t":1793421479.1774487,"s":"o","l":"test macro_expansion_tests::mbe::matching::meta_variable_raw_name_equals_non_raw ... ok <0.000s>"}
+{"t":1793421479.1774728,"s":"o","l":"test macro_expansion_tests::mbe::matching::expr_dont_match_let_expr ... ok <0.000s>"}
+{"t":1793421479.177487,"s":"o","l":"test macro_expansion_tests::mbe::matching::asi ... ok <0.001s>"}
+{"t":1793421479.177509,"s":"o","l":"test macro_expansion_tests::mbe::matching::test_empty_comments ... ok <0.000s>"}
+{"t":1793421479.177512,"s":"o","l":"test macro_expansion_tests::mbe::matching::negative_literal_stays_one_operand ... ok <0.000s>"}
+{"t":1793421479.177664,"s":"o","l":"test macro_expansion_tests::mbe::expr_interpolation ... ok <0.001s>"}
+{"t":1793421479.1776655,"s":"o","l":"test macro_expansion_tests::mbe::matching::range_patterns ... ok <0.000s>"}
+{"t":1793421479.1776664,"s":"o","l":"test macro_expansion_tests::mbe::matching::metavariables_of_one_name_from_two_expansions_are_two ... ok <0.001s>"}
+{"t":1793421479.1779492,"s":"o","l":"test macro_expansion_tests::mbe::eager_expands_with_unresolved_within ... ok <0.001s>"}
+{"t":1793421479.1779506,"s":"o","l":"test macro_expansion_tests::mbe::matching::stmt_boundaries ... ok <0.000s>"}
+{"t":1793421479.177951,"s":"o","l":"test macro_expansion_tests::mbe::matching::trailing_vis ... ok <0.000s>"}
+{"t":1793421479.1779518,"s":"o","l":"test macro_expansion_tests::mbe::matching::expr_inline_const ... ok <0.001s>"}
+{"t":1793421479.1779525,"s":"o","l":"test macro_expansion_tests::mbe::matching::test_expand_bad_literal ... ok <0.001s>"}
+{"t":1793421479.1780508,"s":"o","l":"test macro_expansion_tests::builtin_derive_macro::union_derive ... ok <0.005s>"}
+{"t":1793421479.1780524,"s":"o","l":"test macro_expansion_tests::mbe::meta_syntax::malformed_macro_rules ... ok <0.000s>"}
+{"t":1793421479.1780531,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::concat_invalid_fragment ... ok <0.000s>"}
+{"t":1793421479.1780548,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::concat_invalid_ident ... ok <0.000s>"}
+{"t":1793421479.1781738,"s":"o","l":"test macro_expansion_tests::mbe::meta_syntax::test_rustc_issue_57597 ... ok <0.000s>"}
+{"t":1793421479.1781745,"s":"o","l":"test macro_expansion_tests::mbe::mbe_smoke_test ... ok <0.001s>"}
+{"t":1793421479.1783135,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::concat_less_than_two_elements ... ok <0.000s>"}
+{"t":1793421479.1783144,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::concat ... ok <0.001s>"}
+{"t":1793421479.1786554,"s":"o","l":"test macro_expansion_tests::mbe::mbe_are_not_attributes ... ok <0.001s>"}
+{"t":1793421479.1786573,"s":"o","l":"test macro_expansion_tests::mbe::matching::unary_minus_is_a_literal ... ok <0.001s>"}
+{"t":1793421479.178658,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::count_interaction_with_empty_binding ... ok <0.000s>"}
+{"t":1793421479.1786587,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::concat_repetition ... ok <0.000s>"}
+{"t":1793421479.1786625,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::count_basic ... ok <0.000s>"}
+{"t":1793421479.178663,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::count_depth_out_of_bounds ... ok <0.000s>"}
+{"t":1793421479.1788158,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::malformed_count ... ok <0.000s>"}
+{"t":1793421479.1788177,"s":"o","l":"test macro_expansion_tests::mbe::per_token_edition ... ok <0.000s>"}
+{"t":1793421479.1788187,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::test_metavar_exprs ... ok <0.000s>"}
+{"t":1793421479.1788194,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::misplaced_count ... ok <0.001s>"}
+{"t":1793421479.1788201,"s":"o","l":"test macro_expansion_tests::mbe::regression::eager_concat_bytes_panic ... ok <0.000s>"}
+{"t":1793421479.1789453,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::count_with_depth ... ok <0.001s>"}
+{"t":1793421479.1792333,"s":"o","l":"test macro_expansion_tests::mbe::metavar_expr::test_dollar_dollar ... ok <0.001s>"}
+{"t":1793421479.1792395,"s":"o","l":"test macro_expansion_tests::mbe::regression::eager_regression_15403 ... ok <0.000s>"}
+{"t":1793421479.1792405,"s":"o","l":"test macro_expansion_tests::mbe::regression::eager_concat_line ... ok <0.000s>"}
+{"t":1793421479.1792412,"s":"o","l":"test macro_expansion_tests::mbe::regression::eager_regression_154032 ... ok <0.000s>"}
+{"t":1793421479.1792433,"s":"o","l":"test macro_expansion_tests::mbe::regression::regression_16529 ... ok <0.000s>"}
+{"t":1793421479.1795213,"s":"o","l":"test macro_expansion_tests::mbe::regression::regression_18148 ... ok <0.000s>"}
+{"t":1793421479.1795237,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_empty_repeat_vars_in_empty_repeat_vars ... ok <0.000s>"}
+{"t":1793421479.1795247,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_generate_pattern_iterators ... ok <0.000s>"}
+{"t":1793421479.1795254,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_impl_nonzero_fmt ... ok <0.000s>"}
+{"t":1793421479.179526,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_cfg_if_main ... ok <0.000s>"}
+{"t":1793421479.179554,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_issue_2520 ... ok <0.000s>"}
+{"t":1793421479.179653,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_cfg_if_items ... ok <0.001s>"}
+{"t":1793421479.179655,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_int_base ... ok <0.000s>"}
+{"t":1793421479.1798687,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_proptest_arbitrary ... ok <0.000s>"}
+{"t":1793421479.179904,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_issue_3861 ... ok <0.000s>"}
+{"t":1793421479.1799903,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_old_ridl ... ok <0.000s>"}
+{"t":1793421479.1799912,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_repeat_bad_var ... ok <0.000s>"}
+{"t":1793421479.180355,"s":"o","l":"test macro_expansion_tests::mbe::semicolon_after_expression ... ok <0.000s>"}
+{"t":1793421479.180358,"s":"o","l":"test macro_expansion_tests::mbe::semicolon_does_not_glue ... ok <0.000s>"}
+{"t":1793421479.1803586,"s":"o","l":"test macro_expansion_tests::mbe::regression::ty_fragment_followed_by_expr ... ok <0.000s>"}
+{"t":1793421479.1803596,"s":"o","l":"test macro_expansion_tests::mbe::regression::shallow_variable_in_deeper_repetition ... ok <0.001s>"}
+{"t":1793421479.1803603,"s":"o","l":"test macro_expansion_tests::mbe::test_block ... ok <0.000s>"}
+{"t":1793421479.1803608,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_no_space_after_semi_colon ... ok <0.000s>"}
+{"t":1793421479.1803656,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_winapi_struct ... ok <0.001s>"}
+{"t":1793421479.1804614,"s":"o","l":"test macro_expansion_tests::mbe::meta_syntax::well_formed_macro_rules ... ok <0.003s>"}
+{"t":1793421479.180754,"s":"o","l":"test macro_expansion_tests::mbe::test_boolean_is_ident ... ok <0.001s>"}
+{"t":1793421479.1807814,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_impl_fn_for_zst ... ok <0.002s>"}
+{"t":1793421479.180812,"s":"o","l":"test macro_expansion_tests::mbe::test_dollar_crate_lhs_is_not_meta ... ok <0.000s>"}
+{"t":1793421479.1808138,"s":"o","l":"test macro_expansion_tests::mbe::test_expr_after_path_colons ... ok <0.000s>"}
+{"t":1793421479.1808822,"s":"o","l":"test macro_expansion_tests::mbe::test_expr_order ... ok <0.000s>"}
+{"t":1793421479.1808858,"s":"o","l":"test macro_expansion_tests::mbe::test_expr_with_attr ... ok <0.000s>"}
+{"t":1793421479.1808867,"s":"o","l":"test macro_expansion_tests::mbe::test_edition_handling_out ... ok <0.001s>"}
+{"t":1793421479.1810918,"s":"o","l":"test macro_expansion_tests::mbe::test_inner_macro_rules ... ok <0.000s>"}
+{"t":1793421479.1810963,"s":"o","l":"test macro_expansion_tests::mbe::test_lifetime ... ok <0.001s>"}
+{"t":1793421479.181261,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_vec ... ok <0.001s>"}
+{"t":1793421479.1812673,"s":"o","l":"test macro_expansion_tests::mbe::test_expand_to_item_list ... ok <0.001s>"}
+{"t":1793421479.1812682,"s":"o","l":"test macro_expansion_tests::mbe::test_expr ... ok <0.001s>"}
+{"t":1793421479.1817167,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_empty_fixed_token ... ok <0.000s>"}
+{"t":1793421479.181719,"s":"o","l":"test macro_expansion_tests::mbe::test_all_items ... ok <0.002s>"}
+{"t":1793421479.18172,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_pattern_with_multiple_defs ... ok <0.000s>"}
+{"t":1793421479.181721,"s":"o","l":"test macro_expansion_tests::mbe::test_macro_2_0_panic_2015 ... ok <0.001s>"}
+{"t":1793421479.1817214,"s":"o","l":"test macro_expansion_tests::mbe::test_literal ... ok <0.001s>"}
+{"t":1793421479.1818316,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_in_group ... ok <0.000s>"}
+{"t":1793421479.181878,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_in_subtree ... ok <0.000s>"}
+{"t":1793421479.181893,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_pattern_with_multiple_statement_without_semi ... ok <0.000s>"}
+{"t":1793421479.181935,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_pattern_with_multiple_statement ... ok <0.001s>"}
+{"t":1793421479.1819549,"s":"o","l":"test macro_expansion_tests::mbe::test_last_expr ... ok <0.001s>"}
+{"t":1793421479.1819735,"s":"o","l":"test macro_expansion_tests::mbe::test_match_is_not_greedy ... ok <0.000s>"}
+{"t":1793421479.1820035,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_zero_match ... ok <0.000s>"}
+{"t":1793421479.1820426,"s":"o","l":"test macro_expansion_tests::mbe::test_meta_doc_comments ... ok <0.000s>"}
+{"t":1793421479.182044,"s":"o","l":"test macro_expansion_tests::mbe::test_meta_doc_comments_escaped_characters ... ok <0.000s>"}
+{"t":1793421479.1822824,"s":"o","l":"test macro_expansion_tests::mbe::test_match_literal ... ok <0.001s>"}
+{"t":1793421479.1822848,"s":"o","l":"test macro_expansion_tests::mbe::test_match_group_with_multichar_sep ... ok <0.001s>"}
+{"t":1793421479.1822855,"s":"o","l":"test macro_expansion_tests::mbe::test_hygienic_pat ... ok <0.001s>"}
+{"t":1793421479.1822865,"s":"o","l":"test macro_expansion_tests::mbe::test_meta_extended_key_value_attributes ... ok <0.000s>"}
+{"t":1793421479.182287,"s":"o","l":"test macro_expansion_tests::mbe::test_meta ... ok <0.000s>"}
+{"t":1793421479.1823392,"s":"o","l":"test macro_expansion_tests::mbe::test_meta_doc_comments_non_latin ... ok <0.000s>"}
+{"t":1793421479.1823418,"s":"o","l":"test macro_expansion_tests::mbe::test_parse_macro_def_rules ... ok <0.000s>"}
+{"t":1793421479.182541,"s":"o","l":"test macro_expansion_tests::mbe::test_pat_ ... ok <0.000s>"}
+{"t":1793421479.1825426,"s":"o","l":"test macro_expansion_tests::mbe::test_new_std_matches ... ok <0.001s>"}
+{"t":1793421479.1825433,"s":"o","l":"test macro_expansion_tests::mbe::test_path_with_path ... ok <0.000s>"}
+{"t":1793421479.1825438,"s":"o","l":"test macro_expansion_tests::mbe::test_parse_macro_def_simple ... ok <0.001s>"}
+{"t":1793421479.182953,"s":"o","l":"test macro_expansion_tests::mbe::test_pat_fragment_eof_17441 ... ok <0.001s>"}
+{"t":1793421479.1829543,"s":"o","l":"test macro_expansion_tests::mbe::test_path ... ok <0.001s>"}
+{"t":1793421479.182955,"s":"o","l":"test macro_expansion_tests::mbe::test_tt_with_composite_without_space ... ok <0.000s>"}
+{"t":1793421479.1829555,"s":"o","l":"test macro_expansion_tests::mbe::test_tt_to_stmts ... ok <0.000s>"}
+{"t":1793421479.182956,"s":"o","l":"test macro_expansion_tests::mbe::test_single_item ... ok <0.000s>"}
+{"t":1793421479.1829565,"s":"o","l":"test macro_expansion_tests::mbe::test_punct_without_space ... ok <0.001s>"}
+{"t":1793421479.182957,"s":"o","l":"test macro_expansion_tests::mbe::regression::test_quick_error ... ok <0.003s>"}
+{"t":1793421479.1830544,"s":"o","l":"test macro_expansion_tests::mbe::test_tt_block ... ok <0.000s>"}
+{"t":1793421479.1830552,"s":"o","l":"test macro_expansion_tests::mbe::test_two_idents ... ok <0.000s>"}
+{"t":1793421479.1830556,"s":"o","l":"test macro_expansion_tests::mbe::test_stmt ... ok <0.000s>"}
+{"t":1793421479.1830583,"s":"o","l":"test macro_expansion_tests::mbe::test_tt_composite2 ... ok <0.000s>"}
+{"t":1793421479.1831546,"s":"o","l":"test macro_expansion_tests::mbe::test_tt_composite ... ok <0.000s>"}
+{"t":1793421479.1833565,"s":"o","l":"test macro_expansion_tests::mbe::test_tt_group ... ok <0.000s>"}
+{"t":1793421479.1834388,"s":"o","l":"test macro_expansion_tests::mbe::test_two_paths ... ok <0.000s>"}
+{"t":1793421479.1834404,"s":"o","l":"test macro_expansion_tests::mbe::test_ty ... ok <0.000s>"}
+{"t":1793421479.1834414,"s":"o","l":"test macro_expansion_tests::mbe::test_underscore ... ok <0.000s>"}
+{"t":1793421479.183442,"s":"o","l":"test macro_expansion_tests::mbe::test_ty_with_complex_type ... ok <0.000s>"}
+{"t":1793421479.1834435,"s":"o","l":"test macro_expansion_tests::mbe::test_underscore_flavors ... ok <0.000s>"}
+{"t":1793421479.183476,"s":"o","l":"test macro_expansion_tests::mbe::token_mapping_across_files ... ok <0.000s>"}
+{"t":1793421479.18352,"s":"o","l":"test macro_expansion_tests::mbe::token_mapping_floats ... ok <0.000s>"}
+{"t":1793421479.183521,"s":"o","l":"test macro_expansion_tests::mbe::test_underscore_not_greedily ... ok <0.000s>"}
+{"t":1793421479.1836314,"s":"o","l":"test macro_expansion_tests::mbe::test_vis ... ok <0.001s>"}
+{"t":1793421479.1836512,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::expansion_does_not_parse_as_expression ... ok <0.000s>"}
+{"t":1793421479.1836898,"s":"o","l":"test macro_expansion_tests::mbe::test_vertical_bar_with_pat_param ... ok <0.000s>"}
+{"t":1793421479.1838264,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::broken_pat ... ok <0.000s>"}
+{"t":1793421479.1839504,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::broken_parenthesis_sequence ... ok <0.000s>"}
+{"t":1793421479.1839697,"s":"o","l":"test macro_expansion_tests::mbe::test_type_path_is_transcribed_as_expr_path ... ok <0.001s>"}
+{"t":1793421479.1839721,"s":"o","l":"test macro_expansion_tests::mbe::token_mapping_smoke_test ... ok <0.001s>"}
+{"t":1793421479.1839874,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::float_literal_in_tt ... ok <0.000s>"}
+{"t":1793421479.1839998,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::float_literal_in_output ... ok <0.000s>"}
+{"t":1793421479.184047,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::roundtrip_lifetime ... ok <0.000s>"}
+{"t":1793421479.184049,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::lifetime_bound_to_ident_fragment ... ok <0.000s>"}
+{"t":1793421479.1840496,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::round_trips_compound_tokens ... ok <0.000s>"}
+{"t":1793421479.1840513,"s":"o","l":"test macro_expansion_tests::mbe::wrong_nesting_level ... ok <0.000s>"}
+{"t":1793421479.1840742,"s":"o","l":"test macro_expansion_tests::no_downmap ... ok <0.000s>"}
+{"t":1793421479.1840749,"s":"o","l":"test nameres::collector::tests::test_macro_expand_will_stop_2 ... ignored"}
+{"t":1793421479.18434,"s":"o","l":"test macro_expansion_tests::proc_macros::attribute_macro_stripping_with_cfg ... ok <0.000s>"}
+{"t":1793421479.1843417,"s":"o","l":"test macro_expansion_tests::proc_macros::attribute_macro_doc_desugaring ... ok <0.001s>"}
+{"t":1793421479.1843421,"s":"o","l":"test macro_expansion_tests::regression_20171 ... ok <0.000s>"}
+{"t":1793421479.1843557,"s":"o","l":"test macro_expansion_tests::proc_macros::attribute_macro_syntax_completion_2 ... ok <0.000s>"}
+{"t":1793421479.1844044,"s":"o","l":"test macro_expansion_tests::proc_macros::cfg_evaluated_before_attr_macros ... ok <0.000s>"}
+{"t":1793421479.1847162,"s":"o","l":"test macro_expansion_tests::proc_macros::float_attribute_mapping ... ok <0.000s>"}
+{"t":1793421479.1847184,"s":"o","l":"test macro_expansion_tests::proc_macros::float_parsing_panic ... ok <0.000s>"}
+{"t":1793421479.1847193,"s":"o","l":"test macro_expansion_tests::proc_macros::macro_rules_in_attr ... ok <0.000s>"}
+{"t":1793421479.1847978,"s":"o","l":"test nameres::collector::tests::crate_attrs ... ok <0.000s>"}
+{"t":1793421479.1848023,"s":"o","l":"test macro_expansion_tests::proc_macros::attribute_macro_syntax_completion_1 ... ok <0.001s>"}
+{"t":1793421479.1848035,"s":"o","l":"test macro_expansion_tests::mbe::tt_conversion::round_trips_literals ... ok <0.001s>"}
+{"t":1793421479.1850488,"s":"o","l":"test nameres::frozen::tests::a_file_outside_the_crate_is_read_only_as_written ... ok <0.001s>"}
+{"t":1793421479.1851346,"s":"o","l":"test macro_expansion_tests::proc_macros::attribute_macro_attr_censoring ... ok <0.001s>"}
+{"t":1793421479.1851366,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_cfg_and_skip_revision_dependencies ... ok <0.000s>"}
+{"t":1793421479.1851373,"s":"o","l":"test macro_expansion_tests::proc_macros::derive_censoring ... ok <0.001s>"}
+{"t":1793421479.185527,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_format_args_visits_before_output ... ok <0.001s>"}
+{"t":1793421479.185587,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_const_static_variant_and_inline_module ... ok <0.000s>"}
+{"t":1793421479.185812,"s":"o","l":"test macro_expansion_tests::proc_macros::derive_helpers_are_ignored ... ok <0.002s>"}
+{"t":1793421479.1858766,"s":"o","l":"test nameres::frozen::tests::a_file_a_build_script_wrote_is_named_from_out_dir ... ok <0.001s>"}
+{"t":1793421479.1858783,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_moves_edits_reparent_and_removal ... ok <0.001s>"}
+{"t":1793421479.1859014,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite ... FAILED <0.001s>"}
+{"t":1793421479.1859033,"s":"o","l":"test nameres::frozen::tests::read_back_resolves_the_same ... ok <0.001s>"}
+{"t":1793421479.186406,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures ... FAILED <0.001s>"}
+{"t":1793421479.1864214,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_verification_decode_errors_remain_strict - should panic ... ok <0.000s>"}
+{"t":1793421479.1864223,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_serving_decode_errors_fail_open ... ok <0.001s>"}
+{"t":1793421479.1864233,"s":"o","l":"test nameres::tests::braced_supers_in_use_tree ... ok <0.000s>"}
+{"t":1793421479.186424,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_macro_written_and_macro_revision ... ok <0.001s>"}
+{"t":1793421479.1864247,"s":"o","l":"test nameres::tests::can_import_enum_variant ... ok <0.000s>"}
+{"t":1793421479.1864264,"s":"o","l":"test nameres::tests::bogus_paths ... ok <0.000s>"}
+{"t":1793421479.1864295,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers ... FAILED <0.001s>"}
+{"t":1793421479.1864667,"s":"o","l":"test nameres::tests::cfg_not_test ... ok <0.000s>"}
+{"t":1793421479.1866083,"s":"o","l":"test nameres::tests::cfg_test ... ok <0.000s>"}
+{"t":1793421479.1866112,"s":"o","l":"test nameres::tests::cfg_the_entire_crate ... ok <0.000s>"}
+{"t":1793421479.1866906,"s":"o","l":"test nameres::tests::crate_def_map_fn_mod_same_name ... ok <0.000s>"}
+{"t":1793421479.1866927,"s":"o","l":"test nameres::tests::crate_def_map_super_super ... ok <0.000s>"}
+{"t":1793421479.1867464,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates ... FAILED <0.001s>"}
+{"t":1793421479.186821,"s":"o","l":"test nameres::tests::crate_def_map_smoke_test ... ok <0.000s>"}
+{"t":1793421479.187112,"s":"o","l":"test nameres::frozen::tests::checking_finds_a_difference ... ok <0.002s>"}
+{"t":1793421479.1871154,"s":"o","l":"test nameres::tests::extern_crate_rename ... ok <0.000s>"}
+{"t":1793421479.1871164,"s":"o","l":"test nameres::tests::edition_specific_preludes ... ok <0.001s>"}
+{"t":1793421479.1871178,"s":"o","l":"test nameres::tests::extern_crate_rename_2015_edition ... ok <0.000s>"}
+{"t":1793421479.1871767,"s":"o","l":"test nameres::tests::globs::glob_across_crates ... ok <0.000s>"}
+{"t":1793421479.1871777,"s":"o","l":"test nameres::tests::globs::glob_2 ... ok <0.000s>"}
+{"t":1793421479.1871946,"s":"o","l":"test nameres::tests::extern_crate_reexport ... ok <0.001s>"}
+{"t":1793421479.1872432,"s":"o","l":"test nameres::tests::globs::glob_1 ... ok <0.000s>"}
+{"t":1793421479.1876018,"s":"o","l":"test nameres::frozen::tests::the_same_bytes_in_every_database ... ok <0.001s>"}
+{"t":1793421479.1876042,"s":"o","l":"test nameres::tests::edition_2015_imports ... ok <0.001s>"}
+{"t":1793421479.187605,"s":"o","l":"test nameres::frozen::tests::an_included_file_is_read_only_as_written ... ok <0.003s>"}
+{"t":1793421479.1876056,"s":"o","l":"test nameres::tests::globs::glob_may_override_visibility ... ok <0.000s>"}
+{"t":1793421479.1876812,"s":"o","l":"test nameres::tests::globs::glob_privacy_across_crates ... ok <0.000s>"}
+{"t":1793421479.1877146,"s":"o","l":"test nameres::tests::globs::glob_privacy_2 ... ok <0.000s>"}
+{"t":1793421479.1877534,"s":"o","l":"test nameres::tests::globs::glob_enum ... ok <0.001s>"}
+{"t":1793421479.1877587,"s":"o","l":"test nameres::tests::globs::glob_of_crate_root_2015 ... ok <0.000s>"}
+{"t":1793421479.1877904,"s":"o","l":"test nameres::tests::globs::glob_name_collision_check_visibility ... ok <0.000s>"}
+{"t":1793421479.187882,"s":"o","l":"test nameres::frozen::tests::resident_block_scopes_semantic_early_exit_and_signature_traps ... ok <0.002s>"}
+{"t":1793421479.1878839,"s":"o","l":"test nameres::tests::globs::glob_privacy_1 ... ok <0.000s>"}
+{"t":1793421479.1879294,"s":"o","l":"test nameres::tests::globs::glob_shadowed_def ... ok <0.000s>"}
+{"t":1793421479.1879344,"s":"o","l":"test nameres::tests::globs::glob_shadowed_def_reversed ... ok <0.000s>"}
+{"t":1793421479.188167,"s":"o","l":"test nameres::tests::globs::regression_18308 ... ok <0.000s>"}
+{"t":1793421479.1882021,"s":"o","l":"test nameres::tests::globs::glob_shadowed_def_dependencies ... ok <0.000s>"}
+{"t":1793421479.1882133,"s":"o","l":"test nameres::frozen::tests::read_back_writes_the_same_bytes ... ok <0.003s>"}
+{"t":1793421479.188235,"s":"o","l":"test nameres::tests::globs::regression_18580 ... ok <0.000s>"}
+{"t":1793421479.188279,"s":"o","l":"test nameres::tests::globs::glob_enum_group ... ok <0.001s>"}
+{"t":1793421479.1883109,"s":"o","l":"test nameres::tests::imports::kw_path_renames ... ok <0.000s>"}
+{"t":1793421479.1883526,"s":"o","l":"test nameres::tests::globs::variant_reexported_through_private_enum_import ... ok <0.000s>"}
+{"t":1793421479.1883554,"s":"o","l":"test nameres::tests::incremental::item_after_impl_is_its_own_span_anchor ... ok <0.000s>"}
+{"t":1793421479.1884007,"s":"o","l":"test nameres::tests::globs::variant_alias_reexported ... ok <0.000s>"}
+{"t":1793421479.1884024,"s":"o","l":"test nameres::tests::imports::trailing_self_import ... ok <0.000s>"}
+{"t":1793421479.1884584,"s":"o","l":"test nameres::tests::imports::primitive_reexport ... ok <0.000s>"}
+{"t":1793421479.1884599,"s":"o","l":"test nameres::tests::import_from_extern_crate_only_imports_public_items ... ok <0.000s>"}
+{"t":1793421479.1884608,"s":"o","l":"test nameres::tests::incremental::crate_metadata_changes_should_not_invalidate_unrelated_def_maps ... ok <0.000s>"}
+{"t":1793421479.1884875,"s":"o","l":"test nameres::tests::incremental::item_tree_prevents_reparsing ... ok <0.000s>"}
+{"t":1793421479.1886635,"s":"o","l":"test nameres::tests::incremental::typing_inside_a_function_should_not_invalidate_def_map ... ok <0.001s>"}
+{"t":1793421479.1886673,"s":"o","l":"test nameres::tests::incremental::typing_inside_a_function_should_not_invalidate_item_expansions ... ok <0.000s>"}
+{"t":1793421479.1887708,"s":"o","l":"test nameres::tests::incremental::typing_inside_a_macro_should_not_invalidate_def_map ... ok <0.000s>"}
+{"t":1793421479.1888425,"s":"o","l":"test nameres::tests::macro_use_extern_crate_self ... ok <0.000s>"}
+{"t":1793421479.1888454,"s":"o","l":"test nameres::tests::item_map_using_self ... ok <0.000s>"}
+{"t":1793421479.188846,"s":"o","l":"test nameres::tests::infer_multiple_namespace ... ok <0.000s>"}
+{"t":1793421479.1888485,"s":"o","l":"test nameres::tests::item_map_across_crates ... ok <0.000s>"}
+{"t":1793421479.189319,"s":"o","l":"test nameres::tests::incremental::typing_inside_an_attribute_should_not_invalidate_def_map ... ok <0.001s>"}
+{"t":1793421479.1893353,"s":"o","l":"test nameres::tests::macros::collects_derive_helpers ... ok <0.000s>"}
+{"t":1793421479.1893618,"s":"o","l":"test nameres::tests::incremental::typing_inside_macro_heavy_file_should_not_invalidate_def_map ... ok <0.001s>"}
+{"t":1793421479.189365,"s":"o","l":"test nameres::tests::macros::builtin_derive_with_unresolved_attributes_fall_back ... ok <0.000s>"}
+{"t":1793421479.1893806,"s":"o","l":"test nameres::tests::macros::expand_derive ... ok <0.001s>"}
+{"t":1793421479.1894104,"s":"o","l":"test nameres::tests::macros::eager_macro_correctly_resolves_contents ... ok <0.001s>"}
+{"t":1793421479.1894124,"s":"o","l":"test nameres::tests::macros::include_many_mods ... ok <0.001s>"}
+{"t":1793421479.189414,"s":"o","l":"test nameres::tests::macros::issue9358_bad_macro_stack_overflow ... ok <0.000s>"}
+{"t":1793421479.1894841,"s":"o","l":"test nameres::tests::macros::legacy_macro_use_before_def ... ok <0.000s>"}
+{"t":1793421479.1901321,"s":"o","l":"test nameres::tests::macros::local_inner_macros_makes_local_macros_usable ... ok <0.001s>"}
+{"t":1793421479.1901386,"s":"o","l":"test nameres::tests::macros::macro_2_attr ... ok <0.000s>"}
+{"t":1793421479.1901393,"s":"o","l":"test nameres::tests::macros::eager_macro_correctly_resolves_dollar_crate ... ok <0.001s>"}
+{"t":1793421479.19014,"s":"o","l":"test nameres::tests::macros::macro_2_mixed_style ... ok <0.000s>"}
+{"t":1793421479.1901407,"s":"o","l":"test nameres::tests::macros::macro_dollar_crate_is_correct_in_item ... ok <0.000s>"}
+{"t":1793421479.1901414,"s":"o","l":"test nameres::tests::macros::macro_dollar_crate_is_correct_in_indirect_deps ... ok <0.000s>"}
+{"t":1793421479.1901422,"s":"o","l":"test nameres::tests::macros::macro_in_prelude ... ok <0.000s>"}
+{"t":1793421479.1901443,"s":"o","l":"test nameres::tests::macros::macro_rules_can_define_modules ... ok <0.000s>"}
+{"t":1793421479.1901708,"s":"o","l":"test nameres::tests::macros::macro_rules_are_globally_visible ... ok <0.000s>"}
+{"t":1793421479.1905932,"s":"o","l":"test nameres::tests::macros::include_with_submod_file ... ok <0.001s>"}
+{"t":1793421479.1905954,"s":"o","l":"test nameres::tests::macros::macro_rules_attr ... ok <0.000s>"}
+{"t":1793421479.1905966,"s":"o","l":"test nameres::tests::macros::macro_rules_defined_by_a_macro_of_another_crate_are_visible_in_child_modules ... ok <0.000s>"}
+{"t":1793421479.1906717,"s":"o","l":"test nameres::tests::macros::macro_rules_mixed_style ... ok <0.000s>"}
+{"t":1793421479.1906736,"s":"o","l":"test nameres::tests::macros::macro_rules_export_with_local_inner_macros_are_visible ... ok <0.000s>"}
+{"t":1793421479.1907706,"s":"o","l":"test nameres::tests::macros::macro_dollar_crate_is_correct_in_derive_meta ... ok <0.001s>"}
+{"t":1793421479.1907725,"s":"o","l":"test nameres::tests::macros::macro_2_derive ... ok <0.001s>"}
+{"t":1793421479.1908488,"s":"o","l":"test nameres::tests::macros::macro_rules_from_other_crates_are_visible ... ok <0.000s>"}
+{"t":1793421479.1908784,"s":"o","l":"test nameres::tests::macros::macro_rules_from_other_crates_are_visible_with_macro_use ... ok <0.001s>"}
+{"t":1793421479.1909606,"s":"o","l":"test nameres::tests::macros::macro_sub_namespace2 ... ok <0.000s>"}
+{"t":1793421479.1910784,"s":"o","l":"test nameres::tests::macros::macro_use_filter ... ok <0.001s>"}
+{"t":1793421479.1915283,"s":"o","l":"test nameres::tests::macros::macro_use_imports_all_macro_types ... ok <0.000s>"}
+{"t":1793421479.1915643,"s":"o","l":"test nameres::tests::macros::eager_include_names_a_macro_an_earlier_include_defined ... ok <0.002s>"}
+{"t":1793421479.1916687,"s":"o","l":"test nameres::tests::macros::macros_defining_macros ... ok <0.000s>"}
+{"t":1793421479.191747,"s":"o","l":"test nameres::tests::macros::macros_in_extern_block ... ok <0.000s>"}
+{"t":1793421479.1917477,"s":"o","l":"test nameres::tests::macros::non_prelude_macros_take_precedence_over_macro_use_prelude ... ok <0.000s>"}
+{"t":1793421479.1917484,"s":"o","l":"test nameres::tests::macros::macro_use_prelude_is_eagerly_expanded ... ok <0.000s>"}
+{"t":1793421479.191749,"s":"o","l":"test nameres::tests::macros::macro_sub_namespace ... ok <0.001s>"}
+{"t":1793421479.1917496,"s":"o","l":"test nameres::tests::macros::path_qualified_macros ... ok <0.001s>"}
+{"t":1793421479.1918814,"s":"o","l":"test nameres::tests::macros::macro_use_module_exports_macro_rules_an_include_defined ... ok <0.001s>"}
+{"t":1793421479.1919777,"s":"o","l":"test nameres::tests::macros::macro_use_can_be_aliased ... ok <0.001s>"}
+{"t":1793421479.1919792,"s":"o","l":"test nameres::tests::macros::prelude_cycle ... ok <0.000s>"}
+{"t":1793421479.1921039,"s":"o","l":"test nameres::tests::macros::macro_rules_derive ... ok <0.002s>"}
+{"t":1793421479.1921353,"s":"o","l":"test nameres::tests::macros::prelude_is_not_macro_use ... ok <0.000s>"}
+{"t":1793421479.192297,"s":"o","l":"test nameres::tests::macros::regression_22806 ... ok <0.000s>"}
+{"t":1793421479.1923041,"s":"o","l":"test nameres::tests::macros::resolve_builtin_derive ... ok <0.000s>"}
+{"t":1793421479.1923056,"s":"o","l":"test nameres::tests::macros::plain_macros_are_legacy_textual_scoped ... ok <0.001s>"}
+{"t":1793421479.1923063,"s":"o","l":"test nameres::tests::macros::resolve_macro_def ... ok <0.000s>"}
+{"t":1793421479.1923068,"s":"o","l":"test nameres::tests::macros::proc_macro_censoring ... ok <0.000s>"}
+{"t":1793421479.192309,"s":"o","l":"test nameres::tests::macros::macro_expansion_overflow ... ok <0.003s>"}
+{"t":1793421479.1927204,"s":"o","l":"test nameres::tests::macros::nested_include ... ok <0.001s>"}
+{"t":1793421479.1927235,"s":"o","l":"test nameres::tests::macros::resolves_derive_helper ... ok <0.000s>"}
+{"t":1793421479.1927245,"s":"o","l":"test nameres::tests::macros::resolves_proc_macros ... ok <0.000s>"}
+{"t":1793421479.1927252,"s":"o","l":"test nameres::tests::macros::unresolved_attr_with_cfg_attr_hang ... ok <0.000s>"}
+{"t":1793421479.192726,"s":"o","l":"test nameres::tests::macros::unexpanded_macro_should_expand_by_fixedpoint_loop ... ok <0.000s>"}
+{"t":1793421479.1927266,"s":"o","l":"test nameres::tests::macros::unresolved_attributes_fall_back_track_per_file_moditems ... ok <0.000s>"}
+{"t":1793421479.192821,"s":"o","l":"test nameres::tests::macros::type_value_macro_live_in_different_scopes ... ok <0.001s>"}
+{"t":1793421479.1928232,"s":"o","l":"test nameres::tests::mod_resolution::cfg_in_module_file ... ok <0.000s>"}
+{"t":1793421479.1928616,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_empty_path ... ok <0.000s>"}
+{"t":1793421479.1928635,"s":"o","l":"test nameres::tests::macros::unresolved_attrs_extern_block_hang ... ok <0.000s>"}
+{"t":1793421479.1928663,"s":"o","l":"test nameres::tests::mod_resolution::abs_path_ignores_local ... ok <0.000s>"}
+{"t":1793421479.1928897,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module ... ok <0.000s>"}
+{"t":1793421479.1929028,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_2_with_path_attribute ... ok <0.000s>"}
+{"t":1793421479.1929426,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_3 ... ok <0.000s>"}
+{"t":1793421479.1929898,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_empty_path ... ok <0.000s>"}
+{"t":1793421479.1931977,"s":"o","l":"test nameres::tests::mod_resolution::circular_mods ... ok <0.001s>"}
+{"t":1793421479.1931996,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_in_crate_root ... ok <0.000s>"}
+{"t":1793421479.1932006,"s":"o","l":"test nameres::tests::macros::resolves_derive_helper_rustc_builtin_macro ... ok <0.001s>"}
+{"t":1793421479.1932862,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_relative_path ... ok <0.000s>"}
+{"t":1793421479.1933427,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_in_non_crate_root_2 ... ok <0.000s>"}
+{"t":1793421479.1933632,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_in_mod_rs ... ok <0.000s>"}
+{"t":1793421479.1934483,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_with_path_attribute ... ok <0.000s>"}
+{"t":1793421479.19345,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_module_in_non_crate_root_2 ... ok <0.000s>"}
+{"t":1793421479.193451,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_inside_inline_module_in_non_crate_root ... ok <0.000s>"}
+{"t":1793421479.19386,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_explicit_path_mod_rs_with_win_separator ... ok <0.000s>"}
+{"t":1793421479.19387,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_module_with_path_in_mod_rs ... ok <0.000s>"}
+{"t":1793421479.1938732,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_module_decl_path_super ... ok <0.000s>"}
+{"t":1793421479.1938741,"s":"o","l":"test nameres::tests::mod_resolution::invalid_imports ... ok <0.001s>"}
+{"t":1793421479.1938748,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_module_with_path_non_crate_root ... ok <0.000s>"}
+{"t":1793421479.1938756,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_explicit_path_mod_rs ... ok <0.001s>"}
+{"t":1793421479.193876,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_decl_path ... ok <0.001s>"}
+{"t":1793421479.1938767,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_relative_path ... ok <0.000s>"}
+{"t":1793421479.1938772,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_explicit_path_mod_rs_2 ... ok <0.001s>"}
+{"t":1793421479.193878,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_works_for_non_standard_filenames ... ok <0.000s>"}
+{"t":1793421479.1939273,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_relative_path_2 ... ok <0.000s>"}
+{"t":1793421479.1939569,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_relative_path_outside_root ... ok <0.000s>"}
+{"t":1793421479.1940024,"s":"o","l":"test nameres::tests::mod_resolution::name_res_works_for_broken_modules ... ok <0.000s>"}
+{"t":1793421479.1940043,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_works_for_inline_raw_modules ... ok <0.000s>"}
+{"t":1793421479.1940186,"s":"o","l":"test nameres::tests::mod_resolution::nested_module_resolution ... ok <0.000s>"}
+{"t":1793421479.1940389,"s":"o","l":"test nameres::tests::mod_resolution::nested_out_of_line_module ... ok <0.000s>"}
+{"t":1793421479.1940756,"s":"o","l":"test nameres::tests::mod_resolution::nested_module_resolution_2 ... ok <0.000s>"}
+{"t":1793421479.1940963,"s":"o","l":"test nameres::tests::mod_resolution::nested_out_of_line_module_with_path ... ok <0.000s>"}
+{"t":1793421479.1943188,"s":"o","l":"test nameres::tests::no_std_prelude ... ok <0.000s>"}
+{"t":1793421479.1943214,"s":"o","l":"test nameres::tests::mod_resolution::trait_item_imports_differing_crate ... ok <0.001s>"}
+{"t":1793421479.194412,"s":"o","l":"test nameres::tests::reexport_across_crates ... ok <0.000s>"}
+{"t":1793421479.1944137,"s":"o","l":"test nameres::tests::mod_resolution::module_resolution_works_for_raw_modules ... ok <0.000s>"}
+{"t":1793421479.1944146,"s":"o","l":"test nameres::tests::re_exports ... ok <0.000s>"}
+{"t":1793421479.1945038,"s":"o","l":"test nameres::tests::self_imports_only_types ... ok <0.000s>"}
+{"t":1793421479.1945057,"s":"o","l":"test nameres::tests::underscore_import ... ok <0.000s>"}
+{"t":1793421479.1945064,"s":"o","l":"test nameres::tests::std_prelude ... ok <0.000s>"}
+{"t":1793421479.194507,"s":"o","l":"test nameres::tests::std_prelude_takes_precedence_above_core_prelude ... ok <0.000s>"}
+{"t":1793421479.1945083,"s":"o","l":"test nameres::tests::mod_resolution::trait_item_imports_same_crate ... ok <0.001s>"}
+{"t":1793421479.1947062,"s":"o","l":"test nameres::tests::underscore_reexport ... ok <0.000s>"}
+{"t":1793421479.194796,"s":"o","l":"test nameres::tests::underscore_pub_crate_reexport ... ok <0.000s>"}
+{"t":1793421479.1948273,"s":"o","l":"test nameres::tests::use_as ... ok <0.000s>"}
+{"t":1793421479.1948292,"s":"o","l":"test nameres::tests::values_dont_shadow_extern_crates ... ok <0.000s>"}
+{"t":1793421479.19483,"s":"o","l":"test nameres::tests::use_trees ... ok <0.000s>"}
+{"t":1793421479.1949236,"s":"o","l":"test nameres::tests::non_prelude_deps ... ok <0.001s>"}
+{"t":1793421479.1949296,"s":"o","l":"test nameres::tests::underscore_nontrait ... ok <0.001s>"}
+{"t":1793421479.1950085,"s":"o","l":"test nameres::tests::use_crate_as ... ok <0.000s>"}
+{"t":1793421479.1950107,"s":"o","l":"test upvars::tests::closure_var ... ok <0.000s>"}
+{"t":1793421479.1950114,"s":"o","l":"test upvars::tests::closure_var_nested ... ok <0.000s>"}
+{"t":1793421479.195054,"s":"o","l":"test upvars::tests::self_upvar ... ok <0.000s>"}
+{"t":1793421479.1950817,"s":"o","l":"test upvars::tests::const_block ... ok <0.000s>"}
+{"t":1793421479.1951275,"s":"o","l":"test upvars::tests::async_fn_local ... ok <0.001s>"}
+{"t":1793421479.1951299,"s":"o","l":"test upvars::tests::nested ... ok <0.000s>"}
+{"t":1793421479.1951814,"s":"o","l":"test upvars::tests::simple ... ok <0.000s>"}
+{"t":1793421479.195212,"s":"o","l":"test nameres::tests::underscore_name_conflict ... ok <0.001s>"}
+{"t":1793421479.888586,"s":"o","l":"test nameres::collector::tests::test_macro_expand_will_stop_1 ... ok <0.704s>"}
+{"t":1793421482.8092632,"s":"o","l":"test nameres::tests::macros::an_expansion_has_no_token_limit ... ok <3.568s>"}
+{"t":1793421482.8092856,"s":"o","l":"failures:"}
+{"t":1793421482.8092916,"s":"o","l":"---- expr_store::tests::body::block::nested_module_scoping stdout ----"}
+{"t":1793421482.8092947,"s":"o","l":"error: expect test failed"}
+{"t":1793421482.8092966,"s":"o","l":"   --> crates/hir-def/src/expr_store/tests/body/block.rs:191:9"}
+{"t":1793421482.8092992,"s":"o","l":"You can update all `expect!` tests by running:"}
+{"t":1793421482.8093019,"s":"o","l":"    env UPDATE_EXPECT=1 cargo test"}
+{"t":1793421482.8093045,"s":"o","l":"To update a single test, place the cursor on `expect` token and use `run` feature of rust-analyzer."}
+{"t":1793421482.8093073,"s":"o","l":"Expect:"}
+{"t":1793421482.8093085,"s":"o","l":"----"}
+{"t":1793421482.80931,"s":"o","l":"ModuleIdLt {"}
+{"t":1793421482.8093114,"s":"o","l":"    [salsa id]: Id(583),"}
+{"t":1793421482.8093128,"s":"o","l":"    krate: Crate("}
+{"t":1793421482.8093143,"s":"o","l":"        Id(380),"}
+{"t":1793421482.8093154,"s":"o","l":"    ),"}
+{"t":1793421482.8093169,"s":"o","l":"    block: Some("}
+{"t":1793421482.8093183,"s":"o","l":"        BlockId("}
+{"t":1793421482.8093195,"s":"o","l":"            Id(881),"}
+{"t":1793421482.809321,"s":"o","l":"        ),"}
+{"t":1793421482.809322,"s":"o","l":"    ),"}
+{"t":1793421482.8093235,"s":"o","l":"    containing_module_inside_def_map: None,"}
+{"t":1793421482.809325,"s":"o","l":"    name_or_empty: Name {"}
+{"t":1793421482.8093264,"s":"o","l":"        symbol: \"\","}
+{"t":1793421482.8093276,"s":"o","l":"        ctx: (),"}
+{"t":1793421482.809329,"s":"o","l":"    },"}
+{"t":1793421482.8093302,"s":"o","l":"}"}
+{"t":1793421482.8093317,"s":"o","l":"----"}
+{"t":1793421482.8093338,"s":"o","l":"Actual:"}
+{"t":1793421482.809335,"s":"o","l":"----"}
+{"t":1793421482.8093417,"s":"o","l":"ModuleIdLt {"}
+{"t":1793421482.809343,"s":"o","l":"    [salsa id]: Id(583),"}
+{"t":1793421482.8093445,"s":"o","l":"    krate: Crate("}
+{"t":1793421482.8093457,"s":"o","l":"        Id(380),"}
+{"t":1793421482.809347,"s":"o","l":"    ),"}
+{"t":1793421482.8093483,"s":"o","l":"    block: Some("}
+{"t":1793421482.8093495,"s":"o","l":"        BlockId("}
+{"t":1793421482.8093507,"s":"o","l":"            Id(901),"}
+{"t":1793421482.8093522,"s":"o","l":"        ),"}
+{"t":1793421482.8093534,"s":"o","l":"    ),"}
+{"t":1793421482.8093545,"s":"o","l":"    containing_module_inside_def_map: None,"}
+{"t":1793421482.809356,"s":"o","l":"    name_or_empty: Name {"}
+{"t":1793421482.8093593,"s":"o","l":"        symbol: \"\","}
+{"t":1793421482.8093605,"s":"o","l":"        ctx: (),"}
+{"t":1793421482.8093617,"s":"o","l":"    },"}
+{"t":1793421482.809363,"s":"o","l":"}"}
+{"t":1793421482.809364,"s":"o","l":"----"}
+{"t":1793421482.8093665,"s":"o","l":"Diff:"}
+{"t":1793421482.8093677,"s":"o","l":"----"}
+{"t":1793421482.8093688,"s":"o","l":"ModuleIdLt {"}
+{"t":1793421482.80937,"s":"o","l":"    [salsa id]: Id(583),"}
+{"t":1793421482.8093715,"s":"o","l":"    krate: Crate("}
+{"t":1793421482.8093727,"s":"o","l":"        Id(380),"}
+{"t":1793421482.8093739,"s":"o","l":"    ),"}
+{"t":1793421482.809375,"s":"o","l":"    block: Some("}
+{"t":1793421482.8093762,"s":"o","l":"        BlockId("}
+{"t":1793421482.8093777,"s":"o","l":"            Id(88901),"}
+{"t":1793421482.809379,"s":"o","l":"        ),"}
+{"t":1793421482.8093803,"s":"o","l":"    ),"}
+{"t":1793421482.8093815,"s":"o","l":"    containing_module_inside_def_map: None,"}
+{"t":1793421482.809383,"s":"o","l":"    name_or_empty: Name {"}
+{"t":1793421482.809384,"s":"o","l":"        symbol: \"\","}
+{"t":1793421482.8093853,"s":"o","l":"        ctx: (),"}
+{"t":1793421482.8093865,"s":"o","l":"    },"}
+{"t":1793421482.8093877,"s":"o","l":"}"}
+{"t":1793421482.8093889,"s":"o","l":"----"}
+{"t":1793421482.8093915,"s":"o","l":"---- nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite stdout ----"}
+{"t":1793421482.8093944,"s":"o","l":"thread 'nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite' (2027875) panicked at crates/hir-def/src/nameres/frozen.rs:3411:9:"}
+{"t":1793421482.809398,"s":"o","l":"assertion `left == right` failed: local owner must discover exactly its outer and own scopes: [\"crate_local_def_map\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"EditionedFileId::parse_\", \"real_span_map\", \"Body::block_scopes_\", \"body_syntax\", \"AttrFlags::query_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"Body::block_scopes_\", \"body_syntax\", \"AttrFlags::query_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\"]"}
+{"t":1793421482.8094008,"s":"o","l":"  left: 0"}
+{"t":1793421482.8094022,"s":"o","l":" right: 2"}
+{"t":1793421482.8094037,"s":"o","l":"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"}
+{"t":1793421482.809406,"s":"o","l":"---- nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures stdout ----"}
+{"t":1793421482.8094087,"s":"o","l":"thread 'nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures' (2027878) panicked at crates/hir-def/src/nameres/frozen.rs:3079:9:"}
+{"t":1793421482.8094366,"s":"o","l":"assertion `left == right` failed: cold candidate did not execute exactly once: [\"Body::block_scopes_\", \"body_syntax\", \"AttrFlags::query_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"Modules < 'db >::module_\", \"ModuleScope < 'db >::legacy_macro_\", \"MacroId::definition_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"ModuleScope < 'db >::legacy_macro_\", \"MacroId::definition_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"AstId < ast :: Macro >::decl_macro_expander_\", \"MacroId::definition_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"Modules < 'db >::module_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"ModuleScope < 'db >::legacy_macro_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"ModuleScope < 'db >::legacy_macro_\", \"ModuleScope < 'db >::legacy_macro_\", \"ModuleScope < 'db >::name_\", \"ModuleScope < 'db >::name_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\"]"}
+{"t":1793421482.8094435,"s":"o","l":"  left: 0"}
+{"t":1793421482.809445,"s":"o","l":" right: 1"}
+{"t":1793421482.8094475,"s":"o","l":"---- nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers stdout ----"}
+{"t":1793421482.8094504,"s":"o","l":"thread 'nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers' (2027872) panicked at crates/hir-def/src/nameres/frozen.rs:3121:9:"}
+{"t":1793421482.809461,"s":"o","l":"assertion `left == right` failed: decoder must execute exactly one cold owner scope provider: [\"crate_local_def_map\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"EditionedFileId::parse_\", \"real_span_map\", \"AstId < ast :: Macro >::decl_macro_expander_\", \"AstId < ast :: Macro >::decl_macro_expander_\", \"Body::block_scopes_\", \"body_syntax\", \"AttrFlags::query_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"Modules < 'db >::module_\", \"ModuleScope < 'db >::legacy_macro_\", \"MacroId::definition_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"ModuleScope < 'db >::legacy_macro_\", \"MacroId::definition_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"AstId < ast :: Macro >::decl_macro_expander_\", \"MacroId::definition_\", \"file_item_tree_query\", \"HirFileId::ast_id_map_\", \"MacroCallId::parse_macro_expansion_\", \"MacroCallId::macro_arg_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"Modules < 'db >::module_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"ModuleScope < 'db >::legacy_macro_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"ModuleScope < 'db >::legacy_macro_\", \"ModuleScope < 'db >::legacy_macro_\", \"ModuleScope < 'db >::name_\", \"ModuleScope < 'db >::name_\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\", \"canonical_block_id\", \"block_def_map\", \"block_item_tree_query\"]"}
+{"t":1793421482.809469,"s":"o","l":"  left: 0"}
+{"t":1793421482.8094704,"s":"o","l":" right: 1"}
+{"t":1793421482.8094728,"s":"o","l":"---- nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates stdout ----"}
+{"t":1793421482.8094757,"s":"o","l":"thread 'nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates' (2027879) panicked at crates/hir-def/src/nameres/frozen.rs:3033:9:"}
+{"t":1793421482.8094773,"s":"o","l":"assertion `left == right` failed: unexpected scope membership"}
+{"t":1793421482.8094788,"s":"o","l":"  left: 0"}
+{"t":1793421482.80948,"s":"o","l":" right: 3"}
+{"t":1793421482.8094823,"s":"o","l":"failures:"}
+{"t":1793421482.8094838,"s":"o","l":"    expr_store::tests::body::block::nested_module_scoping"}
+{"t":1793421482.8094852,"s":"o","l":"    nameres::frozen::tests::resident_block_scopes_codec_identity_without_body_providers"}
+{"t":1793421482.8094869,"s":"o","l":"    nameres::frozen::tests::resident_block_scopes_local_owner_descriptor_is_finite"}
+{"t":1793421482.8094883,"s":"o","l":"    nameres::frozen::tests::resident_block_scopes_nested_macros_and_closures"}
+{"t":1793421482.80949,"s":"o","l":"    nameres::frozen::tests::resident_block_scopes_positive_lang_item_gates"}
+{"t":1793421482.8094928,"s":"o","l":"test result: FAILED. 540 passed; 5 failed; 1 ignored; 0 measured; 0 filtered out; finished in 3.65s"}
+{"t":1793421482.8129833,"s":"e","l":"error: test failed, to rerun pass `-p hir-def --lib`"}

@@ -1,0 +1,18 @@
+    Finished `test` profile [blaze] target(s) in 7.87s
+     Running unittests src/lib.rs (/home/jeremy/q4/engine/target/debug/deps/justrust-dd57136b8016f910)
+blaze time: 7878.3 ms: daemon 7842.8 (100%), client planning 23.3 (0%), client command 5.1 (0%), client test execution 2.8 (0%), client install artifacts 2.0 (0%), daemon↔worker 0.6 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.0%
+blaze    client command                     5.1 ms   0.1%
+blaze    client test                        0.1 ms   0.0%
+blaze    client metadata                    0.6 ms   0.0%
+blaze    client planning                   23.3 ms   0.3%
+blaze    client checkout                    0.3 ms   0.0%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      0.4 ms   0.0%
+blaze    daemon read request                0.1 ms   0.0%
+blaze    daemon                          7842.8 ms  99.5%
+blaze    daemon↔worker                      0.6 ms   0.0%
+blaze    client install artifacts           2.0 ms   0.0%
+blaze    client test execution              2.8 ms   0.0%
+blaze    total                           7878.3 ms 100.0%

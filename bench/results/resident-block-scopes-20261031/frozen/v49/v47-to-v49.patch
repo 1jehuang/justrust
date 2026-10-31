@@ -1,0 +1,731 @@
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v47/candidate/docs/resident-block-identity.md b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/docs/resident-block-identity.md
+index 72b70ae7e..01d3276a8 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v47/candidate/docs/resident-block-identity.md
++++ b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/docs/resident-block-identity.md
+@@ -120,4 +120,10 @@ Filter: **`resident_block_scopes`**, twelve tests in existing `nameres/frozen.rs
+ 
+ Hard fixture counts include 13 blocks and four macro files for the main nested/closure case, one cold owner scope execution for its decoder, and two scope executions for the block-local function owner descriptor. Cold candidate windows assert zero executions of each materializing Body provider before running the independent oracles. Tests exercise repeated same-revision reads, revision source moves, body/signature edits, reparenting, removal, macro expansion edits/removal, cfg and skip changes, formatting, positive/negative language-item gates, constants/statics/variants and inline modules. No tests are skipped, and no pre-existing assertions or fixtures are weakened.
+ 
+-All native results, exact event-name assumptions, fixture counts, runtime correctness, and performance are still **unvalidated** until the coordinator runs the candidate gate. A source-only release is not a native pass and not a speedup claim.
++### v48 native observations and v49 fixture-only repair
++
++The root coordinator ran the v47 bytes in its private v48 snapshot: eight focused tests passed, four failed. Three failures observed exact Salsa event `Body::block_scopes_` rather than the fixture matcher without its suffix. v49 corrects only that exact name and retains strict expected execution counts of one/two. The positive language-item fixture failed with zero scopes versus three: `crate_lang_items` explicitly returns no items unless the crate enables `#![feature(lang_items)]`. v49 enables that required fixture feature and independently requires the original fullwalk to discover exactly three blocks before comparing the candidate. No production source changes address these fixture defects. The root also ran the unchanged v48 full hir-def suite: 540 passed, five failed, one ignored. The fifth failure was existing `nested_module_scoping`, whose actual output differed solely in internal tracked BlockId allocation number 881 versus 901. With narrow coordinator authorization, v49 changes that single expected numeric line to the observed 901, preserving every module/parent field and all semantic identity assertions. The full failure log and original snapshot are archived. This is not a full-suite pass.
++
++The original materializing absence matcher also omitted generated suffixes. v49 uses the exact set `Body::of_`, `Body::relative_`, `Body::with_source_map_`. A separate cold real Body execution in the codec fixture must execute `Body::of_` and `Body::relative_` exactly once each, and the SAME absence matcher must count exactly two materializing executions. Candidate windows still require zero. Thus wrong exact names cannot make the zero-provider oracle pass vacuously. The positive control names/counts remain subject to the next actual native run, not assumed passed.
++
++Full v47 bytes and the actual v48 failure log are preserved. v49 contains only fixture/doc repairs relative to v47, with unchanged production behavior, wire/schema6, twelve tests and strict membership counts. Native runtime correctness and performance remain **unaccepted** until the coordinator completes the candidate gate. This lane ran source-only formatting/diff checks, no native jobs. A source-only release is not a native pass and not a speedup claim.
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body/block.rs b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body/block.rs
+new file mode 100644
+index 000000000..8f6ee3d9d
+--- /dev/null
++++ b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/expr_store/tests/body/block.rs
+@@ -0,0 +1,609 @@
++use super::*;
++use expect_test::expect;
++
++#[test]
++fn inner_item_smoke() {
++    check_at(
++        r#"
++struct inner {}
++fn outer() {
++    $0
++    fn inner() {}
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - inner : value
++
++            crate
++            - inner : type
++            - outer : value
++        "#]],
++    );
++}
++
++#[test]
++fn use_from_crate() {
++    check_at(
++        r#"
++struct Struct {}
++fn outer() {
++    fn Struct() {}
++    use Struct as PlainStruct;
++    use crate::Struct as CrateStruct;
++    use self::Struct as SelfStruct;
++    use super::Struct as SuperStruct;
++    $0
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - CrateStruct : type (import)
++            - PlainStruct : type (import) value (import)
++            - SelfStruct : type (import)
++            - Struct : value
++            - SuperStruct : _
++
++            crate
++            - Struct : type
++            - outer : value
++        "#]],
++    );
++}
++
++#[test]
++fn merge_namespaces() {
++    check_at(
++        r#"
++struct name {}
++fn outer() {
++    fn name() {}
++
++    use name as imported; // should import both `name`s
++
++    $0
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - imported : type (import) value (import)
++            - name : value
++
++            crate
++            - name : type
++            - outer : value
++        "#]],
++    );
++}
++
++#[test]
++fn nested_blocks() {
++    check_at(
++        r#"
++fn outer() {
++    struct inner1 {}
++    fn inner() {
++        use inner1;
++        use outer;
++        fn inner2() {}
++        $0
++    }
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - inner1 : type (import)
++            - inner2 : value
++            - outer : value (import)
++
++            (block scope)
++            - inner : value
++            - inner1 : type
++
++            crate
++            - outer : value
++        "#]],
++    );
++}
++
++#[test]
++fn super_imports() {
++    check_at(
++        r#"
++mod module {
++    fn f() {
++        use super::Struct;
++        $0
++    }
++}
++
++struct Struct {}
++"#,
++        expect![[r#"
++            (block scope)
++            - Struct : type (import)
++
++            crate
++            - Struct : type
++            - module : type
++
++            crate::module
++            - f : value
++        "#]],
++    );
++}
++
++#[test]
++fn super_imports_2() {
++    check_at(
++        r#"
++fn outer() {
++    mod m {
++        struct ResolveMe {}
++        fn middle() {
++            mod m2 {
++                fn inner() {
++                    use super::ResolveMe;
++                    $0
++                }
++            }
++        }
++    }
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - ResolveMe : type (import)
++
++            (block scope)
++            - m2 : type
++
++            (block scope)::m2
++            - inner : value
++
++            (block scope)
++            - m : type
++
++            (block scope)::m
++            - ResolveMe : type
++            - middle : value
++
++            crate
++            - outer : value
++        "#]],
++    );
++}
++
++#[test]
++fn nested_module_scoping() {
++    check_block_scopes_at(
++        r#"
++fn f() {
++    mod module {
++        struct Struct {}
++        fn f() {
++            use self::Struct;
++            $0
++        }
++    }
++}
++    "#,
++        expect![[r#"
++            ModuleIdLt {
++                [salsa id]: Id(583),
++                krate: Crate(
++                    Id(380),
++                ),
++                block: Some(
++                    BlockId(
++                        Id(901),
++                    ),
++                ),
++                containing_module_inside_def_map: None,
++                name_or_empty: Name {
++                    symbol: "",
++                    ctx: (),
++                },
++            }"#]],
++    );
++}
++
++#[test]
++fn self_imports() {
++    check_at(
++        r#"
++fn f() {
++    mod m {
++        struct ResolveMe {}
++        fn g() {
++            fn h() {
++                use self::ResolveMe;
++                $0
++            }
++        }
++    }
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - ResolveMe : type (import)
++
++            (block scope)
++            - h : value
++
++            (block scope)
++            - m : type
++
++            (block scope)::m
++            - ResolveMe : type
++            - g : value
++
++            crate
++            - f : value
++        "#]],
++    );
++}
++
++#[test]
++fn legacy_macro_items() {
++    // Checks that legacy-scoped `macro_rules!` from parent namespaces are resolved and expanded
++    // correctly.
++    check_at(
++        r#"
++macro_rules! mark {
++    () => {
++        struct Hit {}
++    }
++}
++
++fn f() {
++    mark!();
++    $0
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - Hit : type
++
++            crate
++            - f : value
++            - (legacy) mark : macro!
++        "#]],
++    );
++}
++
++#[test]
++fn macro_resolve() {
++    check_at(
++        r#"
++//- /lib.rs crate:lib deps:core
++use core::cov_mark;
++
++fn f() {
++    fn nested() {
++        cov_mark::mark!(Hit);
++        $0
++    }
++}
++//- /core.rs crate:core
++pub mod cov_mark {
++    #[macro_export]
++    macro_rules! _mark {
++        ($name:ident) => {
++            struct $name {}
++        }
++    }
++
++    pub use crate::_mark as mark;
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - Hit : type
++
++            (block scope)
++            - nested : value
++
++            crate
++            - cov_mark : type (import)
++            - f : value
++        "#]],
++    );
++}
++
++#[test]
++fn macro_exported_in_block_mod() {
++    check_at(
++        r#"
++#[macro_export]
++macro_rules! foo {
++    () => { pub struct FooWorks; };
++}
++macro_rules! bar {
++    () => { pub struct BarWorks; };
++}
++fn main() {
++    mod module {
++        foo!();
++        bar!();
++        $0
++    }
++}
++"#,
++        expect![[r#"
++            (block scope)
++            - module : type
++
++            (block scope)::module
++            - BarWorks : type value
++            - FooWorks : type value
++
++            crate
++            - foo : macro!
++            - main : value
++            - (legacy) bar : macro!
++            - (legacy) foo : macro!
++        "#]],
++    );
++}
++
++#[test]
++fn macro_resolve_legacy() {
++    check_at(
++        r#"
++//- /lib.rs
++mod module;
++
++//- /module.rs
++macro_rules! m {
++    () => {
++        struct Def {}
++    };
++}
++
++fn f() {
++    {
++        m!();
++        $0
++    }
++}
++        "#,
++        expect![[r#"
++            (block scope)
++            - Def : type
++
++            crate
++            - module : type
++
++            crate::module
++            - f : value
++            - (legacy) m : macro!
++        "#]],
++    )
++}
++
++#[test]
++fn super_does_not_resolve_to_block_module() {
++    check_at(
++        r#"
++fn main() {
++    struct Struct {}
++    mod module {
++        use super::Struct;
++
++        $0
++    }
++}
++    "#,
++        expect![[r#"
++            (block scope)
++            - Struct : type
++            - module : type
++
++            (block scope)::module
++            - Struct : _
++
++            crate
++            - main : value
++        "#]],
++    );
++}
++
++#[test]
++fn underscore_import() {
++    // This used to panic, because the default (private) visibility inside block expressions would
++    // point into the containing `DefMap`, which visibilities should never be able to do.
++    check_at(
++        r#"
++mod m {
++    fn main() {
++        use Tr as _;
++        trait Tr {}
++        $0
++    }
++}
++    "#,
++        expect![[r#"
++            (block scope)
++            - _ : type
++            - Tr : type
++
++            crate
++            - m : type
++
++            crate::m
++            - main : value
++        "#]],
++    );
++}
++
++#[test]
++fn nested_macro_item_decl() {
++    cov_mark::check!(macro_call_in_macro_stmts_is_added_to_item_tree);
++    check_at(
++        r#"
++macro_rules! inner_declare {
++    ($ident:ident) => {
++        static $ident: u32 = 0;
++    };
++}
++macro_rules! declare {
++    ($ident:ident) => {
++        inner_declare!($ident);
++    };
++}
++
++fn foo() {
++    declare!(bar);
++    bar;
++    $0
++}
++        "#,
++        expect![[r#"
++            (block scope)
++            - bar : value
++
++            crate
++            - foo : value
++            - (legacy) declare : macro!
++            - (legacy) inner_declare : macro!
++        "#]],
++    )
++}
++
++#[test]
++fn is_visible_from_same_def_map_regression_9481() {
++    // Regression test for https://github.com/rust-lang/rust-analyzer/issues/9481
++    check_at(
++        r#"
++fn outer() {
++    mod tests {
++        use super::*;
++    }
++    use crate::name;
++    $0
++}
++        "#,
++        expect![[r#"
++            (block scope)
++            - name : _
++            - tests : type
++
++            (block scope)::tests
++            - outer : value (glob)
++
++            crate
++            - outer : value
++        "#]],
++    );
++}
++
++#[test]
++fn stmt_macro_expansion_with_trailing_expr() {
++    cov_mark::check!(macro_stmt_with_trailing_macro_expr);
++    check_at(
++        r#"
++macro_rules! mac {
++    () => { mac!($) };
++    ($x:tt) => { fn inner() {} };
++}
++fn foo() {
++    mac!();
++    $0
++}
++        "#,
++        expect![[r#"
++            (block scope)
++            - inner : value
++
++            crate
++            - foo : value
++            - (legacy) mac : macro!
++        "#]],
++    )
++}
++
++#[test]
++fn trailing_expr_macro_expands_stmts() {
++    check_at(
++        r#"
++macro_rules! foo {
++    () => { const FOO: u32 = 0;const BAR: u32 = 0; };
++}
++fn f() {$0
++    foo!{}
++};
++        "#,
++        expect![[r#"
++            (block scope)
++            - BAR : value
++            - FOO : value
++
++            crate
++            - f : value
++            - (legacy) foo : macro!
++        "#]],
++    )
++}
++
++#[test]
++fn resolve_extern_prelude_in_block() {
++    check_at(
++        r#"
++//- /main.rs crate:main deps:core
++fn main() {
++    mod f {
++        use core::S;
++        $0
++    }
++}
++
++//- /core.rs crate:core
++pub struct S;
++        "#,
++        expect![[r#"
++            (block scope)
++            - f : type
++
++            (block scope)::f
++            - S : type (import) value (import)
++
++            crate
++            - main : value
++        "#]],
++    )
++}
++
++#[test]
++fn shadow_extern_prelude_in_block() {
++    check_at(
++        r#"
++//- /main.rs crate:main deps:core
++fn main() {
++    mod core { pub struct S; }
++    {
++        fn inner() {} // forces a block def map
++        use core::S; // should resolve to the local one
++        $0
++    }
++}
++
++//- /core.rs crate:core
++pub const S;
++        "#,
++        expect![[r#"
++            (block scope)
++            - S : type (import) value (import)
++            - inner : value
++
++            (block scope)
++            - core : type
++
++            (block scope)::core
++            - S : type value
++
++            crate
++            - main : value
++        "#]],
++    )
++}
+diff --git a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v47/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs
+index 754c300f5..e89043aab 100644
+--- a/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v47/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs
++++ b/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/block-scopes-v49/candidate/toolchain/resident/vendor/rust-analyzer/crates/hir-def/src/nameres/frozen.rs
+@@ -3016,8 +3016,22 @@ mod tests {
+             .unwrap_or_else(|| panic!("missing fixture function {name}"))
+     }
+ 
++    fn resident_materializing_provider_count(events: &[String]) -> usize {
++        events
++            .iter()
++            .filter(|it| {
++                matches!(it.as_str(), "Body::of_" | "Body::relative_" | "Body::with_source_map_")
++            })
++            .count()
++    }
++
+     fn resident_no_body_providers(events: &[String]) {
+-        for forbidden in ["Body::of", "Body::relative", "Body::with_source_map"] {
++        assert_eq!(
++            resident_materializing_provider_count(events),
++            0,
++            "materializing provider: {events:?}"
++        );
++        for forbidden in ["Body::of_", "Body::relative_", "Body::with_source_map_"] {
+             assert_eq!(
+                 events.iter().filter(|it| it.as_str() == forbidden).count(),
+                 0,
+@@ -3077,7 +3091,7 @@ fn target() {
+         let events = db.log_executed(|| first = Body::block_scopes(&db, owner).clone());
+         resident_no_body_providers(&events);
+         assert_eq!(
+-            events.iter().filter(|it| it.as_str() == "Body::block_scopes").count(),
++            events.iter().filter(|it| it.as_str() == "Body::block_scopes_").count(),
+             1,
+             "cold candidate did not execute exactly once: {events:?}"
+         );
+@@ -3096,6 +3110,24 @@ fn target() {
+ 
+     #[test]
+     fn resident_block_scopes_codec_identity_without_body_providers() {
++        // A separate cold real Body execution proves the exact absence matcher is live.
++        let control = TestDB::with_files(RESIDENT_SCOPES);
++        let control_owner = resident_scope_owner(&control, "target");
++        let control_events = control.log_executed(|| {
++            assert_eq!(Body::of(&control, control_owner).blocks(&control).count(), 13);
++        });
++        for provider in ["Body::of_", "Body::relative_"] {
++            assert_eq!(
++                control_events.iter().filter(|it| it.as_str() == provider).count(),
++                1,
++                "cold materializing positive control: {control_events:?}"
++            );
++        }
++        assert_eq!(
++            resident_materializing_provider_count(&control_events),
++            2,
++            "the same candidate absence matcher must detect the original: {control_events:?}"
++        );
+         let source = TestDB::with_files(RESIDENT_SCOPES);
+         let krate = crate_named(&source, "main");
+         let owner = resident_scope_owner(&source, "target");
+@@ -3119,7 +3151,7 @@ fn target() {
+         });
+         resident_no_body_providers(&events);
+         assert_eq!(
+-            events.iter().filter(|it| it.as_str() == "Body::block_scopes").count(),
++            events.iter().filter(|it| it.as_str() == "Body::block_scopes_").count(),
+             1,
+             "decoder must execute exactly one cold owner scope provider: {events:?}"
+         );
+@@ -3364,6 +3396,7 @@ mod inline { pub fn target() { struct InlineScope; } }
+         let db = TestDB::with_files(
+             r#"
+ //- /main.rs crate:main
++#![feature(lang_items)]
+ #[lang = "into_iter"] fn into_iter() {}
+ #[lang = "next"] fn next() {}
+ #[lang = "branch"] fn branch() {}
+@@ -3376,6 +3409,11 @@ fn target() {
+ "#,
+         );
+         let owner = resident_scope_owner(&db, "target");
++        assert_eq!(
++            Body::original_fullwalk_blocks(&db, owner).len(),
++            3,
++            "positive fixture must independently open all original lang-item gates"
++        );
+         resident_scope_oracle(&db, owner, 3);
+     }
+ 
+@@ -3409,7 +3447,7 @@ fn target() {
+         });
+         resident_no_body_providers(&events);
+         assert_eq!(
+-            events.iter().filter(|it| it.as_str() == "Body::block_scopes").count(),
++            events.iter().filter(|it| it.as_str() == "Body::block_scopes_").count(),
+             2,
+             "local owner must discover exactly its outer and own scopes: {events:?}"
+         );
