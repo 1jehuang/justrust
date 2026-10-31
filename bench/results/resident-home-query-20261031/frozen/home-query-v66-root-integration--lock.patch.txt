@@ -1,0 +1,20 @@
+diff --git a/toolchain/resident/Cargo.lock b/toolchain/resident/Cargo.lock
+index 761b0dac4..ba6285cda 100644
+--- a/toolchain/resident/Cargo.lock
++++ b/toolchain/resident/Cargo.lock
+@@ -2224,6 +2224,7 @@ dependencies = [
+  "hir-def",
+  "hir-expand",
+  "hir-ty",
++ "ide-db",
+  "indexmap",
+  "inkwell",
+  "intern",
+@@ -2247,6 +2248,7 @@ dependencies = [
+  "stdx",
+  "syntax",
+  "target-lexicon",
++ "test-fixture",
+  "tracing",
+  "triomphe",
+  "wasm-encoder 0.244.0",

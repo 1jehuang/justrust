@@ -1,0 +1,34 @@
+# Source freeze and ownership release: native-home-query-v66
+
+Frozen October 31, 2026, after source-only checks. Baseline HEAD:
+76994fa48fedc9057de6e8086c18e6c2ef1d8522.
+
+The following candidate source is frozen and released to root for actual gates:
+
+- toolchain/resident/crates/hir-ty-codegen/home.rs
+- toolchain/resident/crates/hir-ty-codegen/Cargo.toml
+- docs/resident-home-query.md
+
+Full originals, full candidate files, candidate.patch, and SHA256SUMS accompany
+this record. The new document's baseline absence is recorded explicitly.
+
+Observed source-only checks: rustfmt formatting and check mode with child
+traversal disabled, git diff --check, and bytewise cmp of original/candidate
+Mentions construction/owner implementation and TypeVisitor implementation.
+All completed successfully. No compiled/tested source correctness is claimed.
+
+No builds, tests, native compiler invocations, toolchain probes, dependency
+resolver, lockfile edits, commits, pushes, or install were performed by this lane.
+No speedup, actual workload reuse, or default promotion is claimed.
+
+Root must add only two already-resolved lock dependency edges, "ide-db" and
+"test-fixture", to the hir-ty-codegen package entry before a locked fixture build.
+This lane did not edit the lockfile. Fixture test prefix: native_home_.
+
+Production opt-in is exact RA_JIT_HOME_MEMO=1, process-first-use latched.
+Empty stored arguments bypass the native memo. Existing RA_JIT_NO_HOME remains
+dynamic and unchanged. Native activation line is QUERY ENTERED only, not hit
+telemetry. Test-only TLS counters have not yet been executed.
+
+Ownership is explicitly RELEASED to root. No further source changes will be
+made by this lane without a root request and a separately identified revision.

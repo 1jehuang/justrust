@@ -1,0 +1,3 @@
+692f9dd54ed132f6dc508fb2e869a7aff68f4bd0dd40dc413ce99a51542ea8f0  toolchain/resident/crates/hir-ty-codegen/home.rs
+70951a5a4d68e479a7a1ab7a452459fe510b211db3705cc5201e91f5d2771159  toolchain/resident/crates/hir-ty-codegen/Cargo.toml
+fe146790836e17df2269f69425e6dfbd9c09a19830b5fa6d6b116647259d51ab  docs/resident-home-query.md

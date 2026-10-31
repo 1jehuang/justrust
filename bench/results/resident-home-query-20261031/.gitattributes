@@ -1,0 +1,4 @@
+# Unified-diff context lines intentionally retain their required leading space.
+# This applies only to frozen evidence patches, never live source or replay code.
+frozen/*.patch whitespace=-blank-at-eol
+frozen/*.patch.txt whitespace=-blank-at-eol

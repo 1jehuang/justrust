@@ -1,0 +1,43 @@
+# Source freeze and ownership release: native-home-query-v67
+
+Frozen October 31, 2026 as a distinct source-only repair of failed v66.
+Pre-edit HEAD: a7f5848e389f1224dfd54d5297d5e1074ebd3ddb.
+Original implementation HEAD: 76994fa48fedc9057de6e8086c18e6c2ef1d8522.
+
+The following complete candidate files are frozen and released to root:
+
+- toolchain/resident/crates/hir-ty-codegen/home.rs
+- toolchain/resident/crates/hir-ty-codegen/Cargo.toml
+- docs/resident-home-query.md
+
+V66 native gate 810298m6y1 failed 101 at the compile check. Full v66 source
+bundle, failure log, source inventory, and root lock integration are preserved
+under v66-evidence/. The unchanged original bundle remains at home-query-v66/.
+
+The v67 repair uses the actual vendored Salsa multiargument native interner:
+native_home_crates(db, instance.clone(), ()). Full key equality/hash domain is
+preserved by (Instance, constant unit). No unsafe/manual identity traits, no
+mutable cache, no dropped fields, and no new semantic shortcut were added.
+Both memo-slice iteration branches explicitly use <[Crate]>::iter to preserve
+borrowed items and avoid the imported SliceLike consuming iterator. Activation
+marker now identifies native-home-query-v67 and proves only QUERY ENTERED.
+
+Strict fixture module, independent Mentions visitor, and Cargo.toml are
+bytewise unchanged relative to v66. Root's pre-existing lock integration is
+unchanged, verified by SHA256. This lane did not edit the lockfile.
+
+Source-only checks passed: rustfmt formatting/check mode with child traversal
+disabled, git diff --check, bytewise original/candidate fixture/visitor/manifest
+comparisons, and root lock SHA comparison. These do not establish compilation,
+real database fixture acceptance, actual cache reuse, or performance.
+
+No builds, tests, native invocations, toolchain probes, dependency resolution,
+lockfile edits, commits, pushes, installations, timings, speedup claims, cache-hit
+claims, or default promotion were performed by this lane. Root owns actual gates.
+
+original/ and candidate/ are full snapshots. incremental-v66-to-v67.patch is the
+repair-only patch. candidate.patch is the cumulative owned change from HEAD,
+excluding root's lock edit. SHA256SUMS covers snapshot and failure evidence.
+
+Ownership is explicitly RELEASED to root. No further source/doc/fixture edits
+will be made by this lane without another explicit root request and revision.

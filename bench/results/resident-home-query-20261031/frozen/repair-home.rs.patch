@@ -1,0 +1,50 @@
+--- a/home.rs
++++ b/home.rs
+@@ -35,8 +35,11 @@
+ /// Native Salsa memoization, keyed by the *whole* instance, including its stored arguments.
+ /// All database reads remain inside this provider, so Salsa records and validates the same
+ /// dependencies as the direct visitor. There is deliberately no process-global value cache.
++/// This Salsa version interns multiple arguments but requires a Salsa struct for a single
++/// argument. The constant unit coordinate selects its native argument interner: `(Instance,
++/// ())` has exactly the full Instance's equality/hash domain, with no hand-written ID traits.
+ #[salsa::tracked(returns(ref))]
+-fn native_home_crates(db: &dyn HirDatabase, instance: Instance) -> Option<Vec<Crate>> {
++fn native_home_crates(db: &dyn HirDatabase, instance: Instance, _unit: ()) -> Option<Vec<Crate>> {
+     #[cfg(test)]
+     HOME_PROVIDER_EXECUTIONS.with(|count| count.set(count.get() + 1));
+     if home_memo_active() {
+@@ -45,7 +48,7 @@
+             use std::io::Write as _;
+             let _ = writeln!(
+                 std::io::stderr().lock(),
+-                "ra_jit: native-home-query-v66 QUERY ENTERED (not workload cache-hit evidence)"
++                "ra_jit: native-home-query-v67 QUERY ENTERED (not workload cache-hit evidence)"
+             );
+         });
+     }
+@@ -76,7 +79,7 @@
+     memo: bool,
+ ) -> Option<HomeCrates<'db>> {
+     if memo && !instance.args.as_ref().is_empty() {
+-        native_home_crates(db, instance.clone()).as_deref().map(HomeCrates::Memo)
++        native_home_crates(db, instance.clone(), ()).as_deref().map(HomeCrates::Memo)
+     } else {
+         let mentions = Mentions::of(db, instance);
+         (!mentions.opaque).then_some(HomeCrates::Direct(mentions.crates))
+@@ -92,14 +95,14 @@
+     fn iter(&self) -> impl Iterator<Item = &Crate> {
+         match self {
+             Self::Direct(crates) => either::Either::Left(crates.iter()),
+-            Self::Memo(crates) => either::Either::Right(crates.iter()),
++            Self::Memo(crates) => either::Either::Right(<[Crate]>::iter(crates)),
+         }
+     }
+ 
+     fn into_set(self) -> FxHashSet<Crate> {
+         match self {
+             Self::Direct(crates) => crates,
+-            Self::Memo(crates) => crates.iter().copied().collect(),
++            Self::Memo(crates) => <[Crate]>::iter(crates).copied().collect(),
+         }
+     }
+ }

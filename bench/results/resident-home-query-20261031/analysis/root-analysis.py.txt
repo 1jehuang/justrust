@@ -1,0 +1,25 @@
+import json
+from pathlib import Path
+ROOT = Path('<PRIVATE_EXPERIMENT_ROOT>')
+labels = ('off', 'on', 'on-repeat', 'off-repeat')
+states = {}
+markers = {}
+for label in labels:
+    folder = ROOT / f'home-query-v67-{label}-seven'
+    state = json.loads((folder / 'state.json').read_text())
+    assert state['status'] == 'passed' and state['unchanged']
+    assert len(state['rows']) == 7
+    assert all(row['accepted'] and row['input_unchanged'] and not row['failures'] for row in state['rows'])
+    counts = [(folder / f'{i:02}-{row["phase"]}-worker-0.log').read_text().count('native-home-query-v67 QUERY ENTERED') for i, row in enumerate(state['rows'])]
+    assert counts == ([0] * 7 if label.startswith('off') else [1] * 7)
+    states[label] = state
+    markers[label] = counts
+comparisons = []
+for off, on in (('off', 'on'), ('off-repeat', 'on-repeat')):
+    rows = []
+    for baseline, candidate in zip(states[off]['rows'], states[on]['rows']):
+        assert baseline['phase'] == candidate['phase']
+        old, new = baseline['elapsed_seconds'], candidate['elapsed_seconds']
+        rows.append({'phase': baseline['phase'], 'off_seconds': old, 'on_seconds': new, 'percent_on_vs_off': 100 * (new / old - 1)})
+    comparisons.append({'off': off, 'on': on, 'rows': rows})
+print(json.dumps({'status': 'passed', 'decision': 'REJECTED: no repeatable useful scoped latency improvement', 'promotion': False, 'speed_claim': False, 'noise': 'unknown', 'native_codegen': 58, 'native_resident': 364, 'native_home_fixtures': 5, 'strict_rows': 28, 'markers': markers, 'marker_scope': 'Cumulative provider-entry snapshot only, not workload cache hit or per-phase provider avoidance', 'comparisons': comparisons}, indent=2))

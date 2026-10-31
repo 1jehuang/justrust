@@ -1,0 +1,19 @@
+{
+  "scope": "Python-only historical evidence replay, not native acceptance",
+  "status": "passed",
+  "strict_rows_replayed": 28,
+  "historical_native_named_counts": [58, 364],
+  "historical_home_fixture_names": 5,
+  "python_control_tests_passed": 7,
+  "independent_semantic_negative_mutations": 40,
+  "coherent_raw_parsed_wrong_test_rejected": true,
+  "resigned_native_result_negative_rejected": true,
+  "coherent_timing_root_output_rewrite_rejected": true,
+  "relocated_empty_home_empty_path_isolated_python": true,
+  "ambient_environment_serialized": false,
+  "native_jobs_executed": 0,
+  "commands": [
+    "python3 -B validate.py --manifest",
+    "python3 -B test_offline.py"
+  ]
+}
