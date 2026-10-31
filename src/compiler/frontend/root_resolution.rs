@@ -5454,7 +5454,10 @@ fn validate_declared_path(resolver: &mut Resolver<'_>, path: &AstPath) -> Result
             let value_target = resolver.import(path, index, false)?;
             if type_target.is_none() && value_target.is_none() {
                 if item.macro_import_open {
-                    return Err("unsupported: unresolved import requires configured macro import/export completeness".into());
+                    return Err(format!(
+                        "unsupported: unresolved import requires configured macro import/export completeness: {}",
+                        resolver.display(path)?
+                    ));
                 }
                 return Err(format!(
                     "unresolved or cyclic import {}",

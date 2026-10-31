@@ -1012,6 +1012,65 @@ fn export_namespace_check_uses_source_declarations_without_codegen() {
 }
 
 #[test]
+fn unresolved_macro_open_import_reports_original_binding_path_workers1_8() {
+    for (text, binding) in [
+        (
+            "use missing::Thing as Renamed;fn main(){}",
+            "crate::Renamed",
+        ),
+        (
+            "use inner::Known;mod inner{pub struct Known;use missing::Thing as Nested;}fn main(){}",
+            "crate::inner::Nested",
+        ),
+    ] {
+        let scratch = Scratch::new();
+        scratch.write("client.rs", text.as_bytes());
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let image = scratch.path(&format!("native-{workers}-{check}"));
+                // File-backed CLI compilation uses authentic SOURCE/PARSE export
+                // namespace authority, unlike the standalone parse_unresolved API.
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command
+                    .current_dir(&scratch.0)
+                    .env("RUSTC", scratch.path("no-rustc"))
+                    .env("PATH", scratch.path("no-tools"))
+                    .arg(scratch.path("client.rs"))
+                    .args(["--workers", &workers.to_string()]);
+                if check {
+                    command.arg("--check");
+                } else {
+                    command.arg("-o").arg(&image);
+                }
+                let result = capture(&mut command, &scratch, 20);
+                assert_eq!(
+                    result.code, 1,
+                    "{binding} workers{workers} check{check}: {result:?}"
+                );
+                let message = String::from_utf8_lossy(&result.stderr);
+                let expected = format!(
+                    "unsupported: unresolved import requires configured macro import/export completeness: {binding}"
+                );
+                assert!(message.contains(&expected), "{binding}: {message}");
+                assert!(
+                    !message.contains("completeness: missing::Thing"),
+                    "{binding}: {message}"
+                );
+                assert!(
+                    !message.contains("unresolved or cyclic import"),
+                    "{binding}: {message}"
+                );
+                assert!(!message.contains("panicked at"), "{binding}: {message}");
+                assert!(
+                    !image.exists(),
+                    "failed completeness published an executable"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn exported_namespace_open_authority_is_unsupported_not_absent_workers1_8() {
     let rustc = stock_rustc::stock_rustc();
     for (name, text) in [
