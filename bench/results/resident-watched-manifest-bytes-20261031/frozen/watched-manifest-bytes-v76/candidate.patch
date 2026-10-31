@@ -1,0 +1,376 @@
+--- a/toolchain/resident/crates/ra-jit/src/inputs.rs
++++ b/toolchain/resident/crates/ra-jit/src/inputs.rs
+@@ -14,6 +14,12 @@
+ 
+ /// The variables cargo takes flags for rustc from.
+ const FLAGS: &[&str] = &["RUSTFLAGS", "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_RUSTFLAGS"];
++
++fn watched_manifest_bytes() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED
++        .get_or_init(|| std::env::var_os("RA_JIT_WATCHED_MANIFEST_BYTES").is_some_and(|v| v == "1"))
++}
+ 
+ /// What each of the daemon's checkouts that is loaded in full was loaded from.
+ #[derive(Default)]
+@@ -39,15 +45,94 @@
+     /// the packages inside.
+     package: bool,
+     stamp: u64,
++    /// Only checkout manifest/lock roles opt in. Script watches never carry this proof.
++    content: Option<Box<ManifestBytes>>,
++}
++
++#[derive(PartialEq, Eq)]
++struct ManifestBytes {
++    canonical: PathBuf,
++    link: Option<PathBuf>,
++    bytes: Vec<u8>,
++}
++
++impl ManifestBytes {
++    /// No absence certificates. Unknown, nonregular and unstable reads cannot prove equality.
++    #[cfg(target_os = "linux")]
++    fn read(path: &Path) -> Option<Self> {
++        use std::{
++            fs::OpenOptions,
++            io::Read,
++            os::unix::fs::{MetadataExt, OpenOptionsExt},
++        };
++        let identity = |m: &std::fs::Metadata| {
++            (
++                m.dev(),
++                m.ino(),
++                m.mode(),
++                m.len(),
++                m.mtime(),
++                m.mtime_nsec(),
++                m.ctime(),
++                m.ctime_nsec(),
++            )
++        };
++        let before = std::fs::symlink_metadata(path).ok()?;
++        let link = if before.file_type().is_symlink() {
++            Some(std::fs::read_link(path).ok()?)
++        } else {
++            None
++        };
++        let canonical = path.canonicalize().ok()?;
++        // Reject nonregular targets before opening, including FIFOs.
++        let target = std::fs::metadata(path).ok()?;
++        if !target.is_file() {
++            return None;
++        }
++        // Linux O_NONBLOCK prevents a concurrent replacement with a FIFO from hanging.
++        let mut file = OpenOptions::new().read(true).custom_flags(0x800).open(path).ok()?;
++        let opened = file.metadata().ok()?;
++        if !opened.is_file() || identity(&target) != identity(&opened) {
++            return None;
++        }
++        let mut bytes = Vec::new();
++        file.read_to_end(&mut bytes).ok()?;
++        if identity(&opened) != identity(&file.metadata().ok()?)
++            || identity(&opened) != identity(&std::fs::metadata(path).ok()?)
++            || identity(&before) != identity(&std::fs::symlink_metadata(path).ok()?)
++            || canonical != path.canonicalize().ok()?
++            || bytes.len() as u64 != opened.len()
++        {
++            return None;
++        }
++        Some(Self { canonical, link, bytes })
++    }
++
++    #[cfg(not(target_os = "linux"))]
++    fn read(_path: &Path) -> Option<Self> {
++        None
++    }
+ }
+ 
+ impl Watched {
+     fn new(path: PathBuf, package: bool) -> Watched {
+         let stamp = stamp(&path, package);
+-        Watched { path, package, stamp }
++        Watched { path, package, stamp, content: None }
++    }
++
++    fn manifest(path: PathBuf, enabled: bool) -> Watched {
++        let mut watched = Self::new(path, false);
++        if enabled {
++            watched.content = ManifestBytes::read(&watched.path).map(Box::new);
++        }
++        watched
+     }
+ 
+     fn changed(&self) -> bool {
++        if let Some(was) = &self.content {
++            // Fresh bytes even when size/mtime are unchanged. Never mutate the loaded witness.
++            return ManifestBytes::read(&self.path).as_ref() != Some(was.as_ref());
++        }
+         stamp(&self.path, self.package) != self.stamp
+     }
+ }
+@@ -153,18 +238,23 @@
+         config: &CargoConfig,
+     ) {
+         let mut files = Vec::new();
++        let manifest_bytes = watched_manifest_bytes();
+         for dir in root.ancestors() {
+             for name in ["config.toml", "config"] {
+                 files.push(Watched::new(dir.join(".cargo").join(name), false));
+             }
+         }
+         for name in ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "rust-toolchain"] {
+-            files.push(Watched::new(root.join(name), false));
++            files.push(if matches!(name, "Cargo.toml" | "Cargo.lock") {
++                Watched::manifest(root.join(name), manifest_bytes)
++            } else {
++                Watched::new(root.join(name), false)
++            });
+         }
+         if let ProjectWorkspaceKind::Cargo { cargo, .. } = &workspace.kind {
+             for package in cargo.packages().filter(|&it| cargo[it].is_local) {
+                 let manifest: &Path = cargo[package].manifest.as_ref();
+-                files.push(Watched::new(manifest.to_owned(), false));
++                files.push(Watched::manifest(manifest.to_owned(), manifest_bytes));
+                 // A script that appears there is run without the manifest naming it.
+                 files.push(Watched::new(manifest.with_file_name("build.rs"), false));
+             }
+@@ -384,6 +474,169 @@
+ mod tests {
+     use super::*;
+ 
++    fn touch(path: &Path) {
++        let file = std::fs::File::options().write(true).open(path).unwrap();
++        let time = file.metadata().unwrap().modified().unwrap() + std::time::Duration::from_secs(2);
++        file.set_modified(time).unwrap();
++    }
++
++    fn checkout_fixture(root: &Path, files: Vec<Watched>, scripts: Option<Scripts>) -> Inputs {
++        Inputs {
++            checkouts: vec![Checkout { root: root.to_owned(), files, flags: Vec::new(), scripts }],
++        }
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn manifest_bytes_selector_preserves_original_off_and_detects_hidden_changes() {
++        let dir = tempfile::tempdir().unwrap();
++        let root = dir.path();
++        for name in ["Cargo.toml", "Cargo.lock"] {
++            let path = root.join(name);
++            std::fs::write(&path, "aaaa").unwrap();
++            let original = Watched::new(path.clone(), false);
++            let off = Watched::manifest(path.clone(), false);
++            let on = Watched::manifest(path.clone(), true);
++            assert!(off.content.is_none());
++            let mut inputs = checkout_fixture(root, vec![on], None);
++            touch(&path);
++            assert!(original.changed());
++            assert_eq!(off.changed(), original.changed());
++            assert!(!inputs.stale(root, None).unwrap());
++            let time = std::fs::metadata(&path).unwrap().modified().unwrap();
++            std::fs::write(&path, "bbbb").unwrap();
++            std::fs::File::options().write(true).open(&path).unwrap().set_modified(time).unwrap();
++            assert!(inputs.stale(root, None).unwrap());
++            assert!(inputs.stale(root, None).unwrap());
++            std::fs::write(&path, "aaaa").unwrap();
++            assert!(!inputs.stale(root, None).unwrap());
++            // Independent original baseline cannot detect a size/mtime-preserving edit.
++            let original = Watched::new(path.clone(), false);
++            let time = std::fs::metadata(&path).unwrap().modified().unwrap();
++            std::fs::write(&path, "cccc").unwrap();
++            std::fs::File::options().write(true).open(&path).unwrap().set_modified(time).unwrap();
++            assert!(!original.changed());
++            assert!(inputs.stale(root, None).unwrap());
++        }
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn manifest_and_lock_retouch_only_reuses_selected_checkout() {
++        let dir = tempfile::tempdir().unwrap();
++        let root = dir.path();
++        let paths = [root.join("Cargo.toml"), root.join("Cargo.lock")];
++        for path in &paths {
++            std::fs::write(path, "loaded").unwrap();
++        }
++        let mut off = checkout_fixture(
++            root,
++            paths.iter().map(|p| Watched::manifest(p.clone(), false)).collect(),
++            None,
++        );
++        let mut on = checkout_fixture(
++            root,
++            paths.iter().map(|p| Watched::manifest(p.clone(), true)).collect(),
++            None,
++        );
++        for path in &paths {
++            touch(path);
++        }
++        assert!(off.stale(root, None).unwrap());
++        assert!(!on.stale(root, None).unwrap());
++        std::fs::write(&paths[1], "edited").unwrap();
++        assert!(on.stale(root, None).unwrap());
++        assert!(on.stale(root, None).unwrap());
++        // Only installation of the new successful-load snapshot changes its witness.
++        on = checkout_fixture(
++            root,
++            paths.iter().map(|p| Watched::manifest(p.clone(), true)).collect(),
++            None,
++        );
++        assert!(!on.stale(root, None).unwrap());
++        std::fs::write(&paths[1], "loaded").unwrap();
++        assert!(on.stale(root, None).unwrap());
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn manifest_bytes_missing_errors_and_symlink_identity() {
++        use std::os::unix::fs::symlink;
++        let dir = tempfile::tempdir().unwrap();
++        let path = dir.path().join("Cargo.toml");
++        let absent = Watched::manifest(path.clone(), true);
++        assert!(absent.content.is_none());
++        assert_eq!(absent.changed(), Watched::new(path.clone(), false).changed());
++        std::fs::write(&path, "same").unwrap();
++        assert!(absent.changed());
++        let present = Watched::manifest(path.clone(), true);
++        std::fs::remove_file(&path).unwrap();
++        assert!(present.changed());
++        std::fs::create_dir(&path).unwrap();
++        assert!(present.changed());
++        assert!(ManifestBytes::read(&path).is_none());
++        std::fs::remove_dir(&path).unwrap();
++        let a = dir.path().join("a");
++        let b = dir.path().join("b");
++        std::fs::write(&a, "same").unwrap();
++        std::fs::write(&b, "same").unwrap();
++        symlink(&a, &path).unwrap();
++        let linked = Watched::manifest(path.clone(), true);
++        touch(&a);
++        assert!(!linked.changed());
++        std::fs::remove_file(&path).unwrap();
++        symlink(&b, &path).unwrap();
++        assert!(linked.changed(), "equal bytes do not hide target changes");
++        std::fs::remove_file(&b).unwrap();
++        assert!(linked.changed());
++        assert!(ManifestBytes::read(&path).is_none());
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn equal_manifest_bytes_continue_flags_script_env_and_script_file_proofs() {
++        let dir = tempfile::tempdir().unwrap();
++        let root = dir.path();
++        let manifest = root.join("Cargo.toml");
++        std::fs::write(&manifest, "same").unwrap();
++        let script = Script {
++            out_dir: root.join("no-run/out"),
++            builds: Vec::new(),
++            package: "fixture".to_owned(),
++            root: root.to_owned(),
++            workspace: root.to_owned(),
++            files: vec![Watched::new(manifest.clone(), false)],
++        };
++        let mut scripts = script_snapshot(Some("a"));
++        scripts.scripts.push(script);
++        let mut inputs =
++            checkout_fixture(root, vec![Watched::manifest(manifest.clone(), true)], Some(scripts));
++        touch(&manifest);
++        assert!(!inputs.checkouts[0].files[0].changed());
++        assert!(inputs.checkouts[0].scripts.as_ref().unwrap().scripts[0].changed());
++        assert!(inputs.stale(root, Some(&request_env(Some("a")))).unwrap());
++        assert!(inputs.stale(root, Some(&request_env(Some("a")))).unwrap());
++        inputs.checkouts[0].scripts.as_mut().unwrap().scripts.clear();
++        assert!(inputs.stale(root, Some(&request_env(Some("b")))).unwrap());
++        assert!(inputs.stale(root, Some(&request_env(Some("b")))).unwrap());
++        assert!(!inputs.stale(root, Some(&request_env(Some("a")))).unwrap());
++        inputs.checkouts[0].flags.push(("RUSTFLAGS", None));
++        let mut env = request_env(Some("a"));
++        env.set("RUSTFLAGS", "--cfg changed");
++        assert!(inputs.stale(root, Some(&env)).unwrap());
++        for name in ["config.toml", "rust-toolchain.toml", "rust-toolchain", "build.rs"] {
++            let path = root.join(name);
++            std::fs::write(&path, "same").unwrap();
++            let watch = Watched::new(path.clone(), false);
++            touch(&path);
++            assert!(watch.changed());
++            assert!(watch.content.is_none());
++        }
++        let directory = Watched::new(root.to_owned(), true);
++        touch(&manifest);
++        assert!(directory.changed(), "implicit package script watch retains metadata behavior");
++    }
++
+     fn script_snapshot(value: Option<&str>) -> Scripts {
+         Scripts {
+             scripts: Vec::new(),
+--- /dev/null
++++ b/docs/resident-watched-manifest-bytes.md
+@@ -0,0 +1,66 @@
++# Watched checkout manifest bytes, v76
++
++Source-only bounded hypothesis on accepted v74 / v58 script witnesses. No speed claim.
++
++## Selection and scope
++
++`RA_JIT_WATCHED_MANIFEST_BYTES=1` is exact, default off, latched on first
++`Inputs::watch` with `OnceLock`. Other values, unset, or non-Unicode values do not
++enable it. `Watched::manifest(path, enabled)` is the testable selector, so fixtures
++never change process environment. Off uses the original stamp function with no
++content reads, canonicalization, byte buffers, or proof allocations. The optional
++proof pointer increases the Watched layout but allocates nothing when disabled.
++
++Only the root Cargo.toml and Cargo.lock and local package manifest roles installed
++by Inputs::watch opt in. Cargo config, both rust-toolchain names, discovered
++build.rs, directories, and all Script files retain the original metadata path.
++The original lossless PathBuf stays on Watched. Linux successful regular reads
++add a lossless canonical path, optional raw symlink target, and complete bytes.
++Other platforms retain metadata behavior rather than using a weak proof.
++
++## Proof and lifecycle
++
++Every check of a known eligible file reads fresh bytes, even with identical size
++and mtime. Exact bytes and canonical/link identities must match the loaded
++witness. The read checks device/inode/mode/length/mtime/ctime before and after,
++including nanoseconds, both through the descriptor and through the watched path.
++Nonblocking Linux open avoids FIFO replacement hangs. Read failures, races,
++nonregular replacements, disappearance, and canonicalization failures of known
++files return changed. Initially unknown/missing/nonregular/unreadable paths get
++no content certificate and retain the original stamp semantics, including its
++limitations. There is no inferred known absence and no metadata-only certificate.
++As with normal filesystem checks this is an observation, not a lock against
++writes after the observation. Descriptor/path metadata checks reject detectable
++races, not malicious filesystem timestamp forgery.
++
++No cached bytes or checkout stamps are updated by stale. New proofs are installed
++only by the existing successful-load watch lifecycle. Returning to the actually
++loaded bytes after a failed reload is valid, and changed bytes keep requesting
++reload until a new watch is installed. Equal bytes suppress only this individual
++checkout file's changed result. They never return early from Inputs::stale:
++all remaining checkout files, flags, and Scripts::changed remain in the same order.
++The v58 Scripts implementation and existing assertions are unchanged. Script
++manifest watches retain real raw-stdout plus generated-digest rerun proof. Failed
++environment reloads do not consume A/B/A witnesses. Native directives are not
++replaced by WorkspaceBuildScripts projection equality.
++
++## Authored fixtures, not executed by this worker
++
++Real temporary-filesystem and Inputs/Scripts fixtures cover both selectors,
++manifest/lock retouches, byte change/restoration, size/mtime-preserving changes,
++missing/present and directory/error states, symlink target replacement, unchanged
++bytes continuing flags/env A/B/A checks, explicit script manifest watches without
++a valid rerun proof, and metadata-only configuration/toolchain/build.rs/directory
++watches. The original Watched::new path supplies an independent baseline where
++valid: a retouch must change it and off must agree. That baseline deliberately
++misses same-size/restored-mtime changes. Permission-denied and concurrent-race
++injection are not claimed as executed fixture coverage. Existing native tests
++remain untouched, including their real compiler/archive acceptance behavior.
++
++Only rustfmt and Python source checks are worker validation. Root owns compilation,
++actual53/full resident tests, both-flag environment/file A/B/A, manifest read-error
++acceptance and pinned retouch measurements with v74 whole-generation and v76 flags.
++No builds, tests, native probes, lock/install operations, commits, or speed claims
++are performed by this worker. ROOT/source was observed to be older than the
++checkout v58 implementation, so originals are from the authoritative owned
++checkout source, not ROOT/source.

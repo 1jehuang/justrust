@@ -1,0 +1,49 @@
+WATCHED-MANIFEST SUITE v76 SOURCE-ONLY RELEASE
+STOPEDITS: assigned repository files frozen after Python validation.
+Baseline: de8533b93 (shipping stable native v76 baseline supplied by coordinator).
+Owner: sloth. Only bench/resident_suite.py and bench/test_resident_manifest_retouch.py edited.
+Original v74 harness SHA256: 1508a424fde23d7093ae004bc476abcf95d7681e36ed61d9d5c923de9f9cb2df
+Original v74 tests SHA256: 89be7ee5ccbcd065568dc1d0a174fba02b1e72916d38e1988e9917f50108a1bd
+
+Distinct CLI: bench/suite.py resident --mode watched-manifest-retouch [existing resident arguments]
+Distinct schema: native_resident_watched_manifest_retouch/v1
+Legacy manifest-retouch retains native_resident_manifest_retouch/v1 and its original OFF-restarts / ON-retains policy.
+Default edit mode is unchanged. Original 13-test ManifestRetouchTests class remains AST-identical.
+Runner/replay share a frozen RetouchPolicy, not copied orchestration or mutable global flags.
+
+WATCHER factor:
+  Reference: RA_JIT_MANIFEST_CONTENT_GENERATION=0, RA_JIT_WATCHED_MANIFEST_BYTES=0.
+  Candidate OFF: RA_JIT_MANIFEST_CONTENT_GENERATION=1, RA_JIT_WATCHED_MANIFEST_BYTES=0.
+  Candidate ON: RA_JIT_MANIFEST_CONTENT_GENERATION=1, RA_JIT_WATCHED_MANIFEST_BYTES=1.
+  ABBA OFF/ON/ON/OFF, one frozen candidate ELF, five measured samples and one warmup per segment.
+  Both watcher arms require SAME PID/startticks/executable/socket identity across every retouch.
+  Per-state environment and per-call flags dictionaries record both exact flag values.
+  Factor, mode and schema are replay-validated. Cross-mode/schema and different-run comparisons reject.
+  Raw source63/overlay, nonce, original six semantic gates, byte/size/mtime controls, isolation,
+  artifact receipts, toolchain identity and full native PID proofs use the same shared controls.
+  All 20 samples including segment first touches are retained. Four warmups are separate.
+
+Marker contract:
+  Existing client whole-generation entry marker remains required exactly once on each candidate
+  warmup/measured call in BOTH watcher arms and forbidden on reference calls/version commands.
+  No new per-client watcher marker is fabricated or required. Actual watcher skip marker belongs
+  to worker stderr. Optional worker-log snapshots are not a gating requirement of this harness.
+  Root must establish actual native semantic branch correctness using sheep's native fixtures and
+  source review. PID/runtime receipts plus synthetic Python tests are NOT native acceptance.
+
+Validation (source only):
+  PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s bench -p 'test_resident*.py' -v
+  PASS 109 tests, including all original 13 tests and 15 watcher-mode tests (28 retouch tests total).
+  python-tests.log contains the complete output.
+  PYTHONDONTWRITEBYTECODE=1 python3 [this directory]/sourcechecks.py
+  PASS original SHA, original 13-test class AST equality, unchanged shared controls, exact policies.
+  git diff --check -- bench/resident_suite.py bench/test_resident_manifest_retouch.py: PASS.
+
+No native execution, native builds, probes, workloads, installs, commits, or speed claims by this worker.
+Root alone may run native acceptance/workloads after both native-source and harness freezes.
+Printed comparison is descriptive/uncontrolled, noise unknown, WATCHED manifest+lock factor only,
+not separate manifest/lock attribution, general speedup, or default promotion.
+
+Bundle: originals/ and candidates/ full file snapshots, candidate.patch, sourcechecks.py,
+sourcechecks.log, python-tests.log, RELEASE, SHA256SUMS. No other worker's files overwritten.
+STOPEDITS

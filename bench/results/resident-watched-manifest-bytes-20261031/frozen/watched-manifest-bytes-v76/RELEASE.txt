@@ -1,0 +1,7 @@
+STOPEDITS
+Source freeze v76. Base supplied by coordinator: de8533b93 accepted v74 default off.
+Authoritative source: <PRIVATE_HOME>/justrust/toolchain/resident/crates/ra-jit/src/inputs.rs (preserves v58). ROOT/source is older and was NOT edited.
+Owned changes: inputs.rs and NEW docs/resident-watched-manifest-bytes.md only.
+Exact first-use watch-latched RA_JIT_WATCHED_MANIFEST_BYTES=1, default off. Linux regular known checkout manifest/lock bytes only. No stale early return for equal bytes, no Scripts changes. Unknown initial paths retain original metadata behavior.
+Worker validation: rustfmt and Python structural checks only. Root owns actual53/fullresident, env/file A/B/A, manifesterror, pinned both-v74/v76-flag retouch measurements. No worker speed claim.
+Full originals/candidates, candidate.patch and SHA256SUMS supplied. New doc absence recorded in originals/ABSENT.txt.

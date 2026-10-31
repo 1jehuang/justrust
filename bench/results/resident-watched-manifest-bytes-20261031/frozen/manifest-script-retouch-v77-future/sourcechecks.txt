@@ -1,0 +1,1 @@
+PASS Python AST parse/compile without imports/execution. Future base formula/modulo/future arithmetic checked at four synthetic clock values. Strict runtime nonce/native result and script invocation evidence preserved. Both flags/off-on arms asserted. No native jobs or checkout edits.

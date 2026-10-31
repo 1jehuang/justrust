@@ -1,0 +1,6 @@
+STOPEDITS finaldoc
+Authorized documentation-only addendum following root message 2026-10-31T15:19:40.827Z.
+Only docs/resident-watched-manifest-bytes.md updated. Root-reported bounded acceptance and wm76b results, wm76a rejection, unknown noise and license lineage.
+Rust unchanged SHA256 f9abc7bd51719736080cbd707faae275793e5d74ba8e6c6be520b3c9e6e491d2
+Final doc SHA256 5ce052602d7358374079dd11367314c36bfe47f99fef3fc831c7dd56b78b192c
+Initial release snapshots/patch/SHA remain unchanged. No worker native jobs or commits. Root owns atomic source+harness+docs commit and regression acceptance.

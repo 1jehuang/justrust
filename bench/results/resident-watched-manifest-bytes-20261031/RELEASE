@@ -1,0 +1,15 @@
+STOPEDITS: v76 historical evidence archive release
+Accepted native/harness baseline: 0aa1d0727
+Original v74 baseline: de8533b93
+Observation SHA256: 72772554dbf30ef8464cbc0aa93f3769770308a23a91048117c772fef8a3e63b
+Validator SHA256: ebb1a98107472ff978db2465e9133bc8a1113d89b883f4b0ab2e3779f3678ad9
+Offline tests SHA256: 8da1b6f3c5b64916f1d0b547237e879d83a5116af0105aaa51a5aa5344349500
+Validation: standalone semantic replay + full package manifest; 58 Python tests PASS.
+Includes audited empty-HOME/PATH relocation and coherent resealed negatives.
+Root native evidence only: 53/373, cfg9, nativeABA6, strict28, Python761, wm76b54calls/20samples/5stops, supplemental manifest-script6.
+wm76a52/54 is INCOMPLETE outer600s timeout, never accepted/merged.
+No native jobs, network, live source changes or new timing estimator by archive worker.
+Noise unknown. Default OFF. No general/default/causal speed claim.
+Replay: python3 -B bench/results/resident-watched-manifest-bytes-20261031/validate.py --manifest
+Tests: python3 -B bench/results/resident-watched-manifest-bytes-20261031/test_offline.py
+Package seal: SHA256.json (external digest reported to coordinator).

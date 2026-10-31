@@ -1,0 +1,10 @@
+--- a/docs/resident-watched-manifest-bytes.md
++++ b/docs/resident-watched-manifest-bytes.md
+@@ -75,6 +75,7 @@
+ - Configuration gates: cfg9.
+ - Native environment/file A/B/A gates: 6.
+ - Strict gates: 28.
++- Python regression: 761 tests PASS, as subsequently reported by root.
+ 
+ These are root-executed results, not tests executed by this source-only worker.
+ The initial native gate job was `task594819rrit`. Runtime acceptance is scoped to

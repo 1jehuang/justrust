@@ -1,0 +1,2 @@
+PASS: original v74 harness SHA, unchanged original 13-test class and shared controls, distinct immutable schemas/policies, exact flags and PID policies
+SOURCE ONLY: no native semantic/performance acceptance and no speed claim

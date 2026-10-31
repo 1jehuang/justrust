@@ -1,0 +1,12 @@
+--- a/docs/resident-watched-manifest-bytes.md
++++ b/docs/resident-watched-manifest-bytes.md
+@@ -105,7 +105,8 @@
+ 
+ ## License and source lineage
+ 
+-This changes the owned resident `ra-jit` implementation, retaining its existing
++This changes the owned, licensed Blaze-derived resident `ra-jit` implementation,
++retaining its existing
+ rust-analyzer source lineage and the resident tree's dual MIT/Apache-2.0 license
+ files (`toolchain/resident/LICENSE-MIT` and `LICENSE-APACHE`). It is not a
+ clean-room replacement or a new independently licensed compiler. Existing

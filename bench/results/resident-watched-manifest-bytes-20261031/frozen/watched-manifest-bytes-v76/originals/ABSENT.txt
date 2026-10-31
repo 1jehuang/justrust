@@ -1,0 +1,1 @@
+docs/resident-watched-manifest-bytes.md did not exist before this task.

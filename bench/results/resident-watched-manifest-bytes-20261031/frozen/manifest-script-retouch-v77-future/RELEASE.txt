@@ -1,0 +1,5 @@
+STOPEDITS v77 FUTURE-time private fixture
+Supersedes historical-time proposal for root execution. Prior freeze retained unexecuted.
+Script SHA256 1b833741cfeb059e4e47a1e84e73caf596083e6a2c4d37623c17be7435a1aa6f
+Root-authorized exact future base formula, per-call fresh clock guards, strict OFF/ON 11/22/11 and real script invocation evidence.
+No checkout edits, native jobs or commits. No performance claim. Root owns actual execution.

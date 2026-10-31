@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd <PRIVATE_HOME>/justrust
+ROOT=<EXPERIMENT>
+TC=<PRIVATE_HOME>/.blaze/toolchains/nightly-2026-10-27-x86_64-unknown-linux-gnu
+(cd "$ROOT/watched-manifest-suite-v76" && sha256sum -c SHA256SUMS)
+cmp bench/resident_suite.py "$ROOT/watched-manifest-suite-v76/candidates/resident_suite.py"
+cmp bench/test_resident_manifest_retouch.py "$ROOT/watched-manifest-suite-v76/candidates/test_resident_manifest_retouch.py"
+cmp toolchain/resident/crates/ra-jit/src/inputs.rs "$ROOT/watched-manifest-bytes-v76/candidates/toolchain/resident/crates/ra-jit/src/inputs.rs"
+python3 bench/suite.py resident --mode watched-manifest-retouch \
+ --reference-engine "$ROOT/reference-bin/ra-jit" \
+ --engine "$ROOT/candidate-v76-bin/jr-engine" \
+ --source <PRIVATE_HOME>/.jcode/scratch/resident-matrix-native-20261030/source63 \
+ --toolchain "$TC" --output <PRIVATE_HOME>/wm76a --samples 5 --timeout 360
+python3 bench/suite.py compare <PRIVATE_HOME>/wm76a/off.json <PRIVATE_HOME>/wm76a/on.json

@@ -1,0 +1,62 @@
+--- a/docs/resident-watched-manifest-bytes.md
++++ b/docs/resident-watched-manifest-bytes.md
+@@ -1,6 +1,8 @@
+ # Watched checkout manifest bytes, v76
+ 
+-Source-only bounded hypothesis on accepted v74 / v58 script witnesses. No speed claim.
++Bounded default-OFF candidate on accepted v74 / v58 script witnesses. Root-reported
++scoped acceptance and descriptive measurements are recorded below, not a general
++speedup or default-promotion claim.
+ 
+ ## Selection and scope
+ 
+@@ -64,3 +66,49 @@
+ are performed by this worker. ROOT/source was observed to be older than the
+ checkout v58 implementation, so originals are from the authoritative owned
+ checkout source, not ROOT/source.
++
++## Root-reported scoped acceptance, October 31, 2026
++
++The coordinator reported these gates PASS for the immutable released Rust candidate:
++
++- Native gates: native53 and 373 full resident tests.
++- Configuration gates: cfg9.
++- Native environment/file A/B/A gates: 6.
++- Strict gates: 28.
++
++These are root-executed results, not tests executed by this source-only worker.
++The initial native gate job was `task594819rrit`. Runtime acceptance is scoped to
++the default-OFF candidate and those gates. Activation must be established from
++actual behavior and a same-worker-PID oracle, not merely from setting the flag:
++the candidate has no explicit activation marker. No coverage beyond the reported
++gates, such as a new exhaustive race-injection campaign, is implied.
++
++### Pinned retouch experiment
++
++The coordinator reported fresh pinned `wm76b` complete in `task662968rcy9`, with
++54 calls and 5 stops. Its suite comparison reported OFF 2.457933 seconds versus
++ON 0.054515 seconds, a descriptive reduction of 97.78%. First OFF observations
++were 12.057 and 12.326 seconds, while all ON observations were 0.048 to 0.061
++seconds. These are reported comparison values, not a newly calculated estimator
++or an assertion that the first observations equal the suite aggregate.
++
++The workload is the bounded watched-manifest/lock retouch hypothesis with v74
++whole-generation reuse and the v76 selector under the root's pinned setup. It is
++not the comprehensive session-weighted workload and does not establish broad
++speedup, default promotion, or a noise-adjusted causal estimate. Noise remains
++unknown. Root owns the raw harness/evidence identities and final regression gate.
++
++Earlier `wm76a` was aborted at 52/54 calls by its outer 600-second limit. It is
++retained separately, with the pin restored and stop status 0 reported, but is
++**not accepted** and is not merged into the fresh completed comparison.
++
++## License and source lineage
++
++This changes the owned resident `ra-jit` implementation, retaining its existing
++rust-analyzer source lineage and the resident tree's dual MIT/Apache-2.0 license
++files (`toolchain/resident/LICENSE-MIT` and `LICENSE-APACHE`). It is not a
++clean-room replacement or a new independently licensed compiler. Existing
++attribution and license files are unchanged. The original snapshot is the
++checkout's accepted v58 script-witness implementation on the coordinator-supplied
++v74 base `de8533b93`, not the older `ROOT/source` copy. This final documentation
++addendum does not alter Rust or the original v76 freeze artifacts.

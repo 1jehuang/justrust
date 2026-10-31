@@ -1,0 +1,1 @@
+PASS: rustfmt edition 2024; Inputs::stale exact original; Scripts::changed exact original; all original v58 fixture source/assertions exact original. Four new filesystem/API fixtures authored, not executed. No builds/tests/native probes/lock/install/commits performed.

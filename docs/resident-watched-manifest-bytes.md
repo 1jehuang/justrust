@@ -103,6 +103,19 @@ Earlier `wm76a` was aborted at 52/54 calls by its outer 600-second limit. It is
 retained separately, with the pin restored and stop status 0 reported, but is
 **not accepted** and is not merged into the fresh completed comparison.
 
+## Archived replay and supplemental root gate
+
+The [allowlisted historical evidence bundle](../bench/results/resident-watched-manifest-bytes-20261031/README.md)
+binds native source/toolchain/pinned identities, exact frozen patches, raw runtime
+receipts, all first touches, the separate incomplete run and offline replay. Its
+58 Python checks include audited relocation and coherent resealed negatives.
+
+Supplemental root gate v77 (`task979857g6da`) passed both watcher OFF and ON
+A/B/A native 11/22/11, including actual manifest-watching script invocation
+evidence, unchanged source bytes, controlled-future timestamp guards, identity
+checks and successful stops. This is native correctness coverage only, not a
+performance claim. No source fix was required.
+
 ## License and source lineage
 
 This changes the owned, licensed Blaze-derived resident `ra-jit` implementation,
