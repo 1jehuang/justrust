@@ -1,0 +1,529 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index 9288ae995..0548a0534 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -4207,7 +4207,26 @@ impl Listed {
+     }
+ }
+ 
++fn parallel_declared_query_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED.get_or_init(|| {
++        parallel_declared_query_flag(std::env::var_os("RA_JIT_PARALLEL_DECLARED_QUERY").as_deref())
++    })
++}
++
++fn parallel_declared_query_flag(value: Option<&std::ffi::OsStr>) -> bool {
++    value.is_some_and(|it| it == "1")
++}
++
+ fn declared_in(db: &RootDatabase, krate: Crate) -> Declared {
++    if parallel_declared_query_enabled() {
++        parallel_crate_declarations(db, krate.into()).clone()
++    } else {
++        declared_in_original(db, krate)
++    }
++}
++
++fn declared_in_original(db: &RootDatabase, krate: Crate) -> Declared {
+     let start = Instant::now();
+     // The first thing asked of a crate after an edit: name resolution is redone here.
+     hir_def::nameres::crate_def_map(db, krate.into());
+@@ -4621,6 +4640,105 @@ impl Declared {
+     }
+ }
+ 
++/// A local database extension exposes the existing safe typed clone without
++/// downcasting a Salsa trait object. Clones share storage, never mutate inputs,
++/// and do not transfer their query reads to the parent's dependency stack.
++#[salsa::db]
++trait DeclarationDatabase: HirDatabase {
++    fn declaration_snapshot(&self) -> RootDatabase;
++}
++
++#[salsa::db]
++impl DeclarationDatabase for RootDatabase {
++    fn declaration_snapshot(&self) -> RootDatabase {
++        self.clone()
++    }
++}
++
++#[cfg(test)]
++thread_local! {
++    // Actual provider entries on the requesting thread, not wrapper calls or hits.
++    static PARALLEL_DECLARED_QUERY_PROVIDERS: std::cell::Cell<usize> = const {
++        std::cell::Cell::new(0)
++    };
++}
++
++/// Native final graph with the original wave ordering and parallel cold lowering.
++#[salsa::tracked(returns(ref))]
++fn parallel_crate_declarations(
++    db: &dyn DeclarationDatabase,
++    krate: ide_db::base_db::Crate,
++) -> Declared {
++    #[cfg(test)]
++    PARALLEL_DECLARED_QUERY_PROVIDERS.set(PARALLEL_DECLARED_QUERY_PROVIDERS.get() + 1);
++    // A process-once witness of provider entry only. Failed stderr writes are ignored.
++    static FIRST_PROVIDER: std::sync::Once = std::sync::Once::new();
++    FIRST_PROVIDER.call_once(|| {
++        use std::io::Write;
++        let _ = writeln!(
++            std::io::stderr().lock(),
++            "parallel-declared-query-provider-entry pid={}",
++            std::process::id()
++        );
++    });
++    hir_def::nameres::crate_def_map(db, krate);
++    let mut declared = module_declarations(db, krate).clone();
++    while !declared.bodies.is_empty() || !declared.provided.is_empty() {
++        for under_provided in [false, true] {
++            let bodies = if under_provided {
++                std::mem::take(&mut declared.provided)
++            } else {
++                std::mem::take(&mut declared.bodies)
++            };
++            // Every fragment is read on the parent after warmup. Child snapshot
++            // reads alone never establish this tracked parent's dependencies.
++            for body in prewarm_declaration_bodies(db, bodies) {
++                declared.extend(body_declarations(db, body, under_provided));
++            }
++        }
++    }
++    declared
++}
++
++/// Keep small waves on the already attached parent. The original lower's small
++/// branch attaches its argument, so a cloned database there would violate HIR's
++/// attached-database identity invariant even though its Salsa storage is shared.
++fn prewarm_declaration_bodies(
++    db: &dyn DeclarationDatabase,
++    bodies: Vec<DefWithBodyId>,
++) -> Vec<DefWithBodyId> {
++    // Matches the unchanged original lower's PER_THREAD threshold. Empty and
++    // single-worker waves must not clone or reattach the database on this thread.
++    let parallel =
++        bodies.len() > 16 && std::thread::available_parallelism().is_ok_and(|it| it.get() > 1);
++    if parallel {
++        #[cfg(test)]
++        DECLARATION_PREWARM_ROUTES.with(|routes| {
++            let (parent, parallel) = routes.get();
++            routes.set((parent, parallel + 1));
++        });
++        lower(&db.declaration_snapshot(), bodies)
++    } else {
++        #[cfg(test)]
++        DECLARATION_PREWARM_ROUTES.with(|routes| {
++            let (parent, parallel) = routes.get();
++            routes.set((parent + 1, parallel));
++        });
++        for &body in &bodies {
++            Body::of(db, body);
++        }
++        bodies
++    }
++}
++
++#[cfg(test)]
++thread_local! {
++    // Only real production routing decisions, no simulated scheduler or hits.
++    static DECLARATION_PREWARM_ROUTES: std::cell::Cell<(usize, usize)> = const {
++        std::cell::Cell::new((0, 0))
++    };
++}
++
+ /// Declaration graph nodes, separate from the bodies' executable code. These queries
+ /// retain all name-resolution, macro-expansion and body dependencies through Salsa.
+ /// In particular, a body is not assumed to preserve its nested items after an edit.
+@@ -11929,6 +12047,328 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn parallel_declared_query_flag_is_exact_and_default_off() {
++        use std::ffi::OsStr;
++        assert!(parallel_declared_query_flag(Some(OsStr::new("1"))));
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!parallel_declared_query_flag(value.map(OsStr::new)));
++        }
++    }
++
++    // Independent scope/body walk: neither fragment query nor final query is used.
++    // The final graph's traversal-state field remains its original default false.
++    fn parallel_declared_query_full_walk(db: &RootDatabase, krate: Crate) -> Declared {
++        let mut expected = Declared::default();
++        expected.in_modules(db, krate);
++        while !expected.bodies.is_empty() || !expected.provided.is_empty() {
++            for under_provided in [false, true] {
++                let bodies = if under_provided {
++                    std::mem::take(&mut expected.provided)
++                } else {
++                    std::mem::take(&mut expected.bodies)
++                };
++                for body in bodies {
++                    let mut fragment = Declared { under_provided, ..Declared::default() };
++                    for (_, def_map) in Body::of(db, body).blocks(db) {
++                        for (_, module) in def_map.modules(db) {
++                            fragment.in_scope(db, module.scope(db));
++                        }
++                    }
++                    expected.extend(&fragment);
++                }
++            }
++        }
++        expected
++    }
++
++    /// No env mutation or pretend cache events: directly exercise the real Salsa provider.
++    fn check_parallel_declared_query(db: &RootDatabase, file: vfs::FileId, label: &str) -> usize {
++        hir::attach_db(db, || {
++            let krate = hir::Semantics::new(db)
++                .file_to_module_defs(file)
++                .next()
++                .expect("fixture crate")
++                .krate(db);
++            PARALLEL_DECLARED_QUERY_PROVIDERS.set(0);
++            let actual = parallel_crate_declarations(db, krate.into()).clone();
++            let entered = PARALLEL_DECLARED_QUERY_PROVIDERS.get();
++            eprintln!("parallel-declared-query-fixture label={label:?} provider_entries={entered}");
++            assert!(entered <= 1, "{label}: provider entered more than once");
++            assert!(actual == declared_in_original(db, krate), "{label}: original algorithm");
++            assert!(
++                actual == parallel_declared_query_full_walk(db, krate),
++                "{label}: independent walk"
++            );
++            assert!(!actual.functions.is_empty(), "{label}: vacuous functions");
++            assert!(!actual.under_provided, "{label}: traversal state leaked");
++            assert!(actual.bodies.is_empty() && actual.provided.is_empty());
++            PARALLEL_DECLARED_QUERY_PROVIDERS.set(0);
++            assert!(
++                actual == *parallel_crate_declarations(db, krate.into()),
++                "{label}: repeat order/fields"
++            );
++            assert_eq!(
++                PARALLEL_DECLARED_QUERY_PROVIDERS.get(),
++                0,
++                "{label}: repeat provider entry"
++            );
++            entered
++        })
++    }
++
++    #[test]
++    fn parallel_declared_query_real_database_revisions_match_both_original_walkers() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        const SOURCE: &str = r#"
++//- /main.rs crate:main cfg:enabled
++macro_rules! nested { () => { fn expanded() {} }; }
++fn main() { fn inner() {} nested!(); let _ = 1; let _ = || { fn closure_inner() {} }; }
++trait Tr { fn default() { fn provided_inner() {} } const C: usize = { fn provided_const() {} 1 }; }
++const C: usize = { fn const_inner() {} 1 };
++static S: usize = { fn static_inner() {} 1 };
++#[cfg(enabled)] fn configured() {}
++"#;
++        let (mut db, file) = RootDatabase::with_single_file(SOURCE);
++        let file = file.file_id(&db);
++        assert_eq!(check_parallel_declared_query(&db, file, "cold"), 1);
++        assert_eq!(check_parallel_declared_query(&db, file, "warm"), 0);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = parallel_crate_declarations(&db, krate.into());
++            assert_eq!(graph.statics.len(), 1);
++            let names: Vec<_> = graph
++                .functions
++                .iter()
++                .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
++                .collect();
++            for name in
++                ["inner", "expanded", "closure_inner", "const_inner", "static_inner", "configured"]
++            {
++                assert!(names.iter().any(|it| it == name), "missing {name}");
++            }
++            let provided: Vec<_> = graph
++                .in_provided
++                .iter()
++                .map(|&id| hir::Function::from(id).name(&db).as_str().to_owned())
++                .collect();
++            for name in ["provided_inner", "provided_const"] {
++                assert!(provided.iter().any(|it| it == name), "missing {name}");
++            }
++        });
++        for (label, source, changes_graph) in [
++            ("body only", SOURCE.replace("let _ = 1", "let _ = 2"), false),
++            (
++                "nested",
++                SOURCE.replace("fn inner() {}", "fn inner() {} fn added() { fn deeper() {} }"),
++                true,
++            ),
++            (
++                "macro",
++                SOURCE.replace("fn expanded() {}", "fn expanded() {} fn macro_added() {}"),
++                true,
++            ),
++            (
++                "provided",
++                SOURCE.replace(
++                    "fn provided_inner() {}",
++                    "fn provided_inner() {} fn provided_added() {}",
++                ),
++                true,
++            ),
++            (
++                "const",
++                SOURCE.replace("fn const_inner() {}", "fn const_inner() {} fn const_added() {}"),
++                true,
++            ),
++            (
++                "static",
++                SOURCE.replace("fn static_inner() {}", "fn static_inner() {} fn static_added() {}"),
++                true,
++            ),
++            (
++                "closure",
++                SOURCE.replace(
++                    "fn closure_inner() {}",
++                    "fn closure_inner() {} fn closure_added() {}",
++                ),
++                true,
++            ),
++            ("cfg", SOURCE.replace("#[cfg(enabled)]", "#[cfg(disabled)]"), true),
++            ("signature", SOURCE.replace("fn main()", "fn main(x: u8)"), true),
++            ("restore", SOURCE.to_owned(), false),
++            ("signature only", SOURCE.replace("fn main()", "fn main(x: u16)"), false),
++            ("signature only again", SOURCE.replace("fn main()", "fn main(x: u32)"), false),
++        ] {
++            db.set_file_text_with_durability(file, &source, Durability::LOW);
++            let entered = check_parallel_declared_query(&db, file, label);
++            // Signature IDs can remain equal. Revalidation, not provider execution,
++            // is the contract there; graph-changing revisions must execute.
++            if changes_graph && label != "signature" {
++                assert_eq!(entered, 1, "{label}: changed graph not recomputed");
++            }
++        }
++    }
++
++    #[test]
++    fn parallel_declared_query_tracks_dependency_macros_and_reuses_unrelated_crate() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        let (mut db, files) = RootDatabase::with_many_files(
++            r#"
++//- /main.rs crate:app deps:dep
++fn main() { dep::items!(); }
++//- /dep.rs crate:dep
++#[macro_export] macro_rules! items { () => { fn from_dep() {} }; }
++pub fn dependency() {}
++//- /other.rs crate:other
++fn unrelated() { let _ = 1; }
++"#,
++        );
++        let [app, dep, other] = [0, 1, 2].map(|i| files[i].file_id(&db));
++        assert_eq!(check_parallel_declared_query(&db, app, "app cold"), 1);
++        assert_eq!(check_parallel_declared_query(&db, other, "other cold"), 1);
++        db.set_file_text_with_durability(other, "fn unrelated() { let _ = 2; }", Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, app, "unrelated body"), 0);
++        db.set_file_text_with_durability(
++            dep,
++            r#"
++#[macro_export] macro_rules! items { () => { fn from_dep() {} fn added_from_dep() {} }; }
++pub fn dependency(x: u8) {}
++"#,
++            Durability::LOW,
++        );
++        assert_eq!(check_parallel_declared_query(&db, app, "dependency macro and signature"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(app).next().unwrap().krate(&db);
++            assert!(
++                parallel_crate_declarations(&db, krate.into())
++                    .functions
++                    .iter()
++                    .any(|&id| { hir::Function::from(id).name(&db).as_str() == "added_from_dep" }),
++                "dependency macro fixture did not expand"
++            );
++        });
++    }
++
++    #[test]
++    fn parallel_declared_query_local_trait_snapshot_shares_database() {
++        use test_fixture::WithFixture;
++        let (db, file) = RootDatabase::with_single_file("fn main() { fn nested() {} }");
++        let file = file.file_id(&db);
++        let extension: &dyn DeclarationDatabase = &db;
++        let snapshot = extension.declaration_snapshot();
++        assert_eq!(check_parallel_declared_query(&snapshot, file, "snapshot cold"), 1);
++        assert_eq!(check_parallel_declared_query(&db, file, "original shares snapshot memo"), 0);
++    }
++
++    #[test]
++    fn parallel_declared_query_parent_records_nested_reads_after_parallel_prewarm() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        // Enough real bodies for lower's original parallel threshold, with two
++        // traversal waves. No fake events or snapshot-read dependency assumptions.
++        let mut source = String::from("fn main() {}\n");
++        for i in 0..96 {
++            source.push_str(&format!("fn outer_{i}() {{ fn nested_{i}() {{}} }}\n"));
++        }
++        let (mut db, file) = RootDatabase::with_single_file(&source);
++        let file = file.file_id(&db);
++        assert_eq!(check_parallel_declared_query(&db, file, "parallel cold"), 1);
++        assert_eq!(check_parallel_declared_query(&db, file, "parallel repeat"), 0);
++        let changed = source.replace(
++            "fn nested_47() {}",
++            "fn nested_47() { fn changed_deep_item() {} static DEEP: u8 = 1; }",
++        );
++        assert_ne!(source, changed);
++        db.set_file_text_with_durability(file, &changed, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "nested block changed"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = parallel_crate_declarations(&db, krate.into());
++            assert!(
++                graph.functions.iter().any(|&id| {
++                    hir::Function::from(id).name(&db).as_str() == "changed_deep_item"
++                })
++            );
++            assert_eq!(graph.statics.len(), 1, "new nested static missing");
++        });
++        db.set_file_text_with_durability(file, &source, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "nested block restored"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = parallel_crate_declarations(&db, krate.into());
++            assert!(
++                !graph.functions.iter().any(|&id| {
++                    hir::Function::from(id).name(&db).as_str() == "changed_deep_item"
++                })
++            );
++            assert!(graph.statics.is_empty(), "removed nested static retained");
++        });
++    }
++
++    #[test]
++    fn parallel_declared_query_production_routes_small_multi_and_transition_waves() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        let mut source = String::from("fn main() { fn only_nested() {} }\n");
++        for i in 0..48 {
++            source.push_str(&format!("fn plain_{i}() {{}}\n"));
++        }
++        let (mut db, file) = RootDatabase::with_single_file(&source);
++        let file = file.file_id(&db);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let bodies = module_declarations(&db, krate.into()).bodies.clone();
++            assert_eq!(bodies.len(), 49, "must exercise actual large wave");
++            let small = bodies[..1].to_vec();
++            DECLARATION_PREWARM_ROUTES.set((0, 0));
++            // This is the exact production helper, under the original database's
++            // HIR attachment. A cloned small-wave attachment would panic here.
++            assert!(prewarm_declaration_bodies(&db, small.clone()) == small);
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), (1, 0));
++            assert!(prewarm_declaration_bodies(&db, bodies.clone()) == bodies);
++            let multicore = std::thread::available_parallelism().is_ok_and(|it| it.get() > 1);
++            let expected = if multicore { (1, 1) } else { (2, 0) };
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), expected);
++            assert!(prewarm_declaration_bodies(&db, small.clone()) == small);
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), (expected.0 + 1, expected.1));
++        });
++        DECLARATION_PREWARM_ROUTES.set((0, 0));
++        assert_eq!(check_parallel_declared_query(&db, file, "large to single nested wave"), 1);
++        let routes = DECLARATION_PREWARM_ROUTES.get();
++        assert!(routes.0 > 0, "parent small/empty wave not routed");
++        if std::thread::available_parallelism().is_ok_and(|it| it.get() > 1) {
++            assert!(routes.1 > 0, "original parallel lower not routed");
++        }
++        let changed = source.replace(
++            "fn only_nested() {}",
++            "fn only_nested() { fn after_transition() {} static TRANSITION: u8 = 1; }",
++        );
++        assert_ne!(source, changed);
++        db.set_file_text_with_durability(file, &changed, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "transition nested edit"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = parallel_crate_declarations(&db, krate.into());
++            assert!(
++                graph.functions.iter().any(|&id| {
++                    hir::Function::from(id).name(&db).as_str() == "after_transition"
++                })
++            );
++            assert_eq!(graph.statics.len(), 1);
++        });
++        db.set_file_text_with_durability(file, &source, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "transition restored"), 1);
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+diff --git a/docs/resident-parallel-declared-query.md b/docs/resident-parallel-declared-query.md
+new file mode 100644
+index 000000000..f443a06d2
+--- /dev/null
++++ b/docs/resident-parallel-declared-query.md
+@@ -0,0 +1,57 @@
++# Parallel native declaration query candidate (v73)
++
++Status: v73 source-only, default OFF. The v72 native suite FAILED, so v72 must not be timed or promoted. Native typechecking, fixtures, full-suite correctness, timing, restoration and promotion belong to the coordinator. No performance claim or passing native-test claim is made here.
++
++## Distinct hypothesis
++
++The v69 final tracked graph reused green results but its `&dyn HirDatabase` provider traversed bodies sequentially. This candidate keeps the native final graph and restores the existing cold-lowering scheduler. It does not flatten traversal or revive the v70 listing scheduler.
++
++`RA_JIT_PARALLEL_DECLARED_QUERY=1` enables the candidate. A process-local `OnceLock` captures the exact first-use value. Missing, empty, `0`, `true`, `01` and `1 ` remain OFF. The original `declared_in` implementation is retained byte-for-byte except for its name, `declared_in_original`, and the default path calls it.
++
++## Actual v72 failure and bounded v73 repair
++
++The coordinator ran v72: check and build exited 0, codegen passed 53 tests, but the resident suite passed 365 and failed 4 of 369. All four new database fixtures panicked at `hir-ty/src/next_solver/interner.rs:2477` with `Cannot change attached database`. The complete actual failure log is retained with the v73 freeze, while the entire v72 source freeze remains unchanged.
++
++The production cause was calling original `lower(snapshot, bodies)` for a small wave. Its single-worker branch calls `hir::attach_db` on the current thread. A snapshot shares Salsa storage but has a distinct database address, so replacing the already attached original database correctly violates the HIR identity invariant.
++
++V73 routes production warmup through `prewarm_declaration_bodies`. Empty, at-most-16-body or single-worker waves read actual `Body::of(db, body)` directly on the parent, without cloning or reattachment. Larger multicore waves call unchanged original `lower` with a safe typed clone, whose parallel workers attach their databases on fresh threads. The guard matches original `PER_THREAD = 16` and available parallelism. The original OFF traversal and original `lower` remain bytewise unchanged. No `attach_db_allow_change`, unsafe cast, weakened assertion or fake identity is used.
++
++All five v72 fixtures and their strict full-graph oracle remain unchanged. A sixth real-database fixture exercises the exact production helper while the original database is attached: small wave, 49-body wave, then small wave. TLS counts actual routes. It also exercises a 49-body-to-one-nested-body graph transition, mutates that nested body with a new function and static, and checks the unchanged full original/independent oracles plus restoration. The 96-body parent-dependency mutation fixture remains unchanged.
++
++## Actual API investigation
++
++The installed dependency is Salsa 0.28.5. Its `salsa-macros/src/tracked_fn.rs`, around line 405, requires the first tracked-function parameter to be `&dyn Db`, with `Db` a Salsa database trait. A concrete `&RootDatabase` tracked provider would not satisfy that macro contract.
++
++The local `#[salsa::db] trait DeclarationDatabase: HirDatabase` adds only `fn declaration_snapshot(&self) -> RootDatabase`. Its local implementation for the external `RootDatabase` returns `self.clone()`. A local trait may be implemented for that external type. Both trait and implementation use the normal Salsa database-view macro registration. There is no handwritten unsafe cast, custom downcast, global database pointer, or fake snapshot mechanism.
++
++The vendored `ide-db/src/lib.rs` implements `RootDatabase::clone` by cloning storage, file and crate-map handles and preserving its nonce. Salsa `src/storage.rs` implements `Storage::clone` with a shared `StorageHandle` and a fresh `ZalsaLocal`. `StorageHandle::clone` shares the `Arc<Zalsa>` and cancellation coordination. The clone therefore accesses the same database revision but does not inherit the parent's active query stack. The candidate makes no input writes and drops its snapshot before returning.
++
++## Dependency and ordering contract
++
++`parallel_crate_declarations(&dyn DeclarationDatabase, base_db::Crate)` is a native `#[salsa::tracked(returns(ref))]` query returning the full existing `Declared` value. It reads crate name resolution and `module_declarations` on the parent database.
++
++Each traversal wave processes ordinary bodies and then provided bodies in the original order. It calls `prewarm_declaration_bodies`, reading small waves directly on the parent and routing parallel waves through the unchanged original `lower`, including its actual `Body::of` prewarm, threshold, scoped threads, interleaved scheduling, attached databases, probing state and cancellation behavior. It then reads `body_declarations(db, body, under_provided)` on the parent database for every returned body, in order. Those reads are mandatory even after child queries warmed bodies. No child read is presumed to become a parent dependency.
++
++The merge uses the existing `Declared::extend` and preserves every field, ordering, nested items, provided-method distinction, cfg and macro expansion, statics, consts and traversal-state semantics. Signature and dependency changes are left to actual Salsa revalidation rather than classified by a handwritten cache key.
++
++The fixed `parallel-declared-query-provider-entry pid=...` stderr marker is attempted once per process, only inside the real provider. Write errors are ignored. It is not a hit counter, completion claim or speed measurement. Test-only TLS counts actual provider entries on the requesting thread, independently of that marker.
++
++## Fixtures supplied, not executed by this worker
++
++The original five real-RootDatabase fixtures are unchanged and cover:
++
++1. Exact/default-OFF flag parsing without process environment mutation.
++2. Cold provider count 1, repeated count 0, full `Declared` equality against both the original parallel traversal and an independent direct scope/body walker. Revisions cover executable-only edits, nested and macro items, provided methods, consts, statics, closures, cfg, signatures and restoration.
++3. Dependency macro/signature edits and unrelated-crate green reuse.
++4. The local trait's typed snapshot and shared native memo reuse between cloned and original databases.
++5. A 96-body, two-wave graph, large enough to select the original parallel threshold on multicore hosts. After cold prewarm, a nested body's block gains a function and static. The final graph must recompute, contain both new declarations, equal both walkers, and drop the declarations after restoration. This explicitly exercises parent dependency recording after parallel child warmup. Single-core hosts retain the original scheduler's single-thread fallback.
++
++Static source checks also require the unchanged OFF traversal body and unchanged `lower` function and restore the entire original file by removing only the new blocks and undoing the original function rename.
++
++## Source-only validation and handoff
++
++Exact-main `rustfmt --edition 2024 --config-path toolchain/resident/rustfmt.toml --config skip_children=true` completed with exit 0. The matching exact-main `rustfmt --check` completed with exit 0. No child module was formatted. These are syntax/style checks, not macro expansion, typechecking or behavioral validation. The only production repair relative to v72 is the warmup routing helper and its call site. The original OFF traversal and original scheduler are unchanged. Scoped `git diff --check` completed successfully.
++
++The full v72 originals, full v73 candidates, document, incremental/full patches, actual v72 failure log, static-check script/results, formatting logs, SHA256 manifest and `RELEASE` are frozen under `<PRIVATE_EXPERIMENT_ROOT>/parallel-declared-v73`. The complete v72 freeze remains untouched under its own directory. The original main hash is `0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176`.
++
++No builds, native tests, runtime probes, locks, installs or commits were performed by this worker. The coordinator must compile the native trait/query expansion, run these fixtures and the full relevant suite, then measure identical OFF/ON workloads only after all native correctness gates pass. No timing should use the known-failing v72 binary.

@@ -1,0 +1,81 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+parallel-declared-query-provider-entry pid=1517411
+test tests::parallel_declared_query_local_trait_snapshot_shares_database ... FAILED <0.002s>
+test tests::parallel_declared_query_real_database_revisions_match_both_original_walkers ... FAILED <0.002s>
+test tests::parallel_declared_query_tracks_dependency_macros_and_reuses_unrelated_crate ... FAILED <0.002s>
+test tests::parallel_declared_query_parent_records_nested_reads_after_parallel_prewarm ... FAILED <0.008s>
+
+failures:
+
+---- tests::parallel_declared_query_local_trait_snapshot_shares_database stdout ----
+
+thread 'tests::parallel_declared_query_local_trait_snapshot_shares_database' (1518159) panicked at vendor/rust-analyzer/crates/hir-ty/src/next_solver/interner.rs:2477:33:
+Cannot change attached database. This is likely a bug.
+If this is not a bug, you can use `attach_db_allow_change()`.
+
+---- tests::parallel_declared_query_real_database_revisions_match_both_original_walkers stdout ----
+
+thread 'tests::parallel_declared_query_real_database_revisions_match_both_original_walkers' (1518161) panicked at vendor/rust-analyzer/crates/hir-ty/src/next_solver/interner.rs:2477:33:
+Cannot change attached database. This is likely a bug.
+If this is not a bug, you can use `attach_db_allow_change()`.
+
+---- tests::parallel_declared_query_tracks_dependency_macros_and_reuses_unrelated_crate stdout ----
+
+thread 'tests::parallel_declared_query_tracks_dependency_macros_and_reuses_unrelated_crate' (1518162) panicked at vendor/rust-analyzer/crates/hir-ty/src/next_solver/interner.rs:2477:33:
+Cannot change attached database. This is likely a bug.
+If this is not a bug, you can use `attach_db_allow_change()`.
+
+---- tests::parallel_declared_query_parent_records_nested_reads_after_parallel_prewarm stdout ----
+
+thread 'tests::parallel_declared_query_parent_records_nested_reads_after_parallel_prewarm' (1518160) panicked at vendor/rust-analyzer/crates/hir-ty/src/next_solver/interner.rs:2477:33:
+Cannot change attached database. This is likely a bug.
+If this is not a bug, you can use `attach_db_allow_change()`.
+
+failures:
+    tests::parallel_declared_query_local_trait_snapshot_shares_database
+    tests::parallel_declared_query_parent_records_nested_reads_after_parallel_prewarm
+    tests::parallel_declared_query_real_database_revisions_match_both_original_walkers
+    tests::parallel_declared_query_tracks_dependency_macros_and_reuses_unrelated_crate
+
+test result: FAILED. 365 passed; 4 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.75s
+
+error: test failed, to rerun pass `-p ra-jit --bin jr-engine`
+
+justrust: FAILED: 4 of 369 tests failed in 97.0s
+  time    startup 0.39s | compile 79.79s | tests 16.76s | after 0.04s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 428 fresh. Rebuilt because: ra-jit changed (ra-jit)
+          jr_engine (test)                  79.79s  cpu 272.2s   2683 MB
+  tests   365 passed, 4 failed, 0 ignored, 0 filtered out, 1 binary in 16.76s
+          slowest tests (369 timed, 32.7s summed; a suite cannot finish before its slowest test):
+             16.54s  remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times
+              3.58s  remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked
+              2.05s  deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound
+  cpu     281.9s total, avg 2.9/peak 6.1 of 16 cores; others used 10.9 cores
+  memory  peak 2795 MB build, 2683 MB largest rustc, 31.2 GB free; stalls cpu 17.14s mem 0.02s io 0.10s
+  output  3 warnings shown, 250 hidden; 434 progress and 365 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~ 59.9s  79.8s went to recompiling oversized crates: jr_engine (80k lines, 79.8s). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 33.1s  machine was busy: other processes used 11 of 16 cores on average and tasks stalled 17.1s waiting for CPU
+          ~ 16.8s  tests in jr_engine-93ff5023e9192f9b took 16.8s to run; the slowest test alone took 16.5s (remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times). Speed it up or split it, or filter to the tests you changed
+  more    `justrust log 20261031-062315740-1509614` full output, `justrust show 20261031-062315740-1509614` full profile

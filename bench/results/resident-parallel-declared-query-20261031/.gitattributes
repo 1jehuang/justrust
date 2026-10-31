@@ -1,0 +1,13 @@
+# Historical unified-diff context lines only, not executable source snapshots.
+frozen/change-main.rs.patch -whitespace
+frozen/failed-main.rs.patch -whitespace
+frozen/routing-repair-main.rs.patch -whitespace
+frozen/v72/main.patch.txt -whitespace
+frozen/v72/doc.patch.txt -whitespace
+frozen/v72/full.patch.txt -whitespace
+frozen/v73/incremental-main.patch.txt -whitespace
+frozen/v73/incremental-doc.patch.txt -whitespace
+frozen/v73/incremental.patch.txt -whitespace
+frozen/v73/full-main.patch.txt -whitespace
+frozen/v73/full-doc.patch.txt -whitespace
+frozen/v73/full.patch.txt -whitespace

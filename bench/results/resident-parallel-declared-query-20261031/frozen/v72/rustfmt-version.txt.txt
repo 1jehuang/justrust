@@ -1,0 +1,1 @@
+rustfmt 1.10.0-stable (58cf8f9c35 2026-10-13)

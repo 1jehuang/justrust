@@ -1,0 +1,132 @@
+--- a/main.rs
++++ b/main.rs
+@@ -4683,7 +4683,6 @@
+     });
+     hir_def::nameres::crate_def_map(db, krate);
+     let mut declared = module_declarations(db, krate).clone();
+-    let snapshot = db.declaration_snapshot();
+     while !declared.bodies.is_empty() || !declared.provided.is_empty() {
+         for under_provided in [false, true] {
+             let bodies = if under_provided {
+@@ -4691,15 +4690,53 @@
+             } else {
+                 std::mem::take(&mut declared.bodies)
+             };
+-            // Warm actual Body::of queries using the unmodified original scheduler.
+-            // Every fragment is then read on db, not snapshot: these mandatory reads
+-            // record the complete dependency edges of this tracked parent query.
+-            for body in lower(&snapshot, bodies) {
++            // Every fragment is read on the parent after warmup. Child snapshot
++            // reads alone never establish this tracked parent's dependencies.
++            for body in prewarm_declaration_bodies(db, bodies) {
+                 declared.extend(body_declarations(db, body, under_provided));
+             }
+         }
+     }
+     declared
++}
++
++/// Keep small waves on the already attached parent. The original lower's small
++/// branch attaches its argument, so a cloned database there would violate HIR's
++/// attached-database identity invariant even though its Salsa storage is shared.
++fn prewarm_declaration_bodies(
++    db: &dyn DeclarationDatabase,
++    bodies: Vec<DefWithBodyId>,
++) -> Vec<DefWithBodyId> {
++    // Matches the unchanged original lower's PER_THREAD threshold. Empty and
++    // single-worker waves must not clone or reattach the database on this thread.
++    let parallel =
++        bodies.len() > 16 && std::thread::available_parallelism().is_ok_and(|it| it.get() > 1);
++    if parallel {
++        #[cfg(test)]
++        DECLARATION_PREWARM_ROUTES.with(|routes| {
++            let (parent, parallel) = routes.get();
++            routes.set((parent, parallel + 1));
++        });
++        lower(&db.declaration_snapshot(), bodies)
++    } else {
++        #[cfg(test)]
++        DECLARATION_PREWARM_ROUTES.with(|routes| {
++            let (parent, parallel) = routes.get();
++            routes.set((parent + 1, parallel));
++        });
++        for &body in &bodies {
++            Body::of(db, body);
++        }
++        bodies
++    }
++}
++
++#[cfg(test)]
++thread_local! {
++    // Only real production routing decisions, no simulated scheduler or hits.
++    static DECLARATION_PREWARM_ROUTES: std::cell::Cell<(usize, usize)> = const {
++        std::cell::Cell::new((0, 0))
++    };
+ }
+ 
+ /// Declaration graph nodes, separate from the bodies' executable code. These queries
+@@ -12275,6 +12312,63 @@
+         });
+     }
+ 
++    #[test]
++    fn parallel_declared_query_production_routes_small_multi_and_transition_waves() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        let mut source = String::from("fn main() { fn only_nested() {} }\n");
++        for i in 0..48 {
++            source.push_str(&format!("fn plain_{i}() {{}}\n"));
++        }
++        let (mut db, file) = RootDatabase::with_single_file(&source);
++        let file = file.file_id(&db);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let bodies = module_declarations(&db, krate.into()).bodies.clone();
++            assert_eq!(bodies.len(), 49, "must exercise actual large wave");
++            let small = bodies[..1].to_vec();
++            DECLARATION_PREWARM_ROUTES.set((0, 0));
++            // This is the exact production helper, under the original database's
++            // HIR attachment. A cloned small-wave attachment would panic here.
++            assert!(prewarm_declaration_bodies(&db, small.clone()) == small);
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), (1, 0));
++            assert!(prewarm_declaration_bodies(&db, bodies.clone()) == bodies);
++            let multicore = std::thread::available_parallelism().is_ok_and(|it| it.get() > 1);
++            let expected = if multicore { (1, 1) } else { (2, 0) };
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), expected);
++            assert!(prewarm_declaration_bodies(&db, small.clone()) == small);
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), (expected.0 + 1, expected.1));
++        });
++        DECLARATION_PREWARM_ROUTES.set((0, 0));
++        assert_eq!(check_parallel_declared_query(&db, file, "large to single nested wave"), 1);
++        let routes = DECLARATION_PREWARM_ROUTES.get();
++        assert!(routes.0 > 0, "parent small/empty wave not routed");
++        if std::thread::available_parallelism().is_ok_and(|it| it.get() > 1) {
++            assert!(routes.1 > 0, "original parallel lower not routed");
++        }
++        let changed = source.replace(
++            "fn only_nested() {}",
++            "fn only_nested() { fn after_transition() {} static TRANSITION: u8 = 1; }",
++        );
++        assert_ne!(source, changed);
++        db.set_file_text_with_durability(file, &changed, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "transition nested edit"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = parallel_crate_declarations(&db, krate.into());
++            assert!(
++                graph.functions.iter().any(|&id| {
++                    hir::Function::from(id).name(&db).as_str() == "after_transition"
++                })
++            );
++            assert_eq!(graph.statics.len(), 1);
++        });
++        db.set_file_text_with_durability(file, &source, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "transition restored"), 1);
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());

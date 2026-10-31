@@ -1,0 +1,192 @@
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -4683,7 +4683,6 @@
+     });
+     hir_def::nameres::crate_def_map(db, krate);
+     let mut declared = module_declarations(db, krate).clone();
+-    let snapshot = db.declaration_snapshot();
+     while !declared.bodies.is_empty() || !declared.provided.is_empty() {
+         for under_provided in [false, true] {
+             let bodies = if under_provided {
+@@ -4691,10 +4690,9 @@
+             } else {
+                 std::mem::take(&mut declared.bodies)
+             };
+-            // Warm actual Body::of queries using the unmodified original scheduler.
+-            // Every fragment is then read on db, not snapshot: these mandatory reads
+-            // record the complete dependency edges of this tracked parent query.
+-            for body in lower(&snapshot, bodies) {
++            // Every fragment is read on the parent after warmup. Child snapshot
++            // reads alone never establish this tracked parent's dependencies.
++            for body in prewarm_declaration_bodies(db, bodies) {
+                 declared.extend(body_declarations(db, body, under_provided));
+             }
+         }
+@@ -4702,6 +4700,45 @@
+     declared
+ }
+ 
++/// Keep small waves on the already attached parent. The original lower's small
++/// branch attaches its argument, so a cloned database there would violate HIR's
++/// attached-database identity invariant even though its Salsa storage is shared.
++fn prewarm_declaration_bodies(
++    db: &dyn DeclarationDatabase,
++    bodies: Vec<DefWithBodyId>,
++) -> Vec<DefWithBodyId> {
++    // Matches the unchanged original lower's PER_THREAD threshold. Empty and
++    // single-worker waves must not clone or reattach the database on this thread.
++    let parallel =
++        bodies.len() > 16 && std::thread::available_parallelism().is_ok_and(|it| it.get() > 1);
++    if parallel {
++        #[cfg(test)]
++        DECLARATION_PREWARM_ROUTES.with(|routes| {
++            let (parent, parallel) = routes.get();
++            routes.set((parent, parallel + 1));
++        });
++        lower(&db.declaration_snapshot(), bodies)
++    } else {
++        #[cfg(test)]
++        DECLARATION_PREWARM_ROUTES.with(|routes| {
++            let (parent, parallel) = routes.get();
++            routes.set((parent + 1, parallel));
++        });
++        for &body in &bodies {
++            Body::of(db, body);
++        }
++        bodies
++    }
++}
++
++#[cfg(test)]
++thread_local! {
++    // Only real production routing decisions, no simulated scheduler or hits.
++    static DECLARATION_PREWARM_ROUTES: std::cell::Cell<(usize, usize)> = const {
++        std::cell::Cell::new((0, 0))
++    };
++}
++
+ /// Declaration graph nodes, separate from the bodies' executable code. These queries
+ /// retain all name-resolution, macro-expansion and body dependencies through Salsa.
+ /// In particular, a body is not assumed to preserve its nested items after an edit.
+@@ -12275,6 +12312,63 @@
+         });
+     }
+ 
++    #[test]
++    fn parallel_declared_query_production_routes_small_multi_and_transition_waves() {
++        use ide_db::base_db::salsa::Durability;
++        use test_fixture::WithFixture;
++        let mut source = String::from("fn main() { fn only_nested() {} }\n");
++        for i in 0..48 {
++            source.push_str(&format!("fn plain_{i}() {{}}\n"));
++        }
++        let (mut db, file) = RootDatabase::with_single_file(&source);
++        let file = file.file_id(&db);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let bodies = module_declarations(&db, krate.into()).bodies.clone();
++            assert_eq!(bodies.len(), 49, "must exercise actual large wave");
++            let small = bodies[..1].to_vec();
++            DECLARATION_PREWARM_ROUTES.set((0, 0));
++            // This is the exact production helper, under the original database's
++            // HIR attachment. A cloned small-wave attachment would panic here.
++            assert!(prewarm_declaration_bodies(&db, small.clone()) == small);
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), (1, 0));
++            assert!(prewarm_declaration_bodies(&db, bodies.clone()) == bodies);
++            let multicore = std::thread::available_parallelism().is_ok_and(|it| it.get() > 1);
++            let expected = if multicore { (1, 1) } else { (2, 0) };
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), expected);
++            assert!(prewarm_declaration_bodies(&db, small.clone()) == small);
++            assert_eq!(DECLARATION_PREWARM_ROUTES.get(), (expected.0 + 1, expected.1));
++        });
++        DECLARATION_PREWARM_ROUTES.set((0, 0));
++        assert_eq!(check_parallel_declared_query(&db, file, "large to single nested wave"), 1);
++        let routes = DECLARATION_PREWARM_ROUTES.get();
++        assert!(routes.0 > 0, "parent small/empty wave not routed");
++        if std::thread::available_parallelism().is_ok_and(|it| it.get() > 1) {
++            assert!(routes.1 > 0, "original parallel lower not routed");
++        }
++        let changed = source.replace(
++            "fn only_nested() {}",
++            "fn only_nested() { fn after_transition() {} static TRANSITION: u8 = 1; }",
++        );
++        assert_ne!(source, changed);
++        db.set_file_text_with_durability(file, &changed, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "transition nested edit"), 1);
++        hir::attach_db(&db, || {
++            let krate =
++                hir::Semantics::new(&db).file_to_module_defs(file).next().unwrap().krate(&db);
++            let graph = parallel_crate_declarations(&db, krate.into());
++            assert!(
++                graph.functions.iter().any(|&id| {
++                    hir::Function::from(id).name(&db).as_str() == "after_transition"
++                })
++            );
++            assert_eq!(graph.statics.len(), 1);
++        });
++        db.set_file_text_with_durability(file, &source, Durability::LOW);
++        assert_eq!(check_parallel_declared_query(&db, file, "transition restored"), 1);
++    }
++
+     // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+     // Their save/restore guards do not by themselves serialize overlapping sequences.
+     static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+--- a/docs/resident-parallel-declared-query.md
++++ b/docs/resident-parallel-declared-query.md
+@@ -1,6 +1,6 @@
+-# Parallel native declaration query candidate (v72)
++# Parallel native declaration query candidate (v73)
+ 
+-Status: source-only, default OFF. Native typechecking, fixtures, full-suite correctness, timing, restoration and promotion belong to the coordinator. No performance claim or passing native-test claim is made here.
++Status: v73 source-only, default OFF. The v72 native suite FAILED, so v72 must not be timed or promoted. Native typechecking, fixtures, full-suite correctness, timing, restoration and promotion belong to the coordinator. No performance claim or passing native-test claim is made here.
+ 
+ ## Distinct hypothesis
+ 
+@@ -8,6 +8,16 @@
+ 
+ `RA_JIT_PARALLEL_DECLARED_QUERY=1` enables the candidate. A process-local `OnceLock` captures the exact first-use value. Missing, empty, `0`, `true`, `01` and `1 ` remain OFF. The original `declared_in` implementation is retained byte-for-byte except for its name, `declared_in_original`, and the default path calls it.
+ 
++## Actual v72 failure and bounded v73 repair
++
++The coordinator ran v72: check and build exited 0, codegen passed 53 tests, but the resident suite passed 365 and failed 4 of 369. All four new database fixtures panicked at `hir-ty/src/next_solver/interner.rs:2477` with `Cannot change attached database`. The complete actual failure log is retained with the v73 freeze, while the entire v72 source freeze remains unchanged.
++
++The production cause was calling original `lower(snapshot, bodies)` for a small wave. Its single-worker branch calls `hir::attach_db` on the current thread. A snapshot shares Salsa storage but has a distinct database address, so replacing the already attached original database correctly violates the HIR identity invariant.
++
++V73 routes production warmup through `prewarm_declaration_bodies`. Empty, at-most-16-body or single-worker waves read actual `Body::of(db, body)` directly on the parent, without cloning or reattachment. Larger multicore waves call unchanged original `lower` with a safe typed clone, whose parallel workers attach their databases on fresh threads. The guard matches original `PER_THREAD = 16` and available parallelism. The original OFF traversal and original `lower` remain bytewise unchanged. No `attach_db_allow_change`, unsafe cast, weakened assertion or fake identity is used.
++
++All five v72 fixtures and their strict full-graph oracle remain unchanged. A sixth real-database fixture exercises the exact production helper while the original database is attached: small wave, 49-body wave, then small wave. TLS counts actual routes. It also exercises a 49-body-to-one-nested-body graph transition, mutates that nested body with a new function and static, and checks the unchanged full original/independent oracles plus restoration. The 96-body parent-dependency mutation fixture remains unchanged.
++
+ ## Actual API investigation
+ 
+ The installed dependency is Salsa 0.28.5. Its `salsa-macros/src/tracked_fn.rs`, around line 405, requires the first tracked-function parameter to be `&dyn Db`, with `Db` a Salsa database trait. A concrete `&RootDatabase` tracked provider would not satisfy that macro contract.
+@@ -20,7 +30,7 @@
+ 
+ `parallel_crate_declarations(&dyn DeclarationDatabase, base_db::Crate)` is a native `#[salsa::tracked(returns(ref))]` query returning the full existing `Declared` value. It reads crate name resolution and `module_declarations` on the parent database.
+ 
+-Each traversal wave processes ordinary bodies and then provided bodies in the original order. It calls the unchanged `lower(&snapshot, bodies)`, including that function's actual `Body::of` prewarm, threshold, scoped threads, interleaved scheduling, attached databases, probing state and cancellation behavior. It then reads `body_declarations(db, body, under_provided)` on the parent database for every returned body, in order. Those reads are mandatory even after child queries warmed bodies. No child read is presumed to become a parent dependency.
++Each traversal wave processes ordinary bodies and then provided bodies in the original order. It calls `prewarm_declaration_bodies`, reading small waves directly on the parent and routing parallel waves through the unchanged original `lower`, including its actual `Body::of` prewarm, threshold, scoped threads, interleaved scheduling, attached databases, probing state and cancellation behavior. It then reads `body_declarations(db, body, under_provided)` on the parent database for every returned body, in order. Those reads are mandatory even after child queries warmed bodies. No child read is presumed to become a parent dependency.
+ 
+ The merge uses the existing `Declared::extend` and preserves every field, ordering, nested items, provided-method distinction, cfg and macro expansion, statics, consts and traversal-state semantics. Signature and dependency changes are left to actual Salsa revalidation rather than classified by a handwritten cache key.
+ 
+@@ -28,7 +38,7 @@
+ 
+ ## Fixtures supplied, not executed by this worker
+ 
+-Five real-RootDatabase fixtures cover:
++The original five real-RootDatabase fixtures are unchanged and cover:
+ 
+ 1. Exact/default-OFF flag parsing without process environment mutation.
+ 2. Cold provider count 1, repeated count 0, full `Declared` equality against both the original parallel traversal and an independent direct scope/body walker. Revisions cover executable-only edits, nested and macro items, provided methods, consts, statics, closures, cfg, signatures and restoration.
+@@ -40,8 +50,8 @@
+ 
+ ## Source-only validation and handoff
+ 
+-Exact-main `rustfmt --edition 2024 --config-path toolchain/resident/rustfmt.toml --config skip_children=true` completed with exit 0. The matching exact-main `rustfmt --check` completed with exit 0. No child module was formatted. These are syntax/style checks, not macro expansion, typechecking or behavioral validation. The source delta is additive-only relative to the accepted original. Scoped `git diff --check` completed successfully.
++Exact-main `rustfmt --edition 2024 --config-path toolchain/resident/rustfmt.toml --config skip_children=true` completed with exit 0. The matching exact-main `rustfmt --check` completed with exit 0. No child module was formatted. These are syntax/style checks, not macro expansion, typechecking or behavioral validation. The only production repair relative to v72 is the warmup routing helper and its call site. The original OFF traversal and original scheduler are unchanged. Scoped `git diff --check` completed successfully.
+ 
+-The full original, full candidate, document, patch, static-check script/results, formatting logs, SHA256 manifest and `RELEASE` are frozen under `<PRIVATE_EXPERIMENT_ROOT>/parallel-declared-v72`. The original main hash is `0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176`.
++The full v72 originals, full v73 candidates, document, incremental/full patches, actual v72 failure log, static-check script/results, formatting logs, SHA256 manifest and `RELEASE` are frozen under `<PRIVATE_EXPERIMENT_ROOT>/parallel-declared-v73`. The complete v72 freeze remains untouched under its own directory. The original main hash is `0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176`.
+ 
+-No builds, native tests, runtime probes, locks, installs or commits were performed by this worker. The coordinator must compile the native trait/query expansion, run these fixtures and the full relevant suite, then measure identical OFF/ON workloads before deciding whether this hypothesis improves agent wait.
++No builds, native tests, runtime probes, locks, installs or commits were performed by this worker. The coordinator must compile the native trait/query expansion, run these fixtures and the full relevant suite, then measure identical OFF/ON workloads only after all native correctness gates pass. No timing should use the known-failing v72 binary.

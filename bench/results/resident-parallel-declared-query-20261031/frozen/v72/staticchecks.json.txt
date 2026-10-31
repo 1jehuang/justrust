@@ -1,0 +1,24 @@
+{
+  "scope": "source-only invariants, not native validation",
+  "checks": {
+    "accepted_original_sha256": true,
+    "live_main_equals_frozen_candidate": true,
+    "entire_original_restored_bytewise": true,
+    "off_algorithm_bytewise_unchanged": true,
+    "original_parallel_lower_bytewise_unchanged": true,
+    "native_db_extension_trait": true,
+    "safe_typed_clone": true,
+    "tracked_parent_dyn_local_trait": true,
+    "base_db_crate_key": true,
+    "actual_parallel_lower_then_parent_fragment": true,
+    "no_handwritten_unsafe": true,
+    "marker_once_provider_only": true,
+    "exact_flag_once_lock": true,
+    "default_off_routes_original": true,
+    "five_real_fixtures": true,
+    "parent_edge_mutation_fixture_present": true,
+    "independent_fullwalker_present": true,
+    "no_flattened_scheduler": true
+  },
+  "passed": 18
+}

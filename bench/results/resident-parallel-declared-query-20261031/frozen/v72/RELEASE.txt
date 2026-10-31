@@ -1,0 +1,56 @@
+v72 SOURCE-ONLY RELEASE / FREEZE
+2026-10-31
+ROOT=<PRIVATE_EXPERIMENT_ROOT>/parallel-declared-v72
+SOURCE UNCOMPILED. Five native fixtures UNEXECUTED. No native jobs run by worker.
+
+Owned checkout files only:
+- toolchain/resident/crates/ra-jit/src/main.rs
+- NEW docs/resident-parallel-declared-query.md
+
+Original main SHA256:
+0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176
+Candidate main SHA256:
+99f315df38d8e89a4e7f7d7692db761b3657ac450d72e552443cc412e7c0a856
+Candidate document SHA256:
+eb605f18a9011ad973c64bcc31ee390e4afc9e390e96b7122bb2e338b9010a60
+Main patch SHA256:
+1d75ba2bad79836b6062035f273c3f4a3ae471cf42eb915a7317d1170c4cd3c6
+
+Native architecture:
+- local #[salsa::db] DeclarationDatabase: HirDatabase
+- safe fn declaration_snapshot(&self) -> RootDatabase via self.clone()
+- native tracked returns(ref) final query on &dyn DeclarationDatabase + base_db::Crate
+- original lower(snapshot,bodies) per wave, followed by mandatory tracked body_declarations(parent db)
+- exact first-use RA_JIT_PARALLEL_DECLARED_QUERY=1, default OFF
+- original OFF traversal bytes and lower function bytes unchanged
+- fixed process-once ignored-error stderr marker inside actual provider only
+- no handwritten unsafe, global DB pointers, fake snapshot suppression, flattening or new dependencies
+
+API sources inspected:
+- vendored ide-db/src/lib.rs RootDatabase Clone
+- Salsa 0.28.5 src/storage.rs Storage and StorageHandle Clone
+- salsa-macros 0.28.5 src/db.rs trait/view registration
+- salsa-macros 0.28.5 src/tracked_fn.rs around line 405 requires &dyn Db
+
+Actual static results:
+- rustfmt exact main with edition=2024, resident config, skip_children=true: exit 0
+- rustfmt --check same exact main/config: exit 0
+- scoped git diff --check: exit 0
+- reverse main patch apply --check: exit 0
+- source-only staticchecks.py: 18 assertions passed
+  Includes complete original-file restoration from candidate by stripping only added blocks and rename.
+- An initial static helper assertion used ambiguous 'fn declared_in(' and selected the unrelated method.
+  Fixed helper to exact free-function signature. No production source repair was necessary.
+- git diff --no-index creating doc.patch returns 1 as expected for a new file, not validation failure.
+
+Fixtures supplied:
+- exact/default-off flag
+- actual provider TLS cold1/repeat0, full equality to original and independent scope/body walk
+- revisions including nested/provided/cfg/macro/const/static/signatures/restoration
+- dependency macro edit and unrelated-crate green reuse
+- safe typed clone shared native memo
+- explicit 96-body original-parallel-threshold nested block mutation/restoration, new function+static
+
+All static checks are syntax/source-shape evidence only. No passing native compilation or behavior
+claim and no speed claim. Root owns compiler/full-suite gates, timing, restoration and promotion.
+STOP EDITS after this RELEASE. No builds/tests/probes/locks/install/commits performed by worker.

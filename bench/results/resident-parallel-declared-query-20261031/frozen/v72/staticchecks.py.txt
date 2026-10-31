@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Source-only invariants. No compiler, native fixture, probe or build invocation."""
+import hashlib
+import json
+from pathlib import Path
+
+root = Path(__file__).resolve().parent
+repo = Path('<PRIVATE_CHECKOUT>')
+original = (root / 'main.original.rs').read_text()
+candidate = (root / 'main.candidate.rs').read_text()
+checks = {}
+
+def check(name, condition):
+    checks[name] = bool(condition)
+    assert condition, name
+
+check('accepted_original_sha256', hashlib.sha256(original.encode()).hexdigest() ==
+      '0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176')
+check('live_main_equals_frozen_candidate', candidate ==
+      (repo / 'toolchain/resident/crates/ra-jit/src/main.rs').read_text())
+
+# Remove only the three explicitly added sections, then undo the one rename.
+restored = candidate
+begin = restored.index('fn parallel_declared_query_enabled()')
+end = restored.index('fn declared_in_original(', begin)
+restored = restored[:begin] + restored[end:]
+restored = restored.replace('fn declared_in_original(', 'fn declared_in(', 1)
+begin = restored.index('/// A local database extension exposes')
+end = restored.index('/// Declaration graph nodes, separate', begin)
+restored = restored[:begin] + restored[end:]
+begin = restored.index('    #[test]\n    fn parallel_declared_query_flag_is_exact_and_default_off()')
+end = restored.index('    // These tests own process-global CLEAN entries', begin)
+restored = restored[:begin] + restored[end:]
+check('entire_original_restored_bytewise', restored == original)
+
+begin = original.index('fn declared_in(db: &RootDatabase,')
+end = original.index('/// The functions of a crate', begin)
+off_original = original[begin:end]
+begin = candidate.index('fn declared_in_original(')
+end = candidate.index('/// The functions of a crate', begin)
+check('off_algorithm_bytewise_unchanged', candidate[begin:end].replace(
+    'fn declared_in_original(', 'fn declared_in(', 1) == off_original)
+
+begin = original.index('fn lower(db:')
+end = original.index('\nstruct Build {', begin)
+original_lower = original[begin:end]
+begin = candidate.index('fn lower(db:')
+end = candidate.index('\nstruct Build {', begin)
+check('original_parallel_lower_bytewise_unchanged', candidate[begin:end] == original_lower)
+
+begin = candidate.index('/// A local database extension exposes')
+end = candidate.index('/// Declaration graph nodes, separate', begin)
+provider = candidate[begin:end]
+check('native_db_extension_trait', '#[salsa::db]\ntrait DeclarationDatabase: HirDatabase' in provider)
+check('safe_typed_clone', 'fn declaration_snapshot(&self) -> RootDatabase {\n        self.clone()\n    }' in provider)
+check('tracked_parent_dyn_local_trait', '#[salsa::tracked(returns(ref))]' in provider and
+      'db: &dyn DeclarationDatabase' in provider)
+check('base_db_crate_key', 'krate: ide_db::base_db::Crate' in provider)
+check('actual_parallel_lower_then_parent_fragment',
+      'for body in lower(&snapshot, bodies) {\n                declared.extend(body_declarations(db, body, under_provided));' in provider)
+check('no_handwritten_unsafe', 'unsafe' not in provider)
+check('marker_once_provider_only', provider.count('parallel-declared-query-provider-entry') == 1 and
+      'FIRST_PROVIDER.call_once' in provider and 'std::io::stderr().lock()' in provider)
+check('exact_flag_once_lock', 'static ENABLED: std::sync::OnceLock<bool>' in candidate and
+      'value.is_some_and(|it| it == "1")' in candidate and
+      'RA_JIT_PARALLEL_DECLARED_QUERY' in candidate)
+check('default_off_routes_original', 'if parallel_declared_query_enabled() {\n        parallel_crate_declarations(db, krate.into()).clone()\n    } else {\n        declared_in_original(db, krate)\n    }' in candidate)
+check('five_real_fixtures', candidate.count('    #[test]\n    fn parallel_declared_query_') == 5)
+check('parent_edge_mutation_fixture_present', 'for i in 0..96' in candidate and
+      'changed_deep_item' in candidate and 'nested block restored' in candidate)
+check('independent_fullwalker_present', 'fn parallel_declared_query_full_walk' in candidate)
+check('no_flattened_scheduler', 'RA_JIT_LISTING_SCHEDULER' not in candidate)
+print(json.dumps({'scope': 'source-only invariants, not native validation',
+                  'checks': checks, 'passed': len(checks)}, indent=2))

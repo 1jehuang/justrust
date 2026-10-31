@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Static file invariants only. Does not execute native code or compiler."""
+import hashlib
+import json
+from pathlib import Path
+root = Path(__file__).resolve().parent
+v72 = root.parent / 'parallel-declared-v72'
+original = (root / 'main.original.rs').read_text()
+candidate = (root / 'main.candidate.rs').read_text()
+accepted = (v72 / 'main.original.rs').read_text()
+checks = {}
+def check(name, condition):
+    checks[name] = bool(condition)
+    assert condition, name
+
+def section(text, begin, end):
+    at = text.index(begin)
+    return text[at:text.index(end, at)]
+
+check('original_v72_exact', original == (v72 / 'main.candidate.rs').read_text())
+check('v72_candidate_hash_preserved', hashlib.sha256(original.encode()).hexdigest() == '99f315df38d8e89a4e7f7d7692db761b3657ac450d72e552443cc412e7c0a856')
+check('live_candidate_exact', candidate == Path('<PRIVATE_CHECKOUT>/toolchain/resident/crates/ra-jit/src/main.rs').read_text())
+check('original_off_unchanged', section(candidate, 'fn declared_in_original(', '/// The functions of a crate') == section(original, 'fn declared_in_original(', '/// The functions of a crate'))
+check('accepted_off_unchanged', section(candidate, 'fn declared_in_original(', '/// The functions of a crate').replace('fn declared_in_original(', 'fn declared_in(', 1) == section(accepted, 'fn declared_in(db: &RootDatabase,', '/// The functions of a crate'))
+check('original_lower_bytewise_unchanged', section(candidate, 'fn lower(db:', '\nstruct Build {') == section(accepted, 'fn lower(db:', '\nstruct Build {'))
+check('five_strict_fixtures_and_oracles_bytewise_unchanged', section(candidate, '    #[test]\n    fn parallel_declared_query_flag', '    #[test]\n    fn parallel_declared_query_production_routes') == section(original, '    #[test]\n    fn parallel_declared_query_flag', '    // These tests own process-global CLEAN'))
+helper = section(candidate, 'fn prewarm_declaration_bodies(', '/// Declaration graph nodes, separate')
+check('threshold_matches_original', 'bodies.len() > 16' in helper and 'it.get() > 1' in helper and 'const PER_THREAD: usize = 16;' in accepted)
+check('parent_small_wave_reads_actual_body', 'for &body in &bodies {\n            Body::of(db, body);\n        }' in helper)
+check('parallel_wave_uses_original_lower', 'lower(&db.declaration_snapshot(), bodies)' in helper)
+check('no_attachment_or_unsafe_in_helper', 'attach_db(' not in helper and 'attach_db_allow_change' not in helper and 'unsafe' not in helper)
+provider = section(candidate, 'fn parallel_crate_declarations(', '/// Keep small waves')
+check('production_routes_through_exact_helper', 'for body in prewarm_declaration_bodies(db, bodies)' in provider)
+check('mandatory_parent_fragments_preserved', 'declared.extend(body_declarations(db, body, under_provided));' in provider)
+check('no_unconditional_snapshot', 'let snapshot' not in provider)
+check('six_strict_tests', candidate.count('    #[test]\n    fn parallel_declared_query_') == 6)
+check('small_multi_transition_route_assertions', 'assert_eq!(bodies.len(), 49' in candidate and 'DECLARATION_PREWARM_ROUTES.get(), (1, 0)' in candidate and 'transition nested edit' in candidate and 'transition restored' in candidate)
+check('actual_v72_failure_log_preserved', (root / 'v72-full-native-failure.log').read_bytes() == (root.parent / 'candidate-unit-v72/full-native.log').read_bytes())
+print(json.dumps({'scope': 'v73 source-only invariants, not typechecking or native tests', 'passed': len(checks), 'checks': checks}, indent=2))

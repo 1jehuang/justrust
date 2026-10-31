@@ -1,0 +1,44 @@
+v73 BOUNDED SOURCE-ONLY REPAIR / FREEZE
+2026-10-31
+ROOT=<PRIVATE_EXPERIMENT_ROOT>/parallel-declared-v73
+V73 UNCOMPILED. Six native fixtures UNEXECUTED by worker. NO NATIVE JOBS.
+
+Actual v72 root outcome, not a passing candidate:
+check/build exit0, codegen53 PASS, resident365 PASS / 4 FAIL of369.
+All four database fixtures panic at interner.rs:2477 Cannot change attached database.
+Complete original failure log copied bytewise as v72-full-native-failure.log.
+Entire v72 source freeze remains unchanged, SHA256SUMS reverified all PASS.
+Do not run timing against known-failing v72.
+
+Original v72 main SHA256:
+99f315df38d8e89a4e7f7d7692db761b3657ac450d72e552443cc412e7c0a856
+Candidate v73 main SHA256:
+29975bafcfb518bda532a44e559a4e809e64577131d41c103e2aa31251506bda
+Candidate document SHA256:
+59629a48ad41ebbdc61579457a4f5dea2a61f721af0c570c5fb14f28ec139c02
+
+Bounded production repair:
+- Provider delegates each wave to prewarm_declaration_bodies on parent db.
+- Small/empty/single-worker waves call actual Body::of(parent db,body), no snapshot or reattachment.
+- Large multicore waves call original lower with safe typed snapshot; workers attach on fresh threads.
+- Guard matches original PER_THREAD16 and available_parallelism>1, original lower remains bytewise untouched.
+- Every body still has mandatory parent body_declarations reads in original order.
+- Existing five v72 strict fixtures AND full original/independent oracle are bytewise unchanged.
+- Sixth actual DB fixture exercises exact production helper small49small under parent attachment,
+  actual routing TLS, full-query large-to-one nested wave, nested new function+static, restoration.
+- No attach_db_allow_change, unsafe, DB identity tweak, assertion weakening or new dependency.
+
+Static actual results:
+- exact main rustfmt edition2024 resident config skip_children=true: exit0
+- exact main rustfmt --check same config: exit0
+- scoped git diff --check: exit0
+- incremental patch reverse git apply --check: exit0
+- full accepted-baseline patch reverse git apply --check: exit0
+- staticchecks.py:17 PASS, including unchanged five fixtures and original OFF/lower bytes
+- v72 SHA256SUMS reverified all PASS
+
+Files contain full v72 originals, v73 candidates, incremental/full patches, static checks,
+actual original v72 failure log, formatting logs, SHA256SUMS and this RELEASE.
+Source-only evidence is NOT native correctness validation. Root owns actual compiler expansion,
+all fixtures/full suite, timing, restoration and promotion. No passing native v73 or speed claim.
+Worker performed no builds/tests/probes/locks/install/commits. STOP EDITS after RELEASE.

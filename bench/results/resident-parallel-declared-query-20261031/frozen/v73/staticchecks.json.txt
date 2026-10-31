@@ -1,0 +1,23 @@
+{
+  "scope": "v73 source-only invariants, not typechecking or native tests",
+  "passed": 17,
+  "checks": {
+    "original_v72_exact": true,
+    "v72_candidate_hash_preserved": true,
+    "live_candidate_exact": true,
+    "original_off_unchanged": true,
+    "accepted_off_unchanged": true,
+    "original_lower_bytewise_unchanged": true,
+    "five_strict_fixtures_and_oracles_bytewise_unchanged": true,
+    "threshold_matches_original": true,
+    "parent_small_wave_reads_actual_body": true,
+    "parallel_wave_uses_original_lower": true,
+    "no_attachment_or_unsafe_in_helper": true,
+    "production_routes_through_exact_helper": true,
+    "mandatory_parent_fragments_preserved": true,
+    "no_unconditional_snapshot": true,
+    "six_strict_tests": true,
+    "small_multi_transition_route_assertions": true,
+    "actual_v72_failure_log_preserved": true
+  }
+}

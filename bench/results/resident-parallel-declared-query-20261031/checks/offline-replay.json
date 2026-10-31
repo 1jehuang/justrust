@@ -1,0 +1,1 @@
+{"causal_regression_claim": false, "decision": "rejected", "fixtures": 6, "marker": "once-per-process actual provider entry, not cache hit or latency proof", "native": [53, 370], "native_jobs_executed": 0, "native_source3757": 3757, "noise": "unknown", "source63": 63, "speed_claim": false, "strict_rows": 28, "toolchain4020": 4020}
