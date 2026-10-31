@@ -1,0 +1,408 @@
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 413, in <module>
+    main()
+    ~~~~^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 410, in main
+    print(json.dumps(validate(args.root), indent=2))
+                     ~~~~~~~~^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+test_733_root_log_not_reduced_to_summary (__main__.Replay.test_733_root_log_not_reduced_to_summary) ... ERROR
+test_accepted_patch_changed (__main__.Replay.test_accepted_patch_changed) ... ERROR
+test_coherently_nonempty_found_map (__main__.Replay.test_coherently_nonempty_found_map) ... ERROR
+test_coherently_wrong_positive_inventory (__main__.Replay.test_coherently_wrong_positive_inventory) ... ERROR
+test_cold_four_tests_missing (__main__.Replay.test_cold_four_tests_missing) ... ERROR
+test_fixture_repair_not_substituted (__main__.Replay.test_fixture_repair_not_substituted) ... ok
+test_full_codegen_raw_journal_missing_name (__main__.Replay.test_full_codegen_raw_journal_missing_name) ... ERROR
+test_full_round_marker_removed (__main__.Replay.test_full_round_marker_removed) ... ERROR
+test_inventory_control_not_exact (__main__.Replay.test_inventory_control_not_exact) ... ok
+test_inventory_enabled_control_removed (__main__.Replay.test_inventory_enabled_control_removed) ... ERROR
+test_no_zero_noise_upgrade (__main__.Replay.test_no_zero_noise_upgrade) ... ERROR
+test_off_unexpected_inventory (__main__.Replay.test_off_unexpected_inventory) ... ERROR
+test_positive_no_processes (__main__.Replay.test_positive_no_processes) ... ERROR
+test_probe_tool_coherently_changed (__main__.Replay.test_probe_tool_coherently_changed) ... ERROR
+test_relocated_empty_home_no_checkout (__main__.Replay.test_relocated_empty_home_no_checkout) ... FAIL
+test_runtime_error_marker_missing_resigned_suite (__main__.Replay.test_runtime_error_marker_missing_resigned_suite) ... ERROR
+test_runtime_missing_executed_marker_resigned_suite (__main__.Replay.test_runtime_missing_executed_marker_resigned_suite) ... ERROR
+test_runtime_recovery_failure_resigned_suite (__main__.Replay.test_runtime_recovery_failure_resigned_suite) ... ERROR
+test_runtime_row_dropped_resigned_suite (__main__.Replay.test_runtime_row_dropped_resigned_suite) ... ERROR
+test_runtime_wrong_source_hash_resigned_suite (__main__.Replay.test_runtime_wrong_source_hash_resigned_suite) ... ERROR
+test_source_after_line_missing (__main__.Replay.test_source_after_line_missing) ... ERROR
+test_std_startup_control_removed (__main__.Replay.test_std_startup_control_removed) ... ERROR
+test_tc_coherently_changed (__main__.Replay.test_tc_coherently_changed) ... ERROR
+test_unknown_environment_rejected (__main__.Replay.test_unknown_environment_rejected) ... ok
+test_v35_compiler_failure_not_erased (__main__.Replay.test_v35_compiler_failure_not_erased) ... ERROR
+
+======================================================================
+ERROR: test_733_root_log_not_reduced_to_summary (__main__.Replay.test_733_root_log_not_reduced_to_summary)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 208, in test_733_root_log_not_reduced_to_summary
+    self.reject(lambda r: (r / 'outer/32891831af.output').write_text('OK\n'), '733 Python root raw receipt')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-n8f6z79q/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_accepted_patch_changed (__main__.Replay.test_accepted_patch_changed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 174, in test_accepted_patch_changed
+    self.reject(change, 'gitshow full-byte replay')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-a266tgzz/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_coherently_nonempty_found_map (__main__.Replay.test_coherently_nonempty_found_map)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 111, in test_coherently_nonempty_found_map
+    self.reject(change, 'native inventory counts/full round')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-yo6dcfz_/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_coherently_wrong_positive_inventory (__main__.Replay.test_coherently_wrong_positive_inventory)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 104, in test_coherently_wrong_positive_inventory
+    self.reject(change, 'native inventory counts/full round')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-6qqoqe90/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_cold_four_tests_missing (__main__.Replay.test_cold_four_tests_missing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 129, in test_cold_four_tests_missing
+    self.reject(change, 'four actual tests')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-tqiw6cs0/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_full_codegen_raw_journal_missing_name (__main__.Replay.test_full_codegen_raw_journal_missing_name)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 156, in test_full_codegen_raw_journal_missing_name
+    self.reject(change, 'full passing names')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-gjjfgyb_/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_full_round_marker_removed (__main__.Replay.test_full_round_marker_removed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 117, in test_full_round_marker_removed
+    self.reject(change, 'native inventory counts/full round')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-ffoujtoy/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_inventory_enabled_control_removed (__main__.Replay.test_inventory_enabled_control_removed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 91, in test_inventory_enabled_control_removed
+    self.reject(lambda r: self.mutate_json(r, 'probe/state.json', lambda s: s['rows'][1]['startup_controls'].pop('RA_JIT_DEMAND_INVENTORY')), 'explicit separate startup controls')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-uj1z457w/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_no_zero_noise_upgrade (__main__.Replay.test_no_zero_noise_upgrade)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 205, in test_no_zero_noise_upgrade
+    self.reject(lambda r: self.mutate_json(r, 'probe/state.json', lambda s: s['rows'][0]['noise'].update(contamination='quiet')), 'noise must remain unknown')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-j9dtix46/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_off_unexpected_inventory (__main__.Replay.test_off_unexpected_inventory)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 123, in test_off_unexpected_inventory
+    self.reject(change, 'off inventory absence')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-j6xxlrxb/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_positive_no_processes (__main__.Replay.test_positive_no_processes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 59, in test_positive_no_processes
+    result = v.validate(HERE)
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_probe_tool_coherently_changed (__main__.Replay.test_probe_tool_coherently_changed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 134, in test_probe_tool_coherently_changed
+    self.reject(change, 'native tool identity unchanged')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-t0ckiy7u/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_runtime_error_marker_missing_resigned_suite (__main__.Replay.test_runtime_error_marker_missing_resigned_suite)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 191, in test_runtime_error_marker_missing_resigned_suite
+    self.reject(change, 'actual type error')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-ng6f1b9x/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_runtime_missing_executed_marker_resigned_suite (__main__.Replay.test_runtime_missing_executed_marker_resigned_suite)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 180, in test_runtime_missing_executed_marker_resigned_suite
+    self.reject(change, 'executed edit marker')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-_bzwsw_t/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_runtime_recovery_failure_resigned_suite (__main__.Replay.test_runtime_recovery_failure_resigned_suite)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 196, in test_runtime_recovery_failure_resigned_suite
+    self.reject(change, 'runtime success/recovery')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/test_validate.py", line 55, in reject
+    v.validate(root)
+    ~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 380, in validate
+    source_audit(root)
+    ~~~~~~~~~~~~^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-demand-inventory-20261031/validate.py", line 154, in source_audit
+    require(sha(safe(history, name).read_bytes()) == digest, 'v34 historical frozen manifest')
+                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 777, in read_bytes
+    with self.open(mode='rb', buffering=0) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/pathlib/__init__.py", line 771, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/home/jeremy/.jcode/scratch/inventory-offline-0y2dq2fy/bundle/frozen/v34-history/demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs'
+
+======================================================================
+ERROR: test_runtime_row_dropped_resigned_suite (__main__.Replay.test_runtime_row_dropped_resigned_suite)
+------
+... (output truncated)
+
+Exit code: 1

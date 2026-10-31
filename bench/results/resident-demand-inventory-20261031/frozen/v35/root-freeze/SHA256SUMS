@@ -1,0 +1,3 @@
+ac77a20dd4cac30c76bef86bb38dc77e0a2e7524168a559ac1cd1d60bbca958d  toolchain/resident/crates/hir-ty-codegen/mod.rs
+3ef8143a8f6294335168f9a987d3266ce347f06209e1e3c3f209b72d9c6447fd  toolchain/resident/crates/ra-jit/src/main.rs
+b4d62becee27679862d71a548f7375abf2cc2077e1a765c4e668ca10740849b7  docs/resident-demand-library-artifact.md

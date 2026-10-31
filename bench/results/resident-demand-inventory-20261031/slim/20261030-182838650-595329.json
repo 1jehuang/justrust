@@ -1,0 +1,159 @@
+{
+  "id": "20261030-182838650-595329",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "start": 1793410118.6672032,
+  "wall": 19.433619022369385,
+  "exit": 0,
+  "tests": {
+    "binaries": [
+      {
+        "name": "hir_ty_codegen-d85c581ce11daf8e",
+        "start": 19.40026092529297,
+        "wall": 0.023558855056762695,
+        "passed": 48,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 48,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.02,
+    "slowest": [
+      {
+        "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.019,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.013,
+        "passed": true
+      },
+      {
+        "name": "sve::tests::stubs_are_what_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.004,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::types_made_of_each_other_in_many_ways_are_put_together_once",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "f16_f128::tests::quad_bounds",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::a_type_in_a_set_twice_is_one",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::a_type_made_of_itself_through_a_parameter",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_stored_under_the_same_name_from_every_cargo_home",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::an_entry_is_read_back_as_it_was_written",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "debuginfo::set::tests::a_set_is_what_it_was_made_of",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 0.039999999999999994,
+    "timed": 48
+  },
+  "route": "JUSTRUST_REMOTE=off",
+  "scope": "Derived receipt, full original summary retained in journals. No paths or source."
+}

@@ -1,0 +1,24 @@
+{
+  "status": "passed",
+  "scope": "stage1 native input metadata before finish only",
+  "native_calls_during_replay": 0,
+  "compile_errors_v35": 3,
+  "codegen_tests_v36": 48,
+  "resident_tests_v36": 360,
+  "cold_calls": 2,
+  "tests_per_cold_call": 4,
+  "inventory_counts": [6998, 0, 48841, 0, 0, 2, 26533],
+  "runtime_rows_per_session": 22,
+  "runtime_medians_seconds": {
+    "rsb21": {"reference": 0.10595070899580605, "engine": 0.08207886498712469},
+    "rsa27": {"reference": 0.10836988099617884, "engine": 0.0798251059895847}
+  },
+  "reference_normalized_percent": -4.916878153637749,
+  "noise": "unknown",
+  "speed_claim": false,
+  "zero_semantic_overhead_claim": false,
+  "unavailable": [
+    "patch inventory", "unwind/backend finalization data", "exact final closure",
+    "stable cache keys", "persistent artifact reuse"
+  ]
+}

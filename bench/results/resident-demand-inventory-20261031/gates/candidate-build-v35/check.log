@@ -1,0 +1,89 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+error[E0308]: mismatched types
+     --> crates/hir-ty-codegen/mod.rs:19493:36
+      |
+19493 |                 ObjectBuilder::new(target().unwrap(), "inventory-fixture", default_libcall_names())
+      |                 ------------------ ^^^^^^^^^^^^^^^^^ expected `Arc<dyn TargetIsa>`, found `&Arc<dyn TargetIsa>`
+      |                 |
+      |                 arguments to this function are incorrect
+      |
+      = note: expected struct `Arc<(dyn TargetIsa + 'static)>`
+              found reference `&Arc<dyn TargetIsa>`
+note: associated function defined here
+     --> vendor/cranelift-object/src/backend.rs:50:12
+      |
+   42 | impl ObjectBuilder {
+...
+   50 |     pub fn new<V: Into<Vec<u8>>>(
+      |            ^^^
+
+error[E0369]: binary operation `==` cannot be applied to type `cranelift_module::ModuleRelocTarget`
+     --> crates/hir-ty-codegen/mod.rs:19526:17
+      |
+19526 |                 assert_eq!(captured[1].1.data_decls[data_ref], pointers.data_decls[data_ref]);
+      |                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      |                 |
+      |                 cranelift_module::ModuleRelocTarget
+      |                 cranelift_module::ModuleRelocTarget
+      |
+note: `cranelift_module::ModuleRelocTarget` does not implement `std::cmp::PartialEq`
+     --> /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cranelift-module-0.136.2/src/module.rs:431:1
+      |
+  431 | pub enum ModuleRelocTarget {
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^ `cranelift_module::ModuleRelocTarget` is defined in another crate
+
+error[E0369]: binary operation `==` cannot be applied to type `cranelift_module::ModuleRelocTarget`
+     --> crates/hir-ty-codegen/mod.rs:19527:17
+      |
+19527 | /                 assert_eq!(
+19528 | |                     captured[1].1.function_decls[func_ref],
+19529 | |                     pointers.function_decls[func_ref]
+19530 | |                 );
+      | |                 ^
+      | |                 |
+      | |_________________cranelift_module::ModuleRelocTarget
+      |                   cranelift_module::ModuleRelocTarget
+      |
+note: `cranelift_module::ModuleRelocTarget` does not implement `std::cmp::PartialEq`
+     --> /home/jeremy/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cranelift-module-0.136.2/src/module.rs:431:1
+      |
+  431 | pub enum ModuleRelocTarget {
+      | ^^^^^^^^^^^^^^^^^^^^^^^^^^ `cranelift_module::ModuleRelocTarget` is defined in another crate
+
+Some errors have detailed explanations: E0308, E0369.
+For more information about an error, try `rustc --explain E0308`.
+error: could not compile `hir-ty-codegen` (lib test) due to 3 previous errors; 160 warnings emitted
+
+
+justrust: FAILED to compile (3 errors) in 4.9s
+  time    startup 0.39s | compile 4.45s | after 0.03s
+  units   2 compiled (2 local, 0 deps, 0 build scripts), 428 fresh. Rebuilt because: edited crates (ra-jit); edited crates/hir-ty-codegen/mod.rs (hir-ty-codegen)
+          hir_ty_codegen                     2.37s  cpu   4.4s    850 MB
+          hir_ty_codegen (test)              2.08s  cpu   4.1s    855 MB
+  cpu     9.9s total, avg 2.0/peak 3.1 of 16 cores; others used 3.1 cores
+  memory  peak 1767 MB build, 855 MB largest rustc, 48.8 GB free; stalls cpu 0.03s mem 0.00s io 0.02s
+  output  3 warnings shown, 248 hidden; 437 progress and 0 passing-test lines hidden
+  waste   none detected
+  more    `justrust log 20261030-182508083-573757` full output, `justrust show 20261030-182508083-573757` full profile

@@ -1,0 +1,4 @@
+f25af99f976a585766adeb75ee8d21a1983113cfdf3ae46d9c05536975d1ad76  demand-library-artifact-v34/before/toolchain/resident/crates/ra-jit/src/main.rs
+f25af99f976a585766adeb75ee8d21a1983113cfdf3ae46d9c05536975d1ad76  demand-library-artifact-v34/after/toolchain/resident/crates/ra-jit/src/main.rs
+82dc634f2aa9e0904bc60ede5434e83ee01ed1e487102f3512cfc77f80fe2384  demand-library-artifact-v34/after/docs/resident-demand-library-artifact.md
+53983c49da35860d3e2d99f03ac2d7fdc0da7349af97a85dafdaa0e3949b4396  demand-library-artifact-v34/change.patch

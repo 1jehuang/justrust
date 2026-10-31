@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "operation": "frozen evidence retention only",
+  "allowed_destination": "bench/results/resident-demand-inventory-20261031/**",
+  "source_root": "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030",
+  "accepted_source_commit": "a59351f652c9b266b7f29734f2218cbb19a9aaad",
+  "root_ownership": {
+    "attribution": "Coordinator assignment and accepted commit document, not a new worker observation",
+    "reported_sequence": [
+      "Root stopped the source worker and took ownership of a bounded three-path freeze",
+      "Root preserved worker originals and separate v35 root-freeze bytes",
+      "Actual v35 native check produced three fixture compiler errors",
+      "Root made the distinct v36 fixture-only Arc/relocation namespace-index repair",
+      "Root ran native check, build, all 48 codegen tests and all 360 resident tests"
+    ],
+    "worker_ready_claim_upgraded": false,
+    "source_worker_stop_reexecuted_or_independently_observed": false,
+    "root_freeze_byte_equality_independently_checked_offline": true
+  },
+  "retention_inputs": [
+    "Frozen v34 historical barrier report and snapshots",
+    "Frozen v35 before/after/patch/SHA256SUMS/FROZEN_READY and separate root-freeze",
+    "Frozen v36 codegen-mod.rs and main.rs",
+    "git show accepted document, sources and patch",
+    "build-test-candidate-v35.sh and build-test-candidate-v36.sh",
+    "candidate-build-v35, candidate-build-v36 and candidate-unit-v36 top-level receipts",
+    "All five entire justrust raw output.jsonl/meta.json/summary.json journals",
+    "probe-demand-inventory-v36.py and demand-inventory-v36-native raw state/output/worker logs",
+    "rsb21 and rsa27 top-level raw source/output/metadata/records/summary/suite files",
+    "Previously frozen source63, Python helpers, licenses and attribution",
+    "Original 32891831af 733-test root output and 306723vuyn outer runtime output"
+  ],
+  "excluded": ["executables", "targets", "private caches", "telemetry homes", "ambient environment"],
+  "live_toolchain_source_reads": 0,
+  "native_workloads_builds_tests_run_by_evidence_worker": 0,
+  "root_document_edits_by_evidence_worker": 0,
+  "startup_control_provenance": {
+    "cold_probe": "Explicit original per-row startup_controls and original launch script record both RA_JIT_DEMAND_STD=1 and RA_JIT_DEMAND_INVENTORY=0/1",
+    "historical_safe_environment_maps": "Retained verbatim, missing keys are not filled from ambient state or guessed",
+    "runtime_pair": "All actual sessions retained. Safe maps omit demand flags. No extra contemporaneous launch-control receipt was available at collection."
+  },
+  "claim_scope": "Native input metadata before finish only, no final closure, stable cache identity, persistent artifact use or speed claim"
+}

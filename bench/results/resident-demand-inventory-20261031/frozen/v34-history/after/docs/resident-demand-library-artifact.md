@@ -1,0 +1,93 @@
+# Demand library artifact v34: frozen, not implemented
+
+This is the licensed Blaze-derived resident implementation, not the clean-room compiler.
+Baseline: `9f3bab61eb2d37f75f232525e3f4714579aad791`.
+
+## Decision
+
+No experimental cache or startup flag is added. Within the assigned ownership
+(`ra-jit/src/main.rs` and this new document), a separately reusable demand-built
+library object cannot presently be implemented with a demonstrated exact
+instance/static closure and unchanged refusal behavior. This is a concrete
+codegen interface barrier, not a rejection of the performance hypothesis.
+`main.rs` remains byte-for-byte unchanged. Default behavior and
+`RA_JIT_DEMAND_STD=1` remain unchanged.
+
+The coordinator supplied separate-session measurements: demand cold 16.227 s
+versus 23.995 s, manifest 7.722 s versus 5.925 s, recovery 7.092 s versus
+5.332 s. These motivate reuse but are not measurements performed by this worker.
+No speedup is claimed here.
+
+## Inspected boundaries
+
+* `std_unit_at` builds the eager library using all selected library crates and
+  their library roots, an independent `Args`, and a refusal-export sidecar. Its
+  existing key is an eager-library key, not an exact demand-selection key.
+  Reusing it for a demand subset would alias semantically different artifacts.
+* `build` collects runtime/exported roots and `#[used]` statics, partitions roots
+  into entries and on-demand functions, then passes them together to
+  `CodegenUnit::compile_or_hold`. Demand mode adds the same `library_unit`
+  selection to the program's dependency set. The resulting object combines
+  program roots, library roots, instantiated generic callees, and statics.
+* `hir-ty-codegen/mod.rs::CodegenUnit` exposes object/patch bytes, debug sidecars,
+  compiled root IDs and symbols, skipped roots and errors, and an **instance
+  count**. It does not expose the identity/substitutions of each instance, its
+  dependencies, ownership of emitted static/data sections, or a separately
+  emitted library closure. That source is outside the assigned ownership.
+* `Resolver::of` associates a prebuilt object with every crate in `library_unit`.
+  `Resolver::prebuilt` and `rustc_built` are crate-level decisions. A symbol set
+  alone is not an exact instance/static ownership contract. Declaring a partial
+  demand artifact to be this eager prebuilt library can suppress root discovery
+  and alter refusal behavior.
+* `manifest::key` identifies the complete program/configuration and prebuilt
+  object. Manifest lookup additionally checks compilation-discovered environment
+  and include reads. These read checks are private to `manifest.rs`, outside
+  ownership. Its key alone is not a reusable-library dependency certificate.
+
+## Why local shortcuts are not acceptable
+
+Splitting the final ELF by sections or filtering its symbol table would lose
+semantic instance ownership, local/anonymous data dependencies, and refusal
+provenance. Root IDs or exported names do not identify instantiated generics.
+Building a second library from just observed compiled roots would omit those
+instances or instantiate different roots and can pull in different code.
+Marking entire crates as prebuilt can omit previously unreachable ABI exports
+and their diagnostics. Persisting a whole-program object would be a second
+program manifest cache, not library reuse across regeneration. None of these
+provides the requested safety properties. No workload symbol list, injected
+pre-seeding, narrower export policy, or unchecked cache has been introduced.
+
+## Required next implementation scope
+
+A bounded native implementation needs ownership of the codegen boundary as
+well as its caller. Before enabling artifact reuse, it must:
+
+1. Capture the resolver's exact reachable root, instance (including generic
+   substitutions), static and anonymous-data closure before emission. Partition
+   only when cross-boundary references have stable ABI-visible definitions.
+2. Emit a library object and a program object from that same validated closure,
+   retaining runtime exports, kept statics, debug sidecars and rejection
+   provenance. Missing cache coverage must compile normally or refuse with the
+   existing diagnostic, never silently drop a root.
+3. Persist a versioned deterministic identity and dependency/read certificate:
+   codegen/toolchain ABI, target/configuration, source content and transitive
+   dependencies, selected closure, compilation-discovered includes and env
+   reads. Validate the certificate before consuming bytes. Do not repurpose the
+   eager-library key.
+4. Resolve cached coverage per exact root/instance/static, not by treating all
+   standard-library crates as supplied. Preserve the old demand and eager paths
+   as controls under a separate exact opt-in startup flag.
+5. Add pure identity/closure assertions and native fixtures for added/removed
+   reachable generics, ABI exports, refused callees, mutable/TLS/kept statics,
+   changed includes/env/cfg, missing/corrupt cache entries and recovery. Root
+   owns actual native acceptance and matched performance gates.
+
+## Source-only handoff
+
+No builds, tests, native workloads, installation, commits or pushes were run.
+No new helper assertions are added because no behavior was implemented.
+The full before/after source bytes, documentation after bytes, patch and hash
+manifest are in `demand-library-artifact-v34/` at the repository root. The
+before state of this new document is absence. `FROZEN_READY` records the exact
+handoff scope. This is a frozen barrier report, **not** a native-acceptance-ready
+artifact implementation.

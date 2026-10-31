@@ -1,0 +1,11 @@
+FROZEN_READY: barrier-report-only
+Baseline 9f3bab61eb2d37f75f232525e3f4714579aad791
+main.rs unchanged SHA256 f25af99f976a585766adeb75ee8d21a1983113cfdf3ae46d9c05536975d1ad76
+docs/resident-demand-library-artifact.md SHA256 82dc634f2aa9e0904bc60ede5434e83ee01ed1e487102f3512cfc77f80fe2384
+change.patch SHA256 53983c49da35860d3e2d99f03ac2d7fdc0da7349af97a85dafdaa0e3949b4396
+New document before state: absent.
+Full before/after source bytes and after document bytes preserved.
+Checks: cmp before/after main.rs passed. git diff --check passed.
+No builds/tests/native workloads/commits. No behavior change, experimental flag or unsafe cache added.
+Next scope required: hir-ty-codegen/mod.rs and native closure/emission internals, beyond assigned ownership.
+Root owns native acceptance/performance gates. This is not an implemented artifact candidate.

@@ -1,0 +1,65 @@
+[stderr] .................................................usage: compare [-h] --source SOURCE --output OUTPUT --blaze BLAZE
+[stderr]                --justrust JUSTRUST --rustc RUSTC --cargo CARGO
+[stderr]                [--native-cargo NATIVE_CARGO] [--wild WILD] [--samples SAMPLES]
+[stderr]                [--command {test,build}] [--binary BINARY]
+[stderr]                [--test-filter TEST_FILTER] [--edit-test EDIT_TEST]
+[stderr]                [--edit-file EDIT_FILE] [--edit-anchor EDIT_ANCHOR]
+[stderr]                [--blaze-llvm] [--owned-experiments] [--native-macro-cache]
+[stderr]                [--declarative-macro-cache] [--demand-query-cache]
+[stderr]                [--cgu-inline-traversal] [--native-backend-frontier]
+[stderr]                [--blaze-seed-cache BLAZE_SEED_CACHE] [--timeout TIMEOUT]
+[stderr] compare: error: --native-macro-cache requires --wild so hotpatch is not inert
+[stderr] .................usage: profile [--incremental {on,off}]
+[stderr] profile: error: expected suite run arguments
+[stderr] ....usage: profile --debug-info {0,1,2} [--lto {off}]
+[stderr] profile: error: expected suite run arguments after --debug-info
+[stderr] ..................frontend mapping: report output already exists
+[stderr] frontend mapping: report and graph output paths must differ
+FIXTURE /home/jeremy/.jcode/scratch/headless-launch-_fvpkcck
+SOURCE_SHA256 1e6eb817a2bc0fb20fa9a6a7a58e478defe4324aa2580c3cd0a4ae13e48809e4
+OBSERVED {"supervisor": 437495, "child": 437497, "mode": "plain", "probe": {"pid": 437497, "sid": 437495, "pgid": 437497, "tty": true, "stdin": "/dev/null", "jobserver": true}, "stop_signal": 21, "cleanup": {"killed": [437497], "reaped": [437497], "remaining": []}, "stderr": ""}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 437544, "child": 437545, "mode": "command", "exit": 87, "cleanup": {"killed": [437549], "reaped": [437547, 437549], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 05:58:50 PM PDT 2026\nHAS_CONTROLLING_TTY\nEXIT 87\nFri Oct 30 05:58:50 PM PDT 2026\n'
+PRIVATE_TMUX_EARLY_KILL {"pid": 437566, "sid": 437566, "pgid": 437566, "start": "15016535", "tty_error": 6, "detached_alive": true}
+PRIVATE_TMUX_CLEANUP {"pid": 437566, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": true, "remaining_alive": false, "fdclosed": true}
+OBSERVED {"supervisor": 437611, "child": 437612, "mode": "timeout", "probe": {"pid": 437613, "sid": 437611, "pgid": 437612, "tty": true, "stdin": "/dev/null", "jobserver": true}, "payload_stopped": "T (stopped)", "cleanup": {"killed": [437612, 437613], "reaped": [437612, 437613], "remaining": []}, "stderr": ""}
+PRIVATE_TMUX_NATURAL_EXIT {"pid": 437621, "sid": 437621, "pgid": 437621, "start": "15016577", "tty_error": 6}
+PRIVATE_TMUX_CLEANUP {"pid": 437621, "pidfd_opened": true, "identity_verified": true, "pidfd_send_signal": false, "remaining_alive": false, "fdclosed": true}
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 437712, "child": 437713, "mode": "command", "exit": 23, "cleanup": {"killed": [437717], "reaped": [437715, 437717], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 05:58:51 PM PDT 2026\nEXIT 23\nFri Oct 30 05:58:51 PM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 437765, "child": 437771, "mode": "command", "exit": 143, "cleanup": {"killed": [437775], "reaped": [437773, 437775], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 05:58:52 PM PDT 2026\nTerminated                 /usr/bin/python3 /home/jeremy/.jcode/scratch/headless-launch-_fvpkcck/public-status-143/home/payload.py\nEXIT 143\nFri Oct 30 05:58:52 PM PDT 2026\n'
+CAPTURED_TMUX_COMMAND bash ~/bench-fixture.sh >~/bench-fixture.log 2>&1
+OBSERVED {"supervisor": 437831, "child": 437832, "mode": "command", "exit": 0, "cleanup": {"killed": [437836], "reaped": [437834, 437836], "remaining": []}, "stderr": ""}
+GENERATED_LOG 'Fri Oct 30 05:58:52 PM PDT 2026\nEXIT 0\nFri Oct 30 05:58:52 PM PDT 2026\n'
+OBSERVED {"supervisor": 437840, "child": 437841, "mode": "setsid", "probe": {"pid": 437842, "sid": 437842, "pgid": 437842, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 23, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": ""}
+CHILD_STDERR 'setsid: child 437848 did not exit normally: Success\n'
+OBSERVED {"supervisor": 437845, "child": 437847, "mode": "setsid", "probe": {"pid": 437848, "sid": 437848, "pgid": 437848, "tty": false, "stdin": "/dev/null", "jobserver": true}, "exit": 15, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "setsid: child 437848 did not exit normally: Success\n"}
+CHILD_STDERR 'Traceback (most recent call last):\n  File "<string>", line 1, in <module>\n    import os; os.open(\'/dev/tty\', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: \'/dev/tty\'\n'
+OBSERVED {"supervisor": 437864, "child": 437869, "mode": "command", "exit": 1, "cleanup": {"killed": [], "reaped": [], "remaining": []}, "stderr": "Traceback (most recent call last):\n  File \"<string>\", line 1, in <module>\n    import os; os.open('/dev/tty', os.O_RDONLY)\n               ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^\nOSError: [Errno 6] No such device or address: '/dev/tty'\n"}
+[stderr] ................................................................................................................usage: python3 -m unittest [-h] [--repo REPO] [--patch PATCH |
+[stderr]                            --source-commit SOURCE_COMMIT]
+[stderr]                            [--allow-file ALLOW_FILE]
+[stderr]                            [--baseline-result BASELINE_RESULT] --out OUT
+[stderr]                            [-n N] [--warmup WARMUP] [--mode {hosted,local}]
+[stderr]                            [--toolchain TOOLCHAIN]
+[stderr] python3 -m unittest: error: refusing to overwrite an existing result
+[stderr] ......frontend mapping: report output already exists
+[stderr] frontend mapping: report and graph output paths must differ
+table
+saved /home/jeremy/.jcode/scratch/tmpz_vdjn5p/baseline.json
+round 1 remote fresh-check measured=True: failed exit=1 wall=0.000s
+[stderr] ..................................................................................................................................................................................................................................................................................................................................................................................................................................................bench: desktop-noop-test (1/1)
+[stderr] .bench: desktop-noop-test (1/1)
+[stderr] bench: desktop-noop-test (1/1)
+[stderr] ......................................bench: desktop-noop-test (1/1)
+[stderr] ......................................................
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 733 tests in 18.485s
+[stderr] 
+[stderr] OK
+
+--- Command finished with exit code: 0 ---

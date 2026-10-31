@@ -1,0 +1,9 @@
+b4d62becee27679862d71a548f7375abf2cc2077e1a765c4e668ca10740849b7  after/docs/resident-demand-library-artifact.md
+ac77a20dd4cac30c76bef86bb38dc77e0a2e7524168a559ac1cd1d60bbca958d  after/toolchain/resident/crates/hir-ty-codegen/mod.rs
+729747547775e84c422307feb84fa4c191c7a39aa91906fae0b1cf19afaf8751  after/toolchain/resident/crates/hir-ty-codegen/units.rs
+3ef8143a8f6294335168f9a987d3266ce347f06209e1e3c3f209b72d9c6447fd  after/toolchain/resident/crates/ra-jit/src/main.rs
+82dc634f2aa9e0904bc60ede5434e83ee01ed1e487102f3512cfc77f80fe2384  before/docs/resident-demand-library-artifact.md
+581a1df6694cc2a77a08197c12cf6a8e046d03067efa9408a2268e2e7e09fb5e  before/toolchain/resident/crates/hir-ty-codegen/mod.rs
+729747547775e84c422307feb84fa4c191c7a39aa91906fae0b1cf19afaf8751  before/toolchain/resident/crates/hir-ty-codegen/units.rs
+f25af99f976a585766adeb75ee8d21a1983113cfdf3ae46d9c05536975d1ad76  before/toolchain/resident/crates/ra-jit/src/main.rs
+6e2a539836c326e052cae4f0b43f4548bc555a3d449e09b397ff47cef357aa72  change.patch

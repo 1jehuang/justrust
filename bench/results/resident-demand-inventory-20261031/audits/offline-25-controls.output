@@ -1,0 +1,73 @@
+{
+  "status": "passed",
+  "scope": "stage1 native input metadata before finish only",
+  "native_calls_during_replay": 0,
+  "compile_errors_v35": 3,
+  "codegen_tests_v36": 48,
+  "resident_tests_v36": 360,
+  "cold_calls": 2,
+  "tests_per_cold_call": 4,
+  "inventory_counts": [
+    6998,
+    0,
+    48841,
+    0,
+    0,
+    2,
+    26533
+  ],
+  "runtime_rows_per_session": 22,
+  "runtime_medians_seconds": {
+    "rsb21": {
+      "reference": 0.10595070899580605,
+      "engine": 0.08207886498712469
+    },
+    "rsa27": {
+      "reference": 0.10836988099617884,
+      "engine": 0.0798251059895847
+    }
+  },
+  "reference_normalized_percent": -4.916878153637749,
+  "noise": "unknown",
+  "speed_claim": false,
+  "zero_semantic_overhead_claim": false,
+  "unavailable": [
+    "patch inventory",
+    "unwind/backend finalization data",
+    "exact final closure",
+    "stable cache keys",
+    "persistent artifact reuse"
+  ]
+}
+test_733_root_log_not_reduced_to_summary (__main__.Replay.test_733_root_log_not_reduced_to_summary) ... ok
+test_accepted_patch_changed (__main__.Replay.test_accepted_patch_changed) ... ok
+test_coherently_nonempty_found_map (__main__.Replay.test_coherently_nonempty_found_map) ... ok
+test_coherently_wrong_positive_inventory (__main__.Replay.test_coherently_wrong_positive_inventory) ... ok
+test_cold_four_tests_missing (__main__.Replay.test_cold_four_tests_missing) ... ok
+test_fixture_repair_not_substituted (__main__.Replay.test_fixture_repair_not_substituted) ... ok
+test_full_codegen_raw_journal_missing_name (__main__.Replay.test_full_codegen_raw_journal_missing_name) ... ok
+test_full_round_marker_removed (__main__.Replay.test_full_round_marker_removed) ... ok
+test_inventory_control_not_exact (__main__.Replay.test_inventory_control_not_exact) ... ok
+test_inventory_enabled_control_removed (__main__.Replay.test_inventory_enabled_control_removed) ... ok
+test_no_zero_noise_upgrade (__main__.Replay.test_no_zero_noise_upgrade) ... ok
+test_off_unexpected_inventory (__main__.Replay.test_off_unexpected_inventory) ... ok
+test_positive_no_processes (__main__.Replay.test_positive_no_processes) ... ok
+test_probe_tool_coherently_changed (__main__.Replay.test_probe_tool_coherently_changed) ... ok
+test_relocated_empty_home_no_checkout (__main__.Replay.test_relocated_empty_home_no_checkout) ... ok
+test_runtime_error_marker_missing_resigned_suite (__main__.Replay.test_runtime_error_marker_missing_resigned_suite) ... ok
+test_runtime_missing_executed_marker_resigned_suite (__main__.Replay.test_runtime_missing_executed_marker_resigned_suite) ... ok
+test_runtime_recovery_failure_resigned_suite (__main__.Replay.test_runtime_recovery_failure_resigned_suite) ... ok
+test_runtime_row_dropped_resigned_suite (__main__.Replay.test_runtime_row_dropped_resigned_suite) ... ok
+test_runtime_wrong_source_hash_resigned_suite (__main__.Replay.test_runtime_wrong_source_hash_resigned_suite) ... ok
+test_source_after_line_missing (__main__.Replay.test_source_after_line_missing) ... ok
+test_std_startup_control_removed (__main__.Replay.test_std_startup_control_removed) ... ok
+test_tc_coherently_changed (__main__.Replay.test_tc_coherently_changed) ... ok
+test_unknown_environment_rejected (__main__.Replay.test_unknown_environment_rejected) ... ok
+test_v35_compiler_failure_not_erased (__main__.Replay.test_v35_compiler_failure_not_erased) ... ok
+
+----------------------------------------------------------------------
+Ran 25 tests in 6.139s
+
+OK
+
+--- Command finished with exit code: 0 ---

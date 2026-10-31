@@ -1,0 +1,40 @@
+FROZEN_READY v35
+Status: source-only native-inventory prerequisite candidate, ready for root-owned compilation/tests and overhead gates.
+Baseline HEAD: 9f3bab61eb2d37f75f232525e3f4714579aad791
+Snapshot root: /home/jeremy/.jcode/scratch/blaze-native-engine-20261030/demand-library-artifact-v35
+
+Frozen candidate SHA256:
+ac77a20dd4cac30c76bef86bb38dc77e0a2e7524168a559ac1cd1d60bbca958d  toolchain/resident/crates/hir-ty-codegen/mod.rs
+3ef8143a8f6294335168f9a987d3266ce347f06209e1e3c3f209b72d9c6447fd  toolchain/resident/crates/ra-jit/src/main.rs
+b4d62becee27679862d71a548f7375abf2cc2077e1a765c4e668ca10740849b7  docs/resident-demand-library-artifact.md
+6e2a539836c326e052cae4f0b43f4548bc555a3d449e09b397ff47cef357aa72  change.patch
+a20fa643b5bb1896f5e62f8c597e9796aa16d29d3d7f3a254cbf7832e0489140  SHA256SUMS
+
+Edited only: main.rs, hir-ty-codegen/mod.rs, docs/resident-demand-library-artifact.md.
+units.rs unchanged, original/candidate bytes included to make this explicit.
+patch.rs, unwind.rs, instance.rs and manifest.rs NOT edited.
+Original v34 snapshots/report untouched and their existing SHA256SUMS all verified.
+Full original/candidate bytes under before/ and after/, normalized a/path to b/path unified patch under change.patch.
+The document before state is the v34 report, not absence.
+
+Exact startup opt-in: RA_JIT_DEMAND_INVENTORY=1. No other value enables capture.
+RA_JIT_DEMAND_STD=1 behavior and default selection remain unchanged.
+Actual typed native ObjectCodegen state is copied after the successful final round, immediately before finish, with successful native definition records.
+Inventory is in memory only. No persistence, cache identity, split artifact, narrowed exports or symbol-table-derived identity.
+Explicit limits: database-local instance/type/module IDs, not portable keys. Backend unwind/debug/object-format support metadata not fully recorded. Successful retained-base patches return no inventory and explicitly say so under opt-in. No merged patch/base closure claim. No persistent closure/read certificate claim.
+
+Source-only checks PASS:
+- rustfmt --edition 2024 --config skip_children=true --check on both edited Rust files
+- git diff --check on both edited Rust files
+- SHA256SUMS verification for all original/candidate fullbytes and change.patch
+- git apply --numstat parses the saved patch
+- v34 existing SHA256SUMS verification
+
+Added but NOT RUN:
+- demand_inventory_requires_the_exact_separate_opt_in
+- demand_inventory_data_capture_does_not_change_native_output_or_errors
+- demand_inventory_preserves_root_instance_static_and_refusal_identities
+
+No builds, tests, native jobs, installations, commits or pushes run by worker.
+Native type-check/correctness/output equality and default/off/on timing overhead remain unverified, owned by root. Inventory alone is not a speed improvement.
+No source edits after this frozen handoff unless coordinator explicitly reopens the candidate.

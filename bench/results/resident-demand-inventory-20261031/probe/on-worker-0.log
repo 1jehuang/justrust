@@ -1,0 +1,23 @@
+symbols: 0 in 349.4µs
+load workspace: 3.4s
+resolve: 69 crates in 3.2s
+frozen, of 68 crates: def maps of 0, impls of 0, lang items of 0 from the store, 204 written in 321.6ms
+proc macros: 111 expanded in 0.20s, 0 from the store in 0.00s, 0.01s to key them (111 derives in 0.20s); 111 kept
+manifest: none used, the store has none of this build (2.9ms)
+cold: demand inventory: 6998 compiled roots, 0 skipped roots, 48841 declared instances, 0 found instances, 0 rejected instances, 2 kept statics, 26533 data definitions (full round)
+compiled 6998 of 6998 fns (+48841 instances) in 7.1s (+7.6µs emit)
+proc macros: 113 expanded in 0.22s, 111 from the store in 0.05s, 0.01s to key them (113 derives in 0.22s); 113 kept
+store: 0 functions found, 56248 compiled and added
+entries: 0 found, 55751 added, 0 as stored, 0 not as stored, 0 instances and 62 requests without a stable name
+not kept: [("call of no instance", 62)]
+not found: [("no entry", 48815)]
+check: 31 files in 1.3s
+stats: 56220 of 55814 functions compiled, 0 reused
+phases: compile 139.9ms, resolve 622.7ms, define 108.2ms, fallback 58.5µs, object 207.2ms, 1 rounds
+link: 120.6ms (exit status: 0; not spliced: no executable to add to)
+manifest: kept, 2 files, 48348160 bytes (71.2ms)
+watching 49 files
+tier: off (RA_JIT_TIER=off, blaze built without `--features llvm`, or not macOS on AArch64)
+request: sync at_us=1793410267406977
+change: 0 files
+request: sync at_us=1793410267421673
