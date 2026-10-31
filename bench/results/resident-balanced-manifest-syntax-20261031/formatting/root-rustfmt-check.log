@@ -1,0 +1,63 @@
+Diff in <repo>/toolchain/resident/crates/blaze-manifest/src/manifest.rs:470:
+         for _ in 0..workers {
+             let next = &next;
+             let read = &read;
+[31m-            let handle = std::thread::Builder::new()
+(B[m[31m-                .name("manifest-syntax".into())
+(B[m[31m-                .spawn_scoped(scope, move || {
+(B[m[32m+            let handle = std::thread::Builder::new().name("manifest-syntax".into()).spawn_scoped(
+(B[m[32m+                scope,
+(B[m[32m+                move || {
+(B[m                     let mut local = Vec::with_capacity(len.div_ceil(workers));
+                     loop {
+                         let index = next.fetch_add(1, Ordering::Relaxed);
+Diff in <repo>/toolchain/resident/crates/blaze-manifest/src/manifest.rs:482:
+                         local.push((index, read(index)));
+                     }
+                     local
+[31m-                });
+(B[m[32m+                },
+(B[m[32m+            );
+(B[m             match handle {
+                 Ok(handle) => handles.push(handle),
+                 Err(_) => {
+Diff in <repo>/toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs:325:
+         }
+     }
+     for workers in [0, 1, 5] {
+[31m-        assert!(schedule_manifest_syntax::<Vec<u8>>(paths.len(), workers, |_| {
+(B[m[31m-            panic!("unsupported worker count must not read any file")
+(B[m[31m-        })
+(B[m[31m-        .is_none());
+(B[m[32m+        assert!(
+(B[m[32m+            schedule_manifest_syntax::<Vec<u8>>(paths.len(), workers, |_| {
+(B[m[32m+                panic!("unsupported worker count must not read any file")
+(B[m[32m+            })
+(B[m[32m+            .is_none()
+(B[m[32m+        );
+(B[m     }
+ }
+ 
+Diff in <repo>/toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs:389:
+     let paths = fixture.paths();
+     fixture.write("p1/Cargo.toml", "[package\nfirst broken");
+     fixture.write("p8/Cargo.toml", [0xff]);
+[31m-    let values = schedule_manifest_syntax(paths.len(), 4, |index| read_manifest_syntax(&paths[index]))
+(B[m[31m-        .expect("normal parse errors must not cause sequential fallback");
+(B[m[32m+    let values =
+(B[m[32m+        schedule_manifest_syntax(paths.len(), 4, |index| read_manifest_syntax(&paths[index]))
+(B[m[32m+            .expect("normal parse errors must not cause sequential fallback");
+(B[m     assert_eq!(values.len(), paths.len());
+     for (index, value) in values.into_iter().enumerate() {
+         assert_eq!(value.is_err(), index == 1 || index == 8);
+Diff in <repo>/toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs:397:
+         if let Err(error) = value {
+[31m-            assert!(crate::diagnostic::report(&error, &fixture.0)
+(B[m[31m-                .contains(&format!("p{index}/Cargo.toml")));
+(B[m[32m+            assert!(
+(B[m[32m+                crate::diagnostic::report(&error, &fixture.0)
+(B[m[32m+                    .contains(&format!("p{index}/Cargo.toml"))
+(B[m[32m+            );
+(B[m         }
+     }
+ }

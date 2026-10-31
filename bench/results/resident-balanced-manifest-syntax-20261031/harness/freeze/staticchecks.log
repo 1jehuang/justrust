@@ -1,0 +1,5 @@
+PASS unchanged legacy helper AST outside enumerated policy/dispatch/runner extensions
+PASS unchanged full v74/v76 test source hash
+PASS new schema reuses one RetouchPolicy runner/replay
+PASS prospective absolute native output <home>/pm81a is fresh and <=30 bytes
+SOURCE ONLY. Native correctness, activation, and timing remain coordinator acceptance.

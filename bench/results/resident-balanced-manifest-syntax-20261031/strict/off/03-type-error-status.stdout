@@ -1,0 +1,5 @@
+plain cargo: not through blaze (`blaze enable` turns it on)
+daemon: pid 3842195, version 0.20261027.0-a15a0ff8-7800058-18e3ad7c526569fd, exits after 1800s idle, workers hold at most 31897 MB
+  worker: pid 3851821, <source63>/, log <home>/p82-off/engine/engine-home/resident-v1/runtime/workers/043136c683c16c29/log
+    <source63>: the source has an error
+store: 142 MB, at most 32768 MB (`blaze cache gc` collects it), <home>/p82-off/engine/engine-home/resident-v1/store/resident-v1-dbb5556ca86a1c8188f80de11c8706d0c0ba707f78872ed2074cb8b0a539357f

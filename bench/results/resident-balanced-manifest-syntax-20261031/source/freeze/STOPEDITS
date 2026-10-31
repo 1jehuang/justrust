@@ -1,0 +1,6 @@
+STOPEDITS 2026-10-31T17:26:00Z
+Five owned v82 paths frozen before ROOT native execution.
+Accepted originals preserved. V81 freeze unchanged.
+Read-only Python source checks PASS, native fixtures authored NOT RUN.
+No native builds/tests/probes/jobs/formatting/install/lock/commit by worker.
+Exact v81 flag/marker factor contract, separate v82 source/binary identity.

@@ -1,0 +1,4 @@
+ra-jit: parallel-manifest-parse-v81 batch
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 0.03s
+     Running unittests src/lib.rs (<abba>/s1/engine/target/debug/deps/justrust-4fda419ee79c8127)

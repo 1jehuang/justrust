@@ -1,0 +1,24 @@
+{
+  "accepted_revision": "c8829bae02fd234f46012ce6996baa14c09b3a1c",
+  "files": {
+    "docs/resident-balanced-manifest-syntax.md": "6ee994dbfc9d6cfb0406aae263db6519f39444793ad78fc2b2c4275c15f4305b",
+    "toolchain/resident/crates/blaze-manifest/src/manifest.rs": "e0fff2fcf7336840ae8ffc7cd62a67eb6c4ccc9f95ddbf83ad4e58d2ffc0828b",
+    "toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs": "a86b751e1a4a88cab0ec7be64ee03b88d32a01c34f569835510af00ad2388313",
+    "toolchain/resident/crates/blaze-metadata/src/lib.rs": "33e6df711bd467944755035628bc2a95cd7c21ecf4fb502510dd0242b3953030",
+    "toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs": "f51dc5cc93c8ac5d5e067169eac4afcbf022ce945340958f3cfea9fa991d898e"
+  },
+  "full_original_test_oracle_bytewise_unchanged": true,
+  "manifest_fixture_count": 11,
+  "metadata_bytewise_v81_and_live_harness_accepted": true,
+  "metadata_fixture_count": 7,
+  "native_send_compilation": "NOT RUN, ROOT GATE",
+  "native_tests": "NOT RUN, ROOT GATE",
+  "off_ordered_fetch_tail_bytewise_unchanged": true,
+  "runtime_performance": "NOT RUN, NO SPEED CLAIM",
+  "semantic_body_bytewise_unchanged": true,
+  "sequential_syntax_prefix_bytewise_unchanged": true,
+  "status": "static-source-checks-only-pass",
+  "unrelated_existing_file_regions_bytewise_unchanged": true,
+  "v81_frozen_evidence_receipts_unchanged": true,
+  "v82_dynamic_index_local_results_ordered_gather": true
+}

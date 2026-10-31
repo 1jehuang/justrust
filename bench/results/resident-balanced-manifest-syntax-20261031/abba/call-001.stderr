@@ -1,0 +1,3 @@
+   Compiling justrust v0.1.0-alpha.1 (<source63>)
+    Finished `test` profile [blaze] target(s) in 53.05s
+     Running unittests src/lib.rs (<abba>/r/reference/target/debug/deps/justrust-3fe53d3fdbce7619)

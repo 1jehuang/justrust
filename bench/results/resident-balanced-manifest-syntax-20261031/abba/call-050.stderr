@@ -1,0 +1,3 @@
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 0.04s
+     Running unittests src/lib.rs (<abba>/s3/engine/target/debug/deps/justrust-f14f6e5a449ef821)

@@ -1,0 +1,6 @@
+PYTHONPATH=bench python3 -m unittest bench/test_resident_manifest_retouch.py bench/test_resident_suite.py bench/test_resident_engine_compare.py bench/test_suite.py bench/test_suite_failures.py
+PYTHONPATH=bench python3 -m unittest bench/test_resident_parallel_manifest.py
+PYTHONPATH=bench python3 -m unittest bench/test_resident_parallel_manifest.py bench/test_resident_manifest_retouch.py bench/test_resident_suite.py bench/test_resident_engine_compare.py bench/test_suite.py bench/test_suite_failures.py
+python3 <native-root>/parallel-manifest-harness-v81/staticchecks.py
+git diff --check -- bench/resident_suite.py docs/resident-suite.md
+All Python tests only, engine/compiler and /proc proof commands mocked.

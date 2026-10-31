@@ -1,0 +1,51 @@
+RELEASE balanced-manifest-syntax-v82
+BASE accepted c8829bae02fd234f46012ce6996baa14c09b3a1c, stable
+Source-only proposal, not shipped or natively accepted.
+
+OWNED FIVE PATHS:
+toolchain/resident/crates/blaze-manifest/src/manifest.rs
+toolchain/resident/crates/blaze-metadata/src/lib.rs
+toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs
+toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs
+docs/resident-balanced-manifest-syntax.md
+
+Accepted original native files preserved before proposal edits. Three new paths
+originally absent. V81 frozen source used as proposal input only, never modified.
+V81 was rejected below its floor with unknown noise, not promoted by this work.
+
+V82 HYPOTHESIS: replace contiguous equal-count syntax chunks with atomic dynamic
+per-manifest claims. Each thread owns indexed local results, original-order
+gather precedes sequential source/config/Context semantics. 2-4 scoped workers,
+fresh bytes, no per-edge logs, no result mutex, no new dependencies or caches.
+Every started handle explicitly joined before spawn/panic fallback. Ordinary
+parse errors remain ordered values. No panic-abort recovery promised.
+
+Exact original v81 public factor contract retained: process-cached opt-in only
+RA_JIT_PARALLEL_MANIFEST_PARSE=1, all other values OFF. Fixed actual-batch raw
+stderr line plus newline at most once/process, no dynamic counts:
+ra-jit: parallel-manifest-parse-v81 batch
+Only emitted after a real bounded batch completes, no eligibility-only marker.
+ROOT must use a distinct v82 executable hash/source identity and prove activation
+with its native fixtures/runtime. No phase/cache/performance inference from marker.
+
+SOURCE CHECKS PASS (checks.json, sourcechecks.py):
+- Accepted normalization body, sequential syntax prefix, full independent original
+  fixture oracle, OFF fetch tail and unrelated file regions bytewise unchanged.
+- Metadata bytewise frozen v81. Only scheduler region differs vs v81 manifest.
+- Dynamic atomic claims/local indexed results/original-order gather/join-all present.
+- All original v81 freeze SHA receipts unchanged.
+- Live resident_suite.py + docs/resident-suite.md accepted originals, no new mode.
+- Git whitespace and reversed patch checks pass, no source mutation by checks.
+
+AUTHORED NATIVE FIXTURES: 18 total, 11manifest+7metadata, NOT EXECUTED.
+Retain all v81 native equivalence controls, add six v82 tests for exact-once and
+ordered 2/3/4-worker distribution, controlled adjacent-file unblock, uneven actual
+TOML sizes, error-order + fresh repair/targets, retained normal parse errors, and
+unwind panic drain/fallback. Native compiler/Send proof, native tests, formatting,
+runtime semantics/nonce/marker and timing are NOT RUN by worker, ROOT GATES.
+No builds/native jobs/probes/install/lock edits/commit by worker.
+
+Root notified before freeze. STOPEDITS marks completion before native execution.
+Prospective fresh ABS <abba>, 18bytes, recheck before execution.
+Private frozen v81 adapter may be reused, live harness remains accepted HEAD.
+No speedup/significance/default/general/sessionweighted promotion claim.

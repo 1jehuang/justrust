@@ -1,0 +1,5 @@
+PASS git diff --check for both changed native files.
+PASS git apply --check --reverse candidate.patch for exactly five owned paths.
+PASS accepted live bench/resident_suite.py and docs/resident-suite.md HEAD diff empty.
+PASS prospective <abba> absent at freeze.
+No patch applied and no native tool executed by checks.

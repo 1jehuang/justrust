@@ -1,0 +1,54 @@
+STOPEDITS
+parallel-manifest-syntax-v81 source-only freeze
+accepted_stable=c8829bae02fd234f46012ce6996baa14c09b3a1c
+freeze_date=2026-10-31
+worker=spider
+
+Owned source files, frozen in full beneath candidates/:
+  toolchain/resident/crates/blaze-manifest/src/manifest.rs
+  toolchain/resident/crates/blaze-metadata/src/lib.rs
+  toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs
+  toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs
+  docs/resident-parallel-manifest-syntax.md
+
+Original complete source files are originals/manifest.rs and originals/metadata-lib.rs.
+Both originals were cmp-verified against accepted_stable with git show.
+No Cargo.toml, Cargo.lock, root source, benchmark harness or other worker file changed.
+
+Implemented candidate:
+  Exact first-use cached RA_JIT_PARALLEL_MANIFEST_PARSE=1, default off.
+  Fetched remote-registry-only batches, excluding source replacements to nonregistries.
+  Threshold eight regular Cargo.toml paths, two to four scoped worker threads.
+  Context-free owned read/UTF8/native TomlManifest syntax only.
+  Native Send requirement through actual spawn_scoped return type, no unsafe assertions.
+  Linux x86_64 O_NONBLOCK|O_NOFOLLOW and handle regular-file recheck.
+  Ineligible whole batches retain original sequential path.
+  Failed speculative open/handle checks defer original read until ordered completion.
+  Original syntax prefix and common sequential semantic body bytewise unchanged.
+  Source/config conversion and semantics execute in original vector order.
+  No cache, persisted result, invalidation shortcut, shared Context, or race immunity claim.
+  Fixed ignored-error stderr marker once/process after actual bounded batch chosen:
+    ra-jit: parallel-manifest-parse-v81 batch
+  Existing-target native spans: resolver sources.fetch, resolver fetched manifest syntax,
+    resolver fetched manifest normalize.
+
+Source-only evidence:
+  sourcechecks.py / checks.json: PASS bytewise unchanged semantic body, sequential syntax
+    prefix, complete frozen-original oracle, OFF fetch tail, and unrelated existing regions.
+  Six manifest native fixtures and six metadata native fixtures added but NOT RUN.
+  rustfmt --check with skip_children=true: PASS (rustfmt-check.txt empty).
+  git diff --check on owned files: PASS (diff-check.txt empty).
+  Complete owned candidate.patch reverse-application check: PASS.
+  SHA256SUMS inventories originals, candidates, patch, checker, receipts and this RELEASE.
+
+Native build/tests/probes/workloads/install/lock changes/commits: NONE RUN BY THIS WORKER.
+Native Send, correctness, integration and timing gates remain ROOT-OWNED and UNCLAIMED.
+No speed claim, default promotion or successful-native-gate claim is made.
+Worker stops source edits at this freeze. Root may start gates after both workers freeze.
+
+Candidate SHA256:
+  manifest.rs 7a7e4e2b9aa4b063943c0478a337c597aa1fc9d4131a1e1025fc8c8120f88b70
+  metadata-lib.rs 33e6df711bd467944755035628bc2a95cd7c21ecf4fb502510dd0242b3953030
+  manifest-test-mod.rs 26d66c585d6395f61795b7c63e4bf005bebc5d9c2d9b8d6e14a89f12a27dbb98
+  metadata-test-mod.rs 0d5e9eed0277f97b9c1c5b306edc1b2fe897832c19c7f610784bda6976ed8668
+  documentation cd801c664bc83f36d1291b1bec4f2d4803e0725874fdf7329fb1204e9f8fdba1

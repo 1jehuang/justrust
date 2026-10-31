@@ -1,0 +1,38 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: build succeeded, tests not run in 156.2s
+  time    startup 0.40s | compile 155.76s | gaps 0.02s | after 0.05s
+  units   7 compiled (7 local, 0 deps, 0 build scripts), 420 fresh. Rebuilt because: blaze-manifest changed (3 crates); blaze-metadata changed (blaze-tree); blaze-registry changed (blaze-metadata)
+          jr_engine                        102.42s  cpu 358.1s   2843 MB
+          blaze_fmt                         17.04s  cpu  75.1s    858 MB
+          blaze_manifest                    14.16s  cpu  83.3s    679 MB
+          blaze_registry                     7.95s  cpu  37.5s    548 MB
+  cpu     619.1s total, avg 4.0/peak 6.0 of 16 cores; others used 10.9 cores
+  memory  peak 2940 MB build, 2843 MB largest rustc, 31.0 GB free; stalls cpu 36.90s mem 0.00s io 0.16s
+  output  3 warnings shown, 250 hidden; 442 progress and 0 passing-test lines hidden
+  waste   3 issues (estimated cost each; they can overlap):
+          ~ 86.5s  119.5s went to recompiling oversized crates: jr_engine (80k lines, 102.4s), blaze_fmt (45k lines, 17.0s, rebuilt for an upstream change). Specifically, edits to blaze-manifest::manifest cost ~3.7s each here (1 recorded runs), mostly rebuilding blaze-manifest's dependents, but it cannot move out as is: moving it drags along 44% of blaze-manifest. Cut these references to it first: workspace (7), metadata (3), targets (1) (`justrust split` for all candidates). Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 53.1s  machine was busy: other processes used 11 of 16 cores on average and tasks stalled 36.9s waiting for CPU
+          ~ 39.2s  blaze-units, blaze-registry, blaze-fmt, blaze-metadata, blaze-tree rebuilt only because blaze-manifest, blaze-metadata, blaze-registry changed (edited crates/blaze-manifest/src/manifest.rs) (39.2s). See the split recommendation above
+  more    `justrust log 20261031-102749709-3795489` full output, `justrust show 20261031-102749709-3795489` full profile

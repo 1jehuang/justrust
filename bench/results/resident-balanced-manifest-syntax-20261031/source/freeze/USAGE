@@ -1,0 +1,37 @@
+Distinct source-only v82 proposal, accepted base c8829bae0.
+
+Use ROOT native gate and private frozen v81 adapter only after STOPEDITS.
+Native compilation, all 18 authored fixtures (11 manifest + 7 metadata), Send/Sync
+proof, activation/current nonce and strict original semantic runtime gates are
+NOT RUN by this worker. Formatting is also not executed, ROOT gate if needed.
+Worker ran only read-only Python sourcechecks.py and Git whitespace/patch checks.
+
+Actual factor contract unchanged from v81: exact opt-in
+RA_JIT_PARALLEL_MANIFEST_PARSE=1, default OFF, cached once/client process.
+Raw stderr exact newline-terminated marker, at most once/process, only after
+a real bounded batch executed, never eligibility alone:
+ra-jit: parallel-manifest-parse-v81 batch
+Use a separately identified v82 candidate ELF/SHA. Do not relabel the v81 binary.
+Reference all three flags0, candidate whole-generation+watcher both1 in both
+arms, parser0/1 only. Same candidate ELF OFF/ON/ON/OFF, same PID/startticks/exe/
+socket per candidate segment, 20measurements+4warmup, allfirsttouches retained.
+ONtimed exactly1marker, OFF/reference/version0. Whole source63/TC4020/rawtuple/
+nonce/fixedoverlay/byte+mtime/recovery/private-stop safeguards still required.
+
+Prospective fresh ABS output <abba> (18bytes, <=30), not created.
+ROOT must independently recheck freshness and retain aborted outputs.
+Private adapter already prepared by ROOT at ROOT/suite-frozen-parallel-v81.py.
+Live bench/resident_suite.py remains accepted HEAD, no shipped v82 mode.
+
+Source checks prove exact accepted semantic body + sequential syntax prefix,
+independent full original oracle, OFF fetch tail, unrelated regions, metadata
+bytewise v81, dynamic queue/localresults/order gather, joined worker failures,
+v81 freeze SHA receipts unchanged and accepted live harness/doc unchanged.
+These are source checks, not Rust compilation or native acceptance.
+
+Hypothesis: remaining load imbalance from contiguous equal-count parser chunks.
+V82 instead uses an atomic per-manifest index, thread-local indexed results and
+original-order gather, 2-4 workers and sequential context lowering. It does not
+reinterpret v81 below-floor unknown-noise outcome as accepted. No timing result
+or speedup/significance/general/default/sessionweighted promotion claim.
+No native builds/tests/probes/jobs, installs, lock edits or commits by worker.

@@ -1,0 +1,38 @@
+{
+  "arm": "off",
+  "measurements": {
+    "off": {
+      "median_seconds": 0.05177067649492528,
+      "samples_seconds": [
+        0.049739729991415516,
+        0.05705726100131869,
+        0.05162946999189444,
+        0.05191188299795613,
+        0.0507329510001,
+        0.049617090000538155,
+        0.062207328010117635,
+        0.05491684400476515,
+        0.05148774298140779,
+        0.05851224501384422
+      ]
+    },
+    "on": {
+      "median_seconds": 0.052115632497589104,
+      "samples_seconds": [
+        0.045596732990816236,
+        0.056322657997952774,
+        0.05643002499709837,
+        0.05029485499835573,
+        0.05991389899281785,
+        0.045429583988152444,
+        0.053170322004007176,
+        0.08078073099022731,
+        0.04460467098397203,
+        0.05106094299117103
+      ]
+    }
+  },
+  "noise": "unknown",
+  "schema": "native_resident_parallel_manifest_retouch/v1",
+  "scope": "noop/clientplanning parser factor, combined same-byte manifest+lock retouch, whole-generation+watcher fixed ON, descriptive, no default promotion"
+}

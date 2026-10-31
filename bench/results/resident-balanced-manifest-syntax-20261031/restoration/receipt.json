@@ -1,0 +1,65 @@
+{
+  "files": {
+    "docs/resident-balanced-manifest-syntax.md": {
+      "frozen_original": {
+        "bytes": 5761,
+        "sha256": "6ee994dbfc9d6cfb0406aae263db6519f39444793ad78fc2b2c4275c15f4305b"
+      },
+      "preserved_live_original": {
+        "bytes": 5761,
+        "sha256": "6ee994dbfc9d6cfb0406aae263db6519f39444793ad78fc2b2c4275c15f4305b"
+      }
+    },
+    "toolchain/resident/crates/blaze-manifest/src/manifest.rs": {
+      "frozen_original": {
+        "bytes": 69802,
+        "sha256": "e0fff2fcf7336840ae8ffc7cd62a67eb6c4ccc9f95ddbf83ad4e58d2ffc0828b"
+      },
+      "preserved_live_original": {
+        "bytes": 69802,
+        "sha256": "e0fff2fcf7336840ae8ffc7cd62a67eb6c4ccc9f95ddbf83ad4e58d2ffc0828b"
+      }
+    },
+    "toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs": {
+      "frozen_original": {
+        "bytes": 17605,
+        "sha256": "a86b751e1a4a88cab0ec7be64ee03b88d32a01c34f569835510af00ad2388313"
+      },
+      "preserved_live_original": {
+        "bytes": 17605,
+        "sha256": "a86b751e1a4a88cab0ec7be64ee03b88d32a01c34f569835510af00ad2388313"
+      }
+    },
+    "toolchain/resident/crates/blaze-metadata/src/lib.rs": {
+      "frozen_original": {
+        "bytes": 60173,
+        "sha256": "33e6df711bd467944755035628bc2a95cd7c21ecf4fb502510dd0242b3953030"
+      },
+      "preserved_live_original": {
+        "bytes": 60173,
+        "sha256": "33e6df711bd467944755035628bc2a95cd7c21ecf4fb502510dd0242b3953030"
+      }
+    },
+    "toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs": {
+      "frozen_original": {
+        "bytes": 10484,
+        "sha256": "f51dc5cc93c8ac5d5e067169eac4afcbf022ce945340958f3cfea9fa991d898e"
+      },
+      "preserved_live_original": {
+        "bytes": 10484,
+        "sha256": "f51dc5cc93c8ac5d5e067169eac4afcbf022ce945340958f3cfea9fa991d898e"
+      }
+    }
+  },
+  "native_and_live_harness_head_diff_empty_then": true,
+  "removed_preserved_fixture_modules": [
+    "toolchain/resident/crates/blaze-manifest/tests/parallel_manifest_syntax/mod.rs",
+    "toolchain/resident/crates/blaze-metadata/tests/parallel_manifest_syntax/mod.rs"
+  ],
+  "restored_native_originals": [
+    "toolchain/resident/crates/blaze-manifest/src/manifest.rs",
+    "toolchain/resident/crates/blaze-metadata/src/lib.rs"
+  ],
+  "scope": "point-in-time v82 rollback only, not current native checkout",
+  "time": "2026-10-31T17:45:29Z"
+}

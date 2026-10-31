@@ -1,0 +1,41 @@
+ra-jit: parallel-manifest-parse-v81 batch
+ra-jit: manifest-content-generation-v1 entered
+   Compiling justrust v0.1.0-alpha.1 (<source63>)
+    Finished `test` profile [blaze] target(s) in 0.66s
+     Running unittests src/lib.rs (<home>/p82-on-repeat/engine/target/debug/deps/justrust-6b243540d38abcc9)
+blaze time: 674.8 ms: worker build-rest 283.1 (42%), worker check 141.4 (21%), worker roots 120.7 (18%), worker apply 52.1 (8%), client planning owned resolver 28.8 (4%), client command 7.9 (1%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     7.9 ms   1.2%
+blaze    client test                        0.3 ms   0.0%
+blaze    client metadata                    0.9 ms   0.1%
+blaze    client planning                    0.1 ms   0.0%
+blaze    client planning rustc host         3.0 ms   0.4%
+blaze    client planning target cfg         0.9 ms   0.1%
+blaze    client planning asked setup        0.0 ms   0.0%
+blaze    client planning owned resolver      28.8 ms   4.3%
+blaze    client checkout                    0.6 ms   0.1%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      0.7 ms   0.1%
+blaze    daemon read request                0.3 ms   0.0%
+blaze    daemon                             0.4 ms   0.1%
+blaze    daemon↔worker                      0.8 ms   0.1%
+blaze    worker wait                        0.6 ms   0.1%
+blaze    worker settle                      0.0 ms   0.0%
+blaze    worker read                        6.6 ms   1.0%
+blaze    worker apply                      52.1 ms   7.7%
+blaze    worker roots                     120.7 ms  17.9%
+blaze    worker check                     141.4 ms  21.0%
+blaze    worker reach                       0.6 ms   0.1%
+blaze    worker object                      0.4 ms   0.1%
+blaze    worker statics                     2.2 ms   0.3%
+blaze    worker setup                       6.8 ms   1.0%
+blaze    worker compile-rest                1.7 ms   0.2%
+blaze    worker write                       0.0 ms   0.0%
+blaze    worker build-rest                283.1 ms  42.0%
+blaze    worker report                      0.1 ms   0.0%
+blaze    worker refuse                      6.3 ms   0.9%
+blaze    worker link                        1.6 ms   0.2%
+blaze    client install artifacts           0.2 ms   0.0%
+blaze    client test execution              5.5 ms   0.8%
+blaze    total                            674.8 ms 100.0%

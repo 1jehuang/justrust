@@ -1,0 +1,5 @@
+python3 <native-root>/balanced-manifest-syntax-v82/sourcechecks.py
+git diff --check -- toolchain/resident/crates/blaze-manifest/src/manifest.rs toolchain/resident/crates/blaze-metadata/src/lib.rs
+git diff HEAD --exit-code -- bench/resident_suite.py docs/resident-suite.md
+git apply --check --reverse candidate.patch
+No compiler, formatter, native test, probe, build or runtime was executed by source worker.

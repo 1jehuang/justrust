@@ -1,0 +1,139 @@
+{
+  "traceEvents": [
+    {
+      "cat": "step",
+      "dur": 2965,
+      "name": "client planning rustc host",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047844708
+    },
+    {
+      "cat": "step",
+      "dur": 932,
+      "name": "client planning target cfg",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047847676
+    },
+    {
+      "cat": "step",
+      "dur": 25,
+      "name": "client planning asked setup",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047848610
+    },
+    {
+      "cat": "step",
+      "dur": 24966,
+      "name": "client planning owned resolver",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047848636
+    },
+    {
+      "cat": "step",
+      "dur": 28931,
+      "name": "client planning",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047844703
+    },
+    {
+      "cat": "detail",
+      "dur": 415,
+      "name": "resolver workspace/config",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047848651
+    },
+    {
+      "cat": "detail",
+      "dur": 1678,
+      "name": "resolver sources.fetch",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047853339
+    },
+    {
+      "cat": "detail",
+      "dur": 3000,
+      "name": "resolver fetched manifest syntax",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047855054
+    },
+    {
+      "cat": "detail",
+      "dur": 3430,
+      "name": "resolver fetched manifest normalize",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047858062
+    },
+    {
+      "cat": "detail",
+      "dur": 12435,
+      "name": "resolver package loading",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047849069
+    },
+    {
+      "cat": "detail",
+      "dur": 4176,
+      "name": "resolver summary preparation",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047861508
+    },
+    {
+      "cat": "detail",
+      "dur": 3265,
+      "name": "resolver version resolve",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047865692
+    },
+    {
+      "cat": "detail",
+      "dur": 616,
+      "name": "resolver finalization",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047868964
+    },
+    {
+      "cat": "detail",
+      "dur": 1424,
+      "name": "resolver feature graph/export",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047869582
+    },
+    {
+      "cat": "detail",
+      "dur": 1503,
+      "name": "resolver program projection",
+      "ph": "X",
+      "pid": 3840252,
+      "tid": 1,
+      "ts": 1793468047872095
+    }
+  ]
+}

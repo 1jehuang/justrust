@@ -1,0 +1,43 @@
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+
+justrust: ok: 373 tests passed in 122.1s
+  time    startup 0.44s | compile 104.90s | gaps 0.02s | tests 16.70s | after 0.06s
+  units   3 compiled (3 local, 0 deps, 0 build scripts), 426 fresh. Rebuilt because: blaze-manifest changed (blaze-fmt); blaze-metadata changed (blaze-tree); ra-jit changed (ra-jit)
+          jr_engine (test)                  80.73s  cpu 274.0s   2615 MB
+          blaze_fmt                         21.30s  cpu  73.7s   1005 MB
+          blaze_tree                         2.87s  cpu  20.8s    397 MB
+  tests   373 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 16.70s
+          slowest tests (373 timed, 34.0s summed; a suite cannot finish before its slowest test):
+             16.55s  remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times
+              3.39s  remote::tests::a_packed_pack_is_all_written_before_it_is_unpacked
+              2.16s  deps::tests::no_bytes_of_an_archive_write_outside_of_its_unit_or_past_the_bound
+  cpu     377.8s total, avg 3.1/peak 5.9 of 16 cores; others used 11.1 cores
+  memory  peak 2726 MB build, 2615 MB largest rustc, 31.1 GB free; stalls cpu 23.79s mem 0.02s io 0.18s
+  output  3 warnings shown, 250 hidden; 439 progress and 373 passing-test lines hidden
+  waste   4 issues (estimated cost each; they can overlap):
+          ~ 72.6s  102.0s went to recompiling oversized crates: jr_engine (80k lines, 80.7s), blaze_fmt (45k lines, 21.3s, rebuilt for an upstream change). rustc redoes most of a crate after any edit to it and rebuilds everything downstream, so per-edit cost grows with crate size and no compiler flag removes it. Split them: move the modules that change often (the ones you are editing) into new leaf crates that depend on the big crate rather than the other way round, and keep their tests there. Edits in split-out crates measured 6-13x faster. `justrust split` names the modules to move, from this workspace's recorded edits. Also, these units ran rustc's front-end single-threaded; a -Zthreads rustc wrapper typically halves a full rebuild
+          ~ 42.5s  machine was busy: other processes used 11 of 16 cores on average and tasks stalled 23.8s waiting for CPU
+          ~ 24.2s  blaze-fmt, blaze-tree rebuilt only because blaze-manifest, blaze-metadata changed (24.2s). Edits to shared upstream crates force downstream recompiles; `justrust split` shows which code to move out to stop this
+          ~ 16.7s  tests in jr_engine-f7677374dc565f6c took 16.7s to run; the slowest test alone took 16.6s (remote::gateway::tests::a_rate_limit_and_an_outage_are_waited_out_a_bounded_number_of_times). Speed it up or split it, or filter to the tests you changed
+  more    `justrust log 20261031-103124844-3818246` full output, `justrust show 20261031-103124844-3818246` full profile
