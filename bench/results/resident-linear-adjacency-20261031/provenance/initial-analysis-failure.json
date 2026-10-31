@@ -1,0 +1,15 @@
+{
+  "status": "ORIGINAL_FAILURE_RETAINED",
+  "historical_source": "Coordinator skunk report received 2026-10-31T05:36:16.496Z",
+  "original_script": "validate-linear-adjacency-v51.py",
+  "original_output": "linear-adjacency-v51-validation.json",
+  "original_output_bytes": 0,
+  "failure": "worker report snapshots reset or lost, cannot attribute phase deltas",
+  "reason": "Original delta analysis required monotonically cumulative worker report snapshots. The captured logs reset or were replaced.",
+  "original_stderr_task_journal_embedded": false,
+  "offline_reproduction": "replay.py executes the unchanged archived original script against the exact relocated raw snapshots and requires the same AssertionError with empty stdout. This is labeled replay, not original stderr.",
+  "corrected_separate_script": "validate-linear-adjacency-v51-snapshots.py",
+  "corrected_separate_result": "linear-adjacency-v51-snapshot-validation.json",
+  "snapshot_scope": "Counts overlap or reset. Do not sum snapshots or infer fresh per-phase work.",
+  "diagnostic_timings_valid": false
+}

@@ -1,0 +1,48 @@
+bench/results/resident-linear-adjacency-20261031/frozen/v50/change.patch:40: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:15: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:224: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:287: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:299: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:302: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:314: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:317: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/frozen/v51/change.patch:322: trailing whitespace.
++ 
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline-repeat/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline-repeat/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline-repeat/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline-repeat/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline-repeat/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline-repeat/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-baseline/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate-repeat/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate-repeat/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate-repeat/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate-repeat/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate-repeat/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate-repeat/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v50-candidate/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v51-diagnostic/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v51-diagnostic/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v51-diagnostic/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v51-diagnostic/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v51-diagnostic/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-linear-adjacency-20261031/raw/linear-adjacency-v51-diagnostic/06-assert-recovery.stdout:10: new blank line at EOF.

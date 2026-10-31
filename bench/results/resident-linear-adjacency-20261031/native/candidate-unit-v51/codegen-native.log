@@ -1,0 +1,51 @@
+justrust: sends usage stats (timings, counts, no code, paths, or names; linked to your account when signed in) to improve it. Off: `justrust telemetry off` or JUSTRUST_NO_TELEMETRY=1.
+warning: unused workspace dependency `arrayvec`
+   --> Cargo.toml:154:1
+    |
+154 | arrayvec = "0.7.6"
+    | ^^^^^^^^
+    |
+    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default
+help: consider removing the workspace dependency `arrayvec`
+warning: unused workspace dependency `bitflags`
+   --> Cargo.toml:155:1
+    |
+155 | bitflags = "2.9.1"
+    | ^^^^^^^^
+    |
+help: consider removing the workspace dependency `bitflags`
+warning: unused workspace dependency `camino`
+   --> Cargo.toml:157:1
+    |
+157 | camino = "1.2.2"
+    | ^^^^^^
+    |
+help: consider removing the workspace dependency `camino`
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=1 visits=1 raw_lengths=1 max_raw_length=1 fanout=[0, 1, 0, 0, 0, 0, 0, 0] exhausted=0 aborted=1 candidate_inspections=1 original_inspections=1
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=1 visits=1 raw_lengths=1 max_raw_length=1 fanout=[0, 1, 0, 0, 0, 0, 0, 0] exhausted=0 aborted=1 candidate_inspections=1 original_inspections=1
+native-adjacency-dual-v51 timings_invalid=true selector_calls=130 yielded=128 visits=2 raw_lengths=768 max_raw_length=768 fanout=[1, 0, 0, 0, 0, 0, 1, 0] exhausted=2 aborted=0 candidate_inspections=768 original_inspections=49792
+native-adjacency-dual-v51 timings_invalid=true selector_calls=4 yielded=2 visits=2 raw_lengths=2 max_raw_length=1 fanout=[0, 2, 0, 0, 0, 0, 0, 0] exhausted=2 aborted=0 candidate_inspections=2 original_inspections=4
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=1 visits=1 raw_lengths=1 max_raw_length=1 fanout=[0, 1, 0, 0, 0, 0, 0, 0] exhausted=0 aborted=1 candidate_inspections=1 original_inspections=1
+native-adjacency-dual-v51 timings_invalid=true selector_calls=66 yielded=65 visits=2 raw_lengths=768 max_raw_length=768 fanout=[1, 0, 0, 0, 0, 0, 1, 0] exhausted=1 aborted=1 candidate_inspections=386 original_inspections=12610
+native-adjacency-dual-v51 timings_invalid=true selector_calls=266 yielded=135 visits=131 raw_lengths=775 max_raw_length=770 fanout=[126, 3, 1, 0, 0, 0, 1, 0] exhausted=131 aborted=0 candidate_inspections=775 original_inspections=51344
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=0 visits=1 raw_lengths=0 max_raw_length=0 fanout=[1, 0, 0, 0, 0, 0, 0, 0] exhausted=1 aborted=0 candidate_inspections=0 original_inspections=0
+native-adjacency-dual-v51 timings_invalid=true selector_calls=263 yielded=135 visits=131 raw_lengths=775 max_raw_length=770 fanout=[126, 3, 1, 0, 0, 0, 1, 0] exhausted=128 aborted=3 candidate_inspections=775 original_inspections=50572
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=0 visits=1 raw_lengths=0 max_raw_length=0 fanout=[1, 0, 0, 0, 0, 0, 0, 0] exhausted=1 aborted=0 candidate_inspections=0 original_inspections=0
+native-adjacency-dual-v51 timings_invalid=true selector_calls=262 yielded=134 visits=130 raw_lengths=774 max_raw_length=770 fanout=[126, 2, 1, 0, 0, 0, 1, 0] exhausted=128 aborted=2 candidate_inspections=774 original_inspections=50571
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=0 visits=1 raw_lengths=0 max_raw_length=0 fanout=[1, 0, 0, 0, 0, 0, 0, 0] exhausted=1 aborted=0 candidate_inspections=0 original_inspections=0
+native-adjacency-dual-v51 timings_invalid=true selector_calls=262 yielded=134 visits=130 raw_lengths=774 max_raw_length=770 fanout=[126, 2, 1, 0, 0, 0, 1, 0] exhausted=128 aborted=2 candidate_inspections=774 original_inspections=50571
+native-adjacency-dual-v51 timings_invalid=true selector_calls=1 yielded=0 visits=1 raw_lengths=0 max_raw_length=0 fanout=[1, 0, 0, 0, 0, 0, 0, 0] exhausted=1 aborted=0 candidate_inspections=0 original_inspections=0
+
+justrust: ok: 55 tests passed in 21.9s
+  time    startup 0.24s | compile 19.92s | tests 1.68s | after 0.04s
+  units   1 compiled (1 local, 0 deps, 0 build scripts), 182 fresh
+          hir_ty_codegen (test)             19.92s  cpu  65.6s   1566 MB
+  tests   55 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 1.68s
+          slowest tests (55 timed, 1.8s summed; a suite cannot finish before its slowest test):
+              1.67s  cached::tests::native_linear_adjacency_matches_original_dfs
+  cpu     67.0s total, avg 3.1/peak 6.0 of 16 cores; others used 3.5 cores
+  memory  peak 1682 MB build, 1566 MB largest rustc, 48.7 GB free; stalls cpu 0.22s mem 0.02s io 0.06s
+  output  3 warnings shown, 225 hidden; 188 progress and 55 passing-test lines hidden
+  waste   1 issue (estimated cost each; they can overlap):
+          ~  6.0s  build averaged 3.1 of 16 cores: hir_ty_codegen (test) ran 19.9s mostly alone (single-threaded frontend)
+  more    `justrust log 20261030-223204180-2445807` full output, `justrust show 20261030-223204180-2445807` full profile

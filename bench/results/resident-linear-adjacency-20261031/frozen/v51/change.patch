@@ -1,0 +1,504 @@
+--- a/toolchain/resident/crates/hir-ty-codegen/cached.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+@@ -858,6 +858,8 @@
+     entry: Arc<Entry>,
+     /// The next raw `funcs` slot, including targets that are not named edges.
+     seen: usize,
++    #[cfg(feature = "native-adjacency-diagnostic")]
++    named_seen: usize,
+     /// The highest visit that this one or one below it calls back into: until that one is
+     /// settled, neither is this.
+     leans_on: usize,
+@@ -865,6 +867,111 @@
+     below: usize,
+ }
+ 
++// This separate diagnostic identity executes both selectors. Never time it as a speedup.
++#[cfg(feature = "native-adjacency-diagnostic")]
++#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
++struct AdjacencyDiagnostic {
++    selector_calls: u64,
++    yielded: u64,
++    visits: u64,
++    raw_lengths: u64,
++    max_raw_length: usize,
++    fanout: [u64; 8],
++    exhausted: u64,
++    candidate_inspections: u64,
++    original_inspections: u64,
++}
++
++#[cfg(all(test, feature = "native-adjacency-diagnostic"))]
++thread_local! {
++    static LAST_ADJACENCY_DIAGNOSTIC: std::cell::Cell<Option<AdjacencyDiagnostic>> = const { std::cell::Cell::new(None) };
++}
++
++#[cfg(feature = "native-adjacency-diagnostic")]
++impl AdjacencyDiagnostic {
++    fn admit(&mut self, entry: &Entry) {
++        let len = entry.funcs.len();
++        self.visits += 1;
++        self.raw_lengths += len as u64;
++        self.max_raw_length = self.max_raw_length.max(len);
++        let bucket = match len {
++            0 => 0,
++            1 => 1,
++            2..=7 => 2,
++            8..=31 => 3,
++            32..=127 => 4,
++            128..=511 => 5,
++            512..=2047 => 6,
++            _ => 7,
++        };
++        self.fanout[bucket] += 1;
++    }
++
++    fn select<'a>(
++        &mut self,
++        entry: &'a Entry,
++        seen: &mut usize,
++        named_seen: &mut usize,
++    ) -> Option<&'a str> {
++        self.selector_calls += 1;
++        // Count the raw inspections before filtering, including failed exhaustion scans.
++        // This is the original nth algorithm, not a formula estimating its work.
++        let original = entry
++            .funcs
++            .iter()
++            .inspect(|_| self.original_inspections += 1)
++            .filter_map(|func| match &func.target {
++                CachedTarget::Named(name) => Some(name.as_str()),
++                _ => None,
++            })
++            .nth(*named_seen);
++        let candidate = entry.funcs[*seen..].iter().find_map(|func| {
++            self.candidate_inspections += 1;
++            *seen += 1;
++            match &func.target {
++                CachedTarget::Named(name) => Some(name.as_str()),
++                _ => None,
++            }
++        });
++        assert_eq!(candidate, original, "native-adjacency-dual-v51 selector mismatch");
++        if candidate.is_some() {
++            *named_seen += 1;
++            self.yielded += 1;
++        } else {
++            self.exhausted += 1;
++        }
++        candidate
++    }
++}
++
++#[cfg(feature = "native-adjacency-diagnostic")]
++impl AdjacencyDiagnostic {
++    fn report(self) {
++        if self.visits == 0 {
++            return;
++        }
++        #[cfg(test)]
++        LAST_ADJACENCY_DIAGNOSTIC.with(|last| last.set(Some(self)));
++        // Fixed-size aggregate, no names, no per-edge events or shared counter atomics.
++        // Ignore reporting failure so diagnostics do not turn successful builds into errors.
++        use std::io::Write;
++        let _ = writeln!(
++            std::io::stderr().lock(),
++            "native-adjacency-dual-v51 timings_invalid=true selector_calls={} yielded={} visits={} raw_lengths={} max_raw_length={} fanout={:?} exhausted={} aborted={} candidate_inspections={} original_inspections={}",
++            self.selector_calls,
++            self.yielded,
++            self.visits,
++            self.raw_lengths,
++            self.max_raw_length,
++            self.fanout,
++            self.exhausted,
++            self.visits - self.exhausted,
++            self.candidate_inspections,
++            self.original_inspections
++        );
++    }
++}
++
+ impl Entries {
+     fn count(&self, reason: Miss) {
+         if let Some(stats) = &self.miss_stats {
+@@ -1092,23 +1199,42 @@
+             self.settle(name, false);
+             return false;
+         };
++        #[cfg(feature = "native-adjacency-diagnostic")]
++        let mut adjacency = AdjacencyDiagnostic::default();
+         // Entries call each other in circles, so one is only known to be usable along with
+         // the ones it leans on.
+         let mut unsettled = vec![name.clone()];
+         let mut leaning = FxHashMap::<Arc<str>, usize>::default();
+         leaning.insert(name.clone(), 0);
+-        let mut path = vec![Visit { name, entry, seen: 0, leans_on: 0, below: 0 }];
++        let mut path = vec![Visit {
++            name,
++            entry,
++            seen: 0,
++            #[cfg(feature = "native-adjacency-diagnostic")]
++            named_seen: 0,
++            leans_on: 0,
++            below: 0,
++        }];
+         while !path.is_empty() {
+             let depth = path.len() - 1;
+             let visit = &mut path[depth];
+             let entry = visit.entry.clone();
+-            let Some(callee) = entry.funcs[visit.seen..].iter().find_map(|func| {
++            #[cfg(feature = "native-adjacency-diagnostic")]
++            let next = {
++                if visit.seen == 0 {
++                    adjacency.admit(&entry);
++                }
++                adjacency.select(&entry, &mut visit.seen, &mut visit.named_seen)
++            };
++            #[cfg(not(feature = "native-adjacency-diagnostic"))]
++            let next = entry.funcs[visit.seen..].iter().find_map(|func| {
+                 visit.seen += 1;
+                 match &func.target {
+                     CachedTarget::Named(name) => Some(name.as_str()),
+                     _ => None,
+                 }
+-            }) else {
++            });
++            let Some(callee) = next else {
+                 let Some(done) = path.pop() else { break };
+                 if done.leans_on >= depth {
+                     for name in unsettled.drain(done.below..) {
+@@ -1156,6 +1282,8 @@
+                 for visit in path {
+                     self.settle(visit.name, false);
+                 }
++                #[cfg(feature = "native-adjacency-diagnostic")]
++                adjacency.report();
+                 return false;
+             };
+             leaning.insert(callee.clone(), depth + 1);
+@@ -1164,11 +1292,15 @@
+                 name: callee,
+                 entry,
+                 seen: 0,
++                #[cfg(feature = "native-adjacency-diagnostic")]
++                named_seen: 0,
+                 leans_on: depth + 1,
+                 below: unsettled.len() - 1,
+             });
+         }
+         self.count(Miss::UsablePositive);
++        #[cfg(feature = "native-adjacency-diagnostic")]
++        adjacency.report();
+         true
+     }
+ }
+@@ -1258,7 +1390,15 @@
+         let mut unsettled = vec![name.clone()];
+         let mut leaning = FxHashMap::<Arc<str>, usize>::default();
+         leaning.insert(name.clone(), 0);
+-        let mut path = vec![Visit { name, entry, seen: 0, leans_on: 0, below: 0 }];
++        let mut path = vec![Visit {
++            name,
++            entry,
++            seen: 0,
++            #[cfg(feature = "native-adjacency-diagnostic")]
++            named_seen: 0,
++            leans_on: 0,
++            below: 0,
++        }];
+         while !path.is_empty() {
+             let depth = path.len() - 1;
+             let visit = &mut path[depth];
+@@ -1320,6 +1460,8 @@
+                 name: callee,
+                 entry,
+                 seen: 0,
++                #[cfg(feature = "native-adjacency-diagnostic")]
++                named_seen: 0,
+                 leans_on: depth + 1,
+                 below: unsettled.len() - 1,
+             });
+@@ -1423,6 +1565,61 @@
+         }
+     }
+ 
++    #[cfg(feature = "native-adjacency-diagnostic")]
++    #[test]
++    fn native_adjacency_diagnostic_counts_actual_shadow_inspections() {
++        for fail in [false, true] {
++            let (entries, dir) = stats_fixture();
++            let root = format!("c:1f:adjacency_diagnostic::root_{fail}");
++            let leaf = format!("c:1f:adjacency_diagnostic::leaf_{fail}");
++            let mut targets = Vec::new();
++            for n in 0..128 {
++                targets.extend([
++                    CachedTarget::Root("not_a_dependency".into()),
++                    CachedTarget::Named(if fail && n == 64 {
++                        "c:1f:adjacency_diagnostic::absent".into()
++                    } else {
++                        leaf.clone()
++                    }),
++                    CachedTarget::TypeId(17),
++                    CachedTarget::Asm("nop".into()),
++                    CachedTarget::Import { symbol: "unchecked".into(), checked: false },
++                    CachedTarget::Copy { name: "copy".into(), symbol: "present".into() },
++                ]);
++            }
++            store_fixture(&entries, &root, &graph_entry(targets));
++            store_fixture(&entries, &leaf, &graph_entry(Vec::new()));
++            LAST_ADJACENCY_DIAGNOSTIC.with(|last| last.set(None));
++            assert_eq!(entries.usable(&root, &|symbol| symbol == "present"), !fail);
++            let stats = LAST_ADJACENCY_DIAGNOSTIC.with(|last| last.take()).unwrap();
++            assert_eq!(stats.visits, 2);
++            assert_eq!(stats.raw_lengths, 768);
++            assert_eq!(stats.max_raw_length, 768);
++            assert_eq!(stats.fanout, [1, 0, 0, 0, 0, 0, 1, 0]);
++            if fail {
++                assert_eq!(stats.selector_calls, 66);
++                assert_eq!(stats.yielded, 65);
++                assert_eq!(stats.exhausted, 1);
++                assert_eq!(stats.visits - stats.exhausted, 1);
++                assert_eq!(stats.candidate_inspections, 386);
++                assert_eq!(stats.original_inspections, 12610);
++                assert_eq!(observed(&entries, Miss::TransitiveFailure), 1);
++            } else {
++                assert_eq!(stats.selector_calls, 130);
++                assert_eq!(stats.yielded, 128);
++                assert_eq!(stats.exhausted, 2);
++                assert_eq!(stats.visits - stats.exhausted, 0);
++                assert_eq!(stats.candidate_inspections, 768);
++                assert_eq!(stats.original_inspections, 49792);
++                assert_eq!(observed(&entries, Miss::UsablePositive), 1);
++            }
++            // A settled lookup traverses nothing and must not report stale/fresh stats.
++            assert_eq!(entries.usable(&root, &|_| panic!("settled lookup relinked")), !fail);
++            assert!(LAST_ADJACENCY_DIAGNOSTIC.with(|last| last.take()).is_none());
++            std::fs::remove_dir_all(dir).unwrap();
++        }
++    }
++
+     #[test]
+     fn cache_miss_stats_gate_is_exact() {
+         use std::ffi::OsStr;
+--- a/toolchain/resident/crates/hir-ty-codegen/Cargo.toml
++++ b/toolchain/resident/crates/hir-ty-codegen/Cargo.toml
+@@ -63,6 +63,8 @@
+ ra-jit-fuzz.workspace = true
+ 
+ [features]
++# Dual-selector scan attribution only. Its timings are not performance measurements.
++native-adjacency-diagnostic = []
+ llvm = ["dep:inkwell"]
+ # The compiler as a WebAssembly module itself: see `crates/ra-jit-wasm`.
+ wasm = []
+--- a/docs/resident-linear-adjacency.md
++++ b/docs/resident-linear-adjacency.md
+@@ -1,79 +1,136 @@
+-# Resident cache DFS linear adjacency, v50
++# Resident native adjacency attribution, v51
+ 
+-## Status and provenance
++## Source-only freeze and provenance
+ 
+-FROZEN_READY for root-owned exact acceptance. This is source-only work on the
+-licensed Blaze-derived resident engine, not the clean-room compiler.
+-No native build, native test, workload, timing, commit, or push was run by this
+-lane. Formatting and whitespace checks are not native correctness acceptance.
+-No runtime speedup is claimed. Root owns the prospective strict runtime baseline,
+-native differential gates, and before/after workflow measurements.
++FROZEN_READY for root-owned native acceptance. This is licensed Blaze-derived
++resident code, not the clean-room compiler. v50 is not promoted: root reports
++mixed runtime results. v51 is an attribution diagnostic, not a speed candidate.
++No native builds, tests, workloads, timings, commits, or pushes were run by this
++worker. Source formatting and diff checks do not establish native correctness.
+ 
+-Owned paths, released at freeze:
++Owned paths, released together at freeze:
+ 
+ - `toolchain/resident/crates/hir-ty-codegen/cached.rs`
+-- `docs/resident-linear-adjacency.md` (new)
++- `toolchain/resident/crates/hir-ty-codegen/Cargo.toml`
++- `docs/resident-linear-adjacency.md`
+ 
+-Accepted original `cached.rs` SHA-256:
++Immutable v50 full original, candidate, document, patch and SHA manifest remain
++under `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/linear-adjacency-v50/`.
++All v50 manifest hashes were verified before v51 edits. v50 candidate SHA-256 is
++`3cba6e0b6868ca2f827a59d64e3a91bd962c8b8958d7a51ab4ebf1ad5e8b1fe7`.
++The earlier accepted pre-cursor source SHA-256 is
+ `11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f`.
+-Full original, candidate, document, patch, and SHA manifest are preserved under
+-`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/linear-adjacency-v50/`.
+-The manifest identifies the frozen candidate bytes. The patch is limited to the
+-two owned paths and can be applied to the accepted original checkout.
+-
+-## Narrow production change
+-
+-`Entries::usable` previously requested `entry.named().nth(visit.seen)` for each
+-outgoing named edge. `named()` starts a `filter_map` over `funcs` from zero each
+-time. For an all-named fanout of N, successful requests inspect
+-`1 + 2 + ... + N` raw targets, and the final unsuccessful request scans N again.
+-Mixed target kinds add repeated prefix work as well.
+-
+-`Visit::seen` now means the next raw `funcs` index. Each request starts at that
+-index and increments it for every inspected raw target, returning the first
+-`Named`. The next request resumes after that target. Non-named targets are
+-consumed but never become DFS edges. At exhaustion, `seen == funcs.len()`, and
+-an empty suffix takes the existing settlement branch. Each target of each
+-visited entry is inspected at most once by this adjacency selector. This bound
+-is about scan work, not elapsed time or total cache traversal complexity.
+-
+-The clone keeping the current entry alive is retained. Edge order, duplicate
+-named edges, early exits, the SCC stack and low-link updates, settlement,
+-native `links` checks, all miss counters, and lookup/fallback paths remain
+-unchanged. `Entry::named` remains unchanged for native prefetch use.
+-No key memo is proposed: `get` already derives its key inside the `OnceLock`
+-initializer, on a miss rather than each lookup.
+-
+-## Native differential fixture supplied, not executed
+-
+-`native_linear_adjacency_matches_original_dfs` calls the production
+-`Entries::usable` and a frozen copy of the original traversal, each against
+-independent real native `Store` instances populated through encode, decode,
+-insert, seal, and readback. This is not a standalone graph simulation.
+-
+-Four 132-node fixture variants exercise:
+-
+-- 128-way mixed fanout with all six `CachedTarget` kinds, duplicate named edges,
+-  unchecked imports and valid copy symbols, plus empty adjacency leaves;
+-- a two-node SCC, an outgoing settled leaf, and a late cycle back to the root;
+-- a late missing named dependency;
+-- a late unavailable checked native import;
+-- a late unavailable copy symbol.
+-
+-Every node is queried in order twice, so positive/negative memo hits and partial
+-settlement after failure are observable. After every query the test compares
+-return values, the exact ordered native `defines` callbacks, every one of the
+-19 miss-counter values, and each fixture node's settlement map value.
+-Explicit final assertions require exactly one transitive failure in each
+-failing variant and exactly one dependency-native-import failure in each
+-native-symbol failure variant. Existing native direct-miss/import and
+-negative-cache tests remain present and unchanged.
+-
+-## Source checks and next gate
+-
+-Only standalone `rustfmt --edition 2024 --config skip_children=true` on the
+-owned Rust file and scoped `git diff --check` were run. Root must execute the
+-exact native acceptance against the SHA-frozen candidate before treating these
+-fixtures as passing. Root must preserve the accepted original for strict
+-before/after runtime comparison. A successful differential test would establish
+-fixture equivalence, not general semantic proof or a runtime improvement.
++
++v51 complete original/candidate files, patch, SHA manifest and readiness record
++are under `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/linear-adjacency-v51/`.
++The v51 original directory is the exact v50 source and documentation plus the
++pre-v51 Cargo manifest. The incremental patch is against those originals.
++
++## Default-free compile-time control
++
++`hir-ty-codegen/native-adjacency-diagnostic` is a default-OFF Cargo feature,
++with no default-feature activation. Every diagnostic type, field, initialization,
++scan, counter, report and feature-only test is behind this compile-time cfg.
++There is no runtime environment check, shared counter, per-edge event, or atomic
++in the disabled path. The disabled selector retains the v50 raw cursor algorithm,
++with its result bound locally before the unchanged DFS settlement branch.
++
++The v50 production change advances a raw `funcs` cursor, skipping every
++non-`Named` target once instead of restarting `named().nth(seen)` from zero per
++edge. Named order and duplicate edges remain intact. SCC settlement, lookup,
++native links, miss counters and fallback remain unchanged. `Entry::named` still
++serves native prefetch. No full-key memo is proposed: `get` already derives its
++key inside the `OnceLock` initializer.
++
++## Exact same-visit shadow measurement
++
++When the diagnostic feature is compiled in, each reached DFS visit holds a
++separate `named_seen` cursor. Every selector invocation actually runs both:
++
++1. Original: `funcs.iter().inspect(count_original).filter_map(Named).nth(named_seen)`.
++   The counter is before filtering, so it includes non-named targets, every
++   repeatedly rescanned prefix, and the final failed exhaustion scan.
++2. Candidate: the existing raw-cursor `find_map`, incrementing its raw inspection
++   counter for each target consumed, including skipped non-named targets.
++
++The code asserts exact `Option<&str>` equality before the existing DFS processes
++that edge or exhaustion. Only the candidate raw cursor drives the traversal.
++The shadow never calls `get`, `links`, or `settle`, and never updates native miss
++counters. Both counts therefore describe the same reached graph and query,
++without cross-run concurrency or cache-state differences. These are actual
++instrumented iterator visits, not a mathematical estimate of original work.
++
++## Bounded report schema
++
++One fixed-size report is emitted per `usable` call that traversed entries, after
++success or transitive failure. Direct unavailable and settled lookups emit none.
++Reporting errors are ignored. Panic/mismatch is a diagnostic failure, not a valid
++completed measurement. The prefix is `native-adjacency-dual-v51`, and every report
++contains `timings_invalid=true`.
++
++All counters are local to the `usable` call. The only shared reporting operation
++is the one final stderr write. There is no named-edge census or extra adjacency
++pass for fanout. A test-only thread-local slot captures the last report for exact
++native-fixture assertions and is absent from non-test builds.
++
++Fields:
++
++- `selector_calls`: both-selector invocations, including exhaustion.
++- `yielded`: successful named-edge yields, including duplicates and backedges.
++- `visits`: reached DFS entries, counted on their first selector invocation.
++- `raw_lengths`: sum of `entry.funcs.len()` across reached visits.
++- `max_raw_length`: maximum reached raw adjacency length.
++- `fanout`: fixed raw-length histogram buckets `0`, `1`, `2..7`, `8..31`,
++  `32..127`, `128..511`, `512..2047`, `2048+`. This is raw fanout, not named fanout.
++- `exhausted`: visits whose selector returned `None`.
++- `aborted`: `visits - exhausted`, the active unfinished visits on early failure.
++- `candidate_inspections`, `original_inspections`: actual raw targets examined
++  by their respective selectors. Neither includes native import/link scans.
++
++## Native fixtures supplied, not executed here
++
++The existing v50 `native_linear_adjacency_matches_original_dfs` semantic test is
++unchanged except for cfg-only initialization of the new visit field. It compares
++production traversal with the full original DFS using independent real native
++sealed stores. Four 132-node cases cover 128-way mixed fanout/all six target
++kinds, duplicate edges, SCC/backedge behavior, missing dependencies, checked
++imports and copy symbols. It compares results, ordered `defines` callbacks,
++all 19 counters and settlement maps after each query, including repeated queries.
++
++The feature-only
++`native_adjacency_diagnostic_counts_actual_shadow_inspections` uses real native
++stores and calls production `Entries::usable`, asserting:
++
++| Path | Candidate inspections | Original inspections | Calls | Yields | Visits | Exhausted | Aborted |
++| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
++| Mixed 128-way root, complete exhaustion | 768 | 49792 | 130 | 128 | 2 | 2 | 0 |
++| Same root, missing dependency at named edge 65 | 386 | 12610 | 66 | 65 | 2 | 1 | 1 |
++
++Each root has 768 raw targets, all six target kinds, with repeated edges to an
++empty leaf. Both paths assert sum/max raw lengths and histogram. A subsequent
++settled lookup asserts that no fresh/stale report is captured. These counts are
++deterministic fixture requirements, not observed passing results yet.
++
++## Identity, controls and interpretation required of root
++
++Build a separately named `native-adjacency-dual-v51` diagnostic artifact with
++`hir-ty-codegen/native-adjacency-diagnostic` explicitly enabled. Record the full
++build command, feature controls, toolchain version, complete source snapshot
++identity, owned-file SHA manifest and final whole-binary SHA-256 in root evidence.
++Use separate build/artifact directories and the root's versioned native cache
++identity controls so the diagnostic cannot be mistaken for accepted stock/v50
++or reuse a non-diagnostic compiler artifact. This lane cannot supply a binary
++SHA without violating the prohibition on native builds, so that gate remains
++explicitly root-owned and incomplete.
++
++Replay the existing native workflow using that diagnostic identity, preserving
++root's workload/state controls, and retain all report lines by phase. Aggregate
++inspection counts, reached raw fanout, visits, yields, exhaustion and aborts.
++Do not infer scan attribution from workflow timing alone. Absence of traversal
++reports means no observed adjacency work, not a measured win.
++
++Dual-selector execution, counting, assertions and stderr reporting invalidate
++all diagnostic timings for speed claims. Any later performance decision still
++requires separate uninstrumented strict original/candidate measurements and the
++project's applicable native correctness gates. This diagnostic is attribution
++only and does not promote v50.

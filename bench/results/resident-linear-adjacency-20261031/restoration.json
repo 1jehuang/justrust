@@ -1,0 +1,18 @@
+{
+  "status": "RESTORED",
+  "observed": "2026-10-31T05:36:34Z",
+  "source_release": "2026-10-31T05:36:45Z",
+  "base_head": "96fd41f36b050b01a348bab29e80ec9cb46004aa",
+  "files": {
+    "toolchain/resident/crates/hir-ty-codegen/cached.rs": {
+      "sha256": "11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f",
+      "cmp_original": true,
+      "cmp_head": true
+    },
+    "toolchain/resident/crates/hir-ty-codegen/Cargo.toml": {
+      "sha256": "f46dec5b2cf06f30456f2379967d4bb1747c9e690ae35a1861d3775c95eab381",
+      "cmp_original": true,
+      "cmp_head": true
+    }
+  }
+}

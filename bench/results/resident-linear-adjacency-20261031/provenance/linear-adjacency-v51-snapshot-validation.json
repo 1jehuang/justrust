@@ -1,0 +1,167 @@
+{
+  "status": "passed",
+  "scope": "Visible worker-log snapshot work only, not fresh phase attribution. Diagnostic timings invalid.",
+  "native_rows": 7,
+  "reports_in_final_snapshot": 7043,
+  "warning": "Worker logs reset or are replaced, do not sum snapshots or infer fresh phase work. Zero visible reports are not independent proof of zero work.",
+  "rows": [
+    {
+      "captured_after": "cold-prepare",
+      "report_count": 0,
+      "snapshot_metrics": {},
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": null,
+      "original_over_candidate": null
+    },
+    {
+      "captured_after": "repeated-noop-1",
+      "report_count": 0,
+      "snapshot_metrics": {},
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": null,
+      "original_over_candidate": null
+    },
+    {
+      "captured_after": "manifest-feature-add",
+      "report_count": 8244,
+      "snapshot_metrics": {
+        "selector_calls": 115775,
+        "yielded": 70191,
+        "visits": 45621,
+        "raw_lengths": 109850,
+        "exhausted": 45584,
+        "aborted": 37,
+        "candidate_inspections": 109830,
+        "original_inspections": 416910,
+        "max_raw_length": 79
+      },
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": false,
+      "fanout": [
+        10135,
+        11799,
+        21143,
+        2471,
+        73,
+        0,
+        0,
+        0
+      ],
+      "original_over_candidate": 3.7959573886916145
+    },
+    {
+      "captured_after": "type-error",
+      "report_count": 8211,
+      "snapshot_metrics": {
+        "selector_calls": 115534,
+        "yielded": 70139,
+        "visits": 45432,
+        "raw_lengths": 109712,
+        "exhausted": 45395,
+        "aborted": 37,
+        "candidate_inspections": 109692,
+        "original_inspections": 417574,
+        "max_raw_length": 79
+      },
+      "worker_snapshot_reset_or_replaced": true,
+      "repeats_previous_visible_report_counts": false,
+      "fanout": [
+        10075,
+        11706,
+        21103,
+        2475,
+        73,
+        0,
+        0,
+        0
+      ],
+      "original_over_candidate": 3.8067862742952996
+    },
+    {
+      "captured_after": "type-recovery",
+      "report_count": 7043,
+      "snapshot_metrics": {
+        "selector_calls": 155316,
+        "yielded": 98592,
+        "visits": 56801,
+        "raw_lengths": 147780,
+        "exhausted": 56724,
+        "aborted": 77,
+        "candidate_inspections": 147623,
+        "original_inspections": 671534,
+        "max_raw_length": 151
+      },
+      "worker_snapshot_reset_or_replaced": true,
+      "repeats_previous_visible_report_counts": false,
+      "fanout": [
+        11962,
+        13972,
+        27285,
+        3436,
+        144,
+        2,
+        0,
+        0
+      ],
+      "original_over_candidate": 4.548979495065132
+    },
+    {
+      "captured_after": "assert-failure",
+      "report_count": 7043,
+      "snapshot_metrics": {
+        "selector_calls": 155316,
+        "yielded": 98592,
+        "visits": 56801,
+        "raw_lengths": 147780,
+        "exhausted": 56724,
+        "aborted": 77,
+        "candidate_inspections": 147623,
+        "original_inspections": 671534,
+        "max_raw_length": 151
+      },
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": [
+        11962,
+        13972,
+        27285,
+        3436,
+        144,
+        2,
+        0,
+        0
+      ],
+      "original_over_candidate": 4.548979495065132
+    },
+    {
+      "captured_after": "assert-recovery",
+      "report_count": 7043,
+      "snapshot_metrics": {
+        "selector_calls": 155316,
+        "yielded": 98592,
+        "visits": 56801,
+        "raw_lengths": 147780,
+        "exhausted": 56724,
+        "aborted": 77,
+        "candidate_inspections": 147623,
+        "original_inspections": 671534,
+        "max_raw_length": 151
+      },
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": [
+        11962,
+        13972,
+        27285,
+        3436,
+        144,
+        2,
+        0,
+        0
+      ],
+      "original_over_candidate": 4.548979495065132
+    }
+  ]
+}

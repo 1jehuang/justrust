@@ -1,0 +1,316 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/cached.rs b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+index 107adb533..26be9b753 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/cached.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+@@ -856,7 +856,7 @@ impl Drop for Writer {
+ struct Visit {
+     name: Arc<str>,
+     entry: Arc<Entry>,
+-    /// How many of the functions the entry refers to have been looked at.
++    /// The next raw `funcs` slot, including targets that are not named edges.
+     seen: usize,
+     /// The highest visit that this one or one below it calls back into: until that one is
+     /// settled, neither is this.
+@@ -1102,7 +1102,13 @@ impl Entries {
+             let depth = path.len() - 1;
+             let visit = &mut path[depth];
+             let entry = visit.entry.clone();
+-            let Some(callee) = entry.named().nth(visit.seen) else {
++            let Some(callee) = entry.funcs[visit.seen..].iter().find_map(|func| {
++                visit.seen += 1;
++                match &func.target {
++                    CachedTarget::Named(name) => Some(name.as_str()),
++                    _ => None,
++                }
++            }) else {
+                 let Some(done) = path.pop() else { break };
+                 if done.leans_on >= depth {
+                     for name in unsettled.drain(done.below..) {
+@@ -1116,7 +1122,6 @@ impl Entries {
+                 }
+                 continue;
+             };
+-            visit.seen += 1;
+             if let Some(&on) = leaning.get(callee) {
+                 visit.leans_on = visit.leans_on.min(on);
+                 continue;
+@@ -1230,6 +1235,194 @@ mod tests {
+             .load(std::sync::atomic::Ordering::Relaxed)
+     }
+ 
++    // Frozen pre-cursor DFS. Keep independent of the production adjacency selector so
++    // native fixtures compare settlement and counters, not just a model of the graph.
++    fn original_usable(this: &Entries, name: &str, defines: &dyn Fn(&str) -> bool) -> bool {
++        let settled = |name: &str| this.usable.shard(name).get(name).copied();
++        if let Some(usable) = settled(name) {
++            this.count(if usable { Miss::SettledPositive } else { Miss::SettledNegative });
++            return usable;
++        }
++        let name: Arc<str> = Arc::from(name);
++        let Some(entry) = this.get(&name).filter(|it| {
++            let links = it.links(defines);
++            if !links {
++                this.count(Miss::NativeImports);
++            }
++            links
++        }) else {
++            this.count(Miss::DirectUnavailable);
++            this.settle(name, false);
++            return false;
++        };
++        let mut unsettled = vec![name.clone()];
++        let mut leaning = FxHashMap::<Arc<str>, usize>::default();
++        leaning.insert(name.clone(), 0);
++        let mut path = vec![Visit { name, entry, seen: 0, leans_on: 0, below: 0 }];
++        while !path.is_empty() {
++            let depth = path.len() - 1;
++            let visit = &mut path[depth];
++            let entry = visit.entry.clone();
++            let Some(callee) = entry.named().nth(visit.seen) else {
++                let Some(done) = path.pop() else { break };
++                if done.leans_on >= depth {
++                    for name in unsettled.drain(done.below..) {
++                        leaning.remove(&name);
++                        this.settle(name, true);
++                    }
++                } else {
++                    leaning.insert(done.name, done.leans_on);
++                    let above = &mut path[depth - 1];
++                    above.leans_on = above.leans_on.min(done.leans_on);
++                }
++                continue;
++            };
++            visit.seen += 1;
++            if let Some(&on) = leaning.get(callee) {
++                visit.leans_on = visit.leans_on.min(on);
++                continue;
++            }
++            let found = match settled(callee) {
++                Some(true) => {
++                    this.count(Miss::DependencySettledPositive);
++                    continue;
++                }
++                Some(false) => {
++                    this.count(Miss::DependencySettledNegative);
++                    None
++                }
++                None => {
++                    let found = this.get(callee);
++                    if found.is_none() {
++                        this.count(Miss::DependencyUnavailable);
++                    }
++                    found.filter(|it| {
++                        let links = it.links(defines);
++                        if !links {
++                            this.count(Miss::DependencyNativeImports);
++                        }
++                        links
++                    })
++                }
++            };
++            let callee: Arc<str> = Arc::from(callee);
++            let Some(entry) = found else {
++                this.count(Miss::TransitiveFailure);
++                this.settle(callee, false);
++                for visit in path {
++                    this.settle(visit.name, false);
++                }
++                return false;
++            };
++            leaning.insert(callee.clone(), depth + 1);
++            unsettled.push(callee.clone());
++            path.push(Visit {
++                name: callee,
++                entry,
++                seen: 0,
++                leans_on: depth + 1,
++                below: unsettled.len() - 1,
++            });
++        }
++        this.count(Miss::UsablePositive);
++        true
++    }
++
++    fn graph_entry(targets: Vec<CachedTarget>) -> Entry {
++        let mut entry = dependency_fixture("unused");
++        entry.funcs =
++            targets.into_iter().map(|target| CachedFunc { target, sig: signature() }).collect();
++        entry
++    }
++
++    #[test]
++    fn native_linear_adjacency_matches_original_dfs() {
++        // Each pair has independent native stores and memo tables. Query every node
++        // after the root too, exposing partial SCC settlement after an early failure.
++        for failure in 0..4 {
++            let (candidate, candidate_dir) = stats_fixture();
++            let (original, original_dir) = stats_fixture();
++            let names: Vec<_> = (0..132).map(|n| format!("c:1f:linear::{failure}_{n}")).collect();
++            let mut root = Vec::new();
++            for name in &names[1..129] {
++                root.extend([
++                    CachedTarget::Root("not_a_dependency".into()),
++                    CachedTarget::Named(name.clone()),
++                    CachedTarget::TypeId(17),
++                    CachedTarget::Asm("nop".into()),
++                    CachedTarget::Import { symbol: "unchecked".into(), checked: false },
++                    CachedTarget::Copy { name: "copy".into(), symbol: "present".into() },
++                ]);
++            }
++            root.push(CachedTarget::Named(names[1].clone()));
++            root.push(CachedTarget::Named(names[129].clone()));
++            let mut graph = vec![graph_entry(root)];
++            for n in 1..names.len() {
++                let targets = match n {
++                    1 => vec![CachedTarget::Named(names[2].clone())],
++                    2 => vec![
++                        CachedTarget::Named(names[1].clone()),
++                        CachedTarget::Named(names[3].clone()),
++                    ],
++                    129 => vec![CachedTarget::Named(names[130].clone())],
++                    130 => match failure {
++                        0 => vec![CachedTarget::Named(names[0].clone())],
++                        1 => vec![CachedTarget::Named("c:1f:linear::missing".into())],
++                        2 => vec![CachedTarget::Import { symbol: "absent".into(), checked: true }],
++                        _ => vec![CachedTarget::Copy {
++                            name: "copy".into(),
++                            symbol: "absent".into(),
++                        }],
++                    },
++                    _ => Vec::new(),
++                };
++                graph.push(graph_entry(targets));
++            }
++            for (name, entry) in names.iter().zip(&graph) {
++                store_fixture(&candidate, name, entry);
++                store_fixture(&original, name, entry);
++            }
++            for name in names.iter().chain(names.iter()) {
++                let original_links = std::cell::RefCell::new(Vec::new());
++                let candidate_links = std::cell::RefCell::new(Vec::new());
++                let expected = original_usable(&original, name, &|symbol| {
++                    original_links.borrow_mut().push(symbol.to_owned());
++                    symbol == "present"
++                });
++                assert_eq!(
++                    candidate.usable(name, &|symbol| {
++                        candidate_links.borrow_mut().push(symbol.to_owned());
++                        symbol == "present"
++                    }),
++                    expected,
++                    "{failure}: {name}"
++                );
++                assert_eq!(candidate_links.into_inner(), original_links.into_inner());
++                for index in 0..MISS_LABELS.len() {
++                    let load = |entries: &Entries| {
++                        entries.miss_stats.as_ref().unwrap().0[index]
++                            .load(std::sync::atomic::Ordering::Relaxed)
++                    };
++                    assert_eq!(load(&candidate), load(&original), "{}: {name}", MISS_LABELS[index]);
++                }
++                for node in &names {
++                    assert_eq!(
++                        candidate.usable.shard(node.as_str()).get(node.as_str()).copied(),
++                        original.usable.shard(node.as_str()).get(node.as_str()).copied(),
++                        "settled {node}"
++                    );
++                }
++            }
++            assert_eq!(observed(&candidate, Miss::TransitiveFailure), u64::from(failure != 0));
++            assert_eq!(
++                observed(&candidate, Miss::DependencyNativeImports),
++                u64::from(failure >= 2)
++            );
++            std::fs::remove_dir_all(candidate_dir).unwrap();
++            std::fs::remove_dir_all(original_dir).unwrap();
++        }
++    }
++
+     #[test]
+     fn cache_miss_stats_gate_is_exact() {
+         use std::ffi::OsStr;
+diff --git a/docs/resident-linear-adjacency.md b/docs/resident-linear-adjacency.md
+new file mode 100644
+index 000000000..0798e10f2
+--- /dev/null
++++ b/docs/resident-linear-adjacency.md
+@@ -0,0 +1,79 @@
++# Resident cache DFS linear adjacency, v50
++
++## Status and provenance
++
++FROZEN_READY for root-owned exact acceptance. This is source-only work on the
++licensed Blaze-derived resident engine, not the clean-room compiler.
++No native build, native test, workload, timing, commit, or push was run by this
++lane. Formatting and whitespace checks are not native correctness acceptance.
++No runtime speedup is claimed. Root owns the prospective strict runtime baseline,
++native differential gates, and before/after workflow measurements.
++
++Owned paths, released at freeze:
++
++- `toolchain/resident/crates/hir-ty-codegen/cached.rs`
++- `docs/resident-linear-adjacency.md` (new)
++
++Accepted original `cached.rs` SHA-256:
++`11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f`.
++Full original, candidate, document, patch, and SHA manifest are preserved under
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/linear-adjacency-v50/`.
++The manifest identifies the frozen candidate bytes. The patch is limited to the
++two owned paths and can be applied to the accepted original checkout.
++
++## Narrow production change
++
++`Entries::usable` previously requested `entry.named().nth(visit.seen)` for each
++outgoing named edge. `named()` starts a `filter_map` over `funcs` from zero each
++time. For an all-named fanout of N, successful requests inspect
++`1 + 2 + ... + N` raw targets, and the final unsuccessful request scans N again.
++Mixed target kinds add repeated prefix work as well.
++
++`Visit::seen` now means the next raw `funcs` index. Each request starts at that
++index and increments it for every inspected raw target, returning the first
++`Named`. The next request resumes after that target. Non-named targets are
++consumed but never become DFS edges. At exhaustion, `seen == funcs.len()`, and
++an empty suffix takes the existing settlement branch. Each target of each
++visited entry is inspected at most once by this adjacency selector. This bound
++is about scan work, not elapsed time or total cache traversal complexity.
++
++The clone keeping the current entry alive is retained. Edge order, duplicate
++named edges, early exits, the SCC stack and low-link updates, settlement,
++native `links` checks, all miss counters, and lookup/fallback paths remain
++unchanged. `Entry::named` remains unchanged for native prefetch use.
++No key memo is proposed: `get` already derives its key inside the `OnceLock`
++initializer, on a miss rather than each lookup.
++
++## Native differential fixture supplied, not executed
++
++`native_linear_adjacency_matches_original_dfs` calls the production
++`Entries::usable` and a frozen copy of the original traversal, each against
++independent real native `Store` instances populated through encode, decode,
++insert, seal, and readback. This is not a standalone graph simulation.
++
++Four 132-node fixture variants exercise:
++
++- 128-way mixed fanout with all six `CachedTarget` kinds, duplicate named edges,
++  unchecked imports and valid copy symbols, plus empty adjacency leaves;
++- a two-node SCC, an outgoing settled leaf, and a late cycle back to the root;
++- a late missing named dependency;
++- a late unavailable checked native import;
++- a late unavailable copy symbol.
++
++Every node is queried in order twice, so positive/negative memo hits and partial
++settlement after failure are observable. After every query the test compares
++return values, the exact ordered native `defines` callbacks, every one of the
++19 miss-counter values, and each fixture node's settlement map value.
++Explicit final assertions require exactly one transitive failure in each
++failing variant and exactly one dependency-native-import failure in each
++native-symbol failure variant. Existing native direct-miss/import and
++negative-cache tests remain present and unchanged.
++
++## Source checks and next gate
++
++Only standalone `rustfmt --edition 2024 --config skip_children=true` on the
++owned Rust file and scoped `git diff --check` were run. Root must execute the
++exact native acceptance against the SHA-frozen candidate before treating these
++fixtures as passing. Root must preserve the accepted original for strict
++before/after runtime comparison. A successful differential test would establish
++fixture equivalence, not general semantic proof or a runtime improvement.

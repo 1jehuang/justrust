@@ -1,0 +1,126 @@
+{
+  "status": "PASS",
+  "native_jobs": false,
+  "cases": [
+    {
+      "case": "empty-home-path-isolated-relocation",
+      "status": "PASS",
+      "original_checkout_scratch_toolchain_forbidden": true,
+      "native_network_forbidden": true
+    },
+    {
+      "case": "runtime-freshness",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh invocation marker/count mismatch']",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "type-freshness",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "assert-freshness",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh assertion failure oracle failed']",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "exact-runtime-test",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['exact reference test names/status/counts/filtered mismatch']",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "success-exit",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['process was not successful']",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "failure-exit",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "original actual semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "exact-input-recipe",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "actual source edit recipe",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "unknown-noise",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "unknown noise retained",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "coherent-toolchain",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "pinned actual toolchain manifest",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "exact-native-shadow-fixture",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "exact shadow inspection fixture passed",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "feature-identity",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "explicit native diagnostic build feature",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "phase-order",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "exact phase order",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "promotion-invention",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "rejection and no latency/fresh attribution boundary",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "diagnostic-timing-invention",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "rejection and no latency/fresh attribution boundary",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "fresh-phase-invention",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "rejection and no latency/fresh attribution boundary",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "snapshot-hidden-reset",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "exact corrected snapshot replay",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "actual-shadow-bound",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "actual dual selector scan bounds",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "failed-analysis-overwrite",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "retain failed validator empty output",
+      "transport_checksums": "coherently resealed PASS"
+    },
+    {
+      "case": "restoration-receipt",
+      "status": "REJECTED_AS_EXPECTED",
+      "reason": "exact source restoration receipt",
+      "transport_checksums": "coherently resealed PASS"
+    }
+  ]
+}

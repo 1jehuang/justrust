@@ -1,0 +1,305 @@
+{
+  "id": "20261030-221418790-2299534",
+  "args": [
+    "test",
+    "--release",
+    "--locked",
+    "-p",
+    "hir-ty-codegen",
+    "-j",
+    "6"
+  ],
+  "subcommand": "test",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "96fd41f36b05",
+    "dirty_files": 3
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793423658.805323,
+  "wall": 80.12425923347473,
+  "exit": 0,
+  "cpu_secs": 326.72018599999996,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 379,
+    "processes": 11,
+    "sample_span_secs": 80.12343764305115,
+    "max_sample_gap_secs": 0.21760249137878418
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.25797367095947266,
+    "lock_wait": 0.0,
+    "compile": 78.07717990875244,
+    "build_gaps": 0.008376836776733398,
+    "test_run": 1.7445037364959717,
+    "tail": 0.036225080490112305
+  },
+  "units": {
+    "compiled": 3,
+    "local": 3,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 180,
+    "rustc_cpu_secs": 325.15,
+    "rustc_wall_sum": 96.24971342086792,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "hir_ty",
+      "kind": "lib",
+      "local": true,
+      "start": 7.245313882827759,
+      "wall": 49.84711241722107,
+      "wall_share": 40.76084554195404,
+      "cpu": 168.24674,
+      "max_rss_mb": 2304.109375,
+      "frontend_threads": null,
+      "rmeta_secs": 21.25658392906189,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 80429
+    },
+    {
+      "name": "hir_ty_codegen (test)",
+      "kind": "test",
+      "local": true,
+      "start": 57.09844422340393,
+      "wall": 21.242727041244507,
+      "wall_share": 21.242727279663086,
+      "cpu": 71.850166,
+      "max_rss_mb": 1562.59375,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    },
+    {
+      "name": "hir_def",
+      "kind": "lib",
+      "local": true,
+      "start": 0.25797367095947266,
+      "wall": 25.159873962402344,
+      "wall_share": 16.073607087135315,
+      "cpu": 85.053866,
+      "max_rss_mb": 1317.3828125,
+      "frontend_threads": null,
+      "rmeta_secs": 6.9826436042785645,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 52747
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [
+      {
+        "name": "hir_ty_codegen-d85c581ce11daf8e",
+        "start": 78.36298418045044,
+        "wall": 1.7445037364959717,
+        "passed": 54,
+        "failed": 0,
+        "filtered_out": 0
+      }
+    ],
+    "passed": 54,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 1.74,
+    "slowest": [
+      {
+        "name": "cached::tests::native_linear_adjacency_matches_original_dfs",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 1.741,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::types_and_scopes_inside_too_many_others_are_read_and_end",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.021,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::no_bytes_break_the_reading_of_an_entry",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.018,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::native_cache_stats_cover_debug_imports_bans_and_positive_scc",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.009,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::native_prefetch_missing_and_dependency_failures_are_distinct",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.009,
+        "passed": true
+      },
+      {
+        "name": "sve::tests::stubs_are_what_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.005,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::native_usable_negative_memo_is_not_a_fresh_missing_key",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.004,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::native_miss_arrival_reasons_follow_real_decode_and_remap",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_in_an_elf_object_share_it_unless_each_is_kept_alone",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.002,
+        "passed": true
+      },
+      {
+        "name": "tests::statics_of_one_section_share_it_in_a_mach_o_object",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.001,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_comment_of_two_slashes_is_one_gnu_as_reads",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_feature_with_no_extension_is_taken_with_its_architecture",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "avx512::tests::each_intrinsic_is_the_instruction_llvm_selects",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_crate_is_named_by_all_of_its_hash_and_a_key_by_all_of_a_name",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::cache_miss_stats_gate_is_exact",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "asm::tests::a_dollar_is_nothing_in_intel_syntax",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_file_of_the_library_is_stored_as_built_and_read_back_as_installed",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_fetched_file_is_not_taken_where_cargo_has_no_directory",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::a_directory_named_as_cargos_stands_in_is_not_mistaken_for_it",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      },
+      {
+        "name": "cached::tests::an_entry_is_read_back_as_it_was_written",
+        "binary": "hir_ty_codegen-d85c581ce11daf8e",
+        "secs": 0.0,
+        "passed": true
+      }
+    ],
+    "timed_secs": 1.812,
+    "timed": 54
+  },
+  "resources": {
+    "avg_build_cores": 4.077668725123154,
+    "peak_build_cores": 6.5222935773658355,
+    "peak_build_rss_mb": 2439.91796875,
+    "peak_unit_rss_mb": 2304.109375,
+    "min_mem_available_mb": 35537,
+    "avg_other_cores": 3.7708042157382535,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 1.0626869999999995,
+    "psi_mem_secs": 0.025831999999999997,
+    "psi_io_secs": 0.11703100000000001
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 228,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "hir-def",
+      "reason": "the file `vendor/rust-analyzer/crates/hir-def/src/expr_store/body.rs` has changed"
+    },
+    {
+      "package": "hir-ty",
+      "reason": "the dependency `hir-def` was rebuilt"
+    },
+    {
+      "package": "hir-ty-codegen",
+      "reason": "the dependency `hir-ty` was rebuilt"
+    }
+  ],
+  "all_units": 3,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-221418790-2299534.scope",
+    "final_weight": 153,
+    "setup_secs": 0.01410326,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

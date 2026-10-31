@@ -1,0 +1,11 @@
+{
+  "decision": "REJECTED",
+  "promotion": false,
+  "noise": "unknown",
+  "latency_claim": false,
+  "fresh_phase_attribution": false,
+  "diagnostic_timings_valid": false,
+  "snapshot_counts_overlap_or_reset": true,
+  "strict_timing_rows": 28,
+  "diagnostic_rows": 7
+}

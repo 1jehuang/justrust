@@ -1,0 +1,270 @@
+{
+  "status": "PASS",
+  "decision": "REJECTED",
+  "promotion": false,
+  "latency_claim": false,
+  "noise": "unknown",
+  "raw_rows": 35,
+  "strict_timing_rows": 28,
+  "diagnostic_rows": 7,
+  "native": {
+    "v43": [
+      53,
+      360
+    ],
+    "v50": [
+      54,
+      360
+    ],
+    "v51": [
+      55,
+      360
+    ]
+  },
+  "source_restored": true,
+  "diagnostic_timings_valid": false,
+  "fresh_phase_attribution": false,
+  "analysis_replay": {
+    "failed_delta": "worker report snapshots reset or lost, cannot attribute phase deltas",
+    "corrected_snapshot": "PASS"
+  },
+  "snapshot_rows": [
+    {
+      "captured_after": "cold-prepare",
+      "report_count": 0,
+      "snapshot_metrics": {},
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": null,
+      "original_over_candidate": null
+    },
+    {
+      "captured_after": "repeated-noop-1",
+      "report_count": 0,
+      "snapshot_metrics": {},
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": null,
+      "original_over_candidate": null
+    },
+    {
+      "captured_after": "manifest-feature-add",
+      "report_count": 8244,
+      "snapshot_metrics": {
+        "selector_calls": 115775,
+        "yielded": 70191,
+        "visits": 45621,
+        "raw_lengths": 109850,
+        "exhausted": 45584,
+        "aborted": 37,
+        "candidate_inspections": 109830,
+        "original_inspections": 416910,
+        "max_raw_length": 79
+      },
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": false,
+      "fanout": [
+        10135,
+        11799,
+        21143,
+        2471,
+        73,
+        0,
+        0,
+        0
+      ],
+      "original_over_candidate": 3.7959573886916145
+    },
+    {
+      "captured_after": "type-error",
+      "report_count": 8211,
+      "snapshot_metrics": {
+        "selector_calls": 115534,
+        "yielded": 70139,
+        "visits": 45432,
+        "raw_lengths": 109712,
+        "exhausted": 45395,
+        "aborted": 37,
+        "candidate_inspections": 109692,
+        "original_inspections": 417574,
+        "max_raw_length": 79
+      },
+      "worker_snapshot_reset_or_replaced": true,
+      "repeats_previous_visible_report_counts": false,
+      "fanout": [
+        10075,
+        11706,
+        21103,
+        2475,
+        73,
+        0,
+        0,
+        0
+      ],
+      "original_over_candidate": 3.8067862742952996
+    },
+    {
+      "captured_after": "type-recovery",
+      "report_count": 7043,
+      "snapshot_metrics": {
+        "selector_calls": 155316,
+        "yielded": 98592,
+        "visits": 56801,
+        "raw_lengths": 147780,
+        "exhausted": 56724,
+        "aborted": 77,
+        "candidate_inspections": 147623,
+        "original_inspections": 671534,
+        "max_raw_length": 151
+      },
+      "worker_snapshot_reset_or_replaced": true,
+      "repeats_previous_visible_report_counts": false,
+      "fanout": [
+        11962,
+        13972,
+        27285,
+        3436,
+        144,
+        2,
+        0,
+        0
+      ],
+      "original_over_candidate": 4.548979495065132
+    },
+    {
+      "captured_after": "assert-failure",
+      "report_count": 7043,
+      "snapshot_metrics": {
+        "selector_calls": 155316,
+        "yielded": 98592,
+        "visits": 56801,
+        "raw_lengths": 147780,
+        "exhausted": 56724,
+        "aborted": 77,
+        "candidate_inspections": 147623,
+        "original_inspections": 671534,
+        "max_raw_length": 151
+      },
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": [
+        11962,
+        13972,
+        27285,
+        3436,
+        144,
+        2,
+        0,
+        0
+      ],
+      "original_over_candidate": 4.548979495065132
+    },
+    {
+      "captured_after": "assert-recovery",
+      "report_count": 7043,
+      "snapshot_metrics": {
+        "selector_calls": 155316,
+        "yielded": 98592,
+        "visits": 56801,
+        "raw_lengths": 147780,
+        "exhausted": 56724,
+        "aborted": 77,
+        "candidate_inspections": 147623,
+        "original_inspections": 671534,
+        "max_raw_length": 151
+      },
+      "worker_snapshot_reset_or_replaced": false,
+      "repeats_previous_visible_report_counts": true,
+      "fanout": [
+        11962,
+        13972,
+        27285,
+        3436,
+        144,
+        2,
+        0,
+        0
+      ],
+      "original_over_candidate": 4.548979495065132
+    }
+  ],
+  "comparisons": [
+    {
+      "phase": "cold-prepare",
+      "seconds": {
+        "baseline": 17.679232644994045,
+        "candidate": 21.58780174999265,
+        "candidate-repeat": 17.30595648298913,
+        "baseline-repeat": 22.193074575989158
+      },
+      "first_percent": 22.10825086973067,
+      "reverse_percent": -22.020915021334776
+    },
+    {
+      "phase": "repeated-noop-1",
+      "seconds": {
+        "baseline": 0.03605960799905006,
+        "candidate": 0.037245341009111144,
+        "candidate-repeat": 0.03464654699200764,
+        "baseline-repeat": 0.03313245900790207
+      },
+      "first_percent": 3.288258180988324,
+      "reverse_percent": 4.569802632954167
+    },
+    {
+      "phase": "manifest-feature-add",
+      "seconds": {
+        "baseline": 8.062418757996056,
+        "candidate": 8.407645833998686,
+        "candidate-repeat": 8.054738356004236,
+        "baseline-repeat": 8.321986987008131
+      },
+      "first_percent": 4.281929360965586,
+      "reverse_percent": -3.2113560309708467
+    },
+    {
+      "phase": "type-error",
+      "seconds": {
+        "baseline": 8.013182003996917,
+        "candidate": 8.339233815990156,
+        "candidate-repeat": 8.22034053299285,
+        "baseline-repeat": 8.50241227800143
+      },
+      "first_percent": 4.068943046976914,
+      "reverse_percent": -3.3175496057559206
+    },
+    {
+      "phase": "type-recovery",
+      "seconds": {
+        "baseline": 8.381386509994627,
+        "candidate": 7.826072565003415,
+        "candidate-repeat": 7.667563476992655,
+        "baseline-repeat": 7.383817784997518
+      },
+      "first_percent": -6.625561824753124,
+      "reverse_percent": 3.8428046338257804
+    },
+    {
+      "phase": "assert-failure",
+      "seconds": {
+        "baseline": 1.7239440910052508,
+        "candidate": 1.8169287060009083,
+        "candidate-repeat": 1.6249111350043677,
+        "baseline-repeat": 1.6877640590100782
+      },
+      "first_percent": 5.3937140700100805,
+      "reverse_percent": -3.7240349840472087
+    },
+    {
+      "phase": "assert-recovery",
+      "seconds": {
+        "baseline": 0.47988472699944396,
+        "candidate": 0.4056540730089182,
+        "candidate-repeat": 0.41047383700788487,
+        "baseline-repeat": 0.509924055004376
+      },
+      "first_percent": -15.468434358114457,
+      "reverse_percent": -19.50294696249183
+    }
+  ]
+}
