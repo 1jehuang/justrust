@@ -1,0 +1,1599 @@
+{
+  "compilers": [
+    {
+      "check_exit": 101,
+      "check_sha256": "709dac69d3c4a3f1539e699ae81218d39ae72f8c07a789a215f93a77adf544f4",
+      "compile_exit": null,
+      "error_codes": [
+        "E0599",
+        "E0599"
+      ],
+      "version": 60
+    },
+    {
+      "check_exit": 101,
+      "check_sha256": "40347e4be122c4a89f84b33807962e5aff8010875fd5e4ef4f5b9cc8e558115b",
+      "compile_exit": null,
+      "error_codes": [
+        "E0282"
+      ],
+      "version": 61
+    },
+    {
+      "check_exit": 0,
+      "check_sha256": "c2cad3661e9b44544c3405746c582b4bbe99af437176629c162edae591df4b41",
+      "compile_exit": 0,
+      "error_codes": [],
+      "version": 62
+    },
+    {
+      "check_exit": 0,
+      "check_sha256": "b088953bbeaf264d7bd4b95772e2a6a8335524ab3f184e218c0398a558f02b35",
+      "compile_exit": 0,
+      "error_codes": [],
+      "version": 63
+    },
+    {
+      "check_exit": 0,
+      "check_sha256": "3b1ca46ed37871cb7e6e94e0ab27bbd1dacb555b600b7f2038d221668d150a42",
+      "compile_exit": 0,
+      "error_codes": [],
+      "version": 64
+    }
+  ],
+  "decision": "rejected-restored",
+  "groups": {
+    "manifest-cfg-reload-v64": {
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=125438"
+          ],
+          "elapsed_seconds": 4.4253031790140085,
+          "literal": "JR_GENERATION_ERROR_39f762ffea6f4eb6af279b09a6bb49ba",
+          "mode": "original",
+          "noise": {
+            "child_cpu_seconds": 0.023535,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 44.246465000018624
+          },
+          "nonce": "382b550cb8944dd7b703c70b61d24941",
+          "phase": "valid",
+          "raw_sha256": {
+            "daemon": "58a2effde11f35f4e2781772109cee6b1ca0ff635b1a0f9cbb5da74b484209d5",
+            "status": "488c3b31db1c28299789c88e77a8dd6070b0c5de76436236feaafd11dc739fe8",
+            "stderr": "7db63b3ef66d380db3a7a20bc4435cafe0f0bfcd26d64717e84268378695801b",
+            "stdout": "5223b912b158039b4b6068495a03fcfa648c242c18b7f1fab5f8e5af84a48a61"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "GEN_OK_382b550cb8944dd7b703c70b61d24941\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            125438
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=125438",
+            "worker-start pid=127614"
+          ],
+          "elapsed_seconds": 3.449057260004338,
+          "literal": "JR_GENERATION_ERROR_39f762ffea6f4eb6af279b09a6bb49ba",
+          "mode": "original",
+          "noise": {
+            "child_cpu_seconds": 0.020942999999999996,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 34.889057000032594
+          },
+          "nonce": "c8d121975ef042c197e7eb8eb0281a62",
+          "phase": "manifest-error",
+          "raw_sha256": {
+            "daemon": "2cdffbec880f60e1efee4c2aac729db75b2c5e88893de8bfd9b01cfa9ce49cb7",
+            "status": "2bb4c428e1b3a85b5bed849d692cfb4105b632652c5a23496faf5ad458680fdd",
+            "stderr": "8d1f220005d08f8858d9f8e5b4e168eb1ad17829a4f7ccd5dd7233f3b0e75443",
+            "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "status": 101,
+          "stderr": "error[E0308]: expected u32, found &'static str\nerror: could not compile `generation-fixture` (bin \"generation-fixture\") due to 1 previous error\nJR_GENERATION_ERROR_39f762ffea6f4eb6af279b09a6bb49ba\n",
+          "stdout": "",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            127614
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=125438",
+            "worker-start pid=127614",
+            "worker-start pid=129441"
+          ],
+          "elapsed_seconds": 4.2543433269893285,
+          "literal": "JR_GENERATION_ERROR_39f762ffea6f4eb6af279b09a6bb49ba",
+          "mode": "original",
+          "noise": {
+            "child_cpu_seconds": 0.028539999999999996,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 57.55145999995809
+          },
+          "nonce": "6f88f3eee27b462cbb1bc9f18c037863",
+          "phase": "recovery",
+          "raw_sha256": {
+            "daemon": "e573b27af011a4779b58ab162d3a88433002c41af1faa97dde1b013a7eabf26b",
+            "status": "7b0d0a9d07156985027895a165d1056e9909a8f6fe7428dbfc67ba8dc588ca32",
+            "stderr": "aa696b88c3e62ea3312bb019c823b7c890adc534d121fd0f87f8b125aa3baf54",
+            "stdout": "31fe541925decd0b16dbac0b3a730f836cc1eb6cf6e005b8ad1ba48e2e0cccab"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "GEN_OK_6f88f3eee27b462cbb1bc9f18c037863\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            129441
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=131318"
+          ],
+          "elapsed_seconds": 6.009660112002166,
+          "literal": "JR_GENERATION_ERROR_d8882088dd794b25bdff173442b139e9",
+          "mode": "off",
+          "noise": {
+            "child_cpu_seconds": 0.02815300000000001,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 84.08184699998603
+          },
+          "nonce": "a8c1aa20dbae49b59e21d8e6326ca36e",
+          "phase": "valid",
+          "raw_sha256": {
+            "daemon": "532013052f2bd9e77c294793273a75c73982529fa0e497936f93188590230eff",
+            "status": "932f00afb66e35c3a67853f96aed6934bcb6cda52e4e64d5db2fbb9d00abed05",
+            "stderr": "c3d897df2e1bc27c5f892cdd23ed16b1e0efc4fa6e4523bcf71918990c4ede40",
+            "stdout": "74d97767bf354a9855eb8182a9c27b7bf5d0d172ac72e9c3cfc464b0491f6e18"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "GEN_OK_a8c1aa20dbae49b59e21d8e6326ca36e\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            131318
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=131318",
+            "worker-start pid=133644"
+          ],
+          "elapsed_seconds": 4.3140351379988715,
+          "literal": "JR_GENERATION_ERROR_d8882088dd794b25bdff173442b139e9",
+          "mode": "off",
+          "noise": {
+            "child_cpu_seconds": 0.026180999999999982,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 54.29381900006519
+          },
+          "nonce": "d0f23321c38c4ec48471a2dbc81cb9e2",
+          "phase": "manifest-error",
+          "raw_sha256": {
+            "daemon": "c145066429a4482a4fd9127f34024651153d6ed5a1bc85127c8680d64ad2969c",
+            "status": "b09bd8bde6b8744448c3663e894c5d8fe2cd922cd650e88fc7c5f73288e44ce8",
+            "stderr": "4eaa0eae0bff5544d839aa607983fce4bbf268934d7cf61c502edc8abe733f55",
+            "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "status": 101,
+          "stderr": "error[E0308]: expected u32, found &'static str\nerror: could not compile `generation-fixture` (bin \"generation-fixture\") due to 1 previous error\nJR_GENERATION_ERROR_d8882088dd794b25bdff173442b139e9\n",
+          "stdout": "",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            133644
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=131318",
+            "worker-start pid=133644",
+            "worker-start pid=135446"
+          ],
+          "elapsed_seconds": 3.8956752340018284,
+          "literal": "JR_GENERATION_ERROR_d8882088dd794b25bdff173442b139e9",
+          "mode": "off",
+          "noise": {
+            "child_cpu_seconds": 0.02570800000000001,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 42.744292000018625
+          },
+          "nonce": "62c9e36be45d4d0791d3a58dbeb1e9a0",
+          "phase": "recovery",
+          "raw_sha256": {
+            "daemon": "f82b69fdc503620a1659b7b6c331543dcf918343f70afc3efc8f6354a7a96458",
+            "status": "0990d8d6d0f13d01006386d68df2f27d814c6b5d4375f0ce6683e967ec67df2a",
+            "stderr": "a43c515a813690bf9fbb34184b921292c7cf43c576a6fa0e42e36493dc917041",
+            "stdout": "52c120f9cb422af0fc5905278fe4947bf48d54d778575ed394167389e7fe31ff"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "GEN_OK_62c9e36be45d4d0791d3a58dbeb1e9a0\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            135446
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=137454"
+          ],
+          "elapsed_seconds": 18.69224632999976,
+          "literal": "JR_GENERATION_ERROR_5f3d2108a551444cbf76f851cf340457",
+          "mode": "on",
+          "noise": {
+            "child_cpu_seconds": 1.5886650000000002,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 244.77133499998604
+          },
+          "nonce": "f5a78bab6032439885ee875b3875662c",
+          "phase": "valid",
+          "raw_sha256": {
+            "daemon": "ab10412fc722584a079d1a260985ecbcb21a8a80678be38787f7ed8efe00b5ab",
+            "status": "f54b904fef96872a0e64c7e5d8d5183d68181be1b41c812af0fad0973a14c453",
+            "stderr": "cc9f7d90761ab384f6582f6d5a8cc906a08d45ce0f45d72f42bc785c365ab218",
+            "stdout": "084c60780f077601107faae3cce5a9567dc09746a90b4ae1a4b2be70ad886e33"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\n",
+          "stdout": "GEN_OK_f5a78bab6032439885ee875b3875662c\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            137454
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=137454",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "retained load failed, restarting cold: error[E0308]: expected u32, found &'static str",
+            "worker-start pid=142507"
+          ],
+          "elapsed_seconds": 7.680530694982735,
+          "literal": "JR_GENERATION_ERROR_5f3d2108a551444cbf76f851cf340457",
+          "mode": "on",
+          "noise": {
+            "child_cpu_seconds": 1.4576570000000004,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 51.222343000051225
+          },
+          "nonce": "689e5b10be6d450a9180dfe89cf8163b",
+          "phase": "manifest-error",
+          "raw_sha256": {
+            "daemon": "f0ce886409087a3dd8a424199585116ec6325a98f8fa9468fc25ef2b2998d5e6",
+            "status": "e7902562da62cf5deea3586f7a873a590fcbe48b0c85d2a6f9d3ef147103f92c",
+            "stderr": "9cccb07b38712a4e22de48f3cc5adbc73b304556db7cf60e4d44a579116f870a",
+            "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "status": 101,
+          "stderr": "generation-certificate result=known stage=ready\nerror[E0308]: expected u32, found &'static str\nerror: could not compile `generation-fixture` (bin \"generation-fixture\") due to 1 previous error\nJR_GENERATION_ERROR_5f3d2108a551444cbf76f851cf340457\n",
+          "stdout": "",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            142507
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=137454",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "retained load failed, restarting cold: error[E0308]: expected u32, found &'static str",
+            "worker-start pid=142507",
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=144294"
+          ],
+          "elapsed_seconds": 13.836170018999837,
+          "literal": "JR_GENERATION_ERROR_5f3d2108a551444cbf76f851cf340457",
+          "mode": "on",
+          "noise": {
+            "child_cpu_seconds": 1.24648,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 79.62351999999534
+          },
+          "nonce": "4dccc1e01c3444169ac9696a3d7ad047",
+          "phase": "recovery",
+          "raw_sha256": {
+            "daemon": "797af04642566d153aa88453cf1fd7cd35ec26c7e49412239542f54d8e29431b",
+            "status": "8afc1e5727935343802a6e432ea4146184ff71fa3e1b86fc0280fd76aa25f4fe",
+            "stderr": "85fa4af8468cf365736db4ccc0ca0047a3c67bba749b1ddcb547ab92248c9e51",
+            "stdout": "4d58003775b9add95558f99aa8b5764cd0550af1d7d694f20c5936c9e84be825"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\n",
+          "stdout": "GEN_OK_4dccc1e01c3444169ac9696a3d7ad047\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            144294,
+            142507
+          ]
+        }
+      ],
+      "state_sha256": "a360225b0d715d5f317efebe4393866c64235a2f05c187475f8b7c9582d9a17a",
+      "unchanged": true
+    },
+    "native-link-reload-v62-off": {
+      "engine_sha256": "5ab5ebe24e554914fe9c793311df2f0ef3ee8a7bf30e869ff7433e14de128408",
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "worker-start pid=4133876"
+          ],
+          "elapsed_seconds": 5.280400469986489,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 0.022393,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 58.61760700001397
+          },
+          "nonce": "bac77d265c0240c1b2c8f87417a5ce34",
+          "phase": "0-a",
+          "raw_sha256": {
+            "daemon": "7673423cd787990c2b3332773ad072dd4d5918298887b58b23f502b77db11fa2",
+            "status": "d738c9df0cd014eccee6305c5d69a5f25a95b37b5a98bee0dd7a0764ad07aaba",
+            "stderr": "10c615a57b918d626c778c51ce04e213a24f5ded5461f72231501a105c9dc1b7",
+            "stdout": "1bc59a435639f48ac350d6bc182d5a0be9bb75e2a8950e1cfdeba4c548f5cf7e"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "NATIVE_bac77d265c0240c1b2c8f87417a5ce34_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            4133876
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "b",
+          "daemon_events": [
+            "worker-start pid=4133876"
+          ],
+          "elapsed_seconds": 0.7798849550017621,
+          "expected": 22,
+          "noise": {
+            "child_cpu_seconds": 0.023024,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 6.056976000074505
+          },
+          "nonce": "867e5f4d9ddf4aa297dcbe5f6b109897",
+          "phase": "1-b",
+          "raw_sha256": {
+            "daemon": "7673423cd787990c2b3332773ad072dd4d5918298887b58b23f502b77db11fa2",
+            "status": "05a65d08c8df005dbc057f5f6dd102a145119aca43ba33aeaf56a541dd501703",
+            "stderr": "228a5df21be6be06e04ec2a45d02c4e61e7045a8b9c350296f718431ac2110a3",
+            "stdout": "3d712ccd44bc5a0068b61c2fd4838753a44c8d8da37a8e701254c0537e1a0699"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "NATIVE_867e5f4d9ddf4aa297dcbe5f6b109897_22\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            4133876
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "worker-start pid=4133876"
+          ],
+          "elapsed_seconds": 0.5878011920140125,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 0.02066499999999999,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 4.389334999916181
+          },
+          "nonce": "652e9421c98447b0832672c7c43f224d",
+          "phase": "2-a",
+          "raw_sha256": {
+            "daemon": "7673423cd787990c2b3332773ad072dd4d5918298887b58b23f502b77db11fa2",
+            "status": "1a26c9d4202cdc878257911befeac666ff4428a48ff733784e79233f5dbe03b6",
+            "stderr": "48fca09ab49b6402aa788a6f0e5e86826bbdb75a37503a68bdd53e827b636fa4",
+            "stdout": "e1af6cf29bd6bee9b99d6b1b159a216bd2ec83ecc7ab8fb8e77b6debf95bdba4"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "NATIVE_652e9421c98447b0832672c7c43f224d_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            4133876
+          ]
+        }
+      ],
+      "state_sha256": "48584bd194d93665143105d118a6eb6422454f9586318f8a7de47869820ac3b3",
+      "unchanged": true
+    },
+    "native-link-reload-v62-on": {
+      "engine_sha256": "5ab5ebe24e554914fe9c793311df2f0ef3ee8a7bf30e869ff7433e14de128408",
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "worker-start pid=4138795"
+          ],
+          "elapsed_seconds": 13.8490514360019,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 1.1983009999999998,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 122.97169900004191
+          },
+          "nonce": "db4d566e01be424db8dcc4e3c53c7814",
+          "phase": "0-a",
+          "raw_sha256": {
+            "daemon": "591fd0f004ff0891b8220b6f762ea46c0bddcde225bc243ab4c900e8d325f078",
+            "status": "71377fee1f0b607b81ef5899400ca098ec8af6786ac84f2b37fcd20af2c1de03",
+            "stderr": "dab3c937e470f18bb28d73cc1a9d38bea766358943aa872c92e26ed2d077294e",
+            "stdout": "88d49d7c3d52ea4a1cdfb556a07955ec61aeb77863f9ea7d1375388cd19730d0"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "NATIVE_db4d566e01be424db8dcc4e3c53c7814_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            4138795
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "b",
+          "daemon_events": [
+            "worker-start pid=4138795",
+            "worker-start pid=4142308"
+          ],
+          "elapsed_seconds": 14.544381651008734,
+          "expected": 22,
+          "noise": {
+            "child_cpu_seconds": 1.2763390000000001,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 121.78366100005587
+          },
+          "nonce": "261010ddc79c425f9f884cdbc8a306ad",
+          "phase": "1-b",
+          "raw_sha256": {
+            "daemon": "2fea5a11815381006810f0cbd9b193e803e277426843c423281482f53c289989",
+            "status": "ffbfb1b09aea2ab2637b385a3c4e0ec06adac1ebf1e23e45274a502fc5536eba",
+            "stderr": "763f9106492bd68b84a609f25ed3fabf56744dd650ee788d92a01ece653da9e2",
+            "stdout": "ab21a38814b009732aa641b8f6b0430061c0ab99eafe18ce7cfc2fecfee13a08"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "NATIVE_261010ddc79c425f9f884cdbc8a306ad_22\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            4142308
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "worker-start pid=4138795",
+            "worker-start pid=4142308",
+            "worker-start pid=4145404"
+          ],
+          "elapsed_seconds": 16.550890576007077,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 1.4118150000000007,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 170.20818499999535
+          },
+          "nonce": "008536f8213c4129b17dfc53549c4ba0",
+          "phase": "2-a",
+          "raw_sha256": {
+            "daemon": "d1501984c12382e129273929c3e6313c6995f2f4f253886d5f5928827dc11468",
+            "status": "829c5a34e385a8f2db0d108ef59cf55f2113d9bdeab24f37c14aeffcd0ec1cff",
+            "stderr": "b80ea91a42307e8f346967295fa3cd3864f88844e3aca7f8e93933c2146910e4",
+            "stdout": "bd6a58f8bd133d9c8915d10076779db3a50d621108a9464415e2141627c7424c"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "NATIVE_008536f8213c4129b17dfc53549c4ba0_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            4145404
+          ]
+        }
+      ],
+      "state_sha256": "9edc0d2c9281fc9358deb9df30816c71f337e3f2b49a7da8883dc23c6b19aeab",
+      "unchanged": true
+    },
+    "native-link-reload-v63-on": {
+      "engine_sha256": "a281c570dd944f98f306ec91363eeb2f7cbc5f10ffd9231c15ba472cf2a046bf",
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=false ready=false old_known=false new_known=false certificate_equal=false prior_failed=false",
+            "worker-start pid=62350"
+          ],
+          "elapsed_seconds": 15.056215207005152,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 1.7596530000000001,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 120.00034700000931
+          },
+          "nonce": "4c50396127f444faa87253fd0d7dccbd",
+          "phase": "0-a",
+          "raw_sha256": {
+            "daemon": "0409f747cf4be4c9b62d241c4a463c6d73fb8cbf025f44d2939c54b21beffa91",
+            "status": "95e1774598c3219554c95105e1fbfcbbe7664e4d1fb6727d35089446d459627b",
+            "stderr": "0fae74ff1e9abf9c136a884171ace14925c08acbe5b9fcc35e7fb4a4f6b85a44",
+            "stdout": "1b5915016fe512cb10f53bbb0f566ea9ab3d4260a81c9e6e2406e7d901d44d3a"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=unknown stage=plan\n",
+          "stdout": "NATIVE_4c50396127f444faa87253fd0d7dccbd_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            62350
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "b",
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=false ready=false old_known=false new_known=false certificate_equal=false prior_failed=false",
+            "worker-start pid=62350",
+            "generation-parent reason=cold-not-kept worker=true alive=true key=true generation_equal=true kept=false ready=true old_known=false new_known=false certificate_equal=false prior_failed=false",
+            "worker-start pid=65742"
+          ],
+          "elapsed_seconds": 13.915020704007475,
+          "expected": 22,
+          "noise": {
+            "child_cpu_seconds": 1.020048,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 89.24995199990221
+          },
+          "nonce": "75715405b0d54f35a861e9dccef7ec12",
+          "phase": "1-b",
+          "raw_sha256": {
+            "daemon": "7e7110242c0c420462c12eb365303d5f43279b1100b5d3afcf394f773aca47c3",
+            "status": "b806370436679a7482f5c3569b8c10de6199648417d5cdd1fd60622679723bf0",
+            "stderr": "94a16b1fae8a51bb600f580eca50227c7f9325bb7edc81203fecf1b44b34d4b3",
+            "stdout": "6956795faf4e6dd7aa6e92590a1058470a139cebe446e7f30a0bfed7b10010be"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=unknown stage=plan\n",
+          "stdout": "NATIVE_75715405b0d54f35a861e9dccef7ec12_22\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            65742
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=false ready=false old_known=false new_known=false certificate_equal=false prior_failed=false",
+            "worker-start pid=62350",
+            "generation-parent reason=cold-not-kept worker=true alive=true key=true generation_equal=true kept=false ready=true old_known=false new_known=false certificate_equal=false prior_failed=false",
+            "worker-start pid=65742",
+            "generation-parent reason=cold-not-kept worker=true alive=true key=true generation_equal=true kept=false ready=true old_known=false new_known=false certificate_equal=false prior_failed=false",
+            "worker-start pid=69215"
+          ],
+          "elapsed_seconds": 17.500889980990905,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 1.729282,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 192.4607179999441
+          },
+          "nonce": "4c77add7d0d14e7ca27bb157cb4f6b81",
+          "phase": "2-a",
+          "raw_sha256": {
+            "daemon": "bd39f58c0c1050610b11acdca971ddc7b6ad519d2bf457d13e3a7ce5fabfef67",
+            "status": "b0050359b87542ac8b9481420854bb1e77f2502bb2211bdd7cbb5dfae4f136da",
+            "stderr": "1333a9008c237f055b16be6775f3724602b00e915790a7a45c1523942757d08a",
+            "stdout": "1070b2295730637236c08570e043e049a08399a91990a7645179f34bbbee9528"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=unknown stage=plan\n",
+          "stdout": "NATIVE_4c77add7d0d14e7ca27bb157cb4f6b81_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            69215
+          ]
+        }
+      ],
+      "state_sha256": "034410938c26aab12cb042cd856df42c17e2304d6490534f16ced482c44367f3",
+      "unchanged": true
+    },
+    "native-link-reload-v64-on": {
+      "engine_sha256": "93b52515b2eb80bc963100414492ee4249e070d23c6244bdda8d85d3a7438a57",
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=114375"
+          ],
+          "elapsed_seconds": 14.066238575993339,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 1.392221,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 88.70777900009313
+          },
+          "nonce": "bfa777aa18f6448ebd31c9925ff9227e",
+          "phase": "0-a",
+          "raw_sha256": {
+            "daemon": "c26fc7e69650c944a5a1909074b6fdcd00632eb238c9b48279370bb5e78a6bfe",
+            "status": "07058361eb68158ddd71ee8ff5f971af3d1cf1ba96507981b60a125ef6f8d87f",
+            "stderr": "762a35dc9f486a27e891994062dd535b25f32995c17745b5b151b1cbcbe51a95",
+            "stdout": "8aa662e2efee990d7572d57f6896cff11f46fa4a4e9d7a24cb85b2c1421f1268"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\n",
+          "stdout": "NATIVE_bfa777aa18f6448ebd31c9925ff9227e_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            114375
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "b",
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=114375",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false"
+          ],
+          "elapsed_seconds": 6.214020339975832,
+          "expected": 22,
+          "noise": {
+            "child_cpu_seconds": 1.6153169999999997,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 64.44468300005587
+          },
+          "nonce": "f274e91ad8b44a099b234a22904a6044",
+          "phase": "1-b",
+          "raw_sha256": {
+            "daemon": "a0e1bb70ff1f839e15472059924bab33befd900fae13ad0f44492b95c7fd7fc2",
+            "status": "0e575693812ccccfb09e818add2eee9d25099d632557df01a01c54ba51612da3",
+            "stderr": "0df31e0e4dcc8f0790f4807b70fbb1ef398accf9e4baedf02047916cacee3b67",
+            "stdout": "fee8d288e8e89dc8286f77f22b6b20ce742d8ac230c972b36c9273fcaad9b335"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\n",
+          "stdout": "NATIVE_f274e91ad8b44a099b234a22904a6044_22\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            114375
+          ]
+        },
+        {
+          "accepted": true,
+          "choice": "a",
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=114375",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false"
+          ],
+          "elapsed_seconds": 5.996725848992355,
+          "expected": 11,
+          "noise": {
+            "child_cpu_seconds": 1.7130960000000002,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 69.59690399993946
+          },
+          "nonce": "c17e0e43b749448f9b08ba47118f1282",
+          "phase": "2-a",
+          "raw_sha256": {
+            "daemon": "d1a28e4f946923acb12c0731506581db383d9f5a2e448c56f40e16c680089923",
+            "status": "18da922ac3d8aeea07d3de628f8fd0653f10d7b45ceccf79489ca51496e9fa5a",
+            "stderr": "e6a48aff6f5dc98f7054031cd5f4142893c082931d56a959a512023655980824",
+            "stdout": "4b750c2fd91bc0965081e2fe7b9769e269ab1108bc4a96ff478b86b9dd5bad71"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\n",
+          "stdout": "NATIVE_c17e0e43b749448f9b08ba47118f1282_11\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            114375
+          ]
+        }
+      ],
+      "state_sha256": "4998e6ea27121f8be111ebc6c5fe8f8a09baf513153f4bfd61d09aa30b8cf875",
+      "unchanged": true
+    },
+    "whole-generation-v64-off-seven": {
+      "engine_sha256": "93b52515b2eb80bc963100414492ee4249e070d23c6244bdda8d85d3a7438a57",
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386"
+          ],
+          "elapsed_seconds": 30.49629395600641,
+          "noise": {
+            "child_cpu_seconds": 0.622757,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 410.1072429999814
+          },
+          "nonce": "194d4c61617a4c26beb66f9acff538c4",
+          "phase": "cold-prepare",
+          "raw_sha256": {
+            "daemon": "73f91e1fcf53350da501a6f32333c2f2cc280dcfefece478c7f3f64fc6c7ceb9",
+            "status": "ff838a0c601b570261829c139405c84bc1123a15bddc41655c1ce6ec1d5ff4f8",
+            "stderr": "748a87b7f73e37cd4cc5c0d3a8452a1cb8fdaddf672ea45f12c83ee87c1b57b0",
+            "stdout": "b25d19e54bacf1eec26820ccd6d4620094bc76d1d890a42a53d811327da02895"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_194d4c61617a4c26beb66f9acff538c4\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            181386
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386"
+          ],
+          "elapsed_seconds": 0.03837441498762928,
+          "noise": {
+            "child_cpu_seconds": 0.04128899999999991,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 0.1687109999627472
+          },
+          "nonce": "317f1deef7a64bd78143606e243fc842",
+          "phase": "repeated-noop-1",
+          "raw_sha256": {
+            "daemon": "73f91e1fcf53350da501a6f32333c2f2cc280dcfefece478c7f3f64fc6c7ceb9",
+            "status": "d5cd2b25f6c4cf17be81c8155c9d1f4eb277df4ca930fc15d9fd483afd425df4",
+            "stderr": "f22eef9705358a22147fbbdac6c9a1c07290274d2bc54e9050234d1e193d1b6a",
+            "stdout": "95345ab52b821324b369df4f878e8ca0fdd1c2adf01c43fdfca275d5fd72eb7d"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_317f1deef7a64bd78143606e243fc842\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            181386
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386",
+            "worker-start pid=187263"
+          ],
+          "elapsed_seconds": 8.886861979990499,
+          "noise": {
+            "child_cpu_seconds": 0.04091700000000009,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 84.59908300001398
+          },
+          "nonce": "cb539cbb04b24be98cef13a96e847349",
+          "phase": "manifest-feature-add",
+          "raw_sha256": {
+            "daemon": "625b9770f7e453803453450aec1c58757afcd0607583da1d08d0c0915b062ae9",
+            "status": "53774c8142f85acf624bc3dd41cdd72b1f0e73f58ca1bec62ad5cde8c0ec801b",
+            "stderr": "bb8dc96d5dbbf7d40796d6775cc5b1e2938b7733a0d060f9441b13da159e697d",
+            "stdout": "a65b81107464848993ff923d0e617dd700051821ab9a2f7eb4ca2d336a2b821d"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_cb539cbb04b24be98cef13a96e847349\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            187263
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386",
+            "worker-start pid=187263",
+            "worker-start pid=191081"
+          ],
+          "elapsed_seconds": 9.262102815991966,
+          "noise": {
+            "child_cpu_seconds": 0.033067999999999986,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 88.56693199997672
+          },
+          "nonce": "34b71eee655242a4b1bf070ed0f4d577",
+          "phase": "type-error",
+          "raw_sha256": {
+            "daemon": "d43a621f642f0e0748d2702e9755fef5bb8947c584363d0d2c84c032c61fbb86",
+            "status": "8299eb9e20c44e3f463920259ce4624a1319e978696ecf50bb51a190ba762754",
+            "stderr": "2c7e9f0f73e9ab79aef3f8e9149b56eb5b8ec03e2bb72f66a59fd5757b4e72e7",
+            "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "status": 101,
+          "stderr": "error[E0308]: expected u64, found &'static str\nerror: could not compile `justrust` (lib test) due to 1 previous error\nJR_MATRIX_TYPE_34b71eee655242a4b1bf070ed0f4d577\n",
+          "stdout": "",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            191081
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386",
+            "worker-start pid=187263",
+            "worker-start pid=191081",
+            "worker-start pid=194980"
+          ],
+          "elapsed_seconds": 11.071772007999243,
+          "noise": {
+            "child_cpu_seconds": 0.0553499999999999,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 146.65464999996274
+          },
+          "nonce": "6d127c94ce3042de9e4cb15de2f5ce68",
+          "phase": "type-recovery",
+          "raw_sha256": {
+            "daemon": "33d02acc5d650fa3f7b6221562ac9ebff992df20cc4f6d664f98627d0f0878ee",
+            "status": "603b19295c2a448c8ee35e7439e1bbe4bf761a19387cd95906ce97d775e1cd6c",
+            "stderr": "248d443b1c37f967019ee23d03855a6cb4630462ea95815f374e80881f5d3ac7",
+            "stdout": "69f1abe3ac9d3f38be4a065bccb4b3a7a6750910ac3f84076a5117864ffa8344"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_6d127c94ce3042de9e4cb15de2f5ce68\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            194980
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386",
+            "worker-start pid=187263",
+            "worker-start pid=191081",
+            "worker-start pid=194980"
+          ],
+          "elapsed_seconds": 2.8955337759980466,
+          "noise": {
+            "child_cpu_seconds": 0.05722399999999994,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 40.11277600004191
+          },
+          "nonce": "96021bd049574307bfe90d7bea8e3f76",
+          "phase": "assert-failure",
+          "raw_sha256": {
+            "daemon": "33d02acc5d650fa3f7b6221562ac9ebff992df20cc4f6d664f98627d0f0878ee",
+            "status": "1c44582c0db41faf037d113fff198110ac4524421c25d604dddffb8bcebca6df",
+            "stderr": "ed3bc07a2eab552bff6b640dff010ade8c95deed257e293f1fde7320fcc81c80",
+            "stdout": "4c5d582f4dd6ed7eec8a055f59c40460e247101d6cb0b9385099f91f1f41591f"
+          },
+          "status": 101,
+          "stderr": "assertion `left == right` failed: JR_MATRIX_FAILURE_96021bd049574307bfe90d7bea8e3f76\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_96021bd049574307bfe90d7bea8e3f76\nFAILED\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            194980
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "worker-start pid=181386",
+            "worker-start pid=187263",
+            "worker-start pid=191081",
+            "worker-start pid=194980"
+          ],
+          "elapsed_seconds": 0.5810974630003329,
+          "noise": {
+            "child_cpu_seconds": 0.05705500000000008,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 6.22294500002794
+          },
+          "nonce": "58a0fcfc47a34a89bfa7ae72cd704ce6",
+          "phase": "assert-recovery",
+          "raw_sha256": {
+            "daemon": "33d02acc5d650fa3f7b6221562ac9ebff992df20cc4f6d664f98627d0f0878ee",
+            "status": "9fd25c55c0fe6e4588044bff46fcfce7efb9d9d39892fe91a8eb10a174a94caa",
+            "stderr": "eee6022bb645a896a8a11c5a95a25ce09d7bb35fd3850f51d466c2a31a74bab5",
+            "stdout": "9d526eb4136d9a8eabb2ba734f581c6010a3e30b5edea716b37fd82f39e028b9"
+          },
+          "status": 0,
+          "stderr": "",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_58a0fcfc47a34a89bfa7ae72cd704ce6\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            194980
+          ]
+        }
+      ],
+      "state_sha256": "e95953658e30f6e061a0990170c98e08602ce7c5c3af359686c26135284e5fc8",
+      "unchanged": true
+    },
+    "whole-generation-v64-on-seven": {
+      "engine_sha256": "93b52515b2eb80bc963100414492ee4249e070d23c6244bdda8d85d3a7438a57",
+      "recorded_status": "passed",
+      "rows": [
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379"
+          ],
+          "elapsed_seconds": 37.96501654500025,
+          "noise": {
+            "child_cpu_seconds": 3.015103,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 469.78489700004656
+          },
+          "nonce": "7265b210846c4f07857ea8bb138a93e1",
+          "phase": "cold-prepare",
+          "raw_sha256": {
+            "daemon": "53892ae5c7690a41ca5169af6343b801de9bb0cd4e812eefc992eabd9f734b1e",
+            "status": "e0e8d5239e2073f2a96d59512a7705b8a22160ecc5dc911953b5321c7734b888",
+            "stderr": "4630be0fedda47ef75b5cd6cd2eef0e2b866865bdee352eb6b723e1c427673af",
+            "stdout": "e31ec11eeab35e297a9dbdb10259df6f6221f9bed10a5e455358e2d0fad71e02"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_7265b210846c4f07857ea8bb138a93e1\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            151379
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false"
+          ],
+          "elapsed_seconds": 7.041846920008538,
+          "noise": {
+            "child_cpu_seconds": 3.5237300000000005,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 82.8162699999674
+          },
+          "nonce": "2adf4df0260e4dd2b2d6d365dc745dc0",
+          "phase": "repeated-noop-1",
+          "raw_sha256": {
+            "daemon": "9296b93dd43b25e4b54ba1fd91caeff8aa5083df564c6ded37db7dc32f93972a",
+            "status": "e0e8d5239e2073f2a96d59512a7705b8a22160ecc5dc911953b5321c7734b888",
+            "stderr": "218f674759b7917dfe1dc0e880495742c45a04ce217ce830aa64eb2b6b56342e",
+            "stdout": "f7bc3d460f14f672e65cff9ad1aa47ccf8a714caa55d573bedeebbee3a3b4d68"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_2adf4df0260e4dd2b2d6d365dc745dc0\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            151379
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "whole-generation retained-load success pid=151379 generation=302221599529555943573272454090828853158"
+          ],
+          "elapsed_seconds": 20.33479580000858,
+          "noise": {
+            "child_cpu_seconds": 2.833451,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 118.03654899999535
+          },
+          "nonce": "b85218541f9143f59498ad0e88e9cebe",
+          "phase": "manifest-feature-add",
+          "raw_sha256": {
+            "daemon": "33414cef6e3f5521ceccf6c34d6c0f92a8e81a2bf2e6475354d41c6f90ffda91",
+            "status": "38fd82e8af45341876d23f2feaad9828d4d6b83496b1cdccdcd98ec972fa67e1",
+            "stderr": "cca239e73be9bb014e663b624ef241ead5e203178aacfa452a41e349b1d4014c",
+            "stdout": "d6ee2244af052f8db825467b5f8ff3defa7c078b45214027dcf7886db1050354"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_b85218541f9143f59498ad0e88e9cebe\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            151379
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "whole-generation retained-load success pid=151379 generation=302221599529555943573272454090828853158",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "retained load failed, restarting cold: error[E0308]: expected u64, found &'static str",
+            "worker-start pid=167572"
+          ],
+          "elapsed_seconds": 20.495901337009855,
+          "noise": {
+            "child_cpu_seconds": 2.668071000000001,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 234.29192899996275
+          },
+          "nonce": "053163c3f45449c0b7c2f93f01292c6b",
+          "phase": "type-error",
+          "raw_sha256": {
+            "daemon": "97bff128ceb0be8ace457865632eb0b8f3139bfcf419203f42e1a7fbf4346935",
+            "status": "50f73308012d64dfa838d33ede11d6ec4613e67304a44b6725232221451ba15d",
+            "stderr": "8e2e65969a9ac76e251441b14faa114adea78e821f77df497d113a205dba1df6",
+            "stdout": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "status": 101,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\nerror[E0308]: expected u64, found &'static str\nerror: could not compile `justrust` (lib test) due to 1 previous error\nJR_MATRIX_TYPE_053163c3f45449c0b7c2f93f01292c6b\n",
+          "stdout": "",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            167572
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "whole-generation retained-load success pid=151379 generation=302221599529555943573272454090828853158",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "retained load failed, restarting cold: error[E0308]: expected u64, found &'static str",
+            "worker-start pid=167572",
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=171844"
+          ],
+          "elapsed_seconds": 23.860281757020857,
+          "noise": {
+            "child_cpu_seconds": 3.564439,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 247.6755609999907
+          },
+          "nonce": "b781d589979a4025b1f1156668958450",
+          "phase": "type-recovery",
+          "raw_sha256": {
+            "daemon": "4f05ff26f29cf020255d9a3a743d5877a4ea30bd1e13680fc3f1becaadcb6598",
+            "status": "884299fd409913a323caf6bdf745fdcdc8bc42e123a4a8463ab44f2952109501",
+            "stderr": "f649dbb735c90881dc2d6fb38f773b94993f936860e9cc5ff4b91fd4f68f2aa4",
+            "stdout": "54888faefdb1f03a7c665f17681968bc2a5ec9db09a2918e9451816cfee83183"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_b781d589979a4025b1f1156668958450\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            167572,
+            171844
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "whole-generation retained-load success pid=151379 generation=302221599529555943573272454090828853158",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "retained load failed, restarting cold: error[E0308]: expected u64, found &'static str",
+            "worker-start pid=167572",
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=171844",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false"
+          ],
+          "elapsed_seconds": 5.9040803629904985,
+          "noise": {
+            "child_cpu_seconds": 3.2096649999999975,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 43.700335000032595
+          },
+          "nonce": "de8f131b92e74d65a535254bae19480e",
+          "phase": "assert-failure",
+          "raw_sha256": {
+            "daemon": "7a2ada7d5c52fd41d481915d7f6b8f8260852a8f9dc245e22742d0fe9152bbea",
+            "status": "5df0d5dc5cace3ebb3751ac421e6fcf2675fa68e84edc306a8c8f082ae52010a",
+            "stderr": "da233722cf37d52d00dcd80e40d8ba397f34bc8cc16e1b80972def83f2cc3af1",
+            "stdout": "4bd8b3faec18d0e59ca6c6867631aa0352f5e6c341b5dac13708d81e0e84fc1b"
+          },
+          "status": 101,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\nassertion `left == right` failed: JR_MATRIX_FAILURE_de8f131b92e74d65a535254bae19480e\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_de8f131b92e74d65a535254bae19480e\nFAILED\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            167572,
+            171844
+          ]
+        },
+        {
+          "accepted": true,
+          "daemon_events": [
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=151379",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "whole-generation retained-load success pid=151379 generation=302221599529555943573272454090828853158",
+            "generation-parent reason=retained-load-candidate worker=true alive=true key=true generation_equal=false kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "retained load failed, restarting cold: error[E0308]: expected u64, found &'static str",
+            "worker-start pid=167572",
+            "generation-parent reason=cold-no-worker worker=false alive=false key=false generation_equal=false kept=true ready=false old_known=false new_known=true certificate_equal=false prior_failed=false",
+            "worker-start pid=171844",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false",
+            "generation-parent reason=same-generation worker=true alive=true key=true generation_equal=true kept=true ready=true old_known=true new_known=true certificate_equal=true prior_failed=false"
+          ],
+          "elapsed_seconds": 4.929700268985471,
+          "noise": {
+            "child_cpu_seconds": 2.7306290000000004,
+            "contamination": "unknown",
+            "other_cpu_seconds_estimate": 21.15937100001397
+          },
+          "nonce": "09ddd53256c64f8d81b409604014913e",
+          "phase": "assert-recovery",
+          "raw_sha256": {
+            "daemon": "572baab3c3b46b63befa2690c734753a2ae8a9a0152a3d4b762f949d6134b82d",
+            "status": "e35dbb0be24efb503d7a75361bac7dc08d13ae0d91e40145cbca112b2b95845c",
+            "stderr": "7ebe52fca7883d746d13b920ae5a5cc2cf9cddd3a145918f9eacdcf6498a96f5",
+            "stdout": "7b33d58a755daa2015dbe4b6be33b46de8821fb0cbf2bc251faab5e47bfad0c9"
+          },
+          "status": 0,
+          "stderr": "generation-certificate result=known stage=ready\ngeneration-certificate result=known stage=ready\n",
+          "stdout": "running 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_09ddd53256c64f8d81b409604014913e\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n",
+          "timed_out": false,
+          "transport_error": false,
+          "worker_pids": [
+            167572,
+            171844
+          ]
+        }
+      ],
+      "state_sha256": "11e24c43abbbec094874de117b059133da83209d53a3b9798fd29f7c1dd3647c",
+      "unchanged": true
+    }
+  },
+  "process_stops": [
+    {
+      "case": "whole-generation-v64-on-seven",
+      "post_measurement_only": true,
+      "status": 0,
+      "timed_out": false
+    },
+    {
+      "case": "whole-generation-v64-off-seven",
+      "post_measurement_only": true,
+      "status": 0,
+      "timed_out": false
+    }
+  ],
+  "restoration": {
+    "accepted_base": "69669f0c7b28721fc3130eb801311e7e7afca962",
+    "files": [
+      {
+        "path": "crates/ra-jit/src/cargo/whole.rs",
+        "sha256": "34b391dd07b92e735b7f640641c8298897c4ec9d3c239493682985c43a473b81"
+      },
+      {
+        "path": "crates/ra-jit/src/cargo/daemon.rs",
+        "sha256": "d488bffe1498847e8e234e6513474c26b38b19939b94915feacaa60decbe0b5c"
+      },
+      {
+        "path": "crates/ra-jit/src/main.rs",
+        "sha256": "0246385937d776e28fc87a0484db8830078f6bc629e930c988f5acb82b63d176"
+      },
+      {
+        "path": "crates/ra-jit/src/inputs.rs",
+        "sha256": "e8c984ea20e4376c21307ee67a2306851945b80b32f4807439c05ddc09b0d798"
+      },
+      {
+        "path": "crates/ra-jit/src/answers.rs",
+        "sha256": "1cd06c69f416f5dfecd74faeab4540594442c7e1e8601a5426e62e848a4913cd"
+      },
+      {
+        "path": "crates/ra-jit/src/answers/cargo.rs",
+        "sha256": "15710e16fe7ed97e112329bacb3e6defcab9acfdefd172d67cc61613c1fde253"
+      },
+      {
+        "path": "crates/ra-jit/src/plan.rs",
+        "sha256": "2beccd0d2291fe087618ce04625550bf4dfe0ea40c8f960669011cb9fba7da60"
+      },
+      {
+        "path": "crates/ra-jit/src/link.rs",
+        "sha256": "164fa609088792415828422f9d46b98ec4f21a2b5996b409b2a4ec42004cc921"
+      },
+      {
+        "path": "vendor/rust-analyzer/crates/load-cargo/src/lib.rs",
+        "sha256": "3ac6621e55b3c1f885b79785cdf62fdf1b0c03fd55cca8f9ebf1ce6f24c2ecc7"
+      }
+    ],
+    "method": "write-from-immutable-originals-then-cmp-and-git-diff-HEAD",
+    "rejected_live_ten_preserved": true,
+    "verified_at_utc": "2026-10-31T10:18:22Z"
+  },
+  "schema": 1,
+  "source_inventories": {
+    "60": {
+      "files": [
+        {
+          "path": "crates/ra-jit/src/cargo/whole.rs",
+          "sha256": "cc01a56a8579905e620b9774a504029b6498f264d6eb121e15fd99919713a741"
+        },
+        {
+          "path": "crates/ra-jit/src/cargo/daemon.rs",
+          "sha256": "9e21fd021efd3a9d953d05cfe08ca597bef03ebf04d537b19b1900334b83a7aa"
+        },
+        {
+          "path": "crates/ra-jit/src/main.rs",
+          "sha256": "2f186d642318bc9c3e7c5a5626f028ea09cde329cc39802d46be2b4b737b6294"
+        },
+        {
+          "path": "crates/ra-jit/src/inputs.rs",
+          "sha256": "4ff855912d36ac36df1a057fdb08258efdf3f7c1e474ded29e3ec4037aefe768"
+        },
+        {
+          "path": "crates/ra-jit/src/answers.rs",
+          "sha256": "4806b85860f320f512f270efaf7567c8994085cf0e6446e9319eb536ab17acab"
+        },
+        {
+          "path": "crates/ra-jit/src/answers/cargo.rs",
+          "sha256": "6670e4c55d51ae7accfe9841e40b7be612b68ed27609da0cce65c79648af8c7f"
+        },
+        {
+          "path": "crates/ra-jit/src/plan.rs",
+          "sha256": "85c5a2c8639c715191e369e64bd6b0bae23cad67b194735ae051c65fd5c9a3d0"
+        },
+        {
+          "path": "crates/ra-jit/src/link.rs",
+          "sha256": "4402bed96d8eca54d294878d17e0a7fd1d8a6ee1b2ea9800a380a40ec122db32"
+        },
+        {
+          "path": "vendor/rust-analyzer/crates/load-cargo/src/lib.rs",
+          "sha256": "3f7eaa892ab6f86b53872e57a416a8cb56680acdd97f1d8d88031585e5a55c9f"
+        },
+        {
+          "path": "docs/resident-generation-certificate.md",
+          "sha256": "67952c24ef02729445ce49a6499e65c41b5679cfa5e65e9dbf10c70353c057cc"
+        }
+      ],
+      "inventory_sha256": "9f4ec0e18e80952685de88c80f1b6b0068f65884f7e3e73df0ea6dd96cb70aab"
+    },
+    "61": {
+      "files": [
+        {
+          "path": "crates/ra-jit/src/cargo/whole.rs",
+          "sha256": "cc01a56a8579905e620b9774a504029b6498f264d6eb121e15fd99919713a741"
+        },
+        {
+          "path": "crates/ra-jit/src/cargo/daemon.rs",
+          "sha256": "3fe7875979a3867f01cab54bb54d4dd52f34b134a63e8014b5e054f530808998"
+        },
+        {
+          "path": "crates/ra-jit/src/main.rs",
+          "sha256": "2f186d642318bc9c3e7c5a5626f028ea09cde329cc39802d46be2b4b737b6294"
+        },
+        {
+          "path": "crates/ra-jit/src/inputs.rs",
+          "sha256": "4ff855912d36ac36df1a057fdb08258efdf3f7c1e474ded29e3ec4037aefe768"
+        },
+        {
+          "path": "crates/ra-jit/src/answers.rs",
+          "sha256": "4806b85860f320f512f270efaf7567c8994085cf0e6446e9319eb536ab17acab"
+        },
+        {
+          "path": "crates/ra-jit/src/answers/cargo.rs",
+          "sha256": "6670e4c55d51ae7accfe9841e40b7be612b68ed27609da0cce65c79648af8c7f"
+        },
+        {
+          "path": "crates/ra-jit/src/plan.rs",
+          "sha256": "85c5a2c8639c715191e369e64bd6b0bae23cad67b194735ae051c65fd5c9a3d0"
+        },
+        {
+          "path": "crates/ra-jit/src/link.rs",
+          "sha256": "4402bed96d8eca54d294878d17e0a7fd1d8a6ee1b2ea9800a380a40ec122db32"
+        },
+        {
+          "path": "vendor/rust-analyzer/crates/load-cargo/src/lib.rs",
+          "sha256": "ceb4829f21a6dada895207460218165e1f34cc2de6f0ecd1abd232ba3a7439af"
+        },
+        {
+          "path": "docs/resident-generation-certificate.md",
+          "sha256": "d55282fbf00d1d987bfd03aff34bc388858c8af9c0f3f035bc8c1b2baca3d836"
+        }
+      ],
+      "inventory_sha256": "24ce015f8163ea93c61f7c6eb33564ffaa67b0328cfea76cab8ea1843c5bc5e4"
+    },
+    "62": {
+      "files": [
+        {
+          "path": "./crates/ra-jit/src/answers/cargo.rs",
+          "sha256": "6670e4c55d51ae7accfe9841e40b7be612b68ed27609da0cce65c79648af8c7f"
+        },
+        {
+          "path": "./crates/ra-jit/src/answers.rs",
+          "sha256": "4806b85860f320f512f270efaf7567c8994085cf0e6446e9319eb536ab17acab"
+        },
+        {
+          "path": "./crates/ra-jit/src/cargo/daemon.rs",
+          "sha256": "3fe7875979a3867f01cab54bb54d4dd52f34b134a63e8014b5e054f530808998"
+        },
+        {
+          "path": "./crates/ra-jit/src/cargo/whole.rs",
+          "sha256": "cc01a56a8579905e620b9774a504029b6498f264d6eb121e15fd99919713a741"
+        },
+        {
+          "path": "./crates/ra-jit/src/inputs.rs",
+          "sha256": "4ff855912d36ac36df1a057fdb08258efdf3f7c1e474ded29e3ec4037aefe768"
+        },
+        {
+          "path": "./crates/ra-jit/src/link.rs",
+          "sha256": "4402bed96d8eca54d294878d17e0a7fd1d8a6ee1b2ea9800a380a40ec122db32"
+        },
+        {
+          "path": "./crates/ra-jit/src/main.rs",
+          "sha256": "2f186d642318bc9c3e7c5a5626f028ea09cde329cc39802d46be2b4b737b6294"
+        },
+        {
+          "path": "./crates/ra-jit/src/plan.rs",
+          "sha256": "85c5a2c8639c715191e369e64bd6b0bae23cad67b194735ae051c65fd5c9a3d0"
+        },
+        {
+          "path": "./docs/resident-generation-certificate.md",
+          "sha256": "d55282fbf00d1d987bfd03aff34bc388858c8af9c0f3f035bc8c1b2baca3d836"
+        },
+        {
+          "path": "./vendor/rust-analyzer/crates/load-cargo/src/lib.rs",
+          "sha256": "a9d8873d57c58afab097c98901b339f17f34b8c708b1563a03d847360a9556ec"
+        }
+      ],
+      "inventory_sha256": "b9b4d3ac41426df0c9211746cef53093259ca452384022cb198cff16a82aad22"
+    },
+    "63": {
+      "files": [
+        {
+          "path": "crates/ra-jit/src/cargo/whole.rs",
+          "sha256": "cc01a56a8579905e620b9774a504029b6498f264d6eb121e15fd99919713a741"
+        },
+        {
+          "path": "crates/ra-jit/src/cargo/daemon.rs",
+          "sha256": "58bde1db6d6fba1e46fdae1e547cbaf59cd6eeeb425d574e8bd9bb865c18f9a9"
+        },
+        {
+          "path": "crates/ra-jit/src/main.rs",
+          "sha256": "2f186d642318bc9c3e7c5a5626f028ea09cde329cc39802d46be2b4b737b6294"
+        },
+        {
+          "path": "crates/ra-jit/src/inputs.rs",
+          "sha256": "4ff855912d36ac36df1a057fdb08258efdf3f7c1e474ded29e3ec4037aefe768"
+        },
+        {
+          "path": "crates/ra-jit/src/answers.rs",
+          "sha256": "af8f5e73abf0484b4b9a6a1c2dedfa9913a9625743021ced386721de166d49dd"
+        },
+        {
+          "path": "crates/ra-jit/src/answers/cargo.rs",
+          "sha256": "d1f91f565f26b5a94545c2e993b40614b26e8a601ce18cf78e28f583cd853678"
+        },
+        {
+          "path": "crates/ra-jit/src/plan.rs",
+          "sha256": "85c5a2c8639c715191e369e64bd6b0bae23cad67b194735ae051c65fd5c9a3d0"
+        },
+        {
+          "path": "crates/ra-jit/src/link.rs",
+          "sha256": "4402bed96d8eca54d294878d17e0a7fd1d8a6ee1b2ea9800a380a40ec122db32"
+        },
+        {
+          "path": "vendor/rust-analyzer/crates/load-cargo/src/lib.rs",
+          "sha256": "a9d8873d57c58afab097c98901b339f17f34b8c708b1563a03d847360a9556ec"
+        },
+        {
+          "path": "docs/resident-generation-certificate.md",
+          "sha256": "d26f8a04632206412c51b0a9f26bd2bec8157e526e4aaed8a658b100a9321e8c"
+        }
+      ],
+      "inventory_sha256": "3f6aa9034af705f7e2a6c98668e162d841dc2ee5c77975939676f8bac019b698"
+    },
+    "64": {
+      "files": [
+        {
+          "path": "crates/ra-jit/src/cargo/whole.rs",
+          "sha256": "8715c2744baa8bada159cc11e60f78b43b34151eb4abc10d2baa4ff6b0e3b9d4"
+        },
+        {
+          "path": "crates/ra-jit/src/cargo/daemon.rs",
+          "sha256": "854d34005e6d7a6bd150f6c12c4774c8735933c0b0a3dfeaa94251ca410fba4b"
+        },
+        {
+          "path": "crates/ra-jit/src/main.rs",
+          "sha256": "2f186d642318bc9c3e7c5a5626f028ea09cde329cc39802d46be2b4b737b6294"
+        },
+        {
+          "path": "crates/ra-jit/src/inputs.rs",
+          "sha256": "4ff855912d36ac36df1a057fdb08258efdf3f7c1e474ded29e3ec4037aefe768"
+        },
+        {
+          "path": "crates/ra-jit/src/answers.rs",
+          "sha256": "af8f5e73abf0484b4b9a6a1c2dedfa9913a9625743021ced386721de166d49dd"
+        },
+        {
+          "path": "crates/ra-jit/src/answers/cargo.rs",
+          "sha256": "d1f91f565f26b5a94545c2e993b40614b26e8a601ce18cf78e28f583cd853678"
+        },
+        {
+          "path": "crates/ra-jit/src/plan.rs",
+          "sha256": "85c5a2c8639c715191e369e64bd6b0bae23cad67b194735ae051c65fd5c9a3d0"
+        },
+        {
+          "path": "crates/ra-jit/src/link.rs",
+          "sha256": "4402bed96d8eca54d294878d17e0a7fd1d8a6ee1b2ea9800a380a40ec122db32"
+        },
+        {
+          "path": "vendor/rust-analyzer/crates/load-cargo/src/lib.rs",
+          "sha256": "a9d8873d57c58afab097c98901b339f17f34b8c708b1563a03d847360a9556ec"
+        },
+        {
+          "path": "docs/resident-generation-certificate.md",
+          "sha256": "0e08d0ba6d5a52f9f2b7601660ca564f67eabf3b9b0d78edfba23e3ade8f609b"
+        }
+      ],
+      "inventory_sha256": "1d3521a51834a803f7e7be5469d1fb157af3e8604840bcc19d53769cb771260a"
+    }
+  },
+  "stores_deleted": false,
+  "timing_claim": "descriptive-uncontrolled-no-significance",
+  "units": [
+    {
+      "exit": 0,
+      "kind": "codegen-native",
+      "log_sha256": "42533e762669e51bce449f61e5acd06ff46f2611ec8aa7cce0116fcc0f69c16b",
+      "summaries": [
+        [
+          53,
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "version": 62
+    },
+    {
+      "exit": 0,
+      "kind": "full-native",
+      "log_sha256": "b0b03a0bd7f9e4c4992c88b43672f864485b3a657316483fa22f91d560584c19",
+      "summaries": [
+        [
+          374,
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "version": 62
+    },
+    {
+      "exit": 0,
+      "kind": "codegen-native",
+      "log_sha256": "5b9b2d7b686d4c0870316840d9874bdb3a2b8c1842a9c241b0aa279b7074da3a",
+      "summaries": [
+        [
+          53,
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "version": 63
+    },
+    {
+      "exit": 0,
+      "kind": "full-native",
+      "log_sha256": "0e63f99c37ef69bf5ceb0481b221c2ecd5b3a2af5df45db792755fd1a518b2b0",
+      "summaries": [
+        [
+          374,
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "version": 63
+    },
+    {
+      "exit": 0,
+      "kind": "codegen-native",
+      "log_sha256": "c1c01ed3a7650bcabe442cfd71c76ef92670823d478a66c50593569b151cbcb2",
+      "summaries": [
+        [
+          53,
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "version": 64
+    },
+    {
+      "exit": 0,
+      "kind": "full-native",
+      "log_sha256": "52eb643714e03cc16973e4a99c5dae924ed8e31bc1cbba759b7a7e386eb4a66c",
+      "summaries": [
+        [
+          375,
+          0,
+          0,
+          0,
+          1
+        ]
+      ],
+      "version": 64
+    }
+  ]
+}
