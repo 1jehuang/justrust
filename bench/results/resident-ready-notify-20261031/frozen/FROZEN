@@ -1,0 +1,10 @@
+FROZEN release: native-ready-poll-v65, 2026-10-31.
+All source/evidence edits stop after this marker. Root may now run native gates and measurements.
+Owned source: toolchain/resident/crates/ra-jit/src/cargo/daemon.rs
+Owned new doc: docs/resident-ready-notify.md
+Candidate daemon SHA256: cb243a2d02abb2509db6203800efa537d048649ba784911f59c5679485026df7
+Candidate doc SHA256: ae980901de0d9adcaba1a8b6283771859b62c9fd59cfa3c90aad53caaa65ed06
+Patch SHA256: 5f7494e7656402ff7b7ed53ab52ef0660f0628f5278492318e461c3395ca2209
+Standalone rustfmt and git diff --check passed. No builds/tests/workloads/compiler probes/install/commit performed. Fixtures unexecuted. No speed claim.
+Marker: ra-jit ready-notify: observed loading transition
+Marker uses ignored-error writeln on locked stderr, once per process only after an actual matching Loading-to-terminal not-timed-out wait. Ready-before-wait and replaced generation do not mark.

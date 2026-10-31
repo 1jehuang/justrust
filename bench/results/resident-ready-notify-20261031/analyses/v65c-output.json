@@ -1,0 +1,125 @@
+{
+  "scope": "Independent strict raw replay and bounded readiness activation, descriptive timing only.",
+  "noise": "unknown",
+  "general_speed_claim": false,
+  "cases": {
+    "off": {
+      "seconds": {
+        "cold-prepare": 19.94007939400035,
+        "repeated-noop-1": 0.03745355102000758,
+        "manifest-feature-add": 9.06115988001693,
+        "type-error": 9.53184460097691,
+        "type-recovery": 9.841643645981094,
+        "assert-failure": 2.7369472029968165,
+        "assert-recovery": 0.669229456980247
+      },
+      "cumulative_marker_snapshots": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "strict_rows": 7,
+      "positive_wait_observed": false
+    },
+    "on": {
+      "seconds": {
+        "cold-prepare": 23.71360986799118,
+        "repeated-noop-1": 0.04802914601168595,
+        "manifest-feature-add": 11.355442641011905,
+        "type-error": 11.523000337008853,
+        "type-recovery": 11.381025427981513,
+        "assert-failure": 2.805692698020721,
+        "assert-recovery": 0.5941534120065626
+      },
+      "cumulative_marker_snapshots": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "strict_rows": 7,
+      "positive_wait_observed": true
+    },
+    "on-repeat": {
+      "seconds": {
+        "cold-prepare": 23.214684453007067,
+        "repeated-noop-1": 0.03365993598708883,
+        "manifest-feature-add": 9.08659665597952,
+        "type-error": 9.57688958401559,
+        "type-recovery": 8.201186198974028,
+        "assert-failure": 1.911772869003471,
+        "assert-recovery": 0.47816494200378656
+      },
+      "cumulative_marker_snapshots": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "strict_rows": 7,
+      "positive_wait_observed": true
+    },
+    "off-repeat": {
+      "seconds": {
+        "cold-prepare": 19.36150258500129,
+        "repeated-noop-1": 0.036752713000169024,
+        "manifest-feature-add": 10.04522139299661,
+        "type-error": 9.670748911012197,
+        "type-recovery": 9.638959148986032,
+        "assert-failure": 2.056224791012937,
+        "assert-recovery": 0.4711168700014241
+      },
+      "cumulative_marker_snapshots": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "strict_rows": 7,
+      "positive_wait_observed": false
+    }
+  },
+  "binary_sha256": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+  "activation_passed": true,
+  "pairs": [
+    {
+      "off": "off",
+      "on": "on",
+      "percent_change": {
+        "cold-prepare": 18.924350296851,
+        "repeated-noop-1": 28.23656156402612,
+        "manifest-feature-add": 25.31996776764398,
+        "type-error": 20.889511100798575,
+        "type-recovery": 15.641511086707926,
+        "assert-failure": 2.5117581716092907,
+        "assert-recovery": -11.21828159095818
+      }
+    },
+    {
+      "off": "off-repeat",
+      "on": "on-repeat",
+      "percent_change": {
+        "cold-prepare": 19.90125431169123,
+        "repeated-noop-1": -8.415098534538036,
+        "manifest-feature-add": -9.543092177992508,
+        "type-error": -0.9705486913193395,
+        "type-recovery": -14.916267698501972,
+        "assert-failure": -7.025103609333794,
+        "assert-recovery": 1.4960347317516165
+      }
+    }
+  ]
+}

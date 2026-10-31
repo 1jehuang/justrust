@@ -1,0 +1,2296 @@
+{
+  "analysis_attempts": [
+    {
+      "historical_rerun": false,
+      "outcome": "failed",
+      "reason": "JSON list versus parser tuple representation mismatch",
+      "stderr_retained": false,
+      "version": "v65"
+    },
+    {
+      "historical_rerun": false,
+      "outcome": "failed",
+      "reason": "JSON list versus parser tuple representation mismatch",
+      "stderr_retained": false,
+      "version": "v65b"
+    },
+    {
+      "historical_rerun": false,
+      "outcome": "passed",
+      "reason": "raw parser tuple reconstruction before unchanged strict oracle",
+      "stderr_retained": false,
+      "version": "v65c"
+    }
+  ],
+  "baseline": {
+    "binary_sha256": "005c6198fddf1a7a77b6fda6d0be27601a0a48a7f2279deac460ebf5d4898edd",
+    "rows": [
+      {
+        "accepted": true,
+        "elapsed_seconds": 23.63005263498053,
+        "phase": "cold-prepare",
+        "status": 0
+      },
+      {
+        "accepted": true,
+        "elapsed_seconds": 0.04808439200860448,
+        "phase": "repeated-noop-1",
+        "status": 0
+      },
+      {
+        "accepted": true,
+        "elapsed_seconds": 9.48948013401241,
+        "phase": "manifest-feature-add",
+        "status": 0
+      },
+      {
+        "accepted": true,
+        "elapsed_seconds": 9.84906183599378,
+        "phase": "type-error",
+        "status": 101
+      },
+      {
+        "accepted": true,
+        "elapsed_seconds": 8.941285992012126,
+        "phase": "type-recovery",
+        "status": 0
+      },
+      {
+        "accepted": true,
+        "elapsed_seconds": 2.0046995370066725,
+        "phase": "assert-failure",
+        "status": 101
+      },
+      {
+        "accepted": true,
+        "elapsed_seconds": 0.4167575130122714,
+        "phase": "assert-recovery",
+        "status": 0
+      }
+    ],
+    "scope": "accepted v58 baseline, distinct executable, not part of same-binary OFF/ON pairs",
+    "status": "passed",
+    "unchanged": true
+  },
+  "cases": {
+    "off": {
+      "controls": {
+        "RA_JIT_CACHE_MISS_STATS": "0",
+        "RA_JIT_DEMAND_STD": "1",
+        "RA_JIT_READY_NOTIFY": "0",
+        "RA_JIT_STATS": "1",
+        "RA_JIT_WHOLE_RELOAD": "0"
+      },
+      "rows": [
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 19.94007939400035,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "0426caafbe8c45dabfee1bd8a335f2ef",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "cold-prepare",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_0426caafbe8c45dabfee1bd8a335f2ef\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.03745355102000758,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "4c1e1751b40f49f7ab8df9f3a9617497",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "repeated-noop-1",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_4c1e1751b40f49f7ab8df9f3a9617497\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 9.06115988001693,
+          "error": null,
+          "failures": [],
+          "input_identity": "b9d2720091612ce3bc2a273760c46e2385eb594cb6c2810f53841759b7a45c0f",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "379a29dc71dd4fa783104e2b24a9e946",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "manifest-feature-add",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_379a29dc71dd4fa783104e2b24a9e946\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "error[E0308]: expected u64, found &'static str",
+            "1100 | let _: u64 = \"JR_MATRIX_TYPE_08e7ede190e04c46be12b9d15dcde31b\";"
+          ],
+          "elapsed_seconds": 9.53184460097691,
+          "error": null,
+          "failures": [],
+          "input_identity": "13196414ea476ecb9ade99a95e3727c205d542d6abd03d9d4933024a6e77dc35",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "08e7ede190e04c46be12b9d15dcde31b",
+          "omitted_environment_entries": 12,
+          "parsed": null,
+          "phase": "type-error",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 9.841643645981094,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "35b61d72f8ac47d8ac01d0f95a68d1c9",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "type-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_35b61d72f8ac47d8ac01d0f95a68d1c9\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "assertion `left == right` failed: JR_MATRIX_FAILURE_08476115b3544c47b29917f83e77d174"
+          ],
+          "elapsed_seconds": 2.7369472029968165,
+          "error": null,
+          "failures": [],
+          "input_identity": "3b1c6423983e60e34fa1c67b338388ac253dc54f5858853cc7c2ef1e79a4d8ce",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "08476115b3544c47b29917f83e77d174",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 1,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 3,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "FAILED"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-failure",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_08476115b3544c47b29917f83e77d174\nFAILED\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\nfailures:\n\nfailures:\n    summary::tests::shares_overlapping_time\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.669229456980247,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "41ecd2ffbf8244e6b67e4a352a0c7099",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_41ecd2ffbf8244e6b67e4a352a0c7099\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        }
+      ],
+      "source_after": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "source_before": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "status": "passed",
+      "tool_after": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "tool_before": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "toolchain_after": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "toolchain_before": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "unchanged": true
+    },
+    "off-repeat": {
+      "controls": {
+        "RA_JIT_CACHE_MISS_STATS": "0",
+        "RA_JIT_DEMAND_STD": "1",
+        "RA_JIT_READY_NOTIFY": "0",
+        "RA_JIT_STATS": "1",
+        "RA_JIT_WHOLE_RELOAD": "0"
+      },
+      "rows": [
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 19.36150258500129,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "370a94db32ef4435ae799cc87bcff336",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "cold-prepare",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_370a94db32ef4435ae799cc87bcff336\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.036752713000169024,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "99ad31cb52804504b98d9b09edefa77f",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "repeated-noop-1",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_99ad31cb52804504b98d9b09edefa77f\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 10.04522139299661,
+          "error": null,
+          "failures": [],
+          "input_identity": "b9d2720091612ce3bc2a273760c46e2385eb594cb6c2810f53841759b7a45c0f",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "0c4c3b4786bd47c5ad71006a35f99ae6",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "manifest-feature-add",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_0c4c3b4786bd47c5ad71006a35f99ae6\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "error[E0308]: expected u64, found &'static str",
+            "1100 | let _: u64 = \"JR_MATRIX_TYPE_37133a5c23cf4ab8bc0af7d3ad40f15f\";"
+          ],
+          "elapsed_seconds": 9.670748911012197,
+          "error": null,
+          "failures": [],
+          "input_identity": "4c28b900ef572e7fe2c5cbf7c8f09b654b9cb326d26bd08d7e7195240c2a0841",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "37133a5c23cf4ab8bc0af7d3ad40f15f",
+          "omitted_environment_entries": 12,
+          "parsed": null,
+          "phase": "type-error",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 9.638959148986032,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "0eb89546bedc4ac7bdf99423e2a1008f",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "type-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_0eb89546bedc4ac7bdf99423e2a1008f\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "assertion `left == right` failed: JR_MATRIX_FAILURE_62d9405413b0447b9699107798486b01"
+          ],
+          "elapsed_seconds": 2.056224791012937,
+          "error": null,
+          "failures": [],
+          "input_identity": "287aa45ed5a2ba028d361f181c7ca8995a6e3dc59964e70fae9325630f883bf2",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "62d9405413b0447b9699107798486b01",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 1,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 3,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "FAILED"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-failure",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_62d9405413b0447b9699107798486b01\nFAILED\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\nfailures:\n\nfailures:\n    summary::tests::shares_overlapping_time\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.4711168700014241,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [],
+          "noise_contamination": "unknown",
+          "nonce": "cc2069956cc14e94954050f6684a1097",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_cc2069956cc14e94954050f6684a1097\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        }
+      ],
+      "source_after": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "source_before": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "status": "passed",
+      "tool_after": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "tool_before": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "toolchain_after": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "toolchain_before": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "unchanged": true
+    },
+    "on": {
+      "controls": {
+        "RA_JIT_CACHE_MISS_STATS": "0",
+        "RA_JIT_DEMAND_STD": "1",
+        "RA_JIT_READY_NOTIFY": "1",
+        "RA_JIT_STATS": "1",
+        "RA_JIT_WHOLE_RELOAD": "0"
+      },
+      "rows": [
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 23.71360986799118,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "46ea65e600ae476d9fecaa54948c1ca4",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "cold-prepare",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_46ea65e600ae476d9fecaa54948c1ca4\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.04802914601168595,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "756764d260c84157814f87dd2c032362",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "repeated-noop-1",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_756764d260c84157814f87dd2c032362\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 11.355442641011905,
+          "error": null,
+          "failures": [],
+          "input_identity": "b9d2720091612ce3bc2a273760c46e2385eb594cb6c2810f53841759b7a45c0f",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "6418682289bf40c5ad3c2df3c4e1a652",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "manifest-feature-add",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_6418682289bf40c5ad3c2df3c4e1a652\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "error[E0308]: expected u64, found &'static str",
+            "1100 | let _: u64 = \"JR_MATRIX_TYPE_546dcbdbdaed46f39bab81566015ad64\";"
+          ],
+          "elapsed_seconds": 11.523000337008853,
+          "error": null,
+          "failures": [],
+          "input_identity": "054a1622b5d698e968f517935921cd2d7424bd5acd5510106f30b3424408a892",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "546dcbdbdaed46f39bab81566015ad64",
+          "omitted_environment_entries": 12,
+          "parsed": null,
+          "phase": "type-error",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 11.381025427981513,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "a3f76e16d7cd4e61838b3e159fb6a2e2",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "type-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_a3f76e16d7cd4e61838b3e159fb6a2e2\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "assertion `left == right` failed: JR_MATRIX_FAILURE_0a26316df8134762a8c204639e6687ce"
+          ],
+          "elapsed_seconds": 2.805692698020721,
+          "error": null,
+          "failures": [],
+          "input_identity": "c047097c70a0cabf432dab1221383cba23111c1f31b51f8336632dc61aed5fea",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "0a26316df8134762a8c204639e6687ce",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 1,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 3,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "FAILED"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-failure",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_0a26316df8134762a8c204639e6687ce\nFAILED\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\nfailures:\n\nfailures:\n    summary::tests::shares_overlapping_time\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.5941534120065626,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "fa950090ebad4b0797c5e1c1785cb4c4",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_fa950090ebad4b0797c5e1c1785cb4c4\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        }
+      ],
+      "source_after": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "source_before": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "status": "passed",
+      "tool_after": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "tool_before": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "toolchain_after": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "toolchain_before": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "unchanged": true
+    },
+    "on-repeat": {
+      "controls": {
+        "RA_JIT_CACHE_MISS_STATS": "0",
+        "RA_JIT_DEMAND_STD": "1",
+        "RA_JIT_READY_NOTIFY": "1",
+        "RA_JIT_STATS": "1",
+        "RA_JIT_WHOLE_RELOAD": "0"
+      },
+      "rows": [
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 23.214684453007067,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "929f8b55708242b6942b323ba2feee0d",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "cold-prepare",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_929f8b55708242b6942b323ba2feee0d\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.03365993598708883,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "b47952ca56f2436085b58722743f6597",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "repeated-noop-1",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_b47952ca56f2436085b58722743f6597\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 9.08659665597952,
+          "error": null,
+          "failures": [],
+          "input_identity": "b9d2720091612ce3bc2a273760c46e2385eb594cb6c2810f53841759b7a45c0f",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "4d8865ce80844402803bf8074eb71f2e",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "manifest-feature-add",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_4d8865ce80844402803bf8074eb71f2e\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "error[E0308]: expected u64, found &'static str",
+            "1100 | let _: u64 = \"JR_MATRIX_TYPE_8c850498e396403a8b3f175d50f1920f\";"
+          ],
+          "elapsed_seconds": 9.57688958401559,
+          "error": null,
+          "failures": [],
+          "input_identity": "371f2a6d01362590cab0a602d59a407210aa67b6734bdfab12ef838d4855746c",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "8c850498e396403a8b3f175d50f1920f",
+          "omitted_environment_entries": 12,
+          "parsed": null,
+          "phase": "type-error",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 8.201186198974028,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "b308863d00bf42d58a2249cdec6141cf",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "type-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_b308863d00bf42d58a2249cdec6141cf\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [
+            "assertion `left == right` failed: JR_MATRIX_FAILURE_1dcab9c3821846cd8539017d73dce265"
+          ],
+          "elapsed_seconds": 1.911772869003471,
+          "error": null,
+          "failures": [],
+          "input_identity": "2b0637bdf084cd8c1ff21c6713d0772d3d8d2c7019256c9cb2b7b1bea6bf49b1",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "1dcab9c3821846cd8539017d73dce265",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 1,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 3,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "FAILED"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-failure",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 101,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_1dcab9c3821846cd8539017d73dce265\nFAILED\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\nfailures:\n\nfailures:\n    summary::tests::shares_overlapping_time\n\ntest result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        },
+        {
+          "accepted": true,
+          "diagnostic_lines": [],
+          "elapsed_seconds": 0.47816494200378656,
+          "error": null,
+          "failures": [],
+          "input_identity": "b2bc360411b9002fb2b3520724b5d6ffce77e43e7b94557e5d5319557f80e4b6",
+          "input_unchanged": true,
+          "marker_lines": [
+            "ra-jit ready-notify: observed loading transition"
+          ],
+          "noise_contamination": "unknown",
+          "nonce": "108d780633634beb94b34438ea5447e1",
+          "omitted_environment_entries": 12,
+          "parsed": {
+            "failed": 0,
+            "filtered": 144,
+            "ignored": 0,
+            "passed": 4,
+            "tests": [
+              [
+                "summary::tests::parses_libtest_results",
+                "ok"
+              ],
+              [
+                "summary::tests::shares_overlapping_time",
+                "ok"
+              ],
+              [
+                "summary::tests::splits_passes_without_double_counting",
+                "ok"
+              ],
+              [
+                "summary::tests::test_failures_are_not_compile_errors",
+                "ok"
+              ]
+            ]
+          },
+          "phase": "assert-recovery",
+          "raw_error": null,
+          "safe_environment": {
+            "BLAZE_BACKEND": "cranelift",
+            "BLAZE_OPT": "0",
+            "CARGO_PROFILE_DEV_DEBUG": "0",
+            "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+            "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+            "CARGO_PROFILE_TEST_DEBUG": "0",
+            "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+            "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+          },
+          "status": 0,
+          "stdout": "\nrunning 4 tests\ntest summary::tests::parses_libtest_results ... ok\ntest summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_108d780633634beb94b34438ea5447e1\nok\ntest summary::tests::splits_passes_without_double_counting ... ok\ntest summary::tests::test_failures_are_not_compile_errors ... ok\n\ntest result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s\n\n",
+          "timed_out": false
+        }
+      ],
+      "source_after": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "source_before": "79c53ff6e87a22c84c9bc7bac6917c69b3f8d0fbc29b107f734cc00cc39a64df",
+      "status": "passed",
+      "tool_after": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "tool_before": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+      "toolchain_after": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "toolchain_before": "8bdbccdd1ca3fd7f2935cfb5667047eb4c46824928823e96311d8eb5ec0a6371",
+      "unchanged": true
+    }
+  },
+  "causal_regression_claim": false,
+  "cleanup": {
+    "baseline": {
+      "rows": [
+        {
+          "case": "ready-notify-v65-baseline-seven",
+          "error": null,
+          "post_measurement_only": true,
+          "status": 0,
+          "timed_out": false
+        }
+      ],
+      "stores_deleted": false
+    },
+    "candidate": {
+      "rows": [
+        {
+          "case": "ready-notify-v65-off-seven",
+          "error": null,
+          "post_measurement_only": true,
+          "status": 0,
+          "timed_out": false
+        },
+        {
+          "case": "ready-notify-v65-on-seven",
+          "error": null,
+          "post_measurement_only": true,
+          "status": 0,
+          "timed_out": false
+        },
+        {
+          "case": "ready-notify-v65-on-repeat-seven",
+          "error": null,
+          "post_measurement_only": true,
+          "status": 0,
+          "timed_out": false
+        },
+        {
+          "case": "ready-notify-v65-off-repeat-seven",
+          "error": null,
+          "post_measurement_only": true,
+          "status": 0,
+          "timed_out": false
+        }
+      ],
+      "stores_deleted": false
+    }
+  },
+  "decision": "rejected",
+  "native": {
+    "benchmark_regression_lines": [
+      "Ran 733 tests in 31.890s",
+      "OK"
+    ],
+    "check": {
+      "exit": 0,
+      "summaries": [
+        "justrust: ok: check succeeded, tests not run in 16.4s"
+      ]
+    },
+    "codegen-native": {
+      "exit": 0,
+      "summaries": [
+        "justrust: ok: 53 tests passed in 0.4s",
+        "  tests   53 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 0.04s"
+      ]
+    },
+    "compile": {
+      "exit": 0,
+      "summaries": [
+        "justrust: ok: build succeeded, tests not run in 80.6s"
+      ]
+    },
+    "engine_version": "jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-0c4d62ccf1f8057aedfec885131c75fd0d2d442162cce4da3d57dbcef2c76e37)",
+    "fixtures": [
+      "test cargo::daemon::tests::ready_notify_ready_before_wait_and_terminal_errors ... ok <0.000s>",
+      "test cargo::daemon::tests::ready_notify_wrong_key_generation_and_loading_timeout ... ok <0.000s>",
+      "test cargo::daemon::tests::ready_notify_during_wait_uses_the_predicate_mutex ... ok <0.002s>",
+      "test cargo::daemon::tests::ready_notify_generation_transition_during_wait ... ok <0.000s>"
+    ],
+    "full-native": {
+      "exit": 0,
+      "summaries": [
+        "justrust: ok: 368 tests passed in 78.4s",
+        "  tests   368 passed, 0 failed, 0 ignored, 0 filtered out, 1 binary in 16.61s"
+      ]
+    },
+    "lock_check_ok": true,
+    "root_lock_sha256": "bf3307542b2b5c0e7a4b8c5b1a1e650bba9afece80284cc497a3800560a0c2bc",
+    "source_check_count": 3757,
+    "source_check_ok": true
+  },
+  "noise": "unknown",
+  "privacy": {
+    "control_allowlist": [
+      "RA_JIT_DEMAND_STD",
+      "RA_JIT_CACHE_MISS_STATS",
+      "RA_JIT_STATS",
+      "RA_JIT_WHOLE_RELOAD",
+      "RA_JIT_READY_NOTIFY"
+    ],
+    "environment_allowlist": {
+      "BLAZE_BACKEND": "cranelift",
+      "BLAZE_OPT": "0",
+      "CARGO_PROFILE_DEV_DEBUG": "0",
+      "CARGO_PROFILE_DEV_INCREMENTAL": "true",
+      "CARGO_PROFILE_DEV_OPT_LEVEL": "0",
+      "CARGO_PROFILE_TEST_DEBUG": "0",
+      "CARGO_PROFILE_TEST_INCREMENTAL": "true",
+      "CARGO_PROFILE_TEST_OPT_LEVEL": "0"
+    },
+    "excluded": [
+      "ambient environment",
+      "raw state JSON",
+      "private homes and caches",
+      "raw daemon and worker logs",
+      "toolchain path listings",
+      "binaries and targets",
+      "telemetry and credentials"
+    ],
+    "method": "fixed-field selection and exact full-line diagnostics, not environment redaction"
+  },
+  "private_originals": {
+    "candidate-build-v65/all-source-before.sha256": {
+      "bytes": 485842,
+      "sha256": "3901c0d8bd95e13718d7cf944e899f1cbd33aad7295b32df1acf31dda0e56a4e"
+    },
+    "candidate-build-v65/check.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "candidate-build-v65/check.log": {
+      "bytes": 2873,
+      "sha256": "2451c42b08a2cc4f98947244be4321f04e74ba6915aebc21bfeb49230de7d5c8"
+    },
+    "candidate-build-v65/compile.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "candidate-build-v65/compile.log": {
+      "bytes": 2764,
+      "sha256": "c405b14f999523f5d7e6f248aa4f833f89cc0f7a633da5cc34ad98fd3693a37e"
+    },
+    "candidate-build-v65/engine-version.txt": {
+      "bytes": 184,
+      "sha256": "10f0ae7f827b88b288d623cec4e15e5395475d017af9c2089993e30107166e0e"
+    },
+    "candidate-build-v65/lock-before.sha256": {
+      "bytes": 77,
+      "sha256": "bbf06b43d38c2a150a291a12ea60fc91e898d2eb3cb9e79b4a54e376189b0567"
+    },
+    "candidate-unit-v65/all-source-after.log": {
+      "bytes": 252908,
+      "sha256": "9d35dc934fc1c56b1e0d32bf0ef52494930bfb4877e84b21bb72ba473c334692"
+    },
+    "candidate-unit-v65/codegen-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "candidate-unit-v65/codegen-native.log": {
+      "bytes": 1459,
+      "sha256": "4c619cefd4e8f95cdfb48e2992915eda9c965095f5bc97be1645257a0f6e5d94"
+    },
+    "candidate-unit-v65/full-native.exit": {
+      "bytes": 2,
+      "sha256": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa"
+    },
+    "candidate-unit-v65/full-native.log": {
+      "bytes": 3414,
+      "sha256": "c6b4cfa00998bd3dd499e9c9d75a946f912683ad24e32b975cf9e84d9e4db065"
+    },
+    "candidate-unit-v65/justrust-home/runs/20261031-034253111-448775/output.jsonl": {
+      "bytes": 422299,
+      "sha256": "7a495ac8ba151696443bac7043e93e4474cdeff71a711ffc22f2506ef43ecd63"
+    },
+    "candidate-unit-v65/lock-after.log": {
+      "bytes": 15,
+      "sha256": "bed0ad10bf786b7e6a0d8e1c4571088a75a31c05c8efbe235f8ec5e5b2ddfef5"
+    },
+    "completed-ready-notify-v65-baseline-stop/receipt.json": {
+      "bytes": 1232,
+      "sha256": "a97e7200dbe2b3d5127293935afdba8ba81100e8eb51a258c244e9f7617ba20f"
+    },
+    "completed-ready-notify-v65-stop/receipt.json": {
+      "bytes": 4498,
+      "sha256": "8514ce45c18d57619a1f80ce5a61853940442eafcc16bb953d1312bc249cf6bd"
+    },
+    "ready-notify-v65-baseline-seven/state.json": {
+      "bytes": 1660235,
+      "sha256": "557c62061b7504876a1ca3f25c44bc0b34a5c86e4ca08460a970830c5a835b8f"
+    },
+    "ready-notify-v65-off-repeat-seven/00-cold-prepare-daemon.log": {
+      "bytes": 523,
+      "sha256": "c83eaca386967e015e28868843f148174bfd80f3f5847aa5ab59bdd7e6149c2a"
+    },
+    "ready-notify-v65-off-repeat-seven/00-cold-prepare.stderr": {
+      "bytes": 1295,
+      "sha256": "c7208eb50f4dbe5107b241e649f74323c97f84a160624789d7320ca1e00a42cb"
+    },
+    "ready-notify-v65-off-repeat-seven/00-cold-prepare.stdout": {
+      "bytes": 400,
+      "sha256": "d60e94e65cd3ef3248687d44ce9f4df4b8f54b67b0750321daf81d1d215be858"
+    },
+    "ready-notify-v65-off-repeat-seven/01-repeated-noop-1-daemon.log": {
+      "bytes": 523,
+      "sha256": "c83eaca386967e015e28868843f148174bfd80f3f5847aa5ab59bdd7e6149c2a"
+    },
+    "ready-notify-v65-off-repeat-seven/01-repeated-noop-1.stderr": {
+      "bytes": 1189,
+      "sha256": "5e3850238964c46412cb8e20ef0e4411132670800599a0c7f768226bb9c4c0c2"
+    },
+    "ready-notify-v65-off-repeat-seven/01-repeated-noop-1.stdout": {
+      "bytes": 400,
+      "sha256": "39133dc22a6fea3852117e86be8090a4592ccf315ff5504e5e7d466f1d5604cd"
+    },
+    "ready-notify-v65-off-repeat-seven/02-manifest-feature-add-daemon.log": {
+      "bytes": 711,
+      "sha256": "4ce4129854ad8281c21e134c2dee1de6b843783e70d47b4869d26a486ccebc91"
+    },
+    "ready-notify-v65-off-repeat-seven/02-manifest-feature-add.stderr": {
+      "bytes": 1196,
+      "sha256": "98000b86508e2c59dab52d2249461f6e79f38c98ebaadef99efd96746ad360e2"
+    },
+    "ready-notify-v65-off-repeat-seven/02-manifest-feature-add.stdout": {
+      "bytes": 400,
+      "sha256": "6948c407b36dbdb2bbfb050c7d8b8e73f8f1631f917d10415546d7af8f229af4"
+    },
+    "ready-notify-v65-off-repeat-seven/03-type-error-daemon.log": {
+      "bytes": 1782,
+      "sha256": "de3635ef1c513022bf2d2f99d768476c29c96fac876e1590f8c713800a7abd51"
+    },
+    "ready-notify-v65-off-repeat-seven/03-type-error.stderr": {
+      "bytes": 1265,
+      "sha256": "1930659cd39b336db0c65563440077e6263daefe47e5022b330eafd5725286d1"
+    },
+    "ready-notify-v65-off-repeat-seven/03-type-error.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ready-notify-v65-off-repeat-seven/04-type-recovery-daemon.log": {
+      "bytes": 1970,
+      "sha256": "0967dba744900d946d6bf2c7772bbe2960327a9f4ebe9db68bd477297758aac6"
+    },
+    "ready-notify-v65-off-repeat-seven/04-type-recovery.stderr": {
+      "bytes": 1194,
+      "sha256": "01ef2ce16fee807e93d5790a313de8da072c0a1f580c7e2a9794b2cc7cb9730d"
+    },
+    "ready-notify-v65-off-repeat-seven/04-type-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "cefda90ae772349ee8111cfa046d11d9ec9afa34588c67d5576cd7ffff4daae0"
+    },
+    "ready-notify-v65-off-repeat-seven/05-assert-failure-daemon.log": {
+      "bytes": 1970,
+      "sha256": "0967dba744900d946d6bf2c7772bbe2960327a9f4ebe9db68bd477297758aac6"
+    },
+    "ready-notify-v65-off-repeat-seven/05-assert-failure.stderr": {
+      "bytes": 2659,
+      "sha256": "5f9c7d3d637dbc8126d04df7b3d3636b7487d0b63143283dd3e4e3ae513ec84a"
+    },
+    "ready-notify-v65-off-repeat-seven/05-assert-failure.stdout": {
+      "bytes": 474,
+      "sha256": "ba65021f9a637784cf2d6a7d33060f03fcf3d32eb23caad24f42f0006e9d9b78"
+    },
+    "ready-notify-v65-off-repeat-seven/06-assert-recovery-daemon.log": {
+      "bytes": 1970,
+      "sha256": "0967dba744900d946d6bf2c7772bbe2960327a9f4ebe9db68bd477297758aac6"
+    },
+    "ready-notify-v65-off-repeat-seven/06-assert-recovery.stderr": {
+      "bytes": 2218,
+      "sha256": "124a56b7e305b25467a0f5238520e11e96b2ddbf5e4ef1e27485d893b33dc719"
+    },
+    "ready-notify-v65-off-repeat-seven/06-assert-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "8c13cdf12fc4d1f1b007235f22056247eaf1d9252a6b1ecd848cd40cc917093b"
+    },
+    "ready-notify-v65-off-repeat-seven/state.json": {
+      "bytes": 1660357,
+      "sha256": "812860e906922163b80a555b8a459e39ef00547b51181023602f2d63cfaaa4f2"
+    },
+    "ready-notify-v65-off-seven/00-cold-prepare-daemon.log": {
+      "bytes": 523,
+      "sha256": "52b800bcf8bc78de8a4033caf8bf7f425a4ac700f48b93afbe735a4f9b8fef4f"
+    },
+    "ready-notify-v65-off-seven/00-cold-prepare.stderr": {
+      "bytes": 1295,
+      "sha256": "5d126e0a6741e1265c82de5ae27cd85cf1cfbebc0de3ddc914bba3c199576c03"
+    },
+    "ready-notify-v65-off-seven/00-cold-prepare.stdout": {
+      "bytes": 400,
+      "sha256": "341425f24ef5a62af0738bd7a8f64f7c70e361625cc4d6195b612b1c2f806970"
+    },
+    "ready-notify-v65-off-seven/01-repeated-noop-1-daemon.log": {
+      "bytes": 523,
+      "sha256": "52b800bcf8bc78de8a4033caf8bf7f425a4ac700f48b93afbe735a4f9b8fef4f"
+    },
+    "ready-notify-v65-off-seven/01-repeated-noop-1.stderr": {
+      "bytes": 1189,
+      "sha256": "08b11c9b4da70ccc870164e6c4b1de387d2c1e3448730f8e98b6564429cf3633"
+    },
+    "ready-notify-v65-off-seven/01-repeated-noop-1.stdout": {
+      "bytes": 400,
+      "sha256": "b1eaca73b182281d8744e9e902a62edb995d5126609fbefda45f321315f3f699"
+    },
+    "ready-notify-v65-off-seven/02-manifest-feature-add-daemon.log": {
+      "bytes": 711,
+      "sha256": "1715db0f2364219bb5e88cf378e97ad8418f8c6031dedd9ed9e951c95c9a0928"
+    },
+    "ready-notify-v65-off-seven/02-manifest-feature-add.stderr": {
+      "bytes": 1193,
+      "sha256": "64ecc00c58beaf8d3322972c3cb21632121256b8cbbce003b8e59fc49b2a66b7"
+    },
+    "ready-notify-v65-off-seven/02-manifest-feature-add.stdout": {
+      "bytes": 400,
+      "sha256": "d2e318e90cb04aef5b451bb1c492da18b89b295752cc1191f9718a14334ad896"
+    },
+    "ready-notify-v65-off-seven/03-type-error-daemon.log": {
+      "bytes": 1791,
+      "sha256": "df41501d55312efb55a739f1d4c62dec517053479f79349d395b6587ad26fbc3"
+    },
+    "ready-notify-v65-off-seven/03-type-error.stderr": {
+      "bytes": 1265,
+      "sha256": "756efadae6ddf01c77fac41086a6b6ff2f2047c0ef2ea1c712afa2aeb1122f0f"
+    },
+    "ready-notify-v65-off-seven/03-type-error.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ready-notify-v65-off-seven/04-type-recovery-daemon.log": {
+      "bytes": 1979,
+      "sha256": "4fcb72886e647ceb9fc270d02480267fc0364554454d8f83adb68b0494af5c81"
+    },
+    "ready-notify-v65-off-seven/04-type-recovery.stderr": {
+      "bytes": 1194,
+      "sha256": "649a7f3e6eeee93b02d44a3d5eae6493f6315901981335a01733b59fd9ca911e"
+    },
+    "ready-notify-v65-off-seven/04-type-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "43bb85a12429b9620041ad663952ab8d138a6ea20993b3736665f643d836b54a"
+    },
+    "ready-notify-v65-off-seven/05-assert-failure-daemon.log": {
+      "bytes": 1979,
+      "sha256": "4fcb72886e647ceb9fc270d02480267fc0364554454d8f83adb68b0494af5c81"
+    },
+    "ready-notify-v65-off-seven/05-assert-failure.stderr": {
+      "bytes": 2660,
+      "sha256": "e29cbd2713c20732396386a1cedad7cf97ab232dc7457993e028f78b0647f147"
+    },
+    "ready-notify-v65-off-seven/05-assert-failure.stdout": {
+      "bytes": 474,
+      "sha256": "af18f74a9269faa01c477566cc15376be0cdfb6c139946d540f55e8ca1f84ad4"
+    },
+    "ready-notify-v65-off-seven/06-assert-recovery-daemon.log": {
+      "bytes": 1979,
+      "sha256": "4fcb72886e647ceb9fc270d02480267fc0364554454d8f83adb68b0494af5c81"
+    },
+    "ready-notify-v65-off-seven/06-assert-recovery.stderr": {
+      "bytes": 2276,
+      "sha256": "4fe1b3fba83a91df6b912284fb0457a85669f0296400befed6cfb95de304eaa2"
+    },
+    "ready-notify-v65-off-seven/06-assert-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "e92a7bf01f3272ee77232d826613dc9493ba557413e90e24336f7bcdf19f2f2b"
+    },
+    "ready-notify-v65-off-seven/state.json": {
+      "bytes": 1660193,
+      "sha256": "82170d6bc93c72e0d3a7ddbccec579b2172387b1cdc780dfe3e53ff8b51410c3"
+    },
+    "ready-notify-v65-on-repeat-seven/00-cold-prepare-daemon.log": {
+      "bytes": 572,
+      "sha256": "a128a9bc643c8e6bd9f0caa34b6173753a57836c78310c8f490a2beb2cbc2ac9"
+    },
+    "ready-notify-v65-on-repeat-seven/00-cold-prepare.stderr": {
+      "bytes": 1297,
+      "sha256": "d42874eafe1de9702a11c7bc98da4760cc69ea2ca313ac0a940861fd6e3fa113"
+    },
+    "ready-notify-v65-on-repeat-seven/00-cold-prepare.stdout": {
+      "bytes": 400,
+      "sha256": "5f4f3612c7b10cbc7aa70c69b878c6b0b19a75b5661c40a36294433e6d3a19b0"
+    },
+    "ready-notify-v65-on-repeat-seven/01-repeated-noop-1-daemon.log": {
+      "bytes": 572,
+      "sha256": "a128a9bc643c8e6bd9f0caa34b6173753a57836c78310c8f490a2beb2cbc2ac9"
+    },
+    "ready-notify-v65-on-repeat-seven/01-repeated-noop-1.stderr": {
+      "bytes": 1189,
+      "sha256": "b8480fb9bcdd5e36d7710889fd340ef940a9a99b62b93f29e1c3e014c7e4f1cc"
+    },
+    "ready-notify-v65-on-repeat-seven/01-repeated-noop-1.stdout": {
+      "bytes": 400,
+      "sha256": "cd3ce2135fc47dbf349f634071d3be02e9be98146b5b0f065630109e8116ddaa"
+    },
+    "ready-notify-v65-on-repeat-seven/02-manifest-feature-add-daemon.log": {
+      "bytes": 760,
+      "sha256": "495606e4fd0d200c56084f1c55b3aa39bee1b8601bf015b88021d3b673cf3745"
+    },
+    "ready-notify-v65-on-repeat-seven/02-manifest-feature-add.stderr": {
+      "bytes": 1193,
+      "sha256": "10382574c4eeb6ba21c994746ef22129c0dd8e6a361aa677749cbde1a3654820"
+    },
+    "ready-notify-v65-on-repeat-seven/02-manifest-feature-add.stdout": {
+      "bytes": 400,
+      "sha256": "e627cc8389673cb810b68f4682110174c5d34e5a7f5eae89f8f61501f08f2f32"
+    },
+    "ready-notify-v65-on-repeat-seven/03-type-error-daemon.log": {
+      "bytes": 1837,
+      "sha256": "6eaada5ce9a38d0ecd898c05ce8f7224d3c5ce51c94e5b21bf5bd1ac5f417900"
+    },
+    "ready-notify-v65-on-repeat-seven/03-type-error.stderr": {
+      "bytes": 1265,
+      "sha256": "a84b9f8e316984dfec68fd6dbf7d68703c540eb895a67c0b5ca43280e8ded4f5"
+    },
+    "ready-notify-v65-on-repeat-seven/03-type-error.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ready-notify-v65-on-repeat-seven/04-type-recovery-daemon.log": {
+      "bytes": 2025,
+      "sha256": "e60f7eeab148ffedf50463030f7c5888be0b6bd66b05a8a34af68b40c84f1e19"
+    },
+    "ready-notify-v65-on-repeat-seven/04-type-recovery.stderr": {
+      "bytes": 1194,
+      "sha256": "b070163f8c9445818a6003b344e4de30b69894a6f5e86f17d21d20d8319cad3d"
+    },
+    "ready-notify-v65-on-repeat-seven/04-type-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "516b3f3215c0d2911f8159779e0a3109ca249cea6b6b1152f0ef46357a3b19c9"
+    },
+    "ready-notify-v65-on-repeat-seven/05-assert-failure-daemon.log": {
+      "bytes": 2025,
+      "sha256": "e60f7eeab148ffedf50463030f7c5888be0b6bd66b05a8a34af68b40c84f1e19"
+    },
+    "ready-notify-v65-on-repeat-seven/05-assert-failure.stderr": {
+      "bytes": 2600,
+      "sha256": "adad8107c38cafcdfd1dae9dc161a64b5e1124615e394174ccab8944059a8d12"
+    },
+    "ready-notify-v65-on-repeat-seven/05-assert-failure.stdout": {
+      "bytes": 474,
+      "sha256": "2f187874c2505867903b1b885ee8fe85edddccc7b8ebfec2498f93deea028c56"
+    },
+    "ready-notify-v65-on-repeat-seven/06-assert-recovery-daemon.log": {
+      "bytes": 2025,
+      "sha256": "e60f7eeab148ffedf50463030f7c5888be0b6bd66b05a8a34af68b40c84f1e19"
+    },
+    "ready-notify-v65-on-repeat-seven/06-assert-recovery.stderr": {
+      "bytes": 2218,
+      "sha256": "42c6ce200bdeed1e6cf0ebfbf778589dedb890a74eaa03551c7d5e8a9dde27d0"
+    },
+    "ready-notify-v65-on-repeat-seven/06-assert-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "6a1bd0e32ea76d5cb85f3a90f2fb789be84ed38bac2590fcbcd8d2e9112b2588"
+    },
+    "ready-notify-v65-on-repeat-seven/state.json": {
+      "bytes": 1660354,
+      "sha256": "49959b403ed9cbf778b0ae4f078a4fdb8948ca1f904372d8383fc57f7ea9966d"
+    },
+    "ready-notify-v65-on-seven/00-cold-prepare-daemon.log": {
+      "bytes": 572,
+      "sha256": "9c4eebd13f2185a7825f5b09631f1bc5fdc841f7b0deefc603deb16b1be4fbb6"
+    },
+    "ready-notify-v65-on-seven/00-cold-prepare.stderr": {
+      "bytes": 1296,
+      "sha256": "122f209cbca87cc60b29d62ddc3714814fd2aae37aacb59b10f1f056b51f7392"
+    },
+    "ready-notify-v65-on-seven/00-cold-prepare.stdout": {
+      "bytes": 400,
+      "sha256": "497bd365dad0fabce4b8713335caf851d3c48eff6e2f7eb916c30200b713ec98"
+    },
+    "ready-notify-v65-on-seven/01-repeated-noop-1-daemon.log": {
+      "bytes": 572,
+      "sha256": "9c4eebd13f2185a7825f5b09631f1bc5fdc841f7b0deefc603deb16b1be4fbb6"
+    },
+    "ready-notify-v65-on-seven/01-repeated-noop-1.stderr": {
+      "bytes": 1189,
+      "sha256": "47c67e6b17ec8592f06313a0459a196c58f19a589487b784a558c83887390831"
+    },
+    "ready-notify-v65-on-seven/01-repeated-noop-1.stdout": {
+      "bytes": 400,
+      "sha256": "7414158fd0c370835635331fd80792d90f6dced9785493226f4e620fcf8d5b37"
+    },
+    "ready-notify-v65-on-seven/02-manifest-feature-add-daemon.log": {
+      "bytes": 760,
+      "sha256": "a8f931f5da3a20cc6e5894fc8096ef7ce0c21a302cec4cfc39ea07dfd59404d2"
+    },
+    "ready-notify-v65-on-seven/02-manifest-feature-add.stderr": {
+      "bytes": 1196,
+      "sha256": "ea806ffc8e300675118c589754afb94e8a9fb2205db5e9c1386f11b679b2ebd4"
+    },
+    "ready-notify-v65-on-seven/02-manifest-feature-add.stdout": {
+      "bytes": 400,
+      "sha256": "38b043ae74be256accafb8430183e298c30d75d81e1b9ff7edbfc2979c8a5244"
+    },
+    "ready-notify-v65-on-seven/03-type-error-daemon.log": {
+      "bytes": 1831,
+      "sha256": "2b5c95c88ebfd275425de46e9ef518a1cc52dffea6268ff9f91825448d90ff17"
+    },
+    "ready-notify-v65-on-seven/03-type-error.stderr": {
+      "bytes": 1267,
+      "sha256": "e88459496d4d80f3afe16766c2cc01f4d46d5e9bb7fd81d7e6d2711d7a42c3ed"
+    },
+    "ready-notify-v65-on-seven/03-type-error.stdout": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ready-notify-v65-on-seven/04-type-recovery-daemon.log": {
+      "bytes": 2019,
+      "sha256": "e3ac00f94a677c756bf23f7309a986cdfc77ad454a252db4fcacbaf7dc1cfc04"
+    },
+    "ready-notify-v65-on-seven/04-type-recovery.stderr": {
+      "bytes": 1197,
+      "sha256": "3f3ce608c8b1052731e2c9e7875d711fcbe896f8320a851980c283dc901a1d0a"
+    },
+    "ready-notify-v65-on-seven/04-type-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "7e5c3170463e1bc4addcd1b9bb955d56244b88788d76296538d7d7dce3eab35a"
+    },
+    "ready-notify-v65-on-seven/05-assert-failure-daemon.log": {
+      "bytes": 2019,
+      "sha256": "e3ac00f94a677c756bf23f7309a986cdfc77ad454a252db4fcacbaf7dc1cfc04"
+    },
+    "ready-notify-v65-on-seven/05-assert-failure.stderr": {
+      "bytes": 2660,
+      "sha256": "f63812cd96f2c20ccb8c164c3bad4e97d25b439c54722613ac79087dd433d7e5"
+    },
+    "ready-notify-v65-on-seven/05-assert-failure.stdout": {
+      "bytes": 474,
+      "sha256": "95f7f5522aafd1c277ad3cd1fae761dbebd2348b9f905f2b01f6c84f5643c559"
+    },
+    "ready-notify-v65-on-seven/06-assert-recovery-daemon.log": {
+      "bytes": 2019,
+      "sha256": "e3ac00f94a677c756bf23f7309a986cdfc77ad454a252db4fcacbaf7dc1cfc04"
+    },
+    "ready-notify-v65-on-seven/06-assert-recovery.stderr": {
+      "bytes": 2220,
+      "sha256": "4d959b6a03fbd2e2e388858fe2a815343db0b4fc2854691c37668f0d9e86638c"
+    },
+    "ready-notify-v65-on-seven/06-assert-recovery.stdout": {
+      "bytes": 400,
+      "sha256": "cba79404f402453c5a7975ca76a92da6fce0534a6bc187d67f0540796e46102f"
+    },
+    "ready-notify-v65-on-seven/state.json": {
+      "bytes": 1660224,
+      "sha256": "a9816909e1a208c7114e8efab671daea263593b90bd85ad5b67f6fe8a423f555"
+    },
+    "ready-notify-v65-validation.json": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ready-notify-v65/FROZEN": {
+      "bytes": 921,
+      "sha256": "2d4eca7aaff1fedc977a93b99f1e066b6073e5c3fc5db02ef01a2fed1b3379f2"
+    },
+    "ready-notify-v65/candidate.patch": {
+      "bytes": 15186,
+      "sha256": "5f7494e7656402ff7b7ed53ab52ef0660f0628f5278492318e461c3395ca2209"
+    },
+    "ready-notify-v65/daemon.rs.candidate": {
+      "bytes": 77770,
+      "sha256": "cb243a2d02abb2509db6203800efa537d048649ba784911f59c5679485026df7"
+    },
+    "ready-notify-v65/daemon.rs.original": {
+      "bytes": 70784,
+      "sha256": "d488bffe1498847e8e234e6513474c26b38b19939b94915feacaa60decbe0b5c"
+    },
+    "ready-notify-v65/resident-ready-notify.md.candidate": {
+      "bytes": 5049,
+      "sha256": "ae980901de0d9adcaba1a8b6283771859b62c9fd59cfa3c90aad53caaa65ed06"
+    },
+    "ready-notify-v65/resident-ready-notify.md.original.ABSENT": {
+      "bytes": 132,
+      "sha256": "24af65fc6b5f472bb9ba705d3f188a16e8dca553565e569d019cac40b1c2fb29"
+    },
+    "ready-notify-v65b-validation.json": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "ready-notify-v65c-validation.json": {
+      "bytes": 3354,
+      "sha256": "51db0edbd20228580f626e447c7f257473798a9d86f8782627e0e9d9c5f0f6ff"
+    },
+    "v65-final-bench-regression.log": {
+      "bytes": 6780,
+      "sha256": "bc365e0deedb3ae5ba2285b5cd8fbc7c5d3d77c0b5b5f366f51a5e1c4820f002"
+    },
+    "validate-ready-notify-v65.py": {
+      "bytes": 2823,
+      "sha256": "acd4f02ebeaaa5a2b68a13ff48d05f8afaa831e8dca7d25e355d97d4da4e8750"
+    },
+    "validate-ready-notify-v65b.py": {
+      "bytes": 2847,
+      "sha256": "b12b8b31c8940072b60a0adbcb8a2528a6611daccb79da06433a7c68ed7869ef"
+    },
+    "validate-ready-notify-v65c.py": {
+      "bytes": 2913,
+      "sha256": "eb2e5a163d0de9cce634792a8e0e213b41a5c7c63491403c68cb7eb774689bc8"
+    }
+  },
+  "promotion": false,
+  "restoration": {
+    "cmp_original": true,
+    "daemon_sha256": "d488bffe1498847e8e234e6513474c26b38b19939b94915feacaa60decbe0b5c",
+    "head_diff_empty": true,
+    "time_utc": "2026-10-31T10:50:22Z",
+    "witness": "worker and coordinator independent scoped comparisons"
+  },
+  "root_validation": {
+    "activation_passed": true,
+    "binary_sha256": "5a0c64792bf11ef68e4ed38e218f2522f6527bd069f70480d543073a11106b27",
+    "cases": {
+      "off": {
+        "cumulative_marker_snapshots": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "positive_wait_observed": false,
+        "seconds": {
+          "assert-failure": 2.7369472029968165,
+          "assert-recovery": 0.669229456980247,
+          "cold-prepare": 19.94007939400035,
+          "manifest-feature-add": 9.06115988001693,
+          "repeated-noop-1": 0.03745355102000758,
+          "type-error": 9.53184460097691,
+          "type-recovery": 9.841643645981094
+        },
+        "strict_rows": 7
+      },
+      "off-repeat": {
+        "cumulative_marker_snapshots": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "positive_wait_observed": false,
+        "seconds": {
+          "assert-failure": 2.056224791012937,
+          "assert-recovery": 0.4711168700014241,
+          "cold-prepare": 19.36150258500129,
+          "manifest-feature-add": 10.04522139299661,
+          "repeated-noop-1": 0.036752713000169024,
+          "type-error": 9.670748911012197,
+          "type-recovery": 9.638959148986032
+        },
+        "strict_rows": 7
+      },
+      "on": {
+        "cumulative_marker_snapshots": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "positive_wait_observed": true,
+        "seconds": {
+          "assert-failure": 2.805692698020721,
+          "assert-recovery": 0.5941534120065626,
+          "cold-prepare": 23.71360986799118,
+          "manifest-feature-add": 11.355442641011905,
+          "repeated-noop-1": 0.04802914601168595,
+          "type-error": 11.523000337008853,
+          "type-recovery": 11.381025427981513
+        },
+        "strict_rows": 7
+      },
+      "on-repeat": {
+        "cumulative_marker_snapshots": [
+          1,
+          1,
+          1,
+          1,
+          1,
+          1,
+          1
+        ],
+        "positive_wait_observed": true,
+        "seconds": {
+          "assert-failure": 1.911772869003471,
+          "assert-recovery": 0.47816494200378656,
+          "cold-prepare": 23.214684453007067,
+          "manifest-feature-add": 9.08659665597952,
+          "repeated-noop-1": 0.03365993598708883,
+          "type-error": 9.57688958401559,
+          "type-recovery": 8.201186198974028
+        },
+        "strict_rows": 7
+      }
+    },
+    "general_speed_claim": false,
+    "noise": "unknown",
+    "pairs": [
+      {
+        "off": "off",
+        "on": "on",
+        "percent_change": {
+          "assert-failure": 2.5117581716092907,
+          "assert-recovery": -11.21828159095818,
+          "cold-prepare": 18.924350296851,
+          "manifest-feature-add": 25.31996776764398,
+          "repeated-noop-1": 28.23656156402612,
+          "type-error": 20.889511100798575,
+          "type-recovery": 15.641511086707926
+        }
+      },
+      {
+        "off": "off-repeat",
+        "on": "on-repeat",
+        "percent_change": {
+          "assert-failure": -7.025103609333794,
+          "assert-recovery": 1.4960347317516165,
+          "cold-prepare": 19.90125431169123,
+          "manifest-feature-add": -9.543092177992508,
+          "repeated-noop-1": -8.415098534538036,
+          "type-error": -0.9705486913193395,
+          "type-recovery": -14.916267698501972
+        }
+      }
+    ],
+    "scope": "Independent strict raw replay and bounded readiness activation, descriptive timing only."
+  },
+  "schema": 1,
+  "speed_claim": false
+}

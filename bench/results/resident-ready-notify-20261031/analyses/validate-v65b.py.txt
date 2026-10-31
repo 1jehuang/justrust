@@ -1,0 +1,48 @@
+#!/usr/bin/env python3
+"""Independent strict raw replay and bounded readiness activation, descriptive timing only."""
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, '<PRIVATE_CHECKOUT>/bench')
+import resident_state_matrix as matrix
+import resident_engine_compare as shared
+ROOT = Path('<PRIVATE_EXPERIMENT_ROOT>')
+PHASES = ('cold-prepare', 'repeated-noop-1', 'manifest-feature-add', 'type-error', 'type-recovery', 'assert-failure', 'assert-recovery')
+MARKER = 'ra-jit ready-notify: observed loading transition'
+result = {'scope': __doc__, 'noise': 'unknown', 'general_speed_claim': False, 'cases': {}}
+identities = set()
+for name, enabled in (('off', '0'), ('on', '1'), ('on-repeat', '1'), ('off-repeat', '0')):
+    folder = ROOT / f'ready-notify-v65-{name}-seven'
+    state = json.loads((folder / 'state.json').read_text())
+    assert state['status'] == 'passed' and state['unchanged']
+    assert state['source_before'] == state['source_after']
+    assert state['tool_before'] == state['tool_after']
+    assert state['toolchain_before'] == state['toolchain_after']
+    assert state['startup_controls']['RA_JIT_READY_NOTIFY'] == enabled
+    assert state['startup_controls']['RA_JIT_WHOLE_RELOAD'] == '0'
+    identities.add(state['tool_after'])
+    assert tuple(row['phase'] for row in state['rows']) == PHASES
+    expected = None
+    snapshots = []
+    seconds = {}
+    for index, row in enumerate(state['rows']):
+        phase = row['phase']
+        raw, text, error = matrix.captured(folder / f'{index:02}-{phase}')
+        assert raw == row['raw'] and error == row['raw_error']
+        assert json.loads(json.dumps(shared.runtime.test_results(text))) == row['parsed']
+        if expected is None:
+            expected = matrix.contract(row['parsed'], phase)
+            assert expected is not None
+        failures = matrix.oracle(row, text, expected, phase, row['nonce'], 0)
+        assert not failures and row['accepted'] and row['input_unchanged']
+        snapshots.append((folder / f'{index:02}-{phase}-daemon.log').read_text().count(MARKER))
+        seconds[phase] = row['elapsed_seconds']
+    assert enabled == '1' or snapshots == [0] * 7
+    result['cases'][name] = {'seconds': seconds, 'cumulative_marker_snapshots': snapshots, 'strict_rows': 7, 'positive_wait_observed': any(snapshots)}
+assert len(identities) == 1
+result['binary_sha256'] = identities.pop()
+result['activation_passed'] = all(result['cases'][name]['positive_wait_observed'] for name in ('on', 'on-repeat'))
+result['pairs'] = []
+for off, on in (('off', 'on'), ('off-repeat', 'on-repeat')):
+    result['pairs'].append({'off': off, 'on': on, 'percent_change': {phase: (result['cases'][on]['seconds'][phase] / result['cases'][off]['seconds'][phase] - 1) * 100 for phase in PHASES}})
+print(json.dumps(result, indent=2))

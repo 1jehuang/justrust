@@ -1,0 +1,36 @@
+# Resident daemon readiness notification, v65
+
+## Candidate contract
+
+`RA_JIT_READY_NOTIFY=1` enables a daemon-local experiment. Only the exact OS-string value `1` enables it. Missing, invalid Unicode and all other values leave it off. A process-wide `OnceLock` latches the value at daemon startup before serving threads start. Changing a client's environment cannot retune an already running daemon. No request, reply, worker socket or serialized configuration format changes.
+
+With the flag off, `Daemon::built` retains the original `sync`, `loads`, 20 ms sleep loop and its replies. Worker readiness updates retain the same key/generation matching and state mutation. Notification is disabled. There is no speed claim or default promotion.
+
+## Lock and replacement safety
+
+Each worker owns its `ReadyNotify` condition variable. The predicate is the matching checkout key and generation still being `Warmth::Loading`, guarded by that worker's existing `checkouts` mutex. `Worker::set` uses the production helper to publish under that mutex, releases it, then notifies all waiters when enabled. Multiple builds can wait on the same worker.
+
+`wait_timeout_while` checks the predicate before releasing the mutex and after every wake, covering ready-before-wait, concurrent publication and spurious wakes without spinning. Poison recovery matches the existing `lock` policy. The wait releases its returned guard before returning.
+
+The worker map is never held across the wait. An `Arc` keeps the selected old worker alive but does not prevent replacement. A new worker cannot notify the old worker's condition variable, and in-place generation insertion is not a readiness publication. Therefore the existing `POLL` duration remains the maximum condition-variable wait budget. Every return re-enters the normal `sync`/`loads` loop, reselecting the worker and preserving ready, failed, source-error, generation and replacement handling. This is not an unbounded wait or a new overall build timeout. Scheduler delay and mutex contention are not wall-clock guarantees.
+
+## Native fixture source
+
+Tests in the real daemon module exercise the same `ReadyNotify::set` and `ReadyNotify::wait` helpers called by production, rather than copied algorithms or a mocked worker protocol:
+
+- `ready_notify_ready_before_wait_and_terminal_errors`: ready, failed and broken/source-error predicates published before waiting, checked with zero patience.
+- `ready_notify_during_wait_uses_the_predicate_mutex`: a channel coordinates a publishing thread while the waiter holds the actual predicate mutex. Publication cannot occur until the condition-variable wait atomically releases it.
+- `ready_notify_wrong_key_generation_and_loading_timeout`: rejects wrong-key and stale-generation updates, verifies a still-loading timeout, and rejects waiting on absent/mismatched entries. A notification without a predicate change does not manufacture readiness.
+- `ready_notify_generation_transition_during_wait`: a channel/mutex coordinated generation transition makes the old-generation predicate false.
+
+No elapsed-time performance assertions are used. Positive blocking fixtures have a generous 30-second failure bound and inspect the timeout result, not measured latency. Zero-patience fixtures deterministically inspect timeout/predicate behavior. Spurious-wake filtering itself is delegated to the standard library's predicate loop, not simulated as an operating-system spurious wake. Full daemon replacement and workload integration are root-owned gates.
+
+## Exercised-wait marker
+
+The fixed stderr line `ra-jit ready-notify: observed loading transition` appears at most once per process, and only when the opt-in is enabled and a wait that entered with the exact key/generation Loading returns not timed out with that same key/generation terminal. It is not emitted for flag activation alone, ready-before-wait, wrong identity, generation replacement, a timeout, or a spurious wake that leaves the predicate loading. The once-only atomic is consulted only on this successful transition path. The marker contains no environment, path or nonce. It proves an exercised transition, not which notification caused the wake, correctness of the full workload, or a speedup. No marker means no positive exercised-wait evidence, not necessarily a failed experiment. Tests do not assert process-global marker counts.
+
+## Validation and release
+
+This worker is authorized for source edits, standalone source rustfmt and diff inspection only. No builds, tests, workloads, compiler probes, installation or commits were run. Native fixtures are added but unexecuted. Root owns all native gates and measurements.
+
+Evidence directory: `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/ready-notify-v65`. It contains the full original daemon, full candidates, addition/deletion patch, SHA-256 manifest and explicit `FROZEN` release marker. The documentation did not exist before this candidate, recorded by an absence marker. Once the marker is written, this worker stops all edits.

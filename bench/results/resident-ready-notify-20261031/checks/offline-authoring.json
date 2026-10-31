@@ -1,0 +1,31 @@
+{
+  "scope": "Worker offline evidence-authoring controls, not native tests or timing evidence",
+  "date": "2026-10-31",
+  "native_jobs_executed_by_worker": 0,
+  "authoring_failures": [
+    {
+      "check": "initial selected semantic replay",
+      "outcome": "failed",
+      "reason": "validator initially expected thirteen omitted environment entries instead of observed twelve",
+      "correction": "fixed count to the actual twenty recorded entries minus eight allowed entries, no raw data change"
+    },
+    {
+      "check": "initial patch-context mutation control",
+      "outcome": "failed",
+      "reason": "mutation changed a source line outside the patch context, so the patch correctly still applied",
+      "correction": "mutation now changes an actual removed/context line, exact context rejection passes"
+    }
+  ],
+  "completed_checks": {
+    "selected_semantic_replay": "passed",
+    "exact_source_and_doc_patch_replay": "passed",
+    "explicit_privacy_allowlists": "passed",
+    "semantic_adversarial_mutations": 37,
+    "source_context_mutation": "rejected as required",
+    "package_relocation_empty_path_unrelated_home": "passed",
+    "coherent_history_mutation_with_rehashed_inventory": "rejected as required",
+    "python_unittest_methods": 5,
+    "scoped_diff_check": "passed"
+  },
+  "root_analysis_failures": "Historical v65 and v65b are retained separately under analyses with actual empty JSONs. No historical stderr was fabricated or failures rerun."
+}

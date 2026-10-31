@@ -1,0 +1,283 @@
+--- a/toolchain/resident/crates/ra-jit/src/cargo/daemon.rs
++++ b/toolchain/resident/crates/ra-jit/src/cargo/daemon.rs
+@@ -11,7 +11,7 @@
+     path::{Path, PathBuf},
+     process::{Child, Command, Stdio},
+     sync::{
+-        Arc, Mutex, MutexGuard, PoisonError,
++        Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError,
+         atomic::{AtomicBool, AtomicUsize, Ordering::Relaxed},
+     },
+     time::{Duration, Instant, SystemTime},
+@@ -117,6 +117,79 @@
+ /// How often a worker that is loading is looked at.
+ const POLL: Duration = Duration::from_millis(20);
+ 
++/// Daemon-local experiment, latched before the serving threads start. Only exact `1`
++/// enables it, with no client or worker request protocol change.
++fn ready_notify() -> bool {
++    static ENABLED: OnceLock<bool> = OnceLock::new();
++    *ENABLED.get_or_init(|| std::env::var_os("RA_JIT_READY_NOTIFY").is_some_and(|it| it == "1"))
++}
++
++/// Owned by one worker and used only with that worker's checkouts mutex.
++#[derive(Default)]
++struct ReadyNotify(Condvar);
++
++impl ReadyNotify {
++    fn loading(checkouts: &FxHashMap<String, Loaded>, key: &str, generation: u128) -> bool {
++        checkouts.get(key).is_some_and(|it| {
++            it.generation == generation && matches!(it.warmth, Warmth::Loading(_))
++        })
++    }
++
++    fn set(
++        &self,
++        checkouts: &Mutex<FxHashMap<String, Loaded>>,
++        key: &str,
++        generation: u128,
++        warmth: Warmth,
++        notify: bool,
++    ) {
++        let changed = {
++            let mut checkouts = lock(checkouts);
++            match checkouts.get_mut(key) {
++                Some(loaded) if loaded.generation == generation => {
++                    loaded.warmth = warmth;
++                    true
++                }
++                _ => false,
++            }
++        };
++        // Publish under the predicate mutex, then wake every build waiting on this worker.
++        if changed && notify {
++            self.0.notify_all();
++        }
++    }
++
++    fn wait(
++        &self,
++        checkouts: MutexGuard<'_, FxHashMap<String, Loaded>>,
++        key: &str,
++        generation: u128,
++        patience: Duration,
++    ) -> bool {
++        let loading = Self::loading(&checkouts, key, generation);
++        let (checkouts, timeout) = self
++            .0
++            .wait_timeout_while(checkouts, patience, |it| Self::loading(it, key, generation))
++            .unwrap_or_else(PoisonError::into_inner);
++        let transitioned = loading
++            && !timeout.timed_out()
++            && checkouts.get(key).is_some_and(|it| {
++                it.generation == generation && !matches!(it.warmth, Warmth::Loading(_))
++            });
++        drop(checkouts);
++        if transitioned && ready_notify() {
++            static NOTED: AtomicBool = AtomicBool::new(false);
++            if !NOTED.swap(true, Relaxed) {
++                let _ = writeln!(
++                    std::io::stderr().lock(),
++                    "ra-jit ready-notify: observed loading transition"
++                );
++            }
++        }
++        timeout.timed_out()
++    }
++}
++
+ /// How long a worker that hung up without an answer is given to be seen to have exited: its
+ /// socket closes as it exits, a moment before it can be waited for.
+ const EXITING: Duration = Duration::from_secs(2);
+@@ -454,6 +527,7 @@
+     log: PathBuf,
+     child: Mutex<Child>,
+     checkouts: Mutex<FxHashMap<String, Loaded>>,
++    ready: ReadyNotify,
+     asked: Mutex<Instant>,
+     /// The requests it is answering now.
+     answering: AtomicUsize,
+@@ -582,6 +656,7 @@
+             log,
+             child: Mutex::new(child),
+             checkouts: Mutex::new(FxHashMap::from_iter([(checkout.key.clone(), loading)])),
++            ready: ReadyNotify::default(),
+             asked: Mutex::new(Instant::now()),
+             answering: AtomicUsize::new(0),
+             noted: AtomicBool::new(false),
+@@ -655,11 +730,7 @@
+ 
+     /// Says how loading `checkout` went, unless another generation of it is loading since.
+     fn set(&self, checkout: &Checkout, warmth: Warmth) {
+-        if let Some(loaded) = lock(&self.checkouts).get_mut(&checkout.key)
+-            && loaded.generation == checkout.generation
+-        {
+-            loaded.warmth = warmth;
+-        }
++        self.ready.set(&self.checkouts, &checkout.key, checkout.generation, warmth, ready_notify());
+     }
+ 
+     /// Waits for the process to listen, then has it build every program of `checkout` once.
+@@ -1108,6 +1179,7 @@
+ /// 3. per worker, the process, and a thread that waits for it to load and has it build
+ ///    its programs once.
+ pub(crate) fn serve() -> anyhow::Result<()> {
++    let _ = ready_notify();
+     let home = home()?;
+     private_dir(&home).with_context(|| format!("the daemon's directory {}", home.display()))?;
+     let memory_max = memory_max().map_err(anyhow::Error::msg)?;
+@@ -1290,7 +1362,24 @@
+     fn built(&self, checkout: &Checkout) -> Reply {
+         loop {
+             match self.sync(checkout) {
+-                Reply::Cold { .. } if self.loads(checkout) => std::thread::sleep(POLL),
++                Reply::Cold { .. } if self.loads(checkout) => {
++                    if ready_notify() {
++                        // Do not hold the workers map while waiting: replacement must remain
++                        // possible. Its old worker cannot signal the new one, so keep POLL
++                        // as the bound and always re-enter normal sync/loads afterwards.
++                        let worker = lock(&self.workers).get(&checkout.config.id()).cloned();
++                        if let Some(worker) = worker {
++                            worker.ready.wait(
++                                lock(&worker.checkouts),
++                                &checkout.key,
++                                checkout.generation,
++                                POLL,
++                            );
++                        }
++                    } else {
++                        std::thread::sleep(POLL);
++                    }
++                }
+                 reply => return reply,
+             }
+         }
+@@ -1654,6 +1743,89 @@
+ mod tests {
+     use super::*;
+ 
++    fn readiness_fixture() -> (ReadyNotify, Mutex<FxHashMap<String, Loaded>>) {
++        (
++            ReadyNotify::default(),
++            Mutex::new(FxHashMap::from_iter([(
++                "checkout".to_owned(),
++                Loaded {
++                    generation: 7,
++                    root: PathBuf::from("workspace"),
++                    warmth: Warmth::Loading(Instant::now()),
++                },
++            )])),
++        )
++    }
++
++    #[test]
++    fn ready_notify_ready_before_wait_and_terminal_errors() {
++        let (ready, checkouts) = readiness_fixture();
++        for warmth in [
++            Warmth::Ready,
++            Warmth::Failed("load failed".to_owned()),
++            Warmth::Broken(crate::errors::Said::of_reply("source error"), SystemTime::now()),
++        ] {
++            ready.set(&checkouts, "checkout", 7, warmth, true);
++            // Zero patience still observes a published terminal predicate, without waiting.
++            assert!(!ready.wait(lock(&checkouts), "checkout", 7, Duration::ZERO));
++            assert!(!ReadyNotify::loading(&lock(&checkouts), "checkout", 7));
++        }
++    }
++
++    #[test]
++    fn ready_notify_during_wait_uses_the_predicate_mutex() {
++        let (ready, checkouts) = readiness_fixture();
++        std::thread::scope(|scope| {
++            let held = lock(&checkouts);
++            let (attempting, attempted) = std::sync::mpsc::channel();
++            let ready = &ready;
++            let checkouts = &checkouts;
++            scope.spawn(move || {
++                attempting.send(()).unwrap();
++                // Cannot publish until wait atomically releases `held`.
++                ready.set(checkouts, "checkout", 7, Warmth::Ready, true);
++            });
++            attempted.recv().unwrap();
++            assert!(!ready.wait(held, "checkout", 7, Duration::from_secs(30)));
++        });
++        assert!(matches!(lock(&checkouts)["checkout"].warmth, Warmth::Ready));
++    }
++
++    #[test]
++    fn ready_notify_wrong_key_generation_and_loading_timeout() {
++        let (ready, checkouts) = readiness_fixture();
++        ready.set(&checkouts, "other", 7, Warmth::Ready, true);
++        ready.set(&checkouts, "checkout", 8, Warmth::Ready, true);
++        assert!(ReadyNotify::loading(&lock(&checkouts), "checkout", 7));
++        assert!(ready.wait(lock(&checkouts), "checkout", 7, Duration::ZERO));
++        // A stale waiter must not wait for a different checkout or generation.
++        assert!(!ready.wait(lock(&checkouts), "other", 7, Duration::ZERO));
++        assert!(!ready.wait(lock(&checkouts), "checkout", 8, Duration::ZERO));
++        ready.0.notify_all();
++        assert!(ready.wait(lock(&checkouts), "checkout", 7, Duration::ZERO));
++    }
++
++    #[test]
++    fn ready_notify_generation_transition_during_wait() {
++        let (ready, checkouts) = readiness_fixture();
++        std::thread::scope(|scope| {
++            let held = lock(&checkouts);
++            let (attempting, attempted) = std::sync::mpsc::channel();
++            let ready = &ready;
++            let checkouts = &checkouts;
++            scope.spawn(move || {
++                attempting.send(()).unwrap();
++                lock(checkouts).get_mut("checkout").unwrap().generation = 8;
++                // In-place generation replacement does not need a signal: the bounded
++                // timeout rechecks the predicate, just as worker replacement does.
++                ready.0.notify_all();
++            });
++            attempted.recv().unwrap();
++            assert!(!ready.wait(held, "checkout", 7, Duration::from_secs(30)));
++        });
++        assert!(ReadyNotify::loading(&lock(&checkouts), "checkout", 8));
++    }
++
+     #[test]
+     fn the_workers_asked_longest_ago_are_stopped_for_the_rest_to_fit() {
+         let now = Instant::now();
+--- /dev/null
++++ b/docs/resident-ready-notify.md
+@@ -0,0 +1,36 @@
++# Resident daemon readiness notification, v65
++
++## Candidate contract
++
++`RA_JIT_READY_NOTIFY=1` enables a daemon-local experiment. Only the exact OS-string value `1` enables it. Missing, invalid Unicode and all other values leave it off. A process-wide `OnceLock` latches the value at daemon startup before serving threads start. Changing a client's environment cannot retune an already running daemon. No request, reply, worker socket or serialized configuration format changes.
++
++With the flag off, `Daemon::built` retains the original `sync`, `loads`, 20 ms sleep loop and its replies. Worker readiness updates retain the same key/generation matching and state mutation. Notification is disabled. There is no speed claim or default promotion.
++
++## Lock and replacement safety
++
++Each worker owns its `ReadyNotify` condition variable. The predicate is the matching checkout key and generation still being `Warmth::Loading`, guarded by that worker's existing `checkouts` mutex. `Worker::set` uses the production helper to publish under that mutex, releases it, then notifies all waiters when enabled. Multiple builds can wait on the same worker.
++
++`wait_timeout_while` checks the predicate before releasing the mutex and after every wake, covering ready-before-wait, concurrent publication and spurious wakes without spinning. Poison recovery matches the existing `lock` policy. The wait releases its returned guard before returning.
++
++The worker map is never held across the wait. An `Arc` keeps the selected old worker alive but does not prevent replacement. A new worker cannot notify the old worker's condition variable, and in-place generation insertion is not a readiness publication. Therefore the existing `POLL` duration remains the maximum condition-variable wait budget. Every return re-enters the normal `sync`/`loads` loop, reselecting the worker and preserving ready, failed, source-error, generation and replacement handling. This is not an unbounded wait or a new overall build timeout. Scheduler delay and mutex contention are not wall-clock guarantees.
++
++## Native fixture source
++
++Tests in the real daemon module exercise the same `ReadyNotify::set` and `ReadyNotify::wait` helpers called by production, rather than copied algorithms or a mocked worker protocol:
++
++- `ready_notify_ready_before_wait_and_terminal_errors`: ready, failed and broken/source-error predicates published before waiting, checked with zero patience.
++- `ready_notify_during_wait_uses_the_predicate_mutex`: a channel coordinates a publishing thread while the waiter holds the actual predicate mutex. Publication cannot occur until the condition-variable wait atomically releases it.
++- `ready_notify_wrong_key_generation_and_loading_timeout`: rejects wrong-key and stale-generation updates, verifies a still-loading timeout, and rejects waiting on absent/mismatched entries. A notification without a predicate change does not manufacture readiness.
++- `ready_notify_generation_transition_during_wait`: a channel/mutex coordinated generation transition makes the old-generation predicate false.
++
++No elapsed-time performance assertions are used. Positive blocking fixtures have a generous 30-second failure bound and inspect the timeout result, not measured latency. Zero-patience fixtures deterministically inspect timeout/predicate behavior. Spurious-wake filtering itself is delegated to the standard library's predicate loop, not simulated as an operating-system spurious wake. Full daemon replacement and workload integration are root-owned gates.
++
++## Exercised-wait marker
++
++The fixed stderr line `ra-jit ready-notify: observed loading transition` appears at most once per process, and only when the opt-in is enabled and a wait that entered with the exact key/generation Loading returns not timed out with that same key/generation terminal. It is not emitted for flag activation alone, ready-before-wait, wrong identity, generation replacement, a timeout, or a spurious wake that leaves the predicate loading. The once-only atomic is consulted only on this successful transition path. The marker contains no environment, path or nonce. It proves an exercised transition, not which notification caused the wake, correctness of the full workload, or a speedup. No marker means no positive exercised-wait evidence, not necessarily a failed experiment. Tests do not assert process-global marker counts.
++
++## Validation and release
++
++This worker is authorized for source edits, standalone source rustfmt and diff inspection only. No builds, tests, workloads, compiler probes, installation or commits were run. Native fixtures are added but unexecuted. Root owns all native gates and measurements.
++
++Evidence directory: `/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/ready-notify-v65`. It contains the full original daemon, full candidates, addition/deletion patch, SHA-256 manifest and explicit `FROZEN` release marker. The documentation did not exist before this candidate, recorded by an absence marker. Once the marker is written, this worker stops all edits.
