@@ -1,0 +1,159 @@
+{
+  "status": "PASS",
+  "decision": "REJECTED: no repeatable useful win; no timing attribution",
+  "raw_rows": 56,
+  "v44_activation": "FAILED, unadmitted",
+  "v45_activation": "positive ON and negative OFF controls PASS",
+  "activation": {
+    "v44": {
+      "off": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "on": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "on-repeat": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "off-repeat": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    "v45": {
+      "off": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "on": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "on-repeat": [
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "off-repeat": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "percentages": {
+    "v44": {
+      "cold-prepare": [
+        -3.2241879215479052,
+        30.154233392802652
+      ],
+      "repeated-noop-1": [
+        -33.30613190251776,
+        17.96029195496147
+      ],
+      "manifest-feature-add": [
+        2.3047302009592263,
+        2.4068734932450875
+      ],
+      "type-error": [
+        -3.4326699573621333,
+        -3.7865319804489928
+      ],
+      "type-recovery": [
+        -4.246351486715683,
+        2.5989860498617734
+      ],
+      "assert-failure": [
+        -9.736256342116512,
+        -0.41514520284881007
+      ],
+      "assert-recovery": [
+        -19.87761954599071,
+        -4.425935407796844
+      ]
+    },
+    "v45": {
+      "cold-prepare": [
+        36.944113368465835,
+        -2.251987883734241
+      ],
+      "repeated-noop-1": [
+        -13.835450025251006,
+        36.54495511679987
+      ],
+      "manifest-feature-add": [
+        6.030299325668675,
+        -5.410687678192005
+      ],
+      "type-error": [
+        1.4652463734810217,
+        0.05498650894157908
+      ],
+      "type-recovery": [
+        5.678866309983088,
+        1.4263032582703117
+      ],
+      "assert-failure": [
+        5.662987003627884,
+        7.828358831585502
+      ],
+      "assert-recovery": [
+        2.552467389367852,
+        -0.9277864928820989
+      ]
+    }
+  },
+  "identities": {
+    "v44": {
+      "engine_sha256": "4aa2e207ba0e0244b7bc4a1e1fb738b750973b8507cdbc96cd1fda6d134e6053",
+      "version": "jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-32d34f4d0e0b97042dfa059101700b73a8289a72b06c59c656c3f495bc787d4b)"
+    },
+    "v45": {
+      "engine_sha256": "741c0c371c15f289891e75963de5a864aed8ed68a8c99cf1391f09124e33d35f",
+      "version": "jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-afed4be77b377982b9085237403052c1b90566744cb13538493417df6a92fbcd)"
+    }
+  },
+  "noise": "unknown",
+  "source_restored": true
+}

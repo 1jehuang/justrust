@@ -1,0 +1,12 @@
+FROZEN_READY entry-key-prefix-v45
+EXPLICIT RELEASE to coordinator for full native gate then strict seven-state on/off pairs.
+Only owned repository paths: toolchain/resident/crates/hir-ty-codegen/cached.rs and docs/resident-entry-key-prefix.md.
+Full originals are exact released v44 candidate paths. Existing v44 directory and failed positive-activation admission were not modified.
+Implementation delta versus v44 is exactly six added constructor lines: if key_prefix.is_some(), ignored-error locked stderr write of fixed bytes ra-jit entry-key-prefix v1 prepared followed by newline. One bounded marker per successfully prepared Entries context, no secrets. No key/query/Store/writer/oracle changes.
+Candidate cached.rs SHA256 25d792f2863fd7fd62b3579f6fea205f1fbd7e10a5887abfa8e37d71500fda1a
+Candidate doc SHA256 087e6e361b704969b41559d3667b657434a2e4b7ea0b14591b383f235d94d865
+Incremental v44-to-v45 candidate.patch SHA256 a95712d80f6e5765cf3775ca9d107b311e63787cc4f6815b25ae07573f4db5fd
+Source rustfmt edition2024 skip_children=true --check PASS. Owned-path git diff --check PASS. Full original/candidate SHA256SUMS check PASS.
+No native builds, tests, workloads, lock changes or commits run by this lane.
+v44 coordinator-reported native57+360 and strict28 success do not admit runtime activation or speed acceptance. v44 positive-activation admission FAILED and remains preserved unadmitted.
+Await fresh coordinator runtime validation. No speed claim. Lane will not edit released paths without explicit reacquisition.

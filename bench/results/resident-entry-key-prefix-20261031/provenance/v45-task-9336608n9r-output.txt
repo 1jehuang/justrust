@@ -1,0 +1,6 @@
+{"status": "passed", "rows": 7, "scope": "Scoped actual native entry-key prefix transitions, not a general performance gate."}
+{"status": "passed", "rows": 7, "scope": "Scoped actual native entry-key prefix transitions, not a general performance gate."}
+{"status": "passed", "rows": 7, "scope": "Scoped actual native entry-key prefix transitions, not a general performance gate."}
+{"status": "passed", "rows": 7, "scope": "Scoped actual native entry-key prefix transitions, not a general performance gate."}
+
+--- Command finished with exit code: 0 ---

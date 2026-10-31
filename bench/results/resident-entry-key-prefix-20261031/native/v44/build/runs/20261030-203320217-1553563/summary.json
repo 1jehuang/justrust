@@ -1,0 +1,157 @@
+{
+  "id": "20261030-203320217-1553563",
+  "args": [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "subcommand": "build",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "cb9d8a01000e",
+    "dirty_files": 3
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793417600.2331665,
+  "wall": 83.47632789611816,
+  "exit": 0,
+  "cpu_secs": 327.267206,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 398,
+    "processes": 8,
+    "sample_span_secs": 83.47537779808044,
+    "max_sample_gap_secs": 0.23104357719421387
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.16008925437927246,
+    "lock_wait": 0.0,
+    "compile": 83.26498699188232,
+    "build_gaps": 0.015709638595581055,
+    "test_run": 0.0,
+    "tail": 0.03554201126098633
+  },
+  "units": {
+    "compiled": 2,
+    "local": 2,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 425,
+    "rustc_cpu_secs": 326.8,
+    "rustc_wall_sum": 83.26498699188232,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "jr_engine",
+      "kind": "bin",
+      "local": true,
+      "start": 26.70294213294983,
+      "wall": 56.72742867469787,
+      "wall_share": 56.727428674697876,
+      "cpu": 229.77380100000002,
+      "max_rss_mb": 2879.78515625,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 79501
+    },
+    {
+      "name": "hir_ty_codegen",
+      "kind": "lib",
+      "local": true,
+      "start": 0.16008925437927246,
+      "wall": 26.53755831718445,
+      "wall_share": 26.53755831718445,
+      "cpu": 97.029448,
+      "max_rss_mb": 1723.38671875,
+      "frontend_threads": null,
+      "rmeta_secs": 9.218474864959717,
+      "split": null,
+      "top_passes": [],
+      "source_lines": null
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 3.920479185515522,
+    "peak_build_cores": 6.526928030186863,
+    "peak_build_rss_mb": 2989.8828125,
+    "peak_unit_rss_mb": 2879.78515625,
+    "min_mem_available_mb": 42230,
+    "avg_other_cores": 3.3365620092851715,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.7179790000000003,
+    "psi_mem_secs": 0.0003920000000000001,
+    "psi_io_secs": 0.045882999999999986
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 253,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "hir-ty-codegen",
+      "reason": "the file `crates/hir-ty-codegen/cached.rs` has changed"
+    },
+    {
+      "package": "ra-jit",
+      "reason": "the dependency `ra-jit` was rebuilt"
+    }
+  ],
+  "all_units": 2,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-203320217-1553563.scope",
+    "final_weight": 154,
+    "setup_secs": 0.014949137,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

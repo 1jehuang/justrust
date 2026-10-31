@@ -1,0 +1,19 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 16.17s
+     Running unittests src/lib.rs (/home/jeremy/o4/engine/target/debug/deps/justrust-dbde88cc590e4c8a)
+blaze time: 16178.2 ms: daemon 15509.7 (96%), client planning 651.6 (4%), client↔daemon 5.6 (0%), client command 5.5 (0%), client test execution 3.3 (0%), daemon↔worker 0.6 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.0%
+blaze    client command                     5.5 ms   0.0%
+blaze    client test                        0.3 ms   0.0%
+blaze    client metadata                    0.5 ms   0.0%
+blaze    client planning                  651.6 ms   4.0%
+blaze    client checkout                    0.3 ms   0.0%
+blaze    client whole build                 0.0 ms   0.0%
+blaze    client↔daemon                      5.6 ms   0.0%
+blaze    daemon read request                0.4 ms   0.0%
+blaze    daemon                         15509.7 ms  95.9%
+blaze    daemon↔worker                      0.6 ms   0.0%
+blaze    client install artifacts           0.3 ms   0.0%
+blaze    client test execution              3.3 ms   0.0%
+blaze    total                          16178.2 ms 100.0%

@@ -1,0 +1,158 @@
+{
+  "scope": "Post-validation stop of four exact completed private namespaces, preserving stores.",
+  "stores_deleted": false,
+  "rows": [
+    {
+      "case": "entry-key-prefix-v45-off",
+      "private": "/home/jeremy/o1",
+      "post_measurement_only": true,
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v45-bin/jr-engine",
+        "stop"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.06606386099883821,
+      "noise": {
+        "before": {
+          "busy_seconds": 586779.18,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "after": {
+          "busy_seconds": 586779.39,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "child_cpu_seconds": 0.0030089999999999995,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.20699099996274709
+      },
+      "environment": {
+        "HOME": "/home/jeremy"
+      }
+    },
+    {
+      "case": "entry-key-prefix-v45-on",
+      "private": "/home/jeremy/o2",
+      "post_measurement_only": true,
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v45-bin/jr-engine",
+        "stop"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.06455049400392454,
+      "noise": {
+        "before": {
+          "busy_seconds": 586779.56,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "after": {
+          "busy_seconds": 586779.77,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "child_cpu_seconds": 0.0027749999999999997,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.2072249999627471
+      },
+      "environment": {
+        "HOME": "/home/jeremy"
+      }
+    },
+    {
+      "case": "entry-key-prefix-v45-on-repeat",
+      "private": "/home/jeremy/o3",
+      "post_measurement_only": true,
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v45-bin/jr-engine",
+        "stop"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.044816366003942676,
+      "noise": {
+        "before": {
+          "busy_seconds": 586779.92,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "after": {
+          "busy_seconds": 586780.05,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "child_cpu_seconds": 0.0026840000000000006,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.12731600000465662
+      },
+      "environment": {
+        "HOME": "/home/jeremy"
+      }
+    },
+    {
+      "case": "entry-key-prefix-v45-off-repeat",
+      "private": "/home/jeremy/o4",
+      "post_measurement_only": true,
+      "command": [
+        "/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/candidate-v45-bin/jr-engine",
+        "stop"
+      ],
+      "status": 0,
+      "error": null,
+      "timed_out": false,
+      "elapsed_seconds": 0.045328223990509287,
+      "noise": {
+        "before": {
+          "busy_seconds": 586780.23,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "after": {
+          "busy_seconds": 586780.38,
+          "loadavg": [
+            4.35205078125,
+            6.44921875,
+            6.236328125
+          ]
+        },
+        "child_cpu_seconds": 0.003096999999999999,
+        "contamination": "unknown",
+        "reason": "Resident daemon CPU is not waited child CPU. This proxy does not establish a quiet machine.",
+        "other_cpu_seconds_estimate": 0.14690300002328308
+      },
+      "environment": {
+        "HOME": "/home/jeremy"
+      }
+    }
+  ]
+}

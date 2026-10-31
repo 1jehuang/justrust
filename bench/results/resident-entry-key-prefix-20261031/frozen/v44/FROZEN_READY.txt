@@ -1,0 +1,17 @@
+FROZEN_READY entry-key-prefix-v44
+RELEASED to coordinator for native build/test and strict on/off workflow validation.
+Base cb9d8a01000e2a1efb44e87e74803b4317cdf997
+Owned candidate paths:
+  toolchain/resident/crates/hir-ty-codegen/cached.rs
+  docs/resident-entry-key-prefix.md
+Original cached.rs SHA256 11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f matches accepted base.
+Candidate cached.rs SHA256 91884e75835674998de1d0323c1e6ecb56290a4bd44a6a78ca4505d30e8e4cbe
+Candidate doc SHA256 3ff62e450226d469f50759d2cc5ca966202d5d67c4ad74eecbc04434471132b9
+Candidate patch SHA256 262df74e9bcee120ea852adef1bb273ca8ae7f7e030a041d7ffd4af6d0097e9e
+Source-only validation: rustfmt edition 2024 skip_children=true write then --check PASS; git diff --check owned paths PASS; SHA256SUMS verification PASS.
+No native builds/tests/workloads, lock changes or commits performed by this lane.
+Native cfgtest selector: entry_key_prefix_ (four tests in actual cached.rs).
+Immutable prefix stops after target. Frame-pointer/link-dead-code atomics remain live per key, since source has no exclusion proving their immutability.
+Enabled unavailable preparation falls back to untouched Entry::key; tests inject context absence without global env writes.
+No speed claim. Coordinator owns usefulness decision and native validation.
+Lane will not edit the two released paths until coordinator explicitly requests repair.

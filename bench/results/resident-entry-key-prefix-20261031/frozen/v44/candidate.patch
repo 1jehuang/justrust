@@ -1,0 +1,411 @@
+diff --git a/toolchain/resident/crates/hir-ty-codegen/cached.rs b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+index 107adb533..dbdc73ae5 100644
+--- a/toolchain/resident/crates/hir-ty-codegen/cached.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+@@ -649,6 +649,70 @@ impl MissStats {
+     }
+ }
+ 
++/// A bounded schema-12 SHA state, owned by one compilation's Entries, never global.
++/// Only process-immutable configuration belongs here. The frame-pointer and
++/// link-dead-code atomics are deliberately read for every key, just as in Entry::key.
++struct EntryKeyPrefix(Sha256);
++
++impl EntryKeyPrefix {
++    fn enabled(value: Option<&std::ffi::OsStr>) -> bool {
++        value == Some(std::ffi::OsStr::new("1"))
++    }
++
++    fn configured(
++        value: Option<&std::ffi::OsStr>,
++        prepare: impl FnOnce() -> Option<Self>,
++    ) -> Option<Self> {
++        if Self::enabled(value) { prepare() } else { None }
++    }
++
++    fn prepare(program: Option<&[u8; 32]>) -> Option<Self> {
++        let backend = super::Backend::from_env().ok()?.to_string();
++        let level = super::mir_opt_level().number();
++        let target = super::Target::selected().ok()?;
++        Some(Self::of(program, backend.as_bytes(), level, target.triple().as_bytes()))
++    }
++
++    fn field(hasher: &mut Sha256, bytes: &[u8]) {
++        hasher.update((bytes.len() as u64).to_le_bytes());
++        hasher.update(bytes);
++    }
++
++    fn of(program: Option<&[u8; 32]>, backend: &[u8], level: u8, target: &[u8]) -> Self {
++        let mut hasher = Sha256::new();
++        Self::field(&mut hasher, b"ra-jit entry 12");
++        Self::field(&mut hasher, program.map_or(&[][..], |it| it));
++        Self::field(&mut hasher, backend);
++        if level != 0 {
++            Self::field(&mut hasher, &[b'M', level]);
++        }
++        Self::field(&mut hasher, target);
++        Self(hasher)
++    }
++
++    fn key(
++        &self,
++        name: &str,
++        debug: Told,
++        frame_pointers: bool,
++        links_dead_code: bool,
++    ) -> [u8; KEY] {
++        let mut hasher = self.0.clone();
++        if frame_pointers {
++            Self::field(&mut hasher, b"frame pointers");
++        }
++        if links_dead_code {
++            Self::field(&mut hasher, b"link dead code");
++        }
++        Self::field(&mut hasher, &[(debug != Told::Nothing) as u8]);
++        if debug == Told::Lines {
++            Self::field(&mut hasher, b"lines alone");
++        }
++        Self::field(&mut hasher, name.as_bytes());
++        hasher.finalize().into()
++    }
++}
++
+ /// The entries of the store that one program was asked about.
+ pub(super) struct Entries {
+     store: &'static Store,
+@@ -666,6 +730,7 @@ pub(super) struct Entries {
+     usable: Sharded<Arc<str>, bool>,
+     types: Sharded<[u8; KEY], Arc<OnceLock<Option<TypeSet>>>>,
+     miss_stats: Option<Box<MissStats>>,
++    key_prefix: Option<EntryKeyPrefix>,
+ }
+ 
+ /// A map behind a lock for each of its shards: a restart has every thread look up the stored
+@@ -897,7 +962,34 @@ impl Entries {
+         let miss_stats = MissStats::startup().then(|| {
+             Box::new(MissStats(std::array::from_fn(|_| std::sync::atomic::AtomicU64::new(0))))
+         });
+-        Entries { store, debug, program, cargo_home, library, entries, usable, types, miss_stats }
++        let key_prefix = EntryKeyPrefix::configured(
++            std::env::var_os("RA_JIT_ENTRY_KEY_PREFIX").as_deref(),
++            || EntryKeyPrefix::prepare(program.as_ref()),
++        );
++        Entries {
++            store,
++            debug,
++            program,
++            cargo_home,
++            library,
++            entries,
++            usable,
++            types,
++            miss_stats,
++            key_prefix,
++        }
++    }
++
++    fn key(&self, name: &str) -> Option<[u8; KEY]> {
++        match &self.key_prefix {
++            Some(prefix) => Some(prefix.key(
++                name,
++                self.debug,
++                super::backend::frame_pointers(),
++                super::backend::links_dead_code(),
++            )),
++            None => Entry::key(name, self.debug, self.program.as_ref()),
++        }
+     }
+ 
+     /// Never use the entry again in this process: it did not fit the object it was read for.
+@@ -913,7 +1005,7 @@ impl Entries {
+     pub(super) fn get(&self, name: &str) -> Option<Arc<Entry>> {
+         let cell = self.cell(name);
+         let read = || {
+-            let Some(key) = Entry::key(name, self.debug, self.program.as_ref()) else {
++            let Some(key) = self.key(name) else {
+                 self.count(Miss::KeyUnavailable);
+                 return None;
+             };
+@@ -997,7 +1089,7 @@ impl Entries {
+                     !banned
+                 })
+                 .filter_map(|(at, (name, _))| {
+-                    let key = Entry::key(name, self.debug, self.program.as_ref());
++                    let key = self.key(name);
+                     if key.is_none() {
+                         self.count(Miss::KeyUnavailable);
+                     }
+@@ -1230,6 +1322,164 @@ mod tests {
+             .load(std::sync::atomic::Ordering::Relaxed)
+     }
+ 
++    #[test]
++    fn entry_key_prefix_gate_is_exact() {
++        use std::ffi::OsStr;
++        assert!(EntryKeyPrefix::enabled(Some(OsStr::new("1"))));
++        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
++            assert!(!EntryKeyPrefix::enabled(value.map(OsStr::new)));
++            assert!(
++                EntryKeyPrefix::configured(value.map(OsStr::new), || panic!(
++                    "off path prepared context"
++                ))
++                .is_none()
++            );
++        }
++        assert!(EntryKeyPrefix::configured(Some(OsStr::new("1")), || None).is_none());
++    }
++
++    #[test]
++    fn entry_key_prefix_matches_native_original() {
++        let programs =
++            [None, Some([0; 32]), Some([255; 32]), Some(std::array::from_fn(|i| i as u8))];
++        let long = "名\0x".repeat(4097);
++        for program in programs {
++            let prefix = EntryKeyPrefix::prepare(program.as_ref()).unwrap();
++            for debug in [Told::Nothing, Told::Lines, Told::Variables] {
++                for name in ["", "a", "ab", "a\0b", "\0", "名λ🦀", long.as_str()] {
++                    assert_eq!(
++                        Entry::key(name, debug, program.as_ref()),
++                        Some(prefix.key(
++                            name,
++                            debug,
++                            super::super::backend::frame_pointers(),
++                            super::super::backend::links_dead_code()
++                        )),
++                        "{debug:?}, program={program:?}, name length={}",
++                        name.len(),
++                    );
++                }
++            }
++        }
++    }
++
++    #[test]
++    fn entry_key_prefix_schema12_optional_fields_and_boundaries() {
++        // Independent, explicit schema bytes, not the prefix's field helper.
++        let original = |program: Option<&[u8; 32]>,
++                        backend: &[u8],
++                        level: u8,
++                        target: &[u8],
++                        frame: bool,
++                        dead: bool,
++                        debug: Told,
++                        name: &str| {
++            let mut fields: Vec<Vec<u8>> = vec![
++                b"ra-jit entry 12".to_vec(),
++                program.map_or(Vec::new(), |p| p.to_vec()),
++                backend.to_vec(),
++            ];
++            if level != 0 {
++                fields.push(vec![b'M', level]);
++            }
++            fields.push(target.to_vec());
++            if frame {
++                fields.push(b"frame pointers".to_vec());
++            }
++            if dead {
++                fields.push(b"link dead code".to_vec());
++            }
++            fields.push(vec![(debug != Told::Nothing) as u8]);
++            if debug == Told::Lines {
++                fields.push(b"lines alone".to_vec());
++            }
++            fields.push(name.as_bytes().to_vec());
++            let mut bytes = Vec::new();
++            for field in fields {
++                bytes.extend_from_slice(&(field.len() as u64).to_le_bytes());
++                bytes.extend(field);
++            }
++            <[u8; KEY]>::from(Sha256::digest(bytes))
++        };
++        for program in [None, Some([19; 32])] {
++            for (backend, target) in
++                [(b"ab".as_slice(), b"c".as_slice()), (b"a", b"bc"), (b"", b"\0")]
++            {
++                for level in [0, 1, 2, 255] {
++                    let prefix = EntryKeyPrefix::of(program.as_ref(), backend, level, target);
++                    for frame in [false, true] {
++                        for dead in [false, true] {
++                            for debug in [Told::Nothing, Told::Lines, Told::Variables] {
++                                for name in ["", "\0", "lines alone", "frame pointers"] {
++                                    assert_eq!(
++                                        prefix.key(name, debug, frame, dead),
++                                        original(
++                                            program.as_ref(),
++                                            backend,
++                                            level,
++                                            target,
++                                            frame,
++                                            dead,
++                                            debug,
++                                            name
++                                        )
++                                    );
++                                }
++                            }
++                        }
++                    }
++                }
++            }
++        }
++        let key = |backend: &[u8], target: &[u8]| {
++            EntryKeyPrefix::of(None, backend, 0, target).key("", Told::Nothing, false, false)
++        };
++        assert_ne!(key(b"ab", b"c"), key(b"a", b"bc"));
++        assert_ne!(key(b"a", b""), key(b"a", b"\0"));
++    }
++
++    #[test]
++    fn entry_key_prefix_native_store_get_prefetch_and_unavailable_context() {
++        for mode in [0, 1, 2] {
++            let (mut entries, dir) = stats_fixture();
++            entries.program = Some([31; 32]);
++            entries.key_prefix = EntryKeyPrefix::configured(
++                Some(std::ffi::OsStr::new(if mode == 0 { "0" } else { "1" })),
++                || if mode == 2 { None } else { EntryKeyPrefix::prepare(entries.program.as_ref()) },
++            );
++            assert_eq!(entries.key_prefix.is_some(), mode == 1);
++            let direct = "entry-prefix-v44-direct";
++            let root = "entry-prefix-v44-root";
++            let child = "entry-prefix-v44-child";
++            let absent = "entry-prefix-v44-absent";
++            let mut leaf = dependency_fixture(child);
++            leaf.funcs.clear();
++            store_fixture(&entries, direct, &leaf);
++            store_fixture(&entries, child, &leaf);
++            store_fixture(&entries, root, &dependency_fixture(child));
++            assert_eq!(*entries.get(direct).unwrap(), leaf);
++            entries.prefetch([Arc::from(root), Arc::from(absent)]);
++            assert!(matches!(entries.cell(root).get(), Some(Some(_))));
++            assert!(matches!(entries.cell(child).get(), Some(Some(_))));
++            assert!(matches!(entries.cell(absent).get(), Some(None)));
++            assert!(entries.get(root).is_some());
++            assert_eq!(*entries.get(child).unwrap(), leaf);
++            assert!(entries.get(absent).is_none());
++            // An unavailable preparation is represented by None and must call the
++            // untouched direct implementation, not fabricate or negatively cache a key.
++            entries.key_prefix = None;
++            assert_eq!(
++                entries.key(direct),
++                Entry::key(direct, entries.debug, entries.program.as_ref())
++            );
++            assert_eq!(
++                entries.key(absent),
++                Entry::key(absent, entries.debug, entries.program.as_ref())
++            );
++            std::fs::remove_dir_all(dir).unwrap();
++        }
++    }
++
+     #[test]
+     fn cache_miss_stats_gate_is_exact() {
+         use std::ffi::OsStr;
+diff --git a/docs/resident-entry-key-prefix.md b/docs/resident-entry-key-prefix.md
+new file mode 100644
+index 000000000..690c4b524
+--- /dev/null
++++ b/docs/resident-entry-key-prefix.md
+@@ -0,0 +1,103 @@
++# Resident entry key prefix experiment, v44
++
++Experimental licensed Blaze-derived resident, not clean-room work. Base accepted
++`cb9d8a01000e2a1efb44e87e74803b4317cdf997`. This is a default-off hypothesis,
++not a measured speedup or a promotion decision.
++
++## Scope and switch
++
++Only `RA_JIT_ENTRY_KEY_PREFIX=1` enables preparation. Unset, empty, `0`, `true`,
++`01`, and whitespace variants stay on the untouched `Entry::key` direct path.
++The switch is read for each `Entries::new`, not memoized globally. No environment
++mutation is used by the fixtures. `get` and `prefetch` use the selected path.
++Writers, Store, cache namespace, schema number, and serialization are unchanged.
++
++One SHA-256 state is owned by each Entries compilation. Its storage is fixed
++size, with no per-name map, retained formatted strings, or global hasher cache.
++Each lookup clones that state and appends the remaining fields. Names are still
++hashed in full, including NULs and multibyte UTF-8. The original `Entry::key`
++implementation remains an independent native oracle and disabled control.
++
++## Exact bytes and lifetime constraints
++
++Each field retains its eight-byte little-endian u64 byte length, followed by
++its complete bytes, in this order:
++
++1. `ra-jit entry 12`
++2. empty bytes for no program, otherwise all 32 program bytes
++3. backend Display bytes
++4. only for a nonzero MIR optimization level, `[b'M', level]`
++5. selected target triple bytes
++6. only when enabled, `frame pointers`
++7. only when enabled, `link dead code`
++8. one byte indicating Told is not Nothing
++9. only for Told::Lines, `lines alone`
++10. name bytes
++
++The prepared state stops after field 5. Backend selection is cached by the
++existing `Backend::from_env` OnceLock in `backend.rs`. MIR optimization is the
++existing `mir_opt_level` LazyLock in `mod.rs`. `Target::select` in `target.rs`
++uses a OnceLock and rejects a different subsequent triple. The existing target
++contract requires selection before compilation. Program bytes are copied into
++Entries at construction and are not mutated by production methods. Debug mode
++is likewise owned by Entries, but remains in the suffix to preserve ordering.
++
++**Frame-pointer and link-dead-code settings cannot safely be snapshotted here.**
++`backend::keep_frame_pointers` and `backend::link_dead_code` write process-global
++AtomicBools. The former is called at `CodegenUnit::compile_or_hold` entry, and
++the latter through `rustc_links_dead_code`. There is no type-level exclusion
++preventing another compilation from writing them during this Entries lifetime.
++Both are therefore read on every prefixed key, in the same order as the direct
++path. The experiment removes repeated backend/target/MIR reads and backend
++formatting, plus prefix hashing, but deliberately does not remove these two
++mutable config reads. This is not a claim to fix existing concurrent compilation
++configuration semantics.
++
++A failed backend/target preparation yields no prepared context. Subsequent
++lookups retry through the original direct function. No unavailable-context key
++is fabricated and preparation failure is not itself cached as an entry miss.
++Enabled preparation initializes the existing immutable selectors at Entries
++construction rather than the first uncached name lookup. Disabled preparation
++does not consult them at all.
++
++## Native fixtures and validation boundary
++
++New cfg(test) fixtures are in the actual `cached.rs` test module:
++
++- `entry_key_prefix_gate_is_exact`: exact switch parsing, no preparation on the
++  off path, and enabled unavailable context, using injected closures, not env writes.
++- `entry_key_prefix_matches_native_original`: actual untouched Entry::key versus
++  prepared output for all Told modes, None and three Some program patterns,
++  empty/ASCII/NUL/Unicode names and a 20,485-byte UTF-8 name.
++- `entry_key_prefix_schema12_optional_fields_and_boundaries`: independent explicit
++  field-byte assembly for optimization 0/1/2/255, every frame/dead flag combination,
++  all Told modes, program None/Some, and adversarial field boundaries. This
++  supplements, not replaces, the actual native oracle comparison.
++- `entry_key_prefix_native_store_get_prefetch_and_unavailable_context`: real
++  Store insertion and sealing, direct-key publication, get, transitive prefetch,
++  missing entries, and on/off/unavailable-preparation modes. It preserves the
++  accepted native fixture seal boundary and never changes writer semantics.
++
++Only source rustfmt and diff whitespace checks were run by this lane. No native
++build, test, workload, lock change, or commit was performed. The coordinator must
++run native suites and actual strict varied workflows on/off, inspect failures and
++regressions, and reject this experiment if it is not useful. Whole build.rs
++source fingerprinting applies. No auxiliary repository source helper was added.
++
++## Motivation, not performance evidence
++
++The actual v43 manifest observations were 45,508 missing-read attempts and
++187,729 get-positive returns. Recovery observed 34,900 missing reads. These
++counts motivate investigating repeated key preparation only. Get-positive calls
++can return already settled cells without deriving a key, so their count is not
++a key-derivation count or estimated savings. No speed claim follows from them.
++
++## Frozen handoff
++
++Exact original and candidate source, the new documentation, candidate patch,
++SHA256SUMS, BASE_HEAD, original-absence receipt for this new document, and
++FROZEN_READY.txt are preserved in
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/entry-key-prefix-v44`.
++Only the two assigned repository paths are candidate inputs. Once explicitly
++released, this lane will not edit them while the coordinator validates hashes,
++builds, and runs the candidate.

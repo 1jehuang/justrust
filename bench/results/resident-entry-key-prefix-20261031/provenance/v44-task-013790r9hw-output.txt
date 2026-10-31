@@ -1,0 +1,13 @@
+off positive_marker_counts [0, 0, 0, 0, 0, 0, 0]
+[stderr] Traceback (most recent call last):
+[stderr]   File "<stdin>", line 10, in <module>
+[stderr] AssertionError
+{"status": "passed", "native_gates": 7, "runtime_rows": 14, "new_native_calls": 0}
+[stderr] .
+{"relocated": true, "empty_home_path": true, "forbid_original_checkout": true, "forbid_native_network": true, "coherently_resealed_negatives": 25}
+[stderr] ----------------------------------------------------------------------
+[stderr] Ran 1 test in 3.940s
+[stderr] 
+[stderr] OK
+
+--- Command finished with exit code: 0 ---

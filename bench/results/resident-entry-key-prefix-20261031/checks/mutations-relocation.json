@@ -1,0 +1,91 @@
+{
+  "status": "PASS",
+  "native_jobs": false,
+  "cases": [
+    {
+      "case": "isolated-relocation",
+      "status": "PASS",
+      "empty_home_path": true,
+      "forbid_original_checkout_scratch": true,
+      "forbid_native_network": true
+    },
+    {
+      "case": "fresh-runtime-nonce",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact original semantic oracle: ['fresh invocation marker/count mismatch']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "type-error-nonce",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "assertion-nonce",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact original semantic oracle: ['fresh assertion failure oracle failed']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "missing-test",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact original semantic oracle: ['exact reference test names/status/counts/filtered mismatch']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "success-exit",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact original semantic oracle: ['process was not successful']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "failure-exit",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "input-recipe",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "exact input recipe",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "unknown-noise",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "retain unknown noise",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "activation-on-missing",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "activation positive/negative control",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "activation-off-invented",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "activation positive/negative control",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "toolchain-coherently-changed",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "pinned toolchain manifest",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "native-fixture-renamed",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "four native prefix fixtures actually passed",
+      "transport_checksums": "coherently resigned PASS"
+    },
+    {
+      "case": "phase-order",
+      "status": "REJECTED_AS_EXPECTED",
+      "semantic_reason": "phase inventory/order",
+      "transport_checksums": "coherently resigned PASS"
+    }
+  ]
+}

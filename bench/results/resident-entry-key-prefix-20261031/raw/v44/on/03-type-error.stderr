@@ -1,0 +1,22 @@
+error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_MATRIX_TYPE_0521d312850b412b81e7330d4c260865";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib test) due to 1 previous error
+blaze time: 7612.4 ms: daemon 7585.8 (100%), client planning 20.3 (0%), client command 4.6 (0%), client↔daemon 0.6 (0%), client metadata 0.5 (0%), client checkout 0.2 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.0%
+blaze    client command                     4.6 ms   0.1%
+blaze    client test                        0.2 ms   0.0%
+blaze    client metadata                    0.5 ms   0.0%
+blaze    client planning                   20.3 ms   0.3%
+blaze    client checkout                    0.2 ms   0.0%
+blaze    client whole build                 0.0 ms   0.0%
+blaze    client↔daemon                      0.6 ms   0.0%
+blaze    daemon read request                0.1 ms   0.0%
+blaze    daemon                          7585.8 ms  99.7%
+blaze    client install artifacts           0.0 ms   0.0%
+blaze    total                           7612.4 ms 100.0%

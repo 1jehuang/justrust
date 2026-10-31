@@ -1,0 +1,62 @@
+--- a/toolchain/resident/crates/hir-ty-codegen/cached.rs
++++ b/toolchain/resident/crates/hir-ty-codegen/cached.rs
+@@ -966,6 +966,12 @@
+             std::env::var_os("RA_JIT_ENTRY_KEY_PREFIX").as_deref(),
+             || EntryKeyPrefix::prepare(program.as_ref()),
+         );
++        if key_prefix.is_some() {
++            let _ = std::io::Write::write_all(
++                &mut std::io::stderr().lock(),
++                b"ra-jit entry-key-prefix v1 prepared\n",
++            );
++        }
+         Entries {
+             store,
+             debug,
+--- a/docs/resident-entry-key-prefix.md
++++ b/docs/resident-entry-key-prefix.md
+@@ -1,9 +1,28 @@
+-# Resident entry key prefix experiment, v44
++# Resident entry key prefix experiment, v45
+ 
+ Experimental licensed Blaze-derived resident, not clean-room work. Base accepted
+ `cb9d8a01000e2a1efb44e87e74803b4317cdf997`. This is a default-off hypothesis,
+ not a measured speedup or a promotion decision.
+ 
++## v45 activation evidence repair
++
++The coordinator reported v44 full native suites passing (57 and 360 tests) and
++all 28 strict seven-state cases passing. Positive-activation admission nevertheless
++failed: v44 emitted no successful-preparation marker, and raw ON worker logs had
++none. Those original measurements and the admission failure remain preserved in
++the v44 evidence. They are not admitted proof of runtime prefix activation or
++speed acceptance.
++
++v45 adds only a constructor diagnostic to the implementation: after successful
++preparation, exactly when `key_prefix.is_some()`, it attempts to write the fixed
++line `ra-jit entry-key-prefix v1 prepared` to locked stderr. The write result is
++ignored. This is one fixed-length line per successfully prepared Entries context,
++not per lookup, with no names, program bytes, keys, or other secrets. OFF and
++unavailable context produce no marker. There are no key, query, Store, writer,
++or oracle changes relative to v44. The coordinator must rerun the full gate and
++strict seven-state pairs and establish activation from the raw worker logs.
++This lane performed source checks only, not native runs, for v45.
++
+ ## Scope and switch
+ 
+ Only `RA_JIT_ENTRY_KEY_PREFIX=1` enables preparation. Unset, empty, `0`, `true`,
+@@ -94,10 +113,11 @@
+ 
+ ## Frozen handoff
+ 
+-Exact original and candidate source, the new documentation, candidate patch,
+-SHA256SUMS, BASE_HEAD, original-absence receipt for this new document, and
++Exact full v44 originals and v45 candidate source/documentation, candidate patch,
++SHA256SUMS, BASE_HEAD, and
+ FROZEN_READY.txt are preserved in
+-`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/entry-key-prefix-v44`.
++`/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/entry-key-prefix-v45`.
++The distinct v44 freeze and its failed activation admission remain unchanged.
+ Only the two assigned repository paths are candidate inputs. Once explicitly
+ released, this lane will not edit them while the coordinator validates hashes,
+ builds, and runs the candidate.

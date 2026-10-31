@@ -1,0 +1,215 @@
+symbols: read 275.1µs (0 of 0 files ahead), added 560.0ns, indexed 2.3µs
+symbols: 0 copies of statics renamed or private, 0 not to be shared
+symbols: 0 in 321.3µs
+load-us: metadata=42213 plan=12366 scripts=27303
+load-us: workspaces=82160 files=95190
+load-us: loaded=178124 toolchain=185 cargo=0
+load workspace: 178.3ms
+resolved adler2: names 62.5ms, impls 20.6ms, +62405064 bytes Lang(Dependency)
+resolved rustc_demangle: names 64.5ms, impls 20.5ms, +59026392 bytes Lang(Dependency)
+resolved memchr: names 68.3ms, impls 16.9ms, +62722440 bytes Lang(Dependency)
+resolved cfg_if: names 1.2ms, impls 254.6µs, +1681080 bytes Lang(Dependency)
+resolved compiler_builtins: names 65.9ms, impls 19.9ms, +73939264 bytes Lang(Other)
+resolved libc: names 258.0µs, impls 2.8ms, +4570520 bytes Lang(Dependency)
+resolved alloc: names 66.6ms, impls 29.7ms, +101217400 bytes Lang(Alloc)
+resolved miniz_oxide: names 67.1ms, impls 29.5ms, +99760520 bytes Lang(Dependency)
+resolved addr2line: names 3.6ms, impls 9.8ms, +40536432 bytes Lang(Dependency)
+resolved gimli: names 3.1ms, impls 10.0ms, +26318040 bytes Lang(Dependency)
+resolved panic_unwind: names 668.4µs, impls 8.9ms, +23910304 bytes Lang(Other)
+resolved object: names 71.9ms, impls 27.9ms, +103432368 bytes Lang(Dependency)
+resolved panic_abort: names 514.8µs, impls 2.5ms, +4554520 bytes Lang(Other)
+resolved hashbrown: names 64.5ms, impls 34.2ms, +108265032 bytes Lang(Dependency)
+resolved rustc_literal_escaper: names 367.4µs, impls 3.7ms, +9602032 bytes Lang(Dependency)
+resolved unwind: names 262.2µs, impls 6.0ms, +12645184 bytes Lang(Other)
+resolved std_detect: names 21.1ms, impls 807.5µs, +69175824 bytes Lang(Other)
+resolved std: names 112.5ms, impls 18.8ms, +195577392 bytes Lang(Std)
+resolved getopts: names 113.1ms, impls 18.8ms, +196855088 bytes Lang(Dependency)
+resolved hashbrown: names 67.3ms, impls 65.4ms, +193066000 bytes Library { repo: Some("https://github.com/rust-lang/hashbrown"), name: "hashbrown" }
+resolved test: names 113.5ms, impls 19.6ms, +190492304 bytes Lang(Test)
+resolved winnow: names 12.3ms, impls 19.4ms, +78480528 bytes Library { repo: Some("https://github.com/winnow-rs/winnow"), name: "winnow" }
+resolved toml_writer: names 13.3ms, impls 21.4ms, +86221040 bytes Library { repo: Some("https://github.com/toml-rs/toml"), name: "toml_writer" }
+resolved toml_edit: names 115.7ms, impls 20.0ms, +195239568 bytes Library { repo: Some("https://github.com/toml-rs/toml"), name: "toml_edit" }
+resolved proc_macro: names 15.7ms, impls 22.3ms, +88028416 bytes Lang(ProcMacro)
+resolved toml: names 7.0ms, impls 22.3ms, +57683952 bytes Library { repo: Some("https://github.com/toml-rs/toml"), name: "toml" }
+resolved indexmap: names 113.8ms, impls 24.5ms, +203942160 bytes Library { repo: Some("https://github.com/indexmap-rs/indexmap"), name: "indexmap" }
+resolved itoa: names 332.3µs, impls 5.2ms, +10727328 bytes Library { repo: Some("https://github.com/dtolnay/itoa"), name: "itoa" }
+resolved unicode_ident: names 233.1µs, impls 237.3µs, -661736 bytes Library { repo: Some("https://github.com/dtolnay/unicode-ident"), name: "unicode-ident" }
+resolved serde_core: names 11.2ms, impls 24.9ms, +86156056 bytes Library { repo: Some("https://github.com/serde-rs/serde"), name: "serde_core" }
+resolved equivalent: names 314.4µs, impls 40.4ms, +97936624 bytes Library { repo: Some("https://github.com/indexmap-rs/equivalent"), name: "equivalent" }
+resolved syn: names 353.6µs, impls 3.8ms, +4345952 bytes Library { repo: Some("https://github.com/dtolnay/syn"), name: "syn" }
+resolved quote: names 263.6µs, impls 4.5ms, -12202064 bytes Library { repo: Some("https://github.com/dtolnay/quote"), name: "quote" }
+resolved proc_macro2: names 4.4ms, impls 334.5µs, +1618544 bytes Library { repo: Some("https://github.com/dtolnay/proc-macro2"), name: "proc-macro2" }
+resolved serde_derive: names 472.6µs, impls 8.0ms, -7004240 bytes Library { repo: Some("https://github.com/serde-rs/serde"), name: "serde_derive" }
+resolved serde: names 1.7ms, impls 8.3ms, +1659080 bytes Library { repo: Some("https://github.com/serde-rs/serde"), name: "serde" }
+resolved toml_parser: names 13.7ms, impls 30.8ms, +87129200 bytes Library { repo: Some("https://github.com/toml-rs/toml"), name: "toml_parser" }
+resolved toml_datetime: names 11.6ms, impls 32.1ms, +81034616 bytes Library { repo: Some("https://github.com/toml-rs/toml"), name: "toml_datetime" }
+resolved regex_syntax: names 5.7ms, impls 3.0ms, +8118240 bytes Library { repo: Some("https://github.com/rust-lang/regex"), name: "regex-syntax" }
+resolved heck: names 396.2µs, impls 321.5µs, +407296 bytes Library { repo: Some("https://github.com/withoutboats/heck"), name: "heck" }
+resolved option_ext: names 6.4ms, impls 415.9µs, +724288 bytes Library { repo: Some("https://github.com/soc/option-ext.git"), name: "option-ext" }
+resolved memchr: names 14.4ms, impls 3.5ms, +13979552 bytes Library { repo: Some("https://github.com/BurntSushi/memchr"), name: "memchr" }
+resolved libc: names 3.9ms, impls 4.1ms, +8372088 bytes Library { repo: Some("https://github.com/rust-lang/libc"), name: "libc" }
+resolved dirs_sys: names 5.7ms, impls 4.6ms, +14280080 bytes Library { repo: Some("https://github.com/dirs-dev/dirs-sys-rs"), name: "dirs-sys" }
+resolved dirs: names 6.7ms, impls 5.0ms, +16310984 bytes Library { repo: Some("https://github.com/soc/dirs-rs"), name: "dirs" }
+resolved colorchoice: names 242.8µs, impls 239.6µs, +2190848 bytes Library { repo: Some("https://github.com/rust-cli/anstyle.git"), name: "colorchoice" }
+resolved anstyle: names 236.6µs, impls 236.1µs, +2017184 bytes Library { repo: Some("https://github.com/rust-cli/anstyle.git"), name: "anstyle" }
+resolved anstyle_query: names 231.7µs, impls 230.4µs, +2290688 bytes Library { repo: Some("https://github.com/rust-cli/anstyle.git"), name: "anstyle-query" }
+resolved anstyle_parse: names 246.3µs, impls 230.4µs, +0 bytes Library { repo: Some("https://github.com/rust-cli/anstyle.git"), name: "anstyle-parse" }
+resolved utf8parse: names 228.4µs, impls 230.6µs, +868832 bytes Library { repo: Some("https://github.com/alacritty/vte"), name: "utf8parse" }
+resolved strsim: names 390.6µs, impls 5.7ms, +10424096 bytes Library { repo: Some("https://github.com/rapidfuzz/strsim-rs"), name: "strsim" }
+resolved zmij: names 16.9ms, impls 8.0ms, +14388008 bytes Library { repo: Some("https://github.com/dtolnay/zmij"), name: "zmij" }
+resolved anstream: names 5.5ms, impls 240.6µs, -1732544 bytes Library { repo: Some("https://github.com/rust-cli/anstyle.git"), name: "anstream" }
+resolved clap: names 334.9µs, impls 13.5ms, +26151712 bytes Library { repo: Some("https://github.com/clap-rs/clap"), name: "clap" }
+resolved clap_builder: names 291.4µs, impls 9.7ms, +18231704 bytes Library { repo: Some("https://github.com/clap-rs/clap"), name: "clap_builder" }
+resolved clap_derive: names 404.3µs, impls 13.4ms, +25088488 bytes Library { repo: Some("https://github.com/clap-rs/clap"), name: "clap_derive" }
+resolved serde_spanned: names 17.0ms, impls 12.6ms, +18692984 bytes Library { repo: Some("https://github.com/toml-rs/toml"), name: "serde_spanned" }
+resolved num_traits: names 4.2ms, impls 424.9µs, +931152 bytes Library { repo: Some("https://github.com/rust-num/num-traits"), name: "num-traits" }
+resolved chrono: names 228.6µs, impls 5.8ms, +5382352 bytes Library { repo: Some("https://github.com/chronotope/chrono"), name: "chrono" }
+resolved iana_time_zone: names 359.0µs, impls 4.8ms, -1457800 bytes Library { repo: Some("https://github.com/strawlab/iana-time-zone"), name: "iana-time-zone" }
+resolved aho_corasick: names 15.7ms, impls 7.5ms, +14906952 bytes Library { repo: Some("https://github.com/BurntSushi/aho-corasick"), name: "aho-corasick" }
+resolved regex_automata: names 17.1ms, impls 7.6ms, +15594840 bytes Library { repo: Some("https://github.com/rust-lang/regex"), name: "regex-automata" }
+resolved serde_json: names 17.8ms, impls 15.1ms, +26110432 bytes Library { repo: Some("https://github.com/serde-rs/json"), name: "serde_json" }
+resolved is_terminal_polyfill: names 9.8ms, impls 2.0ms, -2970200 bytes Library { repo: Some("https://github.com/polyfill-rs/is_terminal_polyfill"), name: "is_terminal_polyfill" }
+resolved anyhow: names 5.0ms, impls 2.2ms, -3045840 bytes Library { repo: Some("https://github.com/dtolnay/anyhow"), name: "anyhow" }
+resolved clap_lex: names 331.9µs, impls 14.1ms, +10032320 bytes Library { repo: Some("https://github.com/clap-rs/clap"), name: "clap_lex" }
+resolved regex: names 18.0ms, impls 9.7ms, +36999720 bytes Library { repo: Some("https://github.com/rust-lang/regex"), name: "regex" }
+resolved core: names 64.1ms, impls 115.0ms, +200823728 bytes Lang(Core)
+resolved justrust: names 294.8ms, impls 96.3ms, +278659752 bytes Local { repo: Some("https://github.com/1jehuang/justrust"), name: Some("justrust") }
+resolve: 69 crates in 488.5ms
+frozen, of 68 crates: def maps of 68, impls of 68, lang items of 68 from the store, 0 written in 78.2µs
+proc macros: 0 expanded in 0.00s, 111 from the store in 0.03s, 0.01s to key them
+manifest: none used, the store has none of this build (1.6ms)
+listing: name resolution 2.6µs, scopes 4.2ms, 1391 bodies 52.5ms
+listing: name resolution 4.7µs, scopes 785.8µs, 6 bodies 616.3µs
+listing: name resolution 1.4µs, scopes 34.5µs, 0 bodies 1.5µs
+listing: name resolution 1.7µs, scopes 932.0µs, 14 bodies 598.4µs
+listing: name resolution 6.7µs, scopes 379.4µs, 11 bodies 4.7ms
+listing: name resolution 780.0ns, scopes 3.0µs, 0 bodies 628.0ns
+listing: name resolution 476.0ns, scopes 1.0ms, 16 bodies 3.1ms
+listing: name resolution 1.9µs, scopes 2.5ms, 47 bodies 7.0ms
+listing: name resolution 818.0ns, scopes 1.1ms, 23 bodies 7.4ms
+listing: name resolution 1.5µs, scopes 6.7ms, 107 bodies 4.5ms
+listing: name resolution 417.0ns, scopes 4.8ms, 44 bodies 7.4ms
+listing: name resolution 1.1µs, scopes 3.7ms, 63 bodies 7.1ms
+listing: name resolution 855.0ns, scopes 12.6ms, 183 bodies 12.1ms
+listing: name resolution 725.0ns, scopes 3.3ms, 125 bodies 25.1ms
+listing: name resolution 593.0ns, scopes 23.0ms, 598 bodies 33.8ms
+listing: name resolution 587.0ns, scopes 28.9ms, 651 bodies 38.9ms
+listing: name resolution 1.2µs, scopes 22.1ms, 298 bodies 52.3ms
+listing: name resolution 579.0ns, scopes 298.7µs, 10 bodies 256.8µs
+listing: name resolution 698.0ns, scopes 8.1ms, 82 bodies 8.1ms
+listing: name resolution 392.0ns, scopes 28.4ms, 620 bodies 66.2ms
+listing: name resolution 596.0ns, scopes 30.9ms, 794 bodies 27.4ms
+listing: name resolution 734.0ns, scopes 2.3ms, 35 bodies 5.1ms
+listing: name resolution 758.0ns, scopes 60.3ms, 887 bodies 35.9ms
+listing: name resolution 706.0ns, scopes 14.0ms, 104 bodies 23.7ms
+listing: name resolution 492.0ns, scopes 92.2ms, 908 bodies 77.0ms
+listing: name resolution 1.9µs, scopes 103.7ms, 1391 bodies 74.5ms
+listing: name resolution 1.6µs, scopes 53.4ms, 499 bodies 91.4ms
+listing: name resolution 525.0ns, scopes 139.9ms, 1373 bodies 73.2ms
+listing: name resolution 1.4µs, scopes 38.9ms, 620 bodies 24.4ms
+listing: name resolution 708.0ns, scopes 70.6ms, 341 bodies 26.0ms
+listing: name resolution 838.0ns, scopes 2.8ms, 38 bodies 5.9ms
+listing: name resolution 767.0ns, scopes 14.6ms, 58 bodies 10.3ms
+listing: name resolution 892.0ns, scopes 3.9ms, 60 bodies 4.4ms
+listing: name resolution 1.0µs, scopes 678.6µs, 30 bodies 6.7ms
+listing: name resolution 898.0ns, scopes 148.9µs, 2 bodies 191.2µs
+listing: name resolution 476.0ns, scopes 220.4ms, 1937 bodies 72.7ms
+listing: name resolution 773.0ns, scopes 13.6ms, 189 bodies 6.5ms
+listing: name resolution 1.1µs, scopes 15.4ms, 73 bodies 7.4ms
+listing: name resolution 1.0µs, scopes 863.5µs, 12 bodies 5.1ms
+listing: name resolution 1.6µs, scopes 2.9ms, 15 bodies 1.4ms
+listing: name resolution 965.0ns, scopes 41.8ms, 154 bodies 7.4ms
+listing: name resolution 1.3µs, scopes 49.1ms, 356 bodies 25.4ms
+listing: name resolution 965.0ns, scopes 68.9ms, 486 bodies 73.8ms
+listing: name resolution 1.0µs, scopes 14.0ms, 91 bodies 22.1ms
+listing: name resolution 691.0ns, scopes 145.4ms, 2942 bodies 111.7ms
+listing: name resolution 747.0ns, scopes 18.1ms, 114 bodies 130.6ms
+listing: name resolution 1.3µs, scopes 45.7ms, 459 bodies 28.9ms
+listing: name resolution 2.3µs, scopes 288.4µs, 3 bodies 527.6µs
+listing: name resolution 806.0ns, scopes 334.9ms, 2001 bodies 80.4ms
+listing: name resolution 484.0ns, scopes 278.7ms, 3992 bodies 280.9ms
+listing: name resolution 1.1µs, scopes 280.3µs, 6 bodies 4.6ms
+listing: name resolution 1.6µs, scopes 102.5ms, 990 bodies 63.2ms
+listing: name resolution 1.2µs, scopes 90.2ms, 890 bodies 31.3ms
+listing: name resolution 706.0ns, scopes 7.4ms, 153 bodies 577.8ms
+listing: name resolution 926.0ns, scopes 520.4µs, 7 bodies 382.8µs
+listing: name resolution 1.0µs, scopes 1.2ms, 16 bodies 1.2ms
+listing: name resolution 1.4µs, scopes 5.0ms, 95 bodies 6.3ms
+listing: name resolution 1.1µs, scopes 47.3ms, 510 bodies 165.6ms
+listing: name resolution 1.2µs, scopes 126.0ms, 1088 bodies 31.2ms
+listing: name resolution 1.4µs, scopes 650.8ms, 6490 bodies 149.3ms
+listing: name resolution 1.1µs, scopes 432.2ms, 3712 bodies 135.9ms
+listing: name resolution 906.0ns, scopes 596.0ms, 6972 bodies 139.3ms
+listing: name resolution 1.4µs, scopes 719.7ms, 6490 bodies 151.5ms
+listing: name resolution 939.0ns, scopes 474.6ms, 1713 bodies 151.0ms
+listing: name resolution 1.3µs, scopes 247.7ms, 2076 bodies 80.0ms
+listing: name resolution 727.0ns, scopes 437.9ms, 2580 bodies 176.2ms
+listing: name resolution 839.0ns, scopes 30.5ms, 318 bodies 850.9ms
+listing: name resolution 1.0µs, scopes 1.3s, 25307 bodies 211.9ms
+entries: 560.3µs
+setup-us: module=46 debug=0 mixed=16 settled=0 names=16
+stored roots: 6361 of 41783 in 209.5ms
+store: 10821 functions found, 1 compiled and added
+entries: 45050 found, 10511 added, 0 as stored, 0 not as stored, 0 instances and 66 requests without a stable name
+not kept: [("call of no instance", 66)]
+not found: [("no entry", 9974), ("an entry that calls what cannot be used", 14)]
+base from the store: 6355 roots, 38695 other functions of the checkout (2678 called by code compiled here)
+steps: infer 1.9s, mir 2.1s, monomorphize 644.1ms, translate 7.1s, describe 0.0ns, store read 271.2ms, store write 225.0ms
+cranelift passes:
+======== ========  ==================================
+   Total     Self  Pass
+-------- --------  ----------------------------------
+   0.000    0.000  Compilation passes
+   0.408    0.408  Try loading from incremental cache
+   0.000    0.000  Store in incremental cache
+   0.045    0.045  Control flow graph
+   0.041    0.041  Dominator tree
+   0.000    0.000  Remove unreachable blocks
+   0.000    0.000  Remove constant phi-nodes
+   0.000    0.000  VCode lowering
+   0.000    0.000  VCode emission
+   0.000    0.000  VCode emission finalization
+   0.000    0.000  Register allocation
+======== ========  ==================================
+backend: cranelift compiled 10792 functions, 3195686 bytes, 657.6ms (60.9µs each)
+roots: 2.3s, revalidate: 3.5ms, compile: 2.5s
+cold: compiled 6990 of 6991 fns (+12666 instances) in 4.8s (+21.2ms emit)
+  refused: justrust[baadcb47f5ef2310]::summary::tests::shares_overlapping_time: frontend: mir: HasErrors
+proc macros: 0 expanded in 0.00s, 224 from the store in 0.06s, 0.01s to key them
+check: FileId(308): the bodies of 10 of 10 functions asked
+check: FileId(306): the bodies of 4 of 4 functions asked
+check: FileId(300): the bodies of 28 of 28 functions asked
+check: FileId(303): the bodies of 24 of 24 functions asked
+check: FileId(309): the bodies of 27 of 27 functions asked
+check: FileId(312): the bodies of 11 of 11 functions asked
+check: FileId(319): the bodies of 12 of 12 functions asked
+check: FileId(313): the bodies of 35 of 35 functions asked
+check: FileId(314): the bodies of 13 of 13 functions asked
+check: FileId(322): the bodies of 33 of 33 functions asked
+check: FileId(307): the bodies of 27 of 27 functions asked
+check: FileId(304): the bodies of 35 of 35 functions asked
+check: FileId(305): the bodies of 29 of 29 functions asked
+check: FileId(301): the bodies of 64 of 64 functions asked
+check: FileId(302): the bodies of 87 of 87 functions asked
+check: FileId(320): the bodies of 35 of 35 functions asked
+check: FileId(328): the bodies of 32 of 32 functions asked
+check: FileId(318): the bodies of 26 of 26 functions asked
+check: FileId(321): the bodies of 10 of 10 functions asked
+check: FileId(323): the bodies of 38 of 38 functions asked
+check: FileId(325): the bodies of 107 of 107 functions asked
+check: FileId(324): the bodies of 91 of 91 functions asked
+check: FileId(316): the bodies of 112 of 112 functions asked
+check: FileId(33): the bodies of 44 of 44 functions asked
+check: FileId(317): the bodies of 126 of 126 functions asked
+check: FileId(311): the bodies of 108 of 108 functions asked
+check: FileId(310): the bodies of 96 of 96 functions asked
+check: FileId(315): the bodies of 36 of 36 functions asked
+check: FileId(327): the bodies of 96 of 96 functions asked
+check: FileId(326): the bodies of 44 of 44 functions asked
+check: FileId(329): the bodies of 204 of 204 functions asked
+check: 31 files in 1.3s
+Error: error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_MATRIX_TYPE_df100d4fd5db43868958efd627b28481";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

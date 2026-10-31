@@ -1,0 +1,12 @@
+{
+  "restored_sha256": "11543e4a6a48afec1c23819a999cf6835ed2c1d7990919aea70cabe134c2906f",
+  "rejected_v45_sha256": "25d792f2863fd7fd62b3579f6fea205f1fbd7e10a5887abfa8e37d71500fda1a",
+  "restored_from": "frozen/v44/original/toolchain/resident/crates/hir-ty-codegen/cached.rs",
+  "rejected_preserved_as": "frozen/v45/rejected-source-before-restoration.rs",
+  "cmp_rejected_candidate_pass": true,
+  "cmp_backup_pass": true,
+  "git_diff_head_pass": true,
+  "observed_utc": "2026-10-31T03:59:19Z",
+  "method": "Copied full original backup, not git reset/checkout. cmp and git diff --exit-code HEAD passed. cached.rs ownership explicitly released before evidence work.",
+  "native_jobs_by_evidence_lane": false
+}
