@@ -1,0 +1,15 @@
+[stderr] Traceback (most recent call last):
+[stderr]   File "/home/jeremy/justrust/bench/resident_state_matrix.py", line 417, in <module>
+[stderr]     main()
+[stderr]     ~~~~^^
+[stderr]   File "/home/jeremy/justrust/bench/resident_state_matrix.py", line 413, in main
+[stderr]     raise SystemExit(execute(parser.parse_args()))
+[stderr]                      ~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+[stderr]   File "/home/jeremy/justrust/bench/resident_state_matrix.py", line 215, in execute
+[stderr]     shared.pinned_source(args.source)
+[stderr]     ~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^
+[stderr]   File "/home/jeremy/justrust/bench/resident_engine_compare.py", line 53, in pinned_source
+[stderr]     raise ValueError(f'source does not match {PIN}: {filename!r}')
+[stderr] ValueError: source does not match f97fcc2: b'src/shim.rs'
+
+--- Command finished with exit code: 1 ---

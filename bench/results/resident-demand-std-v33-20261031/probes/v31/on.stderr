@@ -1,0 +1,15 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+error: could not build `justrust`: the link failed (exit status: 1): >>>               /home/jeremy/d2/engine/target/ra-jit/whole-test/justrust-lib-justrust-test/3000f8c81586b3f7/justrust.o:(ra-jit.5f9471030fc8aba1.getopts::validate_names) | >>> referenced by ra-jit | >>>               /home/jeremy/d2/engine/target/ra-jit/whole-test/justrust-lib-justrust-test/3000f8c81586b3f7/justrust.o:(ra-jit.5f9471030fc8aba1.<getopts::Name>::from_str) | >>> referenced 27 more times | rust-lld: error: too many errors emitted, stopping now (use --error-limit=0 to see all errors) | collect2: error: ld returned 1 exit status
+(what blaze said is in /home/jeremy/d2/engine/engine-home/resident-v1/runtime/workers/3000f8c81586b3f7/log)
+blaze time: 15312.0 ms: client↔daemon 14557.3 (95%), client planning 746.5 (5%), client command 6.7 (0%), client metadata 0.6 (0%), client whole build 0.4 (0%), client checkout 0.2 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     6.7 ms   0.0%
+blaze    client test                        0.2 ms   0.0%
+blaze    client metadata                    0.6 ms   0.0%
+blaze    client planning                  746.5 ms   4.9%
+blaze    client checkout                    0.2 ms   0.0%
+blaze    client whole build                 0.4 ms   0.0%
+blaze    client request                     0.0 ms   0.0%
+blaze    client↔daemon                  14557.3 ms  95.1%
+blaze    total                          15312.0 ms 100.0%

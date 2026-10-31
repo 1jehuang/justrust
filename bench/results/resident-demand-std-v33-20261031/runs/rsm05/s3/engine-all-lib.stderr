@@ -1,0 +1,3 @@
+    Finished `test` profile [blaze] target(s) in 0.03s
+     Running unittests src/lib.rs (/home/jeremy/rsm05/s3/engine/target/debug/deps/justrust-86da66e392519b81)
+justrust: an identical build is running in slot 1; waiting for it instead of compiling the same crates twice (JUSTRUST_JOIN=0 disables)

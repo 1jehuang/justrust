@@ -1,0 +1,24 @@
+justrust
+Copyright 2026 Jeremy Huang
+
+This product includes contributions from the people listed below. Each
+contribution remains under its author's copyright and is licensed to the
+project as described in LICENSING.md: MIT for code outside server/, and the
+Apache License 2.0 for contributions to server/.
+
+Keep this file in every copy of justrust, including the hosted service, as MIT
+and Apache 2.0 require. Update it when a pull request from a new contributor
+is merged: add their name, GitHub username, and the directories they changed.
+
+Contributors
+------------
+
+Jeremy Huang (@1jehuang): maintainer, all directories.
+
+Third-party code
+----------------
+
+No third-party source code is vendored into this repository. Dependencies are
+pulled from crates.io under their own licenses. If code from another project
+is ever copied in, list it here with its origin and license, and keep its
+original license notice next to the code.

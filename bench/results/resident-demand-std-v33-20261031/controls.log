@@ -1,0 +1,37 @@
+PASS: {'rsm05': (140, 130, 10), 'rsm08': (140, 130, 10)} native slim 9 Python regression 733
+test_aborted_finally_not_fabricated (__main__.EvidenceTests.test_aborted_finally_not_fabricated) ... ok
+test_candidate_cross_engine_exclusion_cannot_be_promoted (__main__.EvidenceTests.test_candidate_cross_engine_exclusion_cannot_be_promoted) ... ok
+test_credential_not_permitted_even_with_new_seal (__main__.EvidenceTests.test_credential_not_permitted_even_with_new_seal) ... ok
+test_default_control_engine_flag_forbidden (__main__.EvidenceTests.test_default_control_engine_flag_forbidden) ... ok
+test_default_control_intrinsic_not_promoted (__main__.EvidenceTests.test_default_control_intrinsic_not_promoted) ... ok
+test_engine_demand_flag_required (__main__.EvidenceTests.test_engine_demand_flag_required) ... ok
+test_frozen_helper_tampering_rejected_after_reseal (__main__.EvidenceTests.test_frozen_helper_tampering_rejected_after_reseal) ... ok
+test_intrinsic_derivative_never_promotes_cross_engine (__main__.EvidenceTests.test_intrinsic_derivative_never_promotes_cross_engine) ... ok
+test_intrinsic_derivative_nonce_must_match_raw (__main__.EvidenceTests.test_intrinsic_derivative_nonce_must_match_raw) ... ok
+test_legacy_control_receipt_not_fabricated (__main__.EvidenceTests.test_legacy_control_receipt_not_fabricated) ... ok
+test_legacy_failure_not_promoted (__main__.EvidenceTests.test_legacy_failure_not_promoted) ... ok
+test_matrix_elapsed_cannot_drift_from_summary (__main__.EvidenceTests.test_matrix_elapsed_cannot_drift_from_summary) ... ok
+test_matrix_negative_cannot_be_admitted (__main__.EvidenceTests.test_matrix_negative_cannot_be_admitted) ... ok
+test_metadata_optin_cannot_be_default (__main__.EvidenceTests.test_metadata_optin_cannot_be_default) ... ok
+test_mixed_shape_cannot_hide_credential (__main__.EvidenceTests.test_mixed_shape_cannot_hide_credential) ... ok
+test_native_full359_failure_rejected (__main__.EvidenceTests.test_native_full359_failure_rejected) ... ok
+test_native_full359_raw_name_status_required (__main__.EvidenceTests.test_native_full359_raw_name_status_required) ... ok
+test_nonce_replay_rejected (__main__.EvidenceTests.test_nonce_replay_rejected) ... ok
+test_reference_demand_flag_forbidden (__main__.EvidenceTests.test_reference_demand_flag_forbidden) ... ok
+test_relocated_no_original_paths_or_processes (__main__.EvidenceTests.test_relocated_no_original_paths_or_processes) ... ok
+test_resigned_raw_stale_error_nonce_not_accepted (__main__.EvidenceTests.test_resigned_raw_stale_error_nonce_not_accepted) ... ok
+test_restoration_false_rejected (__main__.EvidenceTests.test_restoration_false_rejected) ... ok
+test_source_patch_tamper_rejected (__main__.EvidenceTests.test_source_patch_tamper_rejected) ... ok
+test_source_tampering_rejected_after_reseal (__main__.EvidenceTests.test_source_tampering_rejected_after_reseal) ... ok
+test_stop_outcomes_are_not_universal_success (__main__.EvidenceTests.test_stop_outcomes_are_not_universal_success) ... ok
+test_symlink_rejected (__main__.EvidenceTests.test_symlink_rejected) ... ok
+test_timeout_finally_not_fabricated (__main__.EvidenceTests.test_timeout_finally_not_fabricated) ... ok
+test_typeerror_median_remains_excluded (__main__.EvidenceTests.test_typeerror_median_remains_excluded) ... ok
+test_unsupported_control_not_promoted (__main__.EvidenceTests.test_unsupported_control_not_promoted) ... ok
+
+----------------------------------------------------------------------
+Ran 29 tests in 18.679s
+
+OK
+
+--- Command finished with exit code: 0 ---

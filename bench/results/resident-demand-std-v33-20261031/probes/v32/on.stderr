@@ -1,0 +1,14 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+error: could not build `justrust`: backend: Duplicate definition of identifier: __rust_panic_cleanup
+(what blaze said is in /home/jeremy/e2/engine/engine-home/resident-v1/runtime/workers/d365982eef8a036a/log)
+blaze time: 16269.4 ms: client↔daemon 15398.0 (95%), client planning 863.9 (5%), client command 6.2 (0%), client metadata 0.5 (0%), client whole build 0.4 (0%), client checkout 0.2 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.0 ms   0.0%
+blaze    client command                     6.2 ms   0.0%
+blaze    client test                        0.2 ms   0.0%
+blaze    client metadata                    0.5 ms   0.0%
+blaze    client planning                  863.9 ms   5.3%
+blaze    client checkout                    0.2 ms   0.0%
+blaze    client whole build                 0.4 ms   0.0%
+blaze    client↔daemon                  15398.0 ms  94.6%
+blaze    total                          16269.4 ms 100.0%

@@ -1,0 +1,352 @@
+{
+  "states": {
+    "cold-prepare": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 23.613374840002507
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 16.22710606000328
+      }
+    },
+    "repeated-noop-1": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.03539719700347632
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.03524391198880039
+      }
+    },
+    "repeated-noop-2": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.03222223800548818
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.03172660000564065
+      }
+    },
+    "summary-testbody-edit": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.20781936099228915
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.18845744599821046
+      }
+    },
+    "summary-edit-recovery": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.12777385499794036
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.12918360000185203
+      }
+    },
+    "ordinary-shim-edit": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.12365652500011493
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.12823038300848566
+      }
+    },
+    "signature-base": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.10932264500297606
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.12176663099671714
+      }
+    },
+    "signature-invalidation": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.24688212599721737
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.19661152100889012
+      }
+    },
+    "manifest-feature-add": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 5.910213997005485
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 7.722203487996012
+      }
+    },
+    "type-error": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "fresh type-error diagnostic/no-runtime oracle failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "fresh type-error diagnostic/no-runtime oracle failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "fresh type-error diagnostic/no-runtime oracle failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "fresh type-error diagnostic/no-runtime oracle failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "fresh type-error diagnostic/no-runtime oracle failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "type-recovery": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 5.605044045005343
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 7.092141907996847
+      }
+    },
+    "assert-failure": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 1.6007544419990154
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 1.6558268560038414
+      }
+    },
+    "assert-recovery": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.38396098199882545
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.38470611099910457
+      }
+    },
+    "all-lib": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.8409570859948872
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [],
+        "accepted_samples": 5,
+        "excluded": false,
+        "failures": [],
+        "median_seconds": 0.8701633380114799
+      }
+    }
+  },
+  "policy": "Descriptive per-state results only. No arbitrary aggregate weighting, significance claim, comprehensive synthetic-workload claim, general faster-than-Blaze claim, or default promotion. Mutations instrument runtime execution and affect timings. Daemon/background CPU and OS cache noise remain uncontrolled.",
+  "identities_unchanged": true
+}

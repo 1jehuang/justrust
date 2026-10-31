@@ -1,0 +1,8 @@
+error[E0308]: expected u64, found &'static str
+    --> src/summary.rs:1100:14
+     |
+1100 | let _: u64 = "JR_MATRIX_TYPE_117ba176a55c402fa3c4dc3eab846da3";
+     |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For more information about this error, try `rustc --explain E0308`.
+error: could not compile `justrust` (lib test) due to 1 previous error

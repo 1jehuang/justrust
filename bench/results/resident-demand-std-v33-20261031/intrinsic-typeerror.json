@@ -1,0 +1,272 @@
+{
+  "rsm05": {
+    "policy": "Explicit offline intrinsic-only derivative. Original cross-engine exclusions unchanged. Not native re-execution, cross-engine admission, median promotion or a complete passing matrix.",
+    "cases": [
+      {
+        "replicate": 0,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "1f0922f56d4344cfb0ccb11d93ea9032",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm05/s0/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm05/s0/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "1a25a687d30fc5f8fb4583f9948f5519634e4198001cc4f13b8a5ea449b24ace"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "ef2515d0d96976999ea58c9c49ffd201c7cbb88d3a20a4ec9f90c3d1a828b9af"
+      },
+      {
+        "replicate": 1,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "4f433850f57f40cc851eb864fc877db9",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm05/s1/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm05/s1/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "b2456695087795fb72c5392614da86a55680fbfcc613d6de63bcc66b041d8625"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "153d2c7576a1a502f54fdf3b29a6e9c1bcb75909ec31877d2a0bbdba497fb523"
+      },
+      {
+        "replicate": 2,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "333d42af142d44a6868d3b55732034c2",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm05/s2/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm05/s2/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "a42a889918da2f4dc549948a79f0856142754a91450d92046cb73464694e583f"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "064de85cd9327fca8261500d86ee25a3050cda958646ac26e36f17f3a5b7598a"
+      },
+      {
+        "replicate": 3,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "7b5a9b5ac6bf4b4ab2c6c14b1d1bca38",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm05/s3/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm05/s3/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "3dfd345779b0c03493f850f8b6ecd82f6d2c87e04cc9206fc418f54c728c7b04"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "009212558cef1ccefd90af35b5b90c2a574b3a5670eca838b8531bba826f7b7c"
+      },
+      {
+        "replicate": 4,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "d7555ee39e8243eea33bd7966cc78c2f",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm05/s4/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm05/s4/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "cb0d3630bec2f5b6089db4469f73b0e5de74d9d2465f1e4b77a2663c6f1cc620"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "cff9b5664cf7b0f3b5fc46af3e389031022443c1ee00a8663d102ea515231da9"
+      }
+    ]
+  },
+  "rsm08": {
+    "policy": "Explicit offline intrinsic-only derivative. Original cross-engine exclusions unchanged. Not native re-execution, cross-engine admission, median promotion or a complete passing matrix.",
+    "cases": [
+      {
+        "replicate": 0,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "09b86f8e9bb64308aa3bfa6c6c6dcd7b",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm08/s0/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm08/s0/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "38a64ea079be2b9f8a225c5f804085730a94cb5aaaddc133da86817810c200c3"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "ec0e64336ba7a52863167dc829ecf52bba47a751dc10ef4c3b876365ec0f05c9"
+      },
+      {
+        "replicate": 1,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "fa721d12921845fe9fa9c3c376c0970c",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm08/s1/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm08/s1/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "d55a0c04e9d6b23dd22059e46d4f7dbd80b9fffa9a28e8d13b0afc6d088ed2e6"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "643e2b0b27e05556b6a27062c80db4fd036439d207bc37f6768a5c3fb1719b8a"
+      },
+      {
+        "replicate": 2,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "d86c63e29a2b4c19844ccc0f8eb68334",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm08/s2/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm08/s2/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "d939219a3e299a884965d6d142a95e59525c360aad516c2c4e59f3ca8deec6f2"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "67f53aff73746a04c87bc2b64fd3c545e4822def4e0e948f693fd1a1e9d2d62d"
+      },
+      {
+        "replicate": 3,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "4dc132f90c5e4780a4a09f1ee3d1f860",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm08/s3/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm08/s3/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "21954ab182e155818b7d1b7826354682e44ac04ce7d326edec8a65973d9476f6"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "ac7c0b397d1c8eb5e1bb7e3647e1e18422766005281769cc13e7ae0cb6796797"
+      },
+      {
+        "replicate": 4,
+        "stack": "engine",
+        "phase": "type-error",
+        "nonce": "117ba176a55c402fa3c4dc3eab846da3",
+        "original_cross_engine_accepted": false,
+        "original_failures": [
+          "reference state oracle unavailable/failed"
+        ],
+        "original_status": 101,
+        "raw": {
+          "stdout": {
+            "path": "/home/jeremy/rsm08/s4/engine-type-error.stdout",
+            "bytes": 0,
+            "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "stderr": {
+            "path": "/home/jeremy/rsm08/s4/engine-type-error.stderr",
+            "bytes": 366,
+            "sha256": "7597c5f2891e69624d5e0cf168320ce0a654d84ca63b0ca0c60bc76c2bb33029"
+          }
+        },
+        "intrinsic_failures": [],
+        "intrinsic_accepted": true,
+        "summary_source_sha256": "94b0ee41f87351a9a5a811a3217aec12455ac285749fda81b2dae0b32737ecb3"
+      }
+    ]
+  }
+}

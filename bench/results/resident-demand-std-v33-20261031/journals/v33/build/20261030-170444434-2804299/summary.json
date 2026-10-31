@@ -1,0 +1,138 @@
+{
+  "id": "20261030-170444434-2804299",
+  "args": [
+    "build",
+    "--release",
+    "--locked",
+    "-p",
+    "ra-jit",
+    "--bin",
+    "jr-engine",
+    "-j",
+    "6"
+  ],
+  "subcommand": "build",
+  "cwd": "/home/jeremy/justrust/toolchain/resident",
+  "git": {
+    "root": "/home/jeremy/justrust",
+    "head": "2b4485105ece",
+    "dirty_files": 3
+  },
+  "agent_session": "session_skunk_1793325801268_bca6e773d45c6a0a",
+  "start": 1793405084.4452684,
+  "wall": 58.46420621871948,
+  "exit": 0,
+  "cpu_secs": 231.14136,
+  "savings": {
+    "dependency_hits": 0,
+    "local_hits": 0,
+    "build_script_hits": 0,
+    "original_task_secs": 0.0,
+    "measured_hit_overhead_secs": 0.0,
+    "estimated_task_secs_avoided": 0.0,
+    "hits_without_full_overhead": 0,
+    "hits_without_valid_timing": 0,
+    "malformed_records": 0
+  },
+  "measurement_coverage": {
+    "samples": 278,
+    "processes": 6,
+    "sample_span_secs": 58.463839530944824,
+    "max_sample_gap_secs": 0.2247028350830078
+  },
+  "ncpu": 16,
+  "phases": {
+    "startup": 0.16520261764526367,
+    "lock_wait": 0.0,
+    "compile": 58.2646541595459,
+    "build_gaps": 0.011143922805786133,
+    "test_run": 0.0,
+    "tail": 0.02320551872253418
+  },
+  "units": {
+    "compiled": 1,
+    "local": 1,
+    "dependencies": 0,
+    "build_scripts": 0,
+    "fresh": 426,
+    "rustc_cpu_secs": 230.7,
+    "rustc_wall_sum": 58.2646541595459,
+    "with_pass_timings": 0,
+    "depcache_hits": 0,
+    "depcache_misses": 0,
+    "depcache_saved_secs": -0.0,
+    "depcache_miss_secs": -0.0,
+    "depcache_remote_hits": 0,
+    "depcache_peer_hits": 0,
+    "depcache_prebuilt_hits": 0,
+    "localcache_hits": 0,
+    "localcache_misses": 0,
+    "localcache_saved_secs": -0.0
+  },
+  "top_units": [
+    {
+      "name": "jr_engine",
+      "kind": "bin",
+      "local": true,
+      "start": 0.16520261764526367,
+      "wall": 58.2646541595459,
+      "wall_share": 58.2646541595459,
+      "cpu": 230.702169,
+      "max_rss_mb": 2864.53515625,
+      "frontend_threads": null,
+      "rmeta_secs": null,
+      "split": null,
+      "top_passes": [],
+      "source_lines": 79401
+    }
+  ],
+  "link": {
+    "linker_processes": 2,
+    "linker_cpu_secs": 0.0,
+    "link_pass_secs": 0.0
+  },
+  "tests": {
+    "binaries": [],
+    "passed": 0,
+    "failed": 0,
+    "ignored": 0,
+    "filtered_out": 0,
+    "libtest_secs": 0.0,
+    "timed_secs": 0.0,
+    "timed": 0
+  },
+  "resources": {
+    "avg_build_cores": 3.953553378203423,
+    "peak_build_cores": 6.409907746699741,
+    "peak_build_rss_mb": 2976.91015625,
+    "peak_unit_rss_mb": 2864.53515625,
+    "min_mem_available_mb": 24284,
+    "avg_other_cores": 3.441105863262291,
+    "max_foreign_rustc": 0,
+    "psi_cpu_secs": 0.6097989999999996,
+    "psi_mem_secs": 0.0002280000000000001,
+    "psi_io_secs": 0.014615000000000001
+  },
+  "diagnostics": {
+    "compile_errors": 0,
+    "warnings": 254,
+    "first_error": null,
+    "compile_failed": false
+  },
+  "rebuild_reasons": [
+    {
+      "package": "ra-jit",
+      "reason": "the dependency `ra-jit` was rebuilt"
+    }
+  ],
+  "all_units": 1,
+  "slot": null,
+  "locks_waited": [],
+  "sched": {
+    "unit": "justrust-20261030-170444434-2804299.scope",
+    "final_weight": 205,
+    "setup_secs": 0.010039219,
+    "yielded_secs": 0.0
+  },
+  "route": "JUSTRUST_REMOTE=off"
+}

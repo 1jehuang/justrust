@@ -1,0 +1,9 @@
+
+running 2 tests
+test shim::tests::describes_cargo_rustc_args ... JR_MATRIX_RUNTIME_1c931458a4cc4ebe89a65bc718f4d2bb
+ok
+test shim::tests::parses_time_passes_json ... JR_WORKLOAD_EXECUTED_shim_function_1
+ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 146 filtered out; finished in 0.00s
+

@@ -1,0 +1,10 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 1.61s
+     Running unittests src/lib.rs (/home/jeremy/rsm08/s0/reference/target/debug/deps/justrust-3b7d4f2693e438ee)
+
+thread 'summary::tests::shares_overlapping_time' (12826) panicked at src/summary.rs:1102:1:
+assertion `left == right` failed: JR_MATRIX_FAILURE_760e76c647ae46f88ba51876a8a6bfbb
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p justrust --lib`

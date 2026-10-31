@@ -1,0 +1,3 @@
+   Compiling justrust v0.1.0-alpha.1 (/home/jeremy/.jcode/scratch/resident-matrix-native-20261030/source63)
+error: could not build `justrust`: the daemon could not load the workspace (signal: 15 (SIGTERM): manifest: none used, the store has none of this build (35.5ms)); the worker's log is /home/jeremy/rsm07/s4/engine/engine-home/resident-v1/runtime/workers/578f8bed98a44e31/log
+(what blaze said is in /home/jeremy/rsm07/s4/engine/engine-home/resident-v1/runtime/workers/578f8bed98a44e31/log)

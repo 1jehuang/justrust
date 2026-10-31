@@ -1,0 +1,17 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index b4b74f418..5933ebc48 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -4763,6 +4763,12 @@ fn std_unit(
+     args: &Args,
+     listed: &Listed,
+ ) -> anyhow::Result<Option<PathBuf>> {
++    // Experimental cold path: let the existing resolver compile reachable library
++    // instances with the program instead of eagerly building every library root.
++    // Disabled unless the private worker explicitly opts in at startup.
++    if std::env::var_os("RA_JIT_DEMAND_STD").as_deref() == Some(std::ffi::OsStr::new("1")) {
++        return Ok(None);
++    }
+     std_unit_at(db, table, args, listed, args.out.with_extension("std.o"))
+ }
+ 

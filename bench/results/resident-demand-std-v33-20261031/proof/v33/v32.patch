@@ -1,0 +1,39 @@
+diff --git a/toolchain/resident/crates/ra-jit/src/main.rs b/toolchain/resident/crates/ra-jit/src/main.rs
+index b4b74f418..378d22c58 100644
+--- a/toolchain/resident/crates/ra-jit/src/main.rs
++++ b/toolchain/resident/crates/ra-jit/src/main.rs
+@@ -4753,6 +4753,10 @@ fn patches_its_library(args: &Args) -> bool {
+     args.patch.is_some() && args.exe.is_none()
+ }
+ 
++fn demand_std_enabled() -> bool {
++    std::env::var_os("RA_JIT_DEMAND_STD").as_deref() == Some(std::ffi::OsStr::new("1"))
++}
++
+ /// The standard library of a build with nothing of rustc's, compiled before the program into
+ /// an object of its own beside `--out` (docs/no-rustc.md, step F): the store's when it has the
+ /// one of these crates, cfgs and target, otherwise built here and kept there. `None` when the
+@@ -4763,6 +4767,12 @@ fn std_unit(
+     args: &Args,
+     listed: &Listed,
+ ) -> anyhow::Result<Option<PathBuf>> {
++    // Experimental cold path: let the existing resolver compile reachable library
++    // instances with the program instead of eagerly building every library root.
++    // Disabled unless the private worker explicitly opts in at startup.
++    if demand_std_enabled() {
++        return Ok(None);
++    }
+     std_unit_at(db, table, args, listed, args.out.with_extension("std.o"))
+ }
+ 
+@@ -5257,7 +5267,9 @@ fn build(
+         let own: FxHashSet<ide_db::base_db::Crate> = local
+             .iter()
+             .flat_map(|&it| ide_db::base_db::Crate::from(it).transitive_deps(db))
+-            .filter(|it| !it.data(db).origin.is_lang())
++            .filter(|it| {
++                !it.data(db).origin.is_lang() || args.prebuilt.is_none() && demand_std_enabled()
++            })
+             .collect();
+         let macros = macros_linked(db, &local, &own);
+         let linked: FxHashSet<Crate> = own

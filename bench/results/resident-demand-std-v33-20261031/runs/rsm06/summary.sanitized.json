@@ -1,0 +1,1280 @@
+{
+  "states": {
+    "cold-prepare": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "repeated-noop-1": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "repeated-noop-2": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "summary-testbody-edit": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "summary-edit-recovery": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "ordinary-shim-edit": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "ordinary function invocation count not reference-validated",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "ordinary function invocation count not reference-validated",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "ordinary function invocation count not reference-validated",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "ordinary function invocation count not reference-validated",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "ordinary function invocation count not reference-validated",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "signature-base": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "signature-invalidation": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "manifest-feature-add": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "type-error": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "type-recovery": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "assert-failure": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "assert-recovery": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    },
+    "all-lib": {
+      "reference": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "invalid native version, see versions[0:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "invalid native version, see versions[1:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "invalid native version, see versions[2:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "invalid native version, see versions[3:reference] raw receipt"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "invalid native version, see versions[4:reference] raw receipt"
+            ]
+          }
+        ],
+        "median_seconds": null
+      },
+      "engine": {
+        "expected_samples": 5,
+        "observed_samples": 5,
+        "exclusion_reasons": [
+          "one or more explicit state oracles failed"
+        ],
+        "accepted_samples": 0,
+        "excluded": true,
+        "failures": [
+          {
+            "replicate": 0,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 1,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 2,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 3,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          },
+          {
+            "replicate": 4,
+            "reasons": [
+              "exact reference test names/status/counts/filtered mismatch",
+              "reference state oracle unavailable/failed"
+            ]
+          }
+        ],
+        "median_seconds": null
+      }
+    }
+  },
+  "policy": "Descriptive per-state results only. No arbitrary aggregate weighting, significance claim, comprehensive synthetic-workload claim, general faster-than-Blaze claim, or default promotion. Mutations instrument runtime execution and affect timings. Daemon/background CPU and OS cache noise remain uncontrolled.",
+  "identities_unchanged": true
+}

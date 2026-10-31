@@ -1,0 +1,63 @@
+{
+  "private_original_location": "/home/jeremy/rsm03",
+  "environment_allowlist": [
+    "BLAZE_BACKEND",
+    "BLAZE_CACHE",
+    "BLAZE_HOME",
+    "BLAZE_OPT",
+    "BLAZE_PROC_MACRO_SERVER",
+    "BLAZE_REMOTE",
+    "CARGO_HOME",
+    "CARGO_PROFILE_DEV_DEBUG",
+    "CARGO_PROFILE_DEV_INCREMENTAL",
+    "CARGO_PROFILE_DEV_OPT_LEVEL",
+    "CARGO_PROFILE_TEST_DEBUG",
+    "CARGO_PROFILE_TEST_INCREMENTAL",
+    "CARGO_PROFILE_TEST_OPT_LEVEL",
+    "CARGO_TARGET_DIR",
+    "HOME",
+    "JR_ENGINE_HOME",
+    "RA_JIT_CACHE",
+    "RA_JIT_DEMAND_STD",
+    "RA_JIT_HOME",
+    "RA_JIT_PROC_MACRO_SERVER",
+    "RA_JIT_REMOTE",
+    "RA_JIT_STATS",
+    "RUSTUP_HOME",
+    "XDG_CACHE_HOME",
+    "XDG_CONFIG_HOME",
+    "XDG_DATA_HOME",
+    "XDG_RUNTIME_DIR"
+  ],
+  "omitted": {
+    "environment_maps": 5,
+    "omitted_entries": 0
+  },
+  "private_original_sha256": {
+    "metadata.json": "15081dabe5a168c40860605bbdef3e569775b753d20b7fa33070b6bae15ecbfd",
+    "records.json": "3c5077fe395b6ba96f1bea99761b2159da98fb57ba500d483a641d859f8188cc",
+    "s0/reference-cold-prepare.stderr": "f3f90f2762d5f3636ad64f971607b98a3dc4d5c4f737b96967ba372ad4fe4eba",
+    "s0/engine-version.stdout": "9a0852b575c3d4e35e7b3d247e92c6d3f84055076fb5780c53311e4238226961",
+    "original-1": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "s0/reference-cold-prepare.stdout": "0e777242534924e4411f7fdbb5a944081f2fb698d5194c2e0f980c3614d3a9cd",
+    "s0/reference-version.stdout": "2ef8b26327a8137dd17c4063c9b6255900bf269d576652c2a35fae420c16434b",
+    "s0/reference-version.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-2": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "s0/engine-version.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-0": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f"
+  },
+  "derivative_sha256": {
+    "metadata.sanitized.json": "15081dabe5a168c40860605bbdef3e569775b753d20b7fa33070b6bae15ecbfd",
+    "records.sanitized.json": "3c5077fe395b6ba96f1bea99761b2159da98fb57ba500d483a641d859f8188cc",
+    "s0/reference-cold-prepare.stderr": "f3f90f2762d5f3636ad64f971607b98a3dc4d5c4f737b96967ba372ad4fe4eba",
+    "s0/engine-version.stdout": "9a0852b575c3d4e35e7b3d247e92c6d3f84055076fb5780c53311e4238226961",
+    "original-1": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "s0/reference-cold-prepare.stdout": "0e777242534924e4411f7fdbb5a944081f2fb698d5194c2e0f980c3614d3a9cd",
+    "s0/reference-version.stdout": "2ef8b26327a8137dd17c4063c9b6255900bf269d576652c2a35fae420c16434b",
+    "s0/reference-version.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-2": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "s0/engine-version.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "original-0": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f"
+  },
+  "policy": "Aborted default-mode observation. Missing finally/summary is not fabricated. No original exit/restoration attestation."
+}
