@@ -373,6 +373,140 @@ class ManifestRetouchTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'short'):
             suite.check_retouch_output_length(Path('/long/' + 'a' * 40))
 
+class WatchedManifestRetouchTests(ManifestRetouchTests):
+    """The same raw controls must hold with whole-generation fixed ON."""
+
+    def setUp(self):
+        super().setUp()
+        self.args.mode = suite.WATCHED_POLICY.mode
+
+    def replay(self):
+        return suite.replay_retouch(self.args.output, self.source, suite.WATCHED_POLICY)
+
+    def fake_run(self, command, cwd, env, prefix, timeout):
+        result = super().fake_run(command, cwd, env, prefix, timeout)
+        result['elapsed_seconds'] = 0.01 if env[suite.WATCHED_FLAG] == '0' else 0.005
+        return result
+
+    def test_raw_status_pid_entry_marker_and_pid_reuse_checks(self):
+        self.run_harness()
+        records = self.args.output / 'records.json'
+        original = records.read_bytes()
+        rows = json.loads(original)
+        for arm in ('0', '1'):
+            index = next(i for i, row in enumerate(rows) if row['phase'] == 'retouch'
+                         and row['flags'][suite.WATCHED_FLAG] == arm)
+            with self.subTest(arm=arm):
+                status = self.args.output / f'call-{index:03}-status.stdout'
+                status_bytes = status.read_bytes()
+                for bad in (b'', status_bytes + status_bytes, b'worker: pid 99\n'):
+                    status.write_bytes(bad)
+                    with self.assertRaisesRegex(ValueError, 'PID'):
+                        self.replay()
+                status.write_bytes(status_bytes)
+                rows[index]['worker']['stat'] += '0'
+                records.write_text(json.dumps(rows))
+                with self.assertRaisesRegex(ValueError, 'PID/starttime'):
+                    self.replay()
+                rows = json.loads(original)
+                records.write_bytes(original)
+                path = self.args.output / f'call-{index:03}.stdout'
+                text = path.read_text()
+                self.assertEqual(text.splitlines().count(suite.RETOUCH_MARKER), 1)
+                path.write_text(text.replace(suite.RETOUCH_MARKER + '\n', ''))
+                with self.assertRaisesRegex(ValueError, 'marker'):
+                    self.replay()
+                path.write_text(text)
+
+    def test_exact_watcher_flags_and_fixed_generation_per_state_and_call(self):
+        self.run_harness()
+        metadata, samples, _ = self.replay()
+        rows = json.loads((self.args.output / 'records.json').read_text())
+        for row in rows:
+            group = row['group']
+            reference = group == 'reference'
+            arm = 'off' if reference else suite.RETOUCH_ORDER[int(group[-1])]
+            wanted = suite.WATCHED_POLICY.flags(arm, reference)
+            self.assertEqual(row['flags'], wanted)
+            self.assertEqual({k: metadata['environments'][group][k] for k in wanted}, wanted)
+        for segment in range(4):
+            measured = [row for row in rows if row['group'] == f'segment-{segment}'
+                        and row['phase'] in ('warmup', 'retouch')]
+            self.assertEqual(len(measured), 6)
+            self.assertEqual(len({(r['worker']['pid'], r['worker']['stat']) for r in measured}), 1)
+        self.assertEqual([len(samples[a]['samples_seconds']) for a in ('off', 'on')], [10, 10])
+        for filename in ('metadata.json', 'records.json'):
+            path = self.args.output / filename
+            original = path.read_bytes()
+            for key in (suite.RETOUCH_FLAG, suite.WATCHED_FLAG):
+                for value in (None, 'true', 'on', 1, '0' if key == suite.RETOUCH_FLAG else '1'):
+                    obj = json.loads(original)
+                    flags = obj['environments']['segment-0'] if filename == 'metadata.json' else obj[6]['flags']
+                    flags[key] = value
+                    path.write_text(json.dumps(obj))
+                    with self.assertRaisesRegex(ValueError, 'flag'):
+                        self.replay()
+                    path.write_bytes(original)
+
+    def test_compare_distinct_schema_same_abba_only_and_descriptive(self):
+        self.run_harness()
+        off, on = self.result('off'), self.result('on')
+        output = io.StringIO()
+        with patch.object(suite, 'pinned_hashes', return_value=self.source), contextlib.redirect_stdout(output):
+            suite.compare(off, on)
+        for phrase in ('WATCHED manifest+lock factor', 'whole-generation fixed ON',
+                       'All first-touch samples retained', 'noise unknown',
+                       'No significance or general speedup verdict', 'default promotion'):
+            self.assertIn(phrase, output.getvalue())
+        for schema in (suite.RETOUCH_SCHEMA, suite.SCHEMA):
+            changed = dict(on, schema=schema)
+            with self.assertRaisesRegex(ValueError, 'mix'):
+                suite.compare(off, changed)
+        with patch.object(suite, 'pinned_hashes', return_value=self.source):
+            with self.assertRaisesRegex(ValueError, 'OFF then ON'):
+                suite.compare(on, off)
+            for floor in (-1, float('nan')):
+                with self.assertRaisesRegex(ValueError, 'floor'):
+                    suite.compare(off, on, floor)
+            changed = copy.deepcopy(on)
+            changed['measurements']['on']['median_seconds'] = 99
+            with self.assertRaisesRegex(ValueError, 'sample/host'):
+                suite.compare(off, changed)
+        changed = copy.deepcopy(on)
+        changed['artifacts_sha256']['records.json'] = 'f' * 64
+        with patch.object(suite, 'validate_retouch', side_effect=[(off['metadata'], off['measurements']),
+                                                                (on['metadata'], on['measurements'])]):
+            with self.assertRaisesRegex(ValueError, 'same frozen'):
+                suite.compare(off, changed)
+        with self.assertRaisesRegex(ValueError, 'schema'):
+            suite.replay_retouch(self.args.output, self.source)
+        path = self.args.output / 'metadata.json'
+        original = path.read_bytes()
+        for mutation in ({'schema': suite.RETOUCH_SCHEMA}, {'mode': 'manifest-retouch'},
+                         {'factor': suite.RETOUCH_FLAG}):
+            obj = json.loads(original)
+            obj.update(mutation)
+            path.write_text(json.dumps(obj))
+            with self.assertRaises(ValueError):
+                self.replay()
+        path.write_bytes(original)
+
+    def test_watched_cli_dispatch_and_immutable_policy(self):
+        parser = argparse.ArgumentParser()
+        suite.add_parser(parser.add_subparsers())
+        argv = ['resident', '--mode', 'watched-manifest-retouch']
+        for name in ('reference-engine', 'engine', 'source', 'output', 'toolchain'):
+            argv.extend(['--' + name, '/absolute/' + name])
+        args = parser.parse_args(argv)
+        with patch.object(suite, 'cmd_manifest_retouch') as call:
+            suite.cmd_resident(args)
+        call.assert_called_once_with(args, suite.WATCHED_POLICY)
+        with self.assertRaises(AttributeError):
+            suite.WATCHED_POLICY.watched = False
+        self.assertEqual(suite.RETOUCH_POLICY.flags('off'), {suite.RETOUCH_FLAG: '0'})
+        self.assertFalse(suite.RETOUCH_POLICY.reuse_worker('off'))
+        self.assertTrue(suite.WATCHED_POLICY.reuse_worker('off'))
+
 
 if __name__ == '__main__':
     unittest.main()

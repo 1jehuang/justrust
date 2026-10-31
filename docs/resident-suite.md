@@ -137,6 +137,36 @@ The new mode's Python-only controls are in
 `bench/test_resident_manifest_retouch.py`. Mock tests do not substitute for the
 actual native workflow above.
 
+## Watched-manifest byte factor
+
+`--mode watched-manifest-retouch` reuses the same pinned source, fixed reachable
+runtime nonce, semantic gates, private states, byte/mtime checks and PID proofs.
+It isolates `RA_JIT_WATCHED_MANIFEST_BYTES`: whole-generation content identity is
+fixed ON in both candidate arms, while watcher bytes are OFF/ON/ON/OFF. The
+reference has both flags OFF. Both candidate arms must retain the same worker
+PID, start ticks, executable and socket across their measured retouches.
+
+```sh
+python3 bench/suite.py resident --mode watched-manifest-retouch \
+  --reference-engine /absolute/reference/ra-jit \
+  --engine /absolute/candidate/jr-engine --source /absolute/pristine/source63 \
+  --toolchain /absolute/pinned/toolchain --output /home/jeremy/wm76b \
+  --samples 5 --timeout 360
+python3 bench/suite.py compare /home/jeremy/wm76b/off.json /home/jeremy/wm76b/on.json
+```
+
+Use a fresh short output path. The distinct
+`native_resident_watched_manifest_retouch/v1` schema records both flags per state
+and call and rejects cross-mode comparisons. The original manifest-retouch
+schema still requires worker replacement in its OFF arm. A client entry marker
+is not proof that the worker skipped a reload. Real native fixtures and changed
+manifest, build-script environment and native-file recovery controls remain
+separate acceptance requirements.
+
+Preserve every first-touch sample and the original aborted runs. A completed
+comparison is descriptive combined manifest+lock evidence with unknown noise,
+not independent file attribution, a general agent speedup or default promotion.
+
 ## Existing mode regression tests
 
 ```sh

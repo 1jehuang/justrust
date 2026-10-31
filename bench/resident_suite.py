@@ -11,6 +11,7 @@ import statistics
 import subprocess
 import time
 import uuid
+from dataclasses import dataclass
 
 import resident_engine_compare as harness
 
@@ -21,6 +22,35 @@ RETOUCH_NONCE = 'JR_MANIFEST_RETOUCH_NONCE'
 RETOUCH_ORDER = ('off', 'on', 'on', 'off')
 RETOUCH_FILES = ('Cargo.toml', 'Cargo.lock')
 RETOUCH_MARKER = 'ra-jit: manifest-content-generation-v1 entered'
+WATCHED_FLAG = 'RA_JIT_WATCHED_MANIFEST_BYTES'
+WATCHED_SCHEMA = 'native_resident_watched_manifest_retouch/v1'
+
+
+@dataclass(frozen=True)
+class RetouchPolicy:
+    mode: str
+    schema: str
+    watched: bool = False
+
+    def flags(self, arm, reference=False):
+        if self.watched:
+            return {RETOUCH_FLAG: '0' if reference else '1',
+                    WATCHED_FLAG: '1' if arm == 'on' and not reference else '0'}
+        return {RETOUCH_FLAG: '1' if arm == 'on' else '0'}
+
+    def reuse_worker(self, arm):
+        return self.watched or arm == 'on'
+
+
+RETOUCH_POLICY = RetouchPolicy('manifest-retouch', RETOUCH_SCHEMA)
+WATCHED_POLICY = RetouchPolicy('watched-manifest-retouch', WATCHED_SCHEMA, True)
+
+
+def retouch_policy(schema):
+    for policy in (RETOUCH_POLICY, WATCHED_POLICY):
+        if schema == policy.schema:
+            return policy
+    raise ValueError('native resident: unsupported retouch schema')
 
 
 def digest(path):
@@ -139,7 +169,7 @@ def replay(root, expected_source):
 
 
 def validate(result):
-    if result.get('schema') == RETOUCH_SCHEMA:
+    if result.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA):
         return validate_retouch(result)
     require(result.get('schema') == SCHEMA, 'unsupported schema')
     root = Path(result['artifacts_root'])
@@ -156,6 +186,8 @@ def validate(result):
 def cmd_resident(args):
     if getattr(args, 'mode', 'edit') == 'manifest-retouch':
         return cmd_manifest_retouch(args)
+    if getattr(args, 'mode', 'edit') == WATCHED_POLICY.mode:
+        return cmd_manifest_retouch(args, WATCHED_POLICY)
     args.blaze = None
     before_host = host_identity()
     status = harness.execute(args)
@@ -171,7 +203,7 @@ def cmd_resident(args):
 
 
 def compare(a, b, floor=10.0):
-    if a.get('schema') == RETOUCH_SCHEMA or b.get('schema') == RETOUCH_SCHEMA:
+    if any(r.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA) for r in (a, b)):
         return compare_retouch(a, b, floor)
     require(a.get('schema') == SCHEMA and b.get('schema') == SCHEMA, 'cannot mix native and non-native results')
     ma, sa = validate(a)
@@ -278,8 +310,9 @@ def check_retouch_process(row, command):
             'invalid elapsed time')
 
 
-def check_retouch_environment(env, metadata, arm):
-    require(env.get(RETOUCH_FLAG) == ('1' if arm == 'on' else '0'), 'wrong exact flag receipt')
+def check_retouch_environment(env, metadata, arm, policy=RETOUCH_POLICY, reference=False):
+    require(all(env.get(key) == value for key, value in policy.flags(arm, reference).items()),
+            'wrong exact flag receipt')
     require(RETOUCH_NONCE not in env, 'runtime nonce leaked into persistent environment')
     require(env.get('BLAZE_BACKEND') == 'cranelift' and env.get('BLAZE_OPT') == '0', 'backend mismatch')
     require(all(env.get(k) == v for k, v in harness.runtime.PROFILES.items()), 'profile mismatch')
@@ -290,12 +323,15 @@ def check_retouch_environment(env, metadata, arm):
         require(env.get(key) == server, 'proc macro policy differs')
 
 
-def replay_retouch(root, expected_source):
+def replay_retouch(root, expected_source, policy=RETOUCH_POLICY):
     """Strict new schema. Never reinterpret the legacy unique-edit measurements."""
     metadata = json.loads((root / 'metadata.json').read_text())
     rows = json.loads((root / 'records.json').read_text())
-    require(metadata.get('schema') == RETOUCH_SCHEMA and metadata.get('pin') == harness.PIN,
+    require(metadata.get('schema') == policy.schema and metadata.get('pin') == harness.PIN,
             'wrong retouch schema/pin')
+    if policy.watched:
+        require(metadata.get('mode') == policy.mode and metadata.get('factor') == WATCHED_FLAG,
+                'wrong watched retouch mode/factor')
     require(metadata.get('order') == list(RETOUCH_ORDER) and metadata.get('samples') == 5,
             'wrong ABBA order/sample count')
     require(len(expected_source) == 63 and metadata.get('source_before') == expected_source
@@ -370,15 +406,17 @@ def replay_retouch(root, expected_source):
         segment = None if group == 'reference' else int(group[-1])
         arm = 'off' if segment is None else RETOUCH_ORDER[segment]
         env = states[group]
-        check_retouch_environment(env, metadata, arm)
+        check_retouch_environment(env, metadata, arm, policy, segment is None)
         require(row.get('flag') == env[RETOUCH_FLAG], 'missing per-call exact flag receipt')
+        if policy.watched:
+            require(row.get('flags') == policy.flags(arm, segment is None), 'wrong per-call flags receipt')
         tool = tools['reference' if segment is None else 'engine']
         command = [tool['path'], '--version'] if phase == 'version' else harness.command(Path(tool['path']), 'reference' if segment is None else 'engine')
         prefix = f'call-{index:03}'
         logs = [prefix + '.stdout', prefix + '.stderr']
         artifacts.extend(logs)
         text = '\n'.join((root / name).read_text(errors='replace') for name in logs)
-        if arm == 'off' or phase == 'version':
+        if env[RETOUCH_FLAG] == '0' or phase == 'version':
             require(RETOUCH_MARKER not in text, 'unexpected opt-in entry marker')
         require(row.get('command') == command and row.get('error') is None and row.get('timed_out') is False,
                 'wrong command/error/timeout')
@@ -416,7 +454,7 @@ def replay_retouch(root, expected_source):
             require(row.get('nonce_environment') == {RETOUCH_NONCE: nonce}, 'wrong runtime nonce environment receipt')
             require(re.findall(r'JR_MANIFEST_RETOUCH_[^\s]+', text) == ['JR_MANIFEST_RETOUCH_' + nonce],
                     'missing/duplicate/stale reachable runtime nonce')
-            require(text.splitlines().count(RETOUCH_MARKER) == int(arm == 'on'), 'wrong opt-in entry marker count')
+            require(text.splitlines().count(RETOUCH_MARKER) == int(env[RETOUCH_FLAG] == '1'), 'wrong opt-in entry marker count')
             status_prefix = prefix + '-status'
             artifacts.extend([status_prefix + '.stdout', status_prefix + '.stderr'])
             status_text = '\n'.join((root / (status_prefix + suffix)).read_text(errors='replace') for suffix in ('.stdout', '.stderr'))
@@ -426,7 +464,7 @@ def replay_retouch(root, expected_source):
             identity = worker_key(row.get('worker'), tool, env['RA_JIT_HOME'])
             require(identity[0] == int(pids[0]), 'status and proc PID differ')
             if phase == 'retouch':
-                require((identity == worker[group]) == (arm == 'on'), 'worker PID/starttime did not match arm behavior')
+                require((identity == worker[group]) == policy.reuse_worker(arm), 'worker PID/starttime did not match arm behavior')
                 touches = row.get('touches', [])
                 require([r.get('file') for r in touches] == list(RETOUCH_FILES), 'wrong retouched file set')
                 for touch in touches:
@@ -451,8 +489,9 @@ def replay_retouch(root, expected_source):
 
 
 def validate_retouch(result):
-    require(result.get('schema') == RETOUCH_SCHEMA and result.get('arm') in ('off', 'on'), 'wrong retouch result arm/schema')
-    metadata, samples, receipts = replay_retouch(Path(result['artifacts_root']), pinned_hashes())
+    policy = retouch_policy(result.get('schema'))
+    require(result.get('arm') in ('off', 'on'), 'wrong retouch result arm/schema')
+    metadata, samples, receipts = replay_retouch(Path(result['artifacts_root']), pinned_hashes(), policy)
     require(result.get('metadata') == metadata and result.get('artifacts_sha256') == receipts,
             'raw retouch artifact receipt mismatch')
     require(result.get('measurements') == samples and result.get('host') == metadata['host_before'],
@@ -465,7 +504,7 @@ def check_retouch_output_length(output):
     require(len(os.fsencode(output)) <= 30, 'retouch output must be short (<=30 bytes) for native sockets')
 
 
-def cmd_manifest_retouch(args):
+def cmd_manifest_retouch(args, policy=RETOUCH_POLICY):
     """Native commands execute only when root explicitly requests this CLI mode."""
     require(args.samples == 5 and math.isfinite(args.timeout) and args.timeout > 0,
             'exactly five samples and a finite positive timeout required')
@@ -494,7 +533,7 @@ def cmd_manifest_retouch(args):
     for name, data in originals.items():
         (args.output / (name + '.original')).write_bytes(data)
     identify = lambda: {name: {'path': str(tool), 'sha256': digest(tool)} for name, tool in tools.items()}
-    metadata = {'schema': RETOUCH_SCHEMA, 'pin': harness.PIN, 'order': list(RETOUCH_ORDER),
+    metadata = {'schema': policy.schema, 'pin': harness.PIN, 'order': list(RETOUCH_ORDER),
                 'samples': 5, 'source_before': expected_source,
                 'fixture_source': dict(expected_source, **{'src/summary.rs': hashlib.sha256(overlay).hexdigest()}),
                 'tools_before': identify(), 'toolchain_before': harness.toolchain_identity(args.toolchain),
@@ -502,6 +541,9 @@ def cmd_manifest_retouch(args):
                 'store_scope': 'unseeded private cold stores, no automatic seeding',
                 'scope': 'combined same-byte manifest+lock retouch only, descriptive, no default promotion',
                 'environments': {}, 'toolchain_links': {}, 'status': 'incomplete'}
+    if policy.watched:
+        metadata.update(mode=policy.mode, factor=WATCHED_FLAG,
+                        scope='WATCHED manifest+lock factor, whole-generation fixed ON, descriptive, no default promotion')
     rows, environments, stops = [], {}, []
     expected_tests = None
 
@@ -531,6 +573,8 @@ def cmd_manifest_retouch(args):
                'flag': env[RETOUCH_FLAG], 'nonce': nonce,
                'nonce_environment': {RETOUCH_NONCE: nonce} if nonce else {},
                'touches': touches or [], 'source_before': before}
+        if policy.watched:
+            row['flags'] = {key: env[key] for key in (RETOUCH_FLAG, WATCHED_FLAG)}
         rows.append(row)
         save()
         row.update(harness.runtime.run_process(command, args.source, env, prefix, args.timeout))
@@ -583,13 +627,15 @@ def cmd_manifest_retouch(args):
             envroot = args.output / ('r' if group == 'reference' else 's' + group[-1])
             stack = 'reference' if group == 'reference' else 'engine'
             env = harness.environment(envroot, stack, args.toolchain, args.proc_macro_server)
-            env[RETOUCH_FLAG] = '1' if arm == 'on' else '0'
+            env.update(policy.flags(arm, group == 'reference'))
             # Prevent a parent runtime nonce from leaking into pristine semantic gates.
             env.pop(RETOUCH_NONCE, None)
             environments[group] = env
             keys = ('HOME', 'JR_ENGINE_HOME', 'RA_JIT_HOME', 'RA_JIT_CACHE', 'CARGO_HOME', 'CARGO_TARGET_DIR',
                     'BLAZE_HOME', 'BLAZE_CACHE', 'BLAZE_BACKEND', 'BLAZE_OPT', 'RUSTUP_HOME', 'BLAZE_REMOTE',
                     'RA_JIT_REMOTE', 'BLAZE_PROC_MACRO_SERVER', 'RA_JIT_PROC_MACRO_SERVER', RETOUCH_FLAG)
+            if policy.watched:
+                keys += (WATCHED_FLAG,)
             metadata['environments'][group] = {key: env[key] for key in keys if key in env}
             metadata['environments'][group].update(harness.runtime.PROFILES)
             metadata['toolchain_links'][group] = str(Path(env['BLAZE_HOME']) / 'toolchains' / args.toolchain.name)
@@ -631,9 +677,9 @@ def cmd_manifest_retouch(args):
         except Exception as exc:
             metadata['identity_error'] = repr(exc)
         save()
-    metadata, samples, receipts = replay_retouch(args.output, expected_source)
+    metadata, samples, receipts = replay_retouch(args.output, expected_source, policy)
     for arm in ('off', 'on'):
-        result = {'schema': RETOUCH_SCHEMA, 'artifacts_root': str(args.output), 'arm': arm,
+        result = {'schema': policy.schema, 'artifacts_root': str(args.output), 'arm': arm,
                   'metadata': metadata, 'measurements': samples, 'artifacts_sha256': receipts,
                   'host': metadata['host_before'], 'noise': 'unknown', 'scope': metadata['scope']}
         target = args.output / (arm + '.json')
@@ -642,7 +688,9 @@ def cmd_manifest_retouch(args):
 
 
 def compare_retouch(a, b, floor):
-    require(a.get('schema') == b.get('schema') == RETOUCH_SCHEMA, 'cannot mix retouch and edit schemas')
+    require(a.get('schema') == b.get('schema') and a.get('schema') in (RETOUCH_SCHEMA, WATCHED_SCHEMA),
+            'cannot mix retouch and edit schemas or retouch modes')
+    policy = retouch_policy(a['schema'])
     ma, sa = validate_retouch(a)
     mb, sb = validate_retouch(b)
     require(a['arm'] == 'off' and b['arm'] == 'on', 'retouch compare requires OFF then ON')
@@ -651,7 +699,11 @@ def compare_retouch(a, b, floor):
     require(math.isfinite(floor) and floor >= 0, 'invalid floor')
     old, new = sa['off']['median_seconds'], sb['on']['median_seconds']
     delta = (new / old - 1) * 100
-    print('Native resident combined same-byte manifest+lock retouch scoped diagnostic.')
+    if policy.watched:
+        print('Native resident WATCHED manifest+lock factor scoped diagnostic, whole-generation fixed ON.')
+        print('Watcher flag explicitly 0/1; reference both flags 0. All first-touch samples retained.')
+    else:
+        print('Native resident combined same-byte manifest+lock retouch scoped diagnostic.')
     print('Same candidate ELF, OFF/ON/ON/OFF; 5 samples per segment, 10 per arm.')
     print(f'OFF median: {old:.6f}s -> ON median: {new:.6f}s, delta {new-old:+.6f}s ({delta:+.2f}%).')
     print(f'Absolute median delta {"exceeds" if abs(delta) > floor else "does not exceed"} requested {floor:g}% floor.')
@@ -666,6 +718,6 @@ def add_parser(sub):
     parser.add_argument('--proc-macro-server', type=harness.absolute)
     parser.add_argument('--samples', type=int, choices=(5,), default=5)
     parser.add_argument('--timeout', type=float, default=360)
-    parser.add_argument('--mode', choices=('edit', 'manifest-retouch'), default='edit',
+    parser.add_argument('--mode', choices=('edit', 'manifest-retouch', WATCHED_POLICY.mode), default='edit',
                         help='manifest-retouch runs fixed same-engine OFF/ON/ON/OFF, five samples each')
     parser.set_defaults(fn=cmd_resident)
