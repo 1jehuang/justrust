@@ -276,6 +276,43 @@ pub struct PreparedAttribute {
     pub name: String,
     pub effective: bool,
 }
+/// Active export ownership issued by the configured source item walker.
+/// Original bytes and both exact ranges survive assembly and file projections.
+#[derive(Clone, Debug)]
+pub(super) struct MacroExport {
+    attribute: SourceSpan,
+    item: SourceSpan,
+    original: Arc<str>,
+}
+impl MacroExport {
+    pub(super) fn spans(
+        &self,
+        source: &PreparedSource,
+    ) -> Result<(SourceSpan, SourceSpan), SourceError> {
+        let file = source.sources.files.get(self.item.file.0 as usize);
+        if self.attribute.file != self.item.file
+            || !file.is_some_and(|file| file.contents == self.original)
+            || self.attribute.lo >= self.attribute.hi
+            || self.attribute.hi > self.item.lo
+            || self.item.lo >= self.item.hi
+            || self.item.hi as usize > self.original.len()
+        {
+            return Err(Loader::error(
+                SourceErrorKind::Contract,
+                Some(self.item),
+                "macro export source identity mismatch",
+            ));
+        }
+        Ok((self.attribute, self.item))
+    }
+    fn remap(&self, file: FileId) -> Self {
+        Self {
+            attribute: remap_span(self.attribute, file),
+            item: remap_span(self.item, file),
+            original: self.original.clone(),
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub(super) struct CratePolicy {
     root: FileId,
@@ -329,6 +366,9 @@ pub struct PreparedSource {
     pub sources: SourceMap,
     pub origins: Vec<OriginSegment>,
     pub attributes: Vec<PreparedAttribute>,
+    pub(super) macro_exports: Vec<MacroExport>,
+    pub(super) has_item_macro_invocations: bool,
+    pub(super) has_root_use_items: bool,
     /// Reviewed source pin audit records, never semantic or publication authority.
     pub probes: Vec<SourceProbeRecord>,
     pub source_bytes: usize,
@@ -349,6 +389,9 @@ impl Default for PreparedSource {
             sources: SourceMap::default(),
             origins: Vec::new(),
             attributes: Vec::new(),
+            macro_exports: Vec::new(),
+            has_item_macro_invocations: false,
+            has_root_use_items: false,
             probes: Vec::new(),
             source_bytes: 0,
             files: 0,
@@ -454,6 +497,11 @@ impl FileView {
         for attribute in &unit.attributes {
             prepared.attributes.push(attribute.clone());
         }
+        prepared
+            .macro_exports
+            .extend(unit.macro_exports.iter().cloned());
+        prepared.has_item_macro_invocations |= unit.has_item_macro_invocations;
+        prepared.has_root_use_items |= unit.has_root_use_items;
         if let Some(error) = &unit.terminal {
             return Err(copy_error(error, error.primary).with_sources(&prepared.sources));
         }
@@ -717,6 +765,9 @@ pub struct FileUnit {
     pub text: String,
     pub origins: Vec<OriginSegment>,
     pub attributes: Vec<PreparedAttribute>,
+    pub(super) macro_exports: Vec<MacroExport>,
+    pub(super) has_item_macro_invocations: bool,
+    pub(super) has_root_use_items: bool,
     pub children: Vec<ChildModule>,
     /// Module path of this file below its crate root.
     pub module: Vec<String>,
@@ -1056,6 +1107,9 @@ fn snapshot_unit<'a>(
         text: builder.text,
         origins: builder.origins,
         attributes: builder.attributes,
+        macro_exports: builder.macro_exports,
+        has_item_macro_invocations: builder.has_item_macro_invocations,
+        has_root_use_items: builder.has_root_use_items,
         children: builder.children,
         module,
         tests: builder.tests,
@@ -1115,7 +1169,7 @@ fn remap_span(span: SourceSpan, id: FileId) -> SourceSpan {
         ..span
     }
 }
-fn copy_error(error: &SourceError, primary: Option<SourceSpan>) -> SourceError {
+pub(super) fn copy_error(error: &SourceError, primary: Option<SourceSpan>) -> SourceError {
     SourceError {
         kind: error.kind,
         primary,
@@ -1260,6 +1314,11 @@ impl SourceAssembler {
                 effective: attribute.effective,
             });
         }
+        self.prepared
+            .macro_exports
+            .extend(unit.macro_exports.iter().map(|export| export.remap(id)));
+        self.prepared.has_item_macro_invocations |= unit.has_item_macro_invocations;
+        self.prepared.has_root_use_items |= unit.has_root_use_items;
         self.frames.push(Frame {
             unit,
             id,
@@ -1291,6 +1350,9 @@ impl SourceAssembler {
                     text: unit.text.clone(),
                     origins: unit.origins.clone(),
                     attributes: unit.attributes.clone(),
+                    macro_exports: unit.macro_exports.clone(),
+                    has_item_macro_invocations: unit.has_item_macro_invocations,
+                    has_root_use_items: unit.has_root_use_items,
                     children: unit.children.clone(),
                     module: unit.module.clone(),
                     tests: unit.tests.clone(),
@@ -1563,6 +1625,9 @@ struct Loader<'a> {
     text: String,
     origins: Vec<OriginSegment>,
     attributes: Vec<PreparedAttribute>,
+    macro_exports: Vec<MacroExport>,
+    has_item_macro_invocations: bool,
+    has_root_use_items: bool,
     children: Vec<ChildModule>,
     derives: Vec<(usize, String)>,
     /// Inline module names enclosing the text being expanded.
@@ -1589,6 +1654,9 @@ impl<'a> Loader<'a> {
             text: String::new(),
             origins: Vec::new(),
             attributes: Vec::new(),
+            macro_exports: Vec::new(),
+            has_item_macro_invocations: false,
+            has_root_use_items: false,
             children: Vec::new(),
             derives: Vec::new(),
             module_stack: Vec::new(),
@@ -1691,6 +1759,15 @@ impl<'a> Loader<'a> {
                     format!("inactive item: {}", e.message),
                 )
             })?;
+        }
+        self.has_item_macro_invocations |= filtered.has_item_macro_invocations;
+        self.has_root_use_items |= filtered.has_root_use_items;
+        for export in filtered.macro_exports {
+            self.macro_exports.push(MacroExport {
+                attribute: Self::span(id, export.attribute()),
+                item: Self::span(id, export.item()),
+                original: self.contents.clone(),
+            });
         }
         for a in filtered.attributes {
             self.attributes.push(PreparedAttribute {

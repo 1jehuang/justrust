@@ -34,6 +34,14 @@ impl TokenView<'_> {
                 && self.text == text
         }
     }
+    pub(super) fn dollar_crate(
+        &self,
+    ) -> Option<crate::compiler::semantic_path::RetainedDollarCrateAnchor> {
+        match &self.kind {
+            ParserTokenKind::DollarCrate(anchor) => Some(anchor.clone()),
+            _ => None,
+        }
+    }
     pub(super) fn is_ident(&self) -> bool {
         self.kind == ParserTokenKind::Ident
     }
@@ -199,8 +207,8 @@ impl<'input> TokenCursor<'input> {
                 .as_ref()
                 .expect("validated cursor suffix")
         };
-        debug_assert!(token.constituents[0].is_some());
-        let (line, column) = part.position(token.line, token.column, prefix);
+        debug_assert!(token.constituents.get(0).is_some());
+        let (line, column) = part.position(token.line as usize, token.column as usize, prefix);
         TokenView {
             text: &token.text[prefix..],
             line,
@@ -210,7 +218,7 @@ impl<'input> TokenCursor<'input> {
             span: part.span,
             name: token.name,
             provenance: part.provenance(),
-            kind: token.kind,
+            kind: token.kind.clone(),
         }
     }
 }
@@ -219,6 +227,12 @@ impl<'input> TokenCursor<'input> {
 mod tests {
     use super::super::lex;
     use super::*;
+
+    #[test]
+    fn authenticated_crate_proofs_keep_all_lexer_token_kinds_compact() {
+        assert!(std::mem::size_of::<ParserTokenKind>() <= 2 * std::mem::size_of::<usize>());
+        assert!(std::mem::size_of::<Token>() <= 19 * std::mem::size_of::<usize>());
+    }
 
     #[test]
     fn leading_angle_split_keeps_actual_suffix_and_normal_shift_consumption() {
@@ -362,7 +376,10 @@ mod tests {
                 let view = cursor.bump();
                 assert_eq!(view.text, token.text);
                 assert_eq!(view.string, token.string);
-                assert_eq!((view.line, view.column), (token.line, token.column));
+                assert_eq!(
+                    (view.line, view.column),
+                    (token.line as usize, token.column as usize)
+                );
                 assert_eq!(view.bytes, token.whole.bytes());
             }
             assert_eq!(cursor.current().bytes, text.len()..text.len());

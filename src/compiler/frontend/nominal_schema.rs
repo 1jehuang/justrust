@@ -395,6 +395,7 @@ impl PlanState {
         match path.anchor() {
             PathAnchor::Relative | PathAnchor::Super(0) => {}
             PathAnchor::Crate => text.push_str("crate"),
+            PathAnchor::DefiningCrate(_) => text.push_str("$crate"),
             PathAnchor::SelfModule => text.push_str("self"),
             PathAnchor::SelfType => text.push_str("Self"),
             PathAnchor::Super(count) => {

@@ -22,6 +22,7 @@ use super::traits as tr;
 use std::collections::HashMap;
 
 mod expanded_adapter;
+mod exported_macros;
 mod native_adapter;
 use super::module_identity::{ModuleArena, ModuleArenaBuilder, ModuleId};
 use super::semantic_name::{
@@ -2815,7 +2816,7 @@ fn copy_source_path(
         });
     }
     Ok(GenericPath {
-        anchor: path.anchor,
+        anchor: path.anchor.clone(),
         segments,
         resolved_use: path.resolved_use.clone(),
     })
@@ -8817,6 +8818,8 @@ impl Program {
 }
 #[derive(Clone, Debug)]
 struct Item {
+    /// Diagnostic-only openness, never authority to admit an unresolved import.
+    macro_import_open: bool,
     path: AstPath,
     module: ModuleId,
     visibility: ir::Visibility,
@@ -9137,7 +9140,7 @@ impl GenericPath {
         for segment in &self.segments {
             segments.push(segment.name)?;
         }
-        let target = AstPath::new(names, self.anchor, segments.as_slice())?;
+        let target = AstPath::new(names, self.anchor.clone(), segments.as_slice())?;
         match &self.resolved_use {
             Some(certificate) => {
                 certificate.check_target(names, &target)?;
@@ -10042,8 +10045,9 @@ impl std::fmt::Display for ParseError {
         }
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum ParserTokenKind {
+    DollarCrate(super::semantic_path::RetainedDollarCrateAnchor),
     Ident,
     Number,
     Char,
@@ -10128,12 +10132,13 @@ impl TokenPart {
 #[derive(Debug)]
 struct Token {
     text: String,
-    line: usize,
-    column: usize,
+    // Checked at prepared and expanded ingress, widened losslessly by views.
+    line: u32,
+    column: u32,
     string: bool,
     kind: ParserTokenKind,
     whole: TokenPart,
-    constituents: [Option<super::expansion_span::SpanId>; 3],
+    constituents: native_adapter::TokenConstituents,
     suffixes: [Option<TokenPart>; 2],
     name: Option<std::num::NonZeroU32>,
 }
@@ -10368,6 +10373,7 @@ fn path_text_len(
     let anchor = match path.anchor() {
         PathAnchor::Relative => 0,
         PathAnchor::Crate => 5,
+        PathAnchor::DefiningCrate(_) => 6,
         PathAnchor::SelfModule | PathAnchor::SelfType => 4,
         PathAnchor::Super(count) => usize::from(count) * 7 - 2,
     };
@@ -10814,6 +10820,7 @@ struct ParserLexicalState {
     scopes: Option<super::semantic_scope::ScopeArenaBuilder>,
     function: Option<FunctionMacroState>,
     item_macros: Option<super::source_item_macro::SourceItemMacroDriver>,
+    exports: Option<Arc<super::source_item_macro::exports::ExportNamespace>>,
     inactive_items: Option<super::token_session::BudgetVec<Arc<UnexpandedMacroSyntax>>>,
     /// Anonymous bodies remain independent checked callable declarations.
     closure_functions: Vec<Function>,
@@ -11466,6 +11473,10 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn local_macro_expression(&mut self) -> Result<Expr, ParseError> {
+        if self.purpose == ParserPurpose::Active && self.qualified_macro_ahead()? {
+            let (buffer, admission, depth) = self.prepare_exported_macro()?;
+            return self.isolated_expression_at(&buffer, Some(admission), depth);
+        }
         if self.purpose == ParserPurpose::InactiveSyntax {
             let span = self.token().span;
             let path = self.path()?;
@@ -12787,6 +12798,10 @@ impl<'input, 'names> Parser<'input, 'names> {
                 found = true;
                 break;
             }
+            if self.lexical.exports.is_some() && self.qualified_macro_at(&probe)? {
+                found = true;
+                break;
+            }
             if module_macros
                 && probe.peek(1).is_some_and(|token| token.matches("!"))
                 && self.probe_module_macro(&probe)?
@@ -13477,6 +13492,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             _ => 1,
         };
         if anchor != PathAnchor::Relative && !self.eat("::") {
+            if matches!(anchor, PathAnchor::DefiningCrate(_)) {
+                return Err(self.error("expected a path after $crate"));
+            }
             return Ok(GenericPath {
                 anchor,
                 segments,
@@ -13530,11 +13548,32 @@ impl<'input, 'names> Parser<'input, 'names> {
                 }
             }
         }
-        Ok(GenericPath {
+        let anchor = match anchor {
+            PathAnchor::DefiningCrate(anchor) => PathAnchor::DefiningCrate(
+                anchor
+                    .bind(
+                        self.names,
+                        segments
+                            .first()
+                            .ok_or_else(|| self.error("expected a path after $crate"))?
+                            .name,
+                    )
+                    .map_err(native_adapter::name_error)?,
+            ),
+            anchor => anchor,
+        };
+        let mut path = GenericPath {
             anchor,
             segments,
             resolved_use: None,
-        })
+        };
+        if matches!(path.anchor, PathAnchor::DefiningCrate(_)) {
+            path.resolved_use = Some(
+                path.checked_path(self.names)
+                    .map_err(native_adapter::name_error)?,
+            );
+        }
+        Ok(path)
     }
     #[inline(never)]
     fn type_parameters(&mut self) -> Result<Vec<AstIdent>, ParseError> {
@@ -13809,6 +13848,13 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(name)
     }
     fn path_anchor(&mut self) -> Result<PathAnchor, ParseError> {
+        if let Some(anchor) = self.token().dollar_crate() {
+            anchor
+                .root(self.names.session())
+                .map_err(native_adapter::transport_error)?;
+            self.cursor.bump();
+            return Ok(PathAnchor::DefiningCrate(anchor));
+        }
         if self.eat("crate") {
             return Ok(PathAnchor::Crate);
         }
@@ -14980,6 +15026,20 @@ impl<'input, 'names> Parser<'input, 'names> {
                 path.len() as u64 + 1,
             )
             .map_err(|error| native_adapter::transport_error(error.into()))?;
+        let macro_import_open = if let (ItemKind::Import(target, false), Some(exports)) =
+            (&kind, &self.lexical.exports)
+        {
+            match exports.select(target, self.names) {
+                Ok(Some(_)) => return Err(self.unsupported(
+                    "macro imports and reexports require configured import authority; use a qualified exported call",
+                )),
+                Ok(None) => false,
+                Err(super::source_macro::DriverError::Unsupported { .. }) => true,
+                Err(error) => return Err(self.driver_error(error)),
+            }
+        } else {
+            false
+        };
         let key = path.key(Namespace::Type);
         let bindings = parsed.items.entry(key).or_default();
         if self.item_expansion.is_some() && bindings.len() == bindings.capacity() {
@@ -15032,6 +15092,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             return Err(self.error(&format!("duplicate item {path:?}")));
         }
         bindings.push(Item {
+            macro_import_open,
             path: path.clone(),
             module,
             visibility,
@@ -16470,6 +16531,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok(expr)
     }
     fn named_expr(&mut self) -> Result<Expr, ParseError> {
+        if self.qualified_macro_ahead()? {
+            return self.local_macro_expression();
+        }
         if let Some(limit) = self.int_const_expr()? {
             return Ok(limit);
         }
@@ -16744,6 +16808,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        if self.qualified_macro_ahead()? {
+            return self.local_macro_expression();
+        }
         if self.token().is_opaque_literal() {
             return self.opaque_literal_expression();
         }
@@ -17604,9 +17671,15 @@ fn parse_syntax_tokens_configured(
         Arc::from([]),
         Arc::from([]),
         Arc::from([]),
-        None,
+        ParserNamespace::default(),
     )
 }
+#[derive(Default)]
+struct ParserNamespace<'a> {
+    mount: Option<ChildMount<'a>>,
+    exports: Option<Arc<super::source_item_macro::exports::ExportNamespace>>,
+}
+
 fn parse_syntax_tokens_policy(
     tokens: NativeParserInput,
     debug_assertions: bool,
@@ -17614,8 +17687,9 @@ fn parse_syntax_tokens_policy(
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     child_sites: Arc<[usize]>,
-    mount: Option<ChildMount<'_>>,
+    namespace: ParserNamespace<'_>,
 ) -> Result<ParsedProgram, ParseError> {
+    let ParserNamespace { mount, exports } = namespace;
     let unit = parse_syntax_unit(
         tokens,
         ParserPurpose::Active,
@@ -17625,6 +17699,7 @@ fn parse_syntax_tokens_policy(
         forbid_unsafe_roots,
         child_sites,
         mount,
+        exports,
     )?;
     let mut program =
         unit.parsed
@@ -17660,20 +17735,55 @@ fn parse_syntax_unit(
     forbid_unsafe_roots: Arc<[super::token_session::SourceFileHandle]>,
     child_sites: Arc<[usize]>,
     mount: Option<ChildMount<'_>>,
+    exports: Option<Arc<super::source_item_macro::exports::ExportNamespace>>,
 ) -> Result<ParsedSyntaxUnit, ParseError> {
     let edition = tokens.edition();
     let (tokens, session, cap) = tokens.into_parts();
     let mut names =
         NameStoreBuilder::new(session, cap, edition).map_err(native_adapter::name_error)?;
+    let mut stores = Vec::new();
+    let mut root = None;
     if let Some(mount) = &mount {
-        // The parent and every ancestor it links (the crate root included),
-        // so inherited handles from any ancestor stay admissible.
-        let mut stores = mount.parent.names.session().linked_stores();
+        stores = mount.parent.names.session().linked_stores();
         stores.push(mount.parent.names.clone());
-        let root = crate_root_store(&stores)?;
+        let root_id = mount.parent.names.session().crate_key();
+        root = Some(
+            stores
+                .iter()
+                .find(|store| store.session().id() == root_id)
+                .cloned()
+                .ok_or_else(|| {
+                    native_adapter::transport_error(super::token_session::TokenError::ForeignHandle)
+                })?,
+        );
+    }
+    if let Some(exports) = &exports {
+        let declarations = exports
+            .stores(names.budget())
+            .map_err(native_adapter::source_error)?;
+        for store in declarations.as_slice() {
+            if !stores
+                .iter()
+                .any(|existing| existing.session().id() == store.session().id())
+            {
+                names
+                    .retain_parser_text(std::mem::size_of::<Arc<NameStore>>())
+                    .map_err(native_adapter::name_error)?;
+                stores.try_reserve_exact(1).map_err(|_| {
+                    native_adapter::transport_error(names.budget().poison_allocation().into())
+                })?;
+                stores.push(store.clone());
+            }
+        }
+    }
+    if !stores.is_empty() {
         names
             .link_crate_files(stores)
-            .and_then(|()| names.join_crate(&root))
+            .map_err(native_adapter::name_error)?;
+    }
+    if let Some(root) = root {
+        names
+            .join_crate(&root)
             .map_err(native_adapter::name_error)?;
     }
     let symbols = ProgramSymbols::new(&mut names).map_err(native_adapter::name_error)?;
@@ -17681,6 +17791,7 @@ fn parse_syntax_unit(
         ParserPurpose::Active => Parser::new(&tokens, &mut names)?,
         ParserPurpose::InactiveSyntax => Parser::with_purpose(&tokens, &mut names, purpose)?,
     };
+    parser.lexical.exports = exports;
     parser.embedded_issuers = embedded_issuers;
     parser.no_std_roots = no_std_roots;
     parser.forbid_unsafe_roots = forbid_unsafe_roots;
@@ -17854,6 +17965,7 @@ pub(super) fn validate_inactive_syntax(
             Arc::from([]),
             Arc::from([]),
             Arc::from([]),
+            None,
             None,
         )?,
     })
@@ -18894,7 +19006,78 @@ pub fn parse_prepared_owned(
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
     let projection = super::source::PreparedLexInput::prepared(source, &budget, snapshot)?;
-    parse_projection(source, projection, 0, None, None, budget, owner)
+    if source.macro_exports.is_empty() {
+        return parse_projection(
+            source,
+            projection,
+            0,
+            None,
+            ParserNamespace::default(),
+            budget,
+            owner,
+        );
+    }
+    // Whole-source tooling has no dependency declaration graph. Do not guess
+    // namespace ownership when several independently rooted crates are present.
+    if source.crate_roots.iter().any(|root| root.0 != 0) {
+        let mut error = super::source::SourceError::syntax(
+            None,
+            "multi-crate exported macros require graph parsing",
+        );
+        error.kind = super::source::SourceErrorKind::Unsupported;
+        return Err(error);
+    }
+    let mut issuer = owner.into_issuer();
+    let inventory_owner = issuer
+        .issue(super::owner_path::OwnerDomain::TokenSession)
+        .map_err(|error| {
+            super::source::SourceError::from_token(super::owner_path::owner_token_error(error))
+        })?;
+    let owner = issuer
+        .issue(super::owner_path::OwnerDomain::TokenSession)
+        .map_err(|error| {
+            super::source::SourceError::from_token(super::owner_path::owner_token_error(error))
+        })?;
+    let local = Arc::new(super::source_item_macro::exports::LocalExports::collect(
+        super::keys::SourceFile::input(),
+        0,
+        source,
+        &projection,
+        budget.clone(),
+        inventory_owner,
+        None,
+    )?);
+    let children =
+        super::token_session::BudgetVec::new(&budget, super::expansion_budget::Storage::Retained)
+            .map_err(super::source::SourceError::from_token)?;
+    let tree = Arc::new(super::source_item_macro::exports::ExportSubtree::complete(
+        local.clone(),
+        children,
+        &budget,
+    )?);
+    let mut trees =
+        super::token_session::BudgetVec::new(&budget, super::expansion_budget::Storage::Retained)
+            .map_err(super::source::SourceError::from_token)?;
+    trees
+        .push(tree)
+        .map_err(super::source::SourceError::from_token)?;
+    let exports = Arc::new(super::source_item_macro::exports::ExportNamespace::new(
+        local,
+        trees,
+        Arc::from([]),
+    )?);
+    parse_projection(
+        source,
+        projection,
+        0,
+        None,
+        ParserNamespace {
+            mount: None,
+            exports: Some(exports),
+        },
+        budget,
+        owner,
+    )
 }
 
 /// Parse one file's shallow view in its own session, rendered at its crate
@@ -18912,7 +19095,7 @@ pub fn parse_file_view_owned(
         projection,
         view.base,
         Some(sites),
-        None,
+        ParserNamespace::default(),
         budget,
         owner,
     )
@@ -18952,65 +19135,78 @@ pub fn parse_child_view_owned(
         projection,
         view.base,
         Some(sites),
-        Some(mount),
+        ParserNamespace {
+            mount: Some(mount),
+            exports: None,
+        },
         budget,
         owner,
     )
 }
 
-/// Attach a separate crate at the shared namespace root without inheriting
-/// the user's textual macros or original-source crate authority.
-pub(super) fn parse_attachment_view_owned(
+/// Graph parsing reuses the declaration producer's original source owner.
+/// Prepared transport has a separately issued identity, including harness views.
+pub(super) fn parse_graph_view_owned(
     view: &super::source::FileView,
-    parent: &ParsedProgram,
+    parent: Option<&ParsedProgram>,
+    child: Option<usize>,
+    exports: Arc<super::source_item_macro::exports::ExportNamespace>,
     budget: super::expansion_budget::ExpansionBudget,
-    snapshot: super::owner_path::Issued,
+    prepared_view: super::owner_path::Issued,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
-    let entry = ChildEntry {
-        module: parent
-            .program
-            .modules
-            .source_root()
-            .map_err(|error| super::source::SourceError::syntax(None, error.to_string()))?,
-        path: AstPath::new(parent.program.names.as_ref(), PathAnchor::Crate, &[])
-            .map_err(|error| super::source::SourceError::syntax(None, error.to_string()))?,
-        macros: None,
-        frontier: None,
-        no_std_roots: Arc::from([]),
-        forbid_unsafe_roots: Arc::from([]),
-    };
-    let mount = ChildMount {
-        parent: &parent.program,
-        entry: &entry,
-    };
-    let projection = super::source::PreparedLexInput::attachment_file_view(
+    let sources = exports.snapshot(&budget)?;
+    let projection = super::source::PreparedLexInput::existing_file_view(
         view,
-        parent.program.names.session().sources(),
+        &sources,
         &budget,
-        snapshot,
+        prepared_view,
     )?;
+    let attachment;
+    let mount = match parent {
+        None => None,
+        Some(parent) => {
+            let entry = match child {
+                Some(index) => parent.child_entries.get(index).ok_or_else(|| {
+                    super::source::SourceError::from_token(
+                        super::token_session::TokenError::InvalidHandle,
+                    )
+                })?,
+                None => {
+                    attachment = ChildEntry {
+                        module: parent.program.modules.source_root().map_err(|error| {
+                            super::source::SourceError::syntax(None, error.to_string())
+                        })?,
+                        path: AstPath::new(parent.program.names.as_ref(), PathAnchor::Crate, &[])
+                            .map_err(|error| {
+                            super::source::SourceError::syntax(None, error.to_string())
+                        })?,
+                        macros: None,
+                        frontier: None,
+                        no_std_roots: Arc::from([]),
+                        forbid_unsafe_roots: Arc::from([]),
+                    };
+                    &attachment
+                }
+            };
+            Some(ChildMount {
+                parent: &parent.program,
+                entry,
+            })
+        }
+    };
     parse_projection(
         &view.prepared,
         projection,
         view.base,
         Some(Arc::from(view.child_sites.as_slice())),
-        Some(mount),
+        ParserNamespace {
+            mount,
+            exports: Some(exports),
+        },
         budget,
         owner,
     )
-}
-/// The store among a crate's linked file stores that is its own crate.
-fn crate_root_store(stores: &[Arc<NameStore>]) -> Result<Arc<NameStore>, ParseError> {
-    stores
-        .iter()
-        .find(|s| s.session().crate_key() == s.session().id())
-        .cloned()
-        .ok_or_else(|| {
-            native_adapter::transport_error(super::token_session::TokenError::InvalidInput(
-                "no crate root among linked files",
-            ))
-        })
 }
 /// A child parse's mount point in its parent's frozen parse.
 pub(super) struct ChildMount<'a> {
@@ -19059,23 +19255,74 @@ pub(super) fn merge_crate_file_refs_at(
     }
     use super::semantic_scope::ScopeArenaBuilder;
     let (root, rest) = files.split_first().ok_or("no crate files to merge")?;
-    let siblings = rest
-        .iter()
-        .map(|f| f.program.names.session().sources().clone())
-        .collect();
-    let sources = root
-        .program
-        .names
-        .session()
-        .sources()
+    let root_sources = root.program.names.session().sources();
+    let mut siblings = root_sources.linked_snapshots();
+    for file in rest {
+        let source = file.program.names.session().sources();
+        if !source.same_snapshot(root_sources)
+            && !siblings.iter().any(|sibling| sibling.same_snapshot(source))
+        {
+            siblings.push(source.clone());
+        }
+    }
+    let sources = root_sources
+        .unlinked()
         .linked_with(siblings, &budget)
         .map_err(|e| e.to_string())?;
     let (session, cap) = super::token_session::TokenSession::with_owner(sources, budget, owner)
         .map_err(|e| e.to_string())?;
     let mut names = NameStoreBuilder::new(session, cap, root.program.names.edition())
         .map_err(|e| e.to_string())?;
+    // File ASTs retain genuine expansion tokens whose definition CrateIds
+    // belong to the declaration-only stores linked by that file parser. Keep
+    // those exact owners, not just the file session, in the merged handle set.
+    let mut stores: Vec<Arc<NameStore>> = Vec::new();
+    let mut stores_lease = names
+        .budget()
+        .reserve(super::expansion_budget::Storage::Temporary, 0)
+        .map_err(|error| error.to_string())?;
+    for file in files {
+        for store in std::iter::once(&file.program.names)
+            .chain(file.program.names.session().linked_stores_iter())
+        {
+            names
+                .budget()
+                .charge(
+                    super::expansion_budget::Counter::Work,
+                    (stores.len() as u64).saturating_add(1),
+                )
+                .map_err(|error| error.to_string())?;
+            if let Some(prior) = stores
+                .iter()
+                .find(|prior| prior.session().id() == store.session().id())
+            {
+                if !Arc::ptr_eq(prior, store) {
+                    return Err("conflicting immutable stores for one parsed owner".into());
+                }
+                continue;
+            }
+            stores_lease
+                .resize_array(
+                    (stores.len() as u64).saturating_add(1),
+                    std::mem::size_of::<Arc<NameStore>>() as u64,
+                    0,
+                )
+                .map_err(|error| error.to_string())?;
+            stores
+                .try_reserve_exact(1)
+                .map_err(|_| names.budget().poison_allocation().to_string())?;
+            stores_lease
+                .resize_array(
+                    stores.capacity() as u64,
+                    std::mem::size_of::<Arc<NameStore>>() as u64,
+                    0,
+                )
+                .map_err(|error| error.to_string())?;
+            stores.push(store.clone());
+        }
+    }
     names
-        .link_crate_files(files.iter().map(|f| f.program.names.clone()).collect())
+        .link_crate_files(stores)
         .and_then(|()| names.join_crate(&root.program.names))
         .map_err(|e| e.to_string())?;
     let mut modules = super::module_identity::ModuleArenaBuilder::for_builder(&mut names)
@@ -19264,10 +19511,21 @@ fn parse_projection(
     projection: super::source::PreparedLexInput<'_>,
     base: u32,
     child_sites: Option<Arc<[usize]>>,
-    mount: Option<ChildMount<'_>>,
+    namespace: ParserNamespace<'_>,
     budget: super::expansion_budget::ExpansionBudget,
     owner: super::owner_path::Issued,
 ) -> Result<ParsedProgram, super::source::SourceError> {
+    let ParserNamespace { mount, exports } = namespace;
+    // Until the graph supplies the declaration namespace, accepting the
+    // retained attribute alone must never turn macro_export into a no-op.
+    if !source.macro_exports.is_empty() && exports.is_none() {
+        let mut error = super::source::SourceError::syntax(
+            None,
+            "exported macro namespace is not attached to this parser",
+        );
+        error.kind = super::source::SourceErrorKind::Unsupported;
+        return Err(error);
+    }
     let file_view = child_sites.is_some();
     let child_sites = child_sites.unwrap_or_else(|| Arc::from([]));
     let mapped = |error: ParseError| {
@@ -19332,7 +19590,7 @@ fn parse_projection(
         issuers.into(),
         forbid_unsafe_roots.into(),
         child_sites,
-        mount,
+        ParserNamespace { mount, exports },
     )
     .map_err(mapped)
 }

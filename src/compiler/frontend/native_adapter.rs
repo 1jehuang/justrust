@@ -11,6 +11,67 @@ use crate::compiler::token::{InputToken, Spacing, TokenKind};
 use crate::compiler::token_session::{BudgetVec, TokenError, TokenSession};
 use std::ops::{Deref, Range};
 
+/// Every token has one original constituent. Only joined logical tokens need
+/// additional original occurrences, whose immutable backing stays metered.
+#[derive(Clone, Debug)]
+pub(super) struct TokenConstituents {
+    first: SpanId,
+    tail: Option<std::sync::Arc<ConstituentTail>>,
+}
+#[derive(Debug)]
+struct ConstituentTail {
+    spans: [Option<SpanId>; 2],
+    _lease: crate::compiler::expansion_budget::ByteLease,
+}
+impl TokenConstituents {
+    fn new(
+        budget: &crate::compiler::expansion_budget::ExpansionBudget,
+        parts: &[TokenPart],
+        fallback: SpanId,
+    ) -> Result<Self, ParseError> {
+        budget
+            .check()
+            .map_err(|error| transport_error(error.into()))?;
+        if parts.len() > 3 {
+            return Err(transport_error(TokenError::InvalidRange));
+        }
+        let first = parts.first().map_or(fallback, |part| part.span);
+        let tail = if parts.len() > 1 {
+            let fixed = std::mem::size_of::<ConstituentTail>()
+                .checked_add(2 * std::mem::size_of::<usize>())
+                .ok_or_else(|| transport_error(TokenError::IdExhausted))?;
+            let lease = budget
+                .reserve(Storage::Retained, fixed as u64)
+                .map_err(|error| transport_error(error.into()))?;
+            Some(std::sync::Arc::new(ConstituentTail {
+                spans: [
+                    parts.get(1).map(|part| part.span),
+                    parts.get(2).map(|part| part.span),
+                ],
+                _lease: lease,
+            }))
+        } else {
+            None
+        };
+        Ok(Self { first, tail })
+    }
+    pub(super) fn get(&self, index: usize) -> Option<SpanId> {
+        match index {
+            0 => Some(self.first),
+            1 | 2 => self.tail.as_ref()?.spans[index - 1],
+            _ => None,
+        }
+    }
+    #[cfg(test)]
+    pub(super) fn iter(&self) -> impl Iterator<Item = &SpanId> {
+        std::iter::once(&self.first).chain(
+            self.tail
+                .iter()
+                .flat_map(|tail| tail.spans.iter().flatten()),
+        )
+    }
+}
+
 pub(super) struct NativeParserInput {
     edition: crate::compiler::token::Edition,
     tokens: BudgetVec<Token>,
@@ -302,10 +363,7 @@ impl NativeTokenBuffer {
             owned.push_str("r#");
         }
         owned.push_str(text);
-        let mut constituents = [None; 3];
-        for (slot, part) in constituents.iter_mut().zip(parts) {
-            *slot = Some(part.span);
-        }
+        let constituents = TokenConstituents::new(budget, parts, whole.span)?;
         let mut suffixes = std::array::from_fn(|_| None);
         if kind == ParserTokenKind::Punct
             && matches!(text, ">>" | ">=" | ">>=" | "&&" | "<<" | "<<=")
@@ -320,6 +378,7 @@ impl NativeTokenBuffer {
             }
         }
         let (line, column) = whole.position(1, 1, 0);
+        let (line, column) = compact_position(line, column)?;
         let index = if let Some((token, edition)) = name {
             admission
                 .validate_token(session, token)
@@ -1125,6 +1184,7 @@ impl NativeParserInput {
         decoded: Option<&str>,
         parts: &[TokenPart],
     ) -> Result<(), ParseError> {
+        let (line, column) = compact_position(line, column)?;
         // Validate the whole legacy logical token, not merely its lexical atoms.
         let whole = if let [part] = parts
             && part.bytes() == bytes
@@ -1149,14 +1209,7 @@ impl NativeParserInput {
             .resize(owned.capacity() as u64)
             .map_err(|e| transport_error(TokenError::Budget(e)))?;
         owned.push_str(text);
-        let mut constituents = std::array::from_fn(|_| None);
-        if parts.is_empty() {
-            constituents[0] = Some(whole.span);
-        } else {
-            for (slot, part) in constituents.iter_mut().zip(parts) {
-                *slot = Some(part.span);
-            }
-        }
+        let constituents = TokenConstituents::new(budget, parts, whole.span)?;
         let mut suffixes = std::array::from_fn(|_| None);
         if kind == ParserTokenKind::Punct
             && matches!(text, ">>" | ">=" | ">>=" | "&&" | "<<" | "<<=")
@@ -1631,6 +1684,18 @@ fn expanded_diagnostic(
         .map_err(|error| transport_error(error.into()))?;
     Ok((primary, line, column, text, lease))
 }
+fn compact_position(line: usize, column: usize) -> Result<(u32, u32), ParseError> {
+    let out_of_range = |_| {
+        simple_error(
+            SourceErrorKind::Limit,
+            "parser diagnostic coordinate exceeds u32 range",
+        )
+    };
+    Ok((
+        u32::try_from(line).map_err(out_of_range)?,
+        u32::try_from(column).map_err(out_of_range)?,
+    ))
+}
 fn simple_error(kind: SourceErrorKind, message: &str) -> ParseError {
     ParseError {
         kind,
@@ -1703,6 +1768,82 @@ mod tests {
     use crate::compiler::expansion_budget::ExpansionBudget;
     use crate::compiler::source::{OriginSegment, SourceOptions, SourceSpan, prepare_text};
     use std::path::Path;
+
+    fn constituent_fixture() -> (NativeParserInput, [TokenPart; 3]) {
+        let input = super::super::lex(">>=").unwrap();
+        let spans = &input[0].constituents;
+        let parts = [
+            TokenPart::new(spans.get(0).unwrap(), 0..1).unwrap(),
+            TokenPart::new(spans.get(1).unwrap(), 1..2).unwrap(),
+            TokenPart::new(spans.get(2).unwrap(), 2..3).unwrap(),
+        ];
+        (input, parts)
+    }
+
+    #[test]
+    fn compact_constituents_keep_every_original_and_share_metered_tail() {
+        let (input, parts) = constituent_fixture();
+        let budget = input.session.budget();
+        let before = budget.snapshot().retained_bytes;
+        let one = TokenConstituents::new(budget, &parts[..1], parts[0].span).unwrap();
+        assert_eq!(one.get(0), Some(parts[0].span));
+        assert_eq!(one.get(1), None);
+        assert_eq!(budget.snapshot().retained_bytes, before);
+        let all = TokenConstituents::new(budget, &parts, parts[0].span).unwrap();
+        let fixed =
+            (std::mem::size_of::<ConstituentTail>() + 2 * std::mem::size_of::<usize>()) as u64;
+        assert_eq!(budget.snapshot().retained_bytes - before, fixed);
+        for (index, part) in parts.iter().enumerate() {
+            assert_eq!(all.get(index), Some(part.span));
+        }
+        assert_eq!(all.get(3), None);
+        let shared = all.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            all.tail.as_ref().unwrap(),
+            shared.tail.as_ref().unwrap()
+        ));
+        assert_eq!(budget.snapshot().retained_bytes - before, fixed);
+        drop(all);
+        assert_eq!(budget.snapshot().retained_bytes - before, fixed);
+        drop(shared);
+        assert_eq!(budget.snapshot().retained_bytes, before);
+    }
+
+    #[test]
+    fn compact_constituent_tail_denies_before_allocation_and_latches() {
+        let (_input, parts) = constituent_fixture();
+        let fixed =
+            (std::mem::size_of::<ConstituentTail>() + 2 * std::mem::size_of::<usize>()) as u64;
+        let budget = ExpansionBudget::new(crate::compiler::expansion_budget::ExpansionLimits {
+            bytes: fixed - 1,
+            ..crate::compiler::expansion_budget::ExpansionLimits::default()
+        });
+        let first = TokenConstituents::new(&budget, &parts, parts[0].span).unwrap_err();
+        assert_eq!(first.kind, SourceErrorKind::Limit);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+        let again = TokenConstituents::new(&budget, &parts, parts[0].span).unwrap_err();
+        assert_eq!(first.message, again.message);
+        assert_eq!(budget.snapshot().retained_bytes, 0);
+    }
+
+    #[test]
+    fn compact_parser_coordinates_are_checked_and_lossless() {
+        let maximum = u32::MAX as usize;
+        for (line, column) in [(1, 1), (65537, 40001), (maximum, maximum)] {
+            let (retained_line, retained_column) = compact_position(line, column).unwrap();
+            assert_eq!(
+                (retained_line as usize, retained_column as usize),
+                (line, column)
+            );
+        }
+        if let Some(overflow) = maximum.checked_add(1) {
+            for (line, column) in [(overflow, 1), (1, overflow)] {
+                let error = compact_position(line, column).unwrap_err();
+                assert_eq!(error.kind, SourceErrorKind::Limit);
+                assert!(error.message.contains("diagnostic coordinate exceeds u32"));
+            }
+        }
+    }
 
     fn inactive_input(text: &str) -> Result<NativeParserInput, ParseError> {
         let budget = ExpansionBudget::default();
@@ -2114,12 +2255,7 @@ mod tests {
             super::super::lex(&text).unwrap()
         };
         let token = &input[0];
-        for (part, expected) in token
-            .constituents
-            .iter()
-            .flatten()
-            .zip([13..14, 14..15, 15..16])
-        {
+        for (part, expected) in token.constituents.iter().zip([13..14, 14..15, 15..16]) {
             let original = original(&input.session, *part).unwrap();
             assert_eq!((original.lo as usize..original.hi as usize), expected);
         }
@@ -2168,7 +2304,7 @@ mod tests {
         let eof = lexed.eof().span;
         let input = NativeParserInput::new(lexed, session, session_cap, &projection).unwrap();
         assert_eq!(input[0].whole.span, span);
-        assert_eq!(input[0].constituents[0].unwrap(), span);
+        assert_eq!(input[0].constituents.get(0).unwrap(), span);
         assert_eq!(input.last().unwrap().whole.span, eof);
         assert_eq!(
             TokenPart::new(span, Range { start: 1, end: 0 })

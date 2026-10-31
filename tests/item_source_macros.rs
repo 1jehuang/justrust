@@ -1,6 +1,6 @@
-//! Stock-first original module macros producing zero or many nongeneric free functions.
-//! Generated attributes/modules/imports/traits/impls/definitions remain explicit
-//! Unsupported boundaries, not invalid Rust examples.
+//! Stock-first original module macro products and retained unsupported boundaries.
+//! Supported generic functions and associated products exercise real calls,
+//! paired with unused invalid-body controls rather than declaration admission.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler::{self, frontend, source};
 use std::fs::{self, OpenOptions};
@@ -9,6 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
+
 const BASELINE_STOCK: &str = "rustc 1.98.1;48a229ceaefd4985c50990b14116b6d856af0985;2026-09-01;x86_64-unknown-linux-gnu;LLVM22.1.8";
 // Exact pre-native JSON SHA256, baseline11 then addendum13:
 // 338914a5bf3fc526ce880f7efdb00ac4305398f0e0d64dd0ec1d3d227c77e165
@@ -197,11 +200,18 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Runtime,
         },
         Case {
-            name: "generic_function_output_boundary",
-            source: r#"macro_rules! make{()=>{fn identity<T>(x:T)->T{x}};}make!();fn main(){println!("ok");}"#,
+            name: "generic_function_output_runtime",
+            source: r#"macro_rules! make{()=>{fn identity<T>(x:T)->T{x}};}make!();fn main(){if identity(7i32)==7{println!("ok");}else{println!("bad");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "unused_generated_generic_invalid_body",
+            source: r#"macro_rules! make{()=>{fn unused<T>(x:T)->i32{x}};}make!();fn main(){}"#,
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
         },
         Case {
             name: "generated_body_original_helper",
@@ -225,11 +235,18 @@ fn cases() -> Vec<Case> {
             outcome: Outcome::Runtime,
         },
         Case {
-            name: "generated_impl_braces_struct_boundary",
-            source: r#"struct Marker{}macro_rules! make{()=>{impl Marker{fn answer()->i32{42}}};}make!();fn main(){println!("ok");}"#,
+            name: "generated_impl_braces_struct_runtime",
+            source: r#"struct Marker{}macro_rules! make{()=>{impl Marker{fn answer()->i32{42}}};}make!();fn main(){if Marker::answer()==42{println!("ok");}else{println!("bad");}}"#,
             stdout: Some("ok\n"),
             stock_diagnostic: None,
-            outcome: Outcome::Unsupported,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "unused_generated_impl_braces_struct_invalid_body",
+            source: r#"struct Marker{}macro_rules! make{()=>{impl Marker{fn unused()->u8{true}}};}make!();fn main(){}"#,
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
         },
         Case {
             name: "generated_impl_fielded_struct_boundary",
@@ -482,7 +499,7 @@ fn runtime(path: &Path, expected: &str, scratch: &Scratch) {
 }
 fn stock_all() {
     let scratch = Scratch::new();
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let rustc = stock_rustc::stock_rustc();
     let version = capture(Command::new(&rustc).arg("-vV"), &scratch, 10);
     assert_eq!(version.code, 0);
     eprintln!(
@@ -536,8 +553,8 @@ fn stock_all() {
             assert!(!image.exists());
         }
     }
-    assert_eq!(counts, (27, 15));
-    assert_eq!(partition, (19, 5, 9, 9));
+    assert_eq!(counts, (27, 17));
+    assert_eq!(partition, (21, 5, 11, 7));
 }
 #[test]
 fn stock_original_module_macro_item_oracle_edition2024() {
@@ -581,7 +598,7 @@ fn item_source_parser_categories_preserve_unsupported_and_macro_frontier_syntax(
             counts.2 += 1;
         }
     }
-    assert_eq!(counts, (5, 9, 2));
+    assert_eq!(counts, (5, 7, 2));
     let invalid = cases()
         .into_iter()
         .find(|c| c.name == "unused_generated_invalid_body")
@@ -652,7 +669,11 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
                     assert!(!diagnostic.is_empty());
                     if case.name.starts_with("unused_bad_") {
                         assert!(
-                            diagnostic.contains("expected Int(I32), got Bool"),
+                            (diagnostic.contains("expected Int(I32), got Bool")
+                                || diagnostic.contains("E0308: mismatched types: expected Fixed(Bool), found Fixed(Int(I32))"))
+                                && ["ResourceLimit", "unsupported:", "contract:", "infrastructure:"]
+                                    .iter()
+                                    .all(|&boundary| !diagnostic.contains(boundary)),
                             "{} must reject the unused generated function semantically, not by a resource/contract boundary:{diagnostic}",
                             case.name
                         );
@@ -716,10 +737,10 @@ fn native_item_source_macros_workers1_8_check_build_no_compiler_fallback() {
             }
         }
     }
-    assert_eq!(gates, 168);
-    assert_eq!(modes, (38, 38, 28, 28, 18, 18));
+    assert_eq!(gates, 176);
+    assert_eq!(modes, (42, 42, 32, 32, 14, 14));
     eprintln!(
-        "NATIVE ITEM SOURCE:168 cells, modes{modes:?};38 executed native images;36 Unsupported cells are phase boundaries, not Rust-invalid parity"
+        "NATIVE ITEM SOURCE:176 cells, modes{modes:?};42 executed native images;28 Unsupported cells are phase boundaries, not Rust-invalid parity"
     );
 }
 
@@ -814,5 +835,246 @@ fn zero_and_sibling_products_share_provenance_not_function_identity_or_source_co
         }
         assert_eq!(prepared.sources.files.len(), 1);
         assert_eq!(prepared.sources.files[0].contents.as_ref(), case.source);
+    }
+}
+
+fn exported_original_cases() -> Vec<Case> {
+    vec![
+        Case {
+            name: "private_module_public_root_mixed_site",
+            source: r#"mod hidden { #[macro_export] macro_rules! exported { ($n:ident) => {{ let temp:i32=5; temp+$n }}; } } fn main(){let temp:i32=100;let input:i32=2;let value:i32=crate::exported!(input);if value==7&&temp==100{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "defining_crate_helper_not_caller_module",
+            source: r#"pub fn helper()->i32{7} mod definitions { #[macro_export] macro_rules! exported {()=>{$crate::helper()};} } mod caller {fn helper()->i32{99} pub fn value()->i32{crate::exported!()}} fn main(){if caller::value()==7{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "textual_shadow_is_not_root_export_shadow",
+            source: r#"mod definition {#[macro_export] macro_rules! exported {()=>{7};}} macro_rules! exported {()=>{99};} fn main(){if crate::exported!()==7&&exported!()==99{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "unused_export_preserves_ordinary_import",
+            source: r#"#[macro_export] macro_rules! exported {()=>{9};} mod values{pub fn helper()->i32{7}} use values::helper; fn main(){if helper()==7{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "unused_export_preserves_ordinary_item_macro",
+            source: r#"#[macro_export] macro_rules! exported {()=>{9};} macro_rules! make{()=>{fn helper()->i32{7}};} make!(); fn main(){if helper()==7{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "inactive_calls_and_imports_do_not_open_export_namespace",
+            source: r#"#[macro_export] macro_rules! exported {()=>{7};} #[cfg(any())] missing!(); #[cfg(any())] use crate::exported as alias; fn main(){if crate::exported!()==7{println!("export7");}}"#,
+            stdout: Some("export7\n"),
+            stock_diagnostic: None,
+            outcome: Outcome::Runtime,
+        },
+        Case {
+            name: "active_export_duplicate_unused",
+            source: r#"mod a {#[macro_export] macro_rules! same {()=>{1};}} mod b {#[macro_export] macro_rules! same {()=>{2};}} fn main(){}"#,
+            stdout: None,
+            stock_diagnostic: Some("defined multiple times"),
+            outcome: Outcome::Syntax,
+        },
+        Case {
+            name: "export_cannot_capture_caller_local",
+            source: r#"mod definition {#[macro_export] macro_rules! exported {()=>{hidden};}} fn main(){let hidden:i32=7;let value=crate::exported!();}"#,
+            stdout: None,
+            stock_diagnostic: Some("cannot find value `hidden`"),
+            outcome: Outcome::Semantic,
+        },
+        Case {
+            name: "unused_invalid_item_not_hidden_by_export",
+            source: r#"#[macro_export] macro_rules! exported {()=>{7};} fn unused()->i32{true} fn main(){}"#,
+            stdout: None,
+            stock_diagnostic: Some("mismatched types"),
+            outcome: Outcome::Semantic,
+        },
+    ]
+}
+
+#[test]
+fn exported_original_declarations_stock_native_check_build_workers1_8() {
+    let rustc = stock_rustc::stock_rustc();
+    for case in exported_original_cases() {
+        let scratch = Scratch::new();
+        scratch.write("client.rs", case.source.as_bytes());
+        let image = scratch.path("stock-export");
+        let stock = capture(
+            Command::new(&rustc)
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args([
+                    "--edition=2024",
+                    "--crate-name=export_original_oracle",
+                    "--color=never",
+                    "-Cpanic=abort",
+                ])
+                .arg(scratch.path("client.rs"))
+                .arg("-o")
+                .arg(&image),
+            &scratch,
+            20,
+        );
+        if let Some(expected) = case.stdout {
+            assert_eq!(stock.code, 0, "{}:{stock:?}", case.name);
+            runtime(&image, expected, &scratch);
+        } else {
+            assert_ne!(stock.code, 0, "{}:{stock:?}", case.name);
+            assert!(
+                String::from_utf8_lossy(&stock.stderr).contains(case.stock_diagnostic.unwrap()),
+                "{}:{stock:?}",
+                case.name
+            );
+        }
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let image = scratch.path(&format!("native-export-{workers}-{check}"));
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command
+                    .current_dir(&scratch.0)
+                    .env("RUSTC", scratch.path("no-rustc"))
+                    .env("PATH", scratch.path("no-tools"))
+                    .arg(scratch.path("client.rs"))
+                    .args(["--workers", &workers.to_string()]);
+                if check {
+                    command.arg("--check");
+                } else {
+                    command.arg("-o").arg(&image);
+                }
+                let result = capture(&mut command, &scratch, 20);
+                assert_eq!(
+                    result.code,
+                    i32::from(case.stdout.is_none()),
+                    "{} workers{workers} check{check}:{result:?}",
+                    case.name
+                );
+                if !check && let Some(expected) = case.stdout {
+                    runtime(&image, expected, &scratch);
+                } else {
+                    assert!(!image.exists());
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn export_namespace_check_uses_source_declarations_without_codegen() {
+    let case = exported_original_cases().remove(0);
+    for workers in [1, 8] {
+        let checked = compiler::compile_observed(case.source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        assert_eq!(checked.report.events_dropped, 0);
+        let source_nodes: std::collections::HashSet<_> = checked
+            .report
+            .node_evaluations
+            .iter()
+            .zip(&checked.report.node_ids)
+            .filter_map(|((key, _), id)| (key.kind == 107).then_some(*id))
+            .collect();
+        let task_nodes: std::collections::HashMap<_, _> = checked
+            .report
+            .events
+            .iter()
+            .filter_map(|event| event.task.zip(event.node))
+            .collect();
+        for &(task, producer, _) in &checked.report.dependency_edges {
+            if source_nodes.contains(&producer) {
+                assert_ne!(
+                    task_nodes.get(&task),
+                    Some(&producer),
+                    "SOURCE must not read its own published source output"
+                );
+            }
+        }
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, count)| *count == 1 && !matches!(key.kind, 103 | 105 | 130..=133))
+        );
+    }
+}
+
+#[test]
+fn exported_namespace_open_authority_is_unsupported_not_absent_workers1_8() {
+    let rustc = stock_rustc::stock_rustc();
+    for (name, text) in [
+        (
+            "active-item-may-add-duplicate",
+            r#"#[macro_export] macro_rules! exported{()=>{7};} macro_rules! make{()=>{fn helper()->i32{7}};}make!();fn main(){let n:i32=crate::exported!();}"#,
+        ),
+        (
+            "configured-root-reexport",
+            r#"mod hidden{#[macro_export]macro_rules! exported{()=>{7};}}pub use crate::exported as alias;fn main(){let n:i32=crate::alias!();}"#,
+        ),
+        (
+            "configured-import-does-not-prove-unique-original",
+            r#"#[macro_export]macro_rules! exported{()=>{7};}mod values{pub fn helper()->i32{7}}use values::helper;fn main(){let n:i32=crate::exported!();}"#,
+        ),
+    ] {
+        let scratch = Scratch::new();
+        scratch.write("client.rs", text.as_bytes());
+        let stock = capture(
+            Command::new(&rustc)
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args([
+                    "--edition=2024",
+                    "--crate-name=export_open_oracle",
+                    "--color=never",
+                ])
+                .arg(scratch.path("client.rs"))
+                .arg("-o")
+                .arg(scratch.path("stock")),
+            &scratch,
+            20,
+        );
+        assert_eq!(stock.code, 0, "valid Rust frontier {name}: {stock:?}");
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let image = scratch.path(&format!("native-{workers}-{check}"));
+                let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+                command
+                    .current_dir(&scratch.0)
+                    .env("RUSTC", scratch.path("no-rustc"))
+                    .env("PATH", scratch.path("no-tools"))
+                    .arg(scratch.path("client.rs"))
+                    .args(["--workers", &workers.to_string()]);
+                if check {
+                    command.arg("--check");
+                } else {
+                    command.arg("-o").arg(&image);
+                }
+                let result = capture(&mut command, &scratch, 20);
+                assert_eq!(
+                    result.code, 1,
+                    "{name} workers{workers} check{check}: {result:?}"
+                );
+                let message = String::from_utf8_lossy(&result.stderr);
+                assert!(message.contains("unsupported:"), "{name}: {message}");
+                assert!(message.contains("completeness"), "{name}: {message}");
+                assert!(!message.contains("no exported macro"), "{name}: {message}");
+                assert!(!message.contains("panicked at"), "{name}: {message}");
+                assert!(
+                    !image.exists(),
+                    "failed completeness cannot publish an executable"
+                );
+            }
+        }
     }
 }

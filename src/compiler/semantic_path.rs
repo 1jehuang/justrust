@@ -55,10 +55,14 @@ macro_rules! name_access {
 name_access!(NameStoreBuilder);
 name_access!(NameStore);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+mod dollar_crate;
+pub use dollar_crate::{DollarCrateAnchor, RetainedDollarCrateAnchor};
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PathAnchor {
     Relative,
     Crate,
+    DefiningCrate(RetainedDollarCrateAnchor),
     SelfModule,
     Super(u16),
     SelfType,
@@ -77,6 +81,7 @@ impl ReceiverOccurrence {
 struct PathData {
     owner: SessionId,
     receiver: Option<ReceiverOccurrence>,
+    defining_crate: Option<RetainedDollarCrateAnchor>,
     segments: BudgetVec<AstIdent>,
     keys: BudgetVec<NameKey>,
     // Released only after both flat payloads, including on the final Arc drop.
@@ -207,6 +212,9 @@ impl AstPath {
     ) -> Result<Self, NameError> {
         let budget = names.budget();
         budget.check()?;
+        if let PathAnchor::DefiningCrate(anchor) = &anchor {
+            anchor.root(names.session())?;
+        }
         budget.checked_u32(count as u64)?;
         // Two flat geometric vectors: one write plus amortized relocation <=3
         // for each vector element. Individual checked name/key reads also charge.
@@ -230,11 +238,27 @@ impl AstPath {
         if segments.len() != count {
             return Err(TokenError::InvalidRange.into());
         }
+        let anchor = match anchor {
+            PathAnchor::DefiningCrate(anchor) => PathAnchor::DefiningCrate(
+                anchor.bind(
+                    names,
+                    *segments
+                        .as_slice()
+                        .first()
+                        .ok_or(TokenError::InvalidHandle)?,
+                )?,
+            ),
+            anchor => anchor,
+        };
         Ok(Self {
-            anchor,
+            anchor: anchor.clone(),
             data: Arc::new(PathData {
                 owner: names.session().crate_key(),
                 receiver: None,
+                defining_crate: match anchor {
+                    PathAnchor::DefiningCrate(anchor) => Some(anchor),
+                    _ => None,
+                },
                 segments,
                 keys,
                 _lease: lease,
@@ -246,6 +270,19 @@ impl AstPath {
     pub fn check(&self, names: &impl NameAccess) -> Result<(), NameError> {
         names.budget().check()?;
         names.budget().charge(Counter::Work, 1)?;
+        match (&self.data.defining_crate, &self.anchor) {
+            (Some(original), PathAnchor::DefiningCrate(actual))
+                if original.same_occurrence(actual) =>
+            {
+                actual.check_head(names, self.segments().first().copied())?
+            }
+            (None, PathAnchor::DefiningCrate(_)) | (Some(_), _) => {
+                return Err(
+                    TokenError::InvalidInput("definition-crate source anchor changed").into(),
+                );
+            }
+            _ => {}
+        }
         if names.session().crate_key() != self.data.owner {
             return Err(TokenError::ForeignHandle.into());
         }
@@ -282,18 +319,18 @@ impl AstPath {
         self.check(names)?;
         source.check(names)?;
         let (original_anchor, original) = match &source.resolved_use {
-            Some(origin) => (origin.original_anchor, origin.original.clone()),
-            None => (source.anchor, source.data.clone()),
+            Some(origin) => (origin.original_anchor.clone(), origin.original.clone()),
+            None => (source.anchor.clone(), source.data.clone()),
         };
         let fixed = size_of::<ResolvedUse>()
             .checked_add(2 * size_of::<usize>())
             .ok_or(TokenError::IdExhausted)?;
         let lease = names.budget().reserve(Storage::Retained, fixed as u64)?;
         Ok(Self {
-            anchor: self.anchor,
+            anchor: self.anchor.clone(),
             data: self.data.clone(),
             resolved_use: Some(Arc::new(ResolvedUse {
-                target_anchor: self.anchor,
+                target_anchor: self.anchor.clone(),
                 target: self.data.clone(),
                 original_anchor,
                 original,
@@ -323,7 +360,7 @@ impl AstPath {
         self.check(names)?;
         Ok(match &self.resolved_use {
             Some(origin) => Self {
-                anchor: origin.original_anchor,
+                anchor: origin.original_anchor.clone(),
                 data: origin.original.clone(),
                 resolved_use: None,
             },
@@ -383,13 +420,13 @@ impl AstPath {
     }
 
     pub(crate) fn semantic_parent(&self, names: &impl NameAccess) -> Result<Self, NameError> {
-        self.semantic_slice(names, 0..self.len().saturating_sub(1), self.anchor)
+        self.semantic_slice(names, 0..self.len().saturating_sub(1), self.anchor.clone())
     }
     pub fn segments(&self) -> &[AstIdent] {
         self.data.segments.as_slice()
     }
     pub fn anchor(&self) -> PathAnchor {
-        self.anchor
+        self.anchor.clone()
     }
     pub fn len(&self) -> usize {
         self.data.segments.len()
@@ -402,7 +439,7 @@ impl AstPath {
     }
     pub fn key(&self, namespace: Namespace) -> PathKey {
         PathKey {
-            anchor: self.anchor,
+            anchor: self.anchor.clone(),
             namespace,
             data: self.data.clone(),
         }
@@ -413,7 +450,7 @@ impl AstPath {
         let count = self.len().checked_add(1).ok_or(TokenError::IdExhausted)?;
         Self::build(
             names,
-            self.anchor,
+            self.anchor.clone(),
             count,
             self.segments()
                 .iter()
@@ -426,7 +463,7 @@ impl AstPath {
         if self.is_empty() {
             return Ok(self.clone());
         }
-        self.slice(names, 0..self.len() - 1, self.anchor)
+        self.slice(names, 0..self.len() - 1, self.anchor.clone())
     }
     pub fn slice(
         &self,
@@ -451,7 +488,7 @@ impl AstPath {
             return Ok(self.clone());
         }
         if self.is_empty() {
-            return Ok(suffix.with_anchor(self.anchor));
+            return Ok(suffix.with_anchor(self.anchor.clone()));
         }
         let count = self
             .len()
@@ -459,7 +496,7 @@ impl AstPath {
             .ok_or(TokenError::IdExhausted)?;
         Self::build(
             names,
-            self.anchor,
+            self.anchor.clone(),
             count,
             self.segments().iter().chain(suffix.segments()).copied(),
         )
@@ -480,6 +517,7 @@ impl AstPath {
         let prefix = match self.anchor {
             PathAnchor::Relative => 0,
             PathAnchor::Crate => 5,
+            PathAnchor::DefiningCrate(_) => 6,
             PathAnchor::SelfModule | PathAnchor::SelfType => 4,
             PathAnchor::Super(0) => 0,
             PathAnchor::Super(count) => usize::from(count)
@@ -517,6 +555,7 @@ impl AstPath {
         match self.anchor {
             PathAnchor::Relative => {}
             PathAnchor::Crate => output.push_str("crate"),
+            PathAnchor::DefiningCrate(_) => output.push_str("$crate"),
             PathAnchor::SelfModule => output.push_str("self"),
             PathAnchor::SelfType => output.push_str("Self"),
             PathAnchor::Super(count) => {
@@ -816,7 +855,7 @@ mod tests {
             (PathAnchor::Super(2), "super::super::alpha::beta"),
             (PathAnchor::SelfType, "Self::alpha::beta"),
         ] {
-            let selected = path.with_anchor(anchor);
+            let selected = path.with_anchor(anchor.clone());
             assert_eq!(selected.anchor(), anchor);
             assert_eq!(selected.display(&names).unwrap().as_str(), expected);
         }

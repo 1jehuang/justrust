@@ -1379,3 +1379,107 @@ fn invalid_projects_are_rejected_explicitly() {
     assert_eq!(out.status.code(), Some(101));
     assert!(String::from_utf8_lossy(&out.stderr).contains("could not compile `x` (lib \"x\")"));
 }
+
+#[test]
+fn exported_macro_renamed_dependency_uses_exact_defining_crate_workers1_8() {
+    for (name, helper, invalid, success) in [
+        ("qualified", "pub fn helper()->i32{7}", "", true),
+        ("private-helper", "fn helper()->i32{7}", "", false),
+        (
+            "unused-invalid",
+            "pub fn helper()->i32{7}",
+            "pub fn unused()->i32{true}",
+            false,
+        ),
+    ] {
+        let base = target_dir(&format!("macro-export-{name}"));
+        let app = base.join("app");
+        let dep = base.join("dep");
+        for directory in [&app, &dep] {
+            std::fs::create_dir_all(directory.join("src")).unwrap();
+        }
+        std::fs::create_dir_all(base.join("home")).unwrap();
+        std::fs::write(app.join("Cargo.toml"), "[package]\nname='export-app'\nversion='0.1.0'\nedition='2024'\n[dependencies]\nrenamed={package='export-dependency',path='../dep'}\n").unwrap();
+        std::fs::write(
+            dep.join("Cargo.toml"),
+            "[package]\nname='export-dependency'\nversion='0.1.0'\nedition='2024'\n",
+        )
+        .unwrap();
+        let library = format!(
+            "{helper} mod hidden {{#[macro_export] macro_rules! exported {{()=>{{$crate::helper()}};}}}} {invalid}"
+        );
+        let consumer = "fn helper()->i32{99} fn main(){if renamed::exported!()==7&&helper()==99{println!(\"export7\");}}";
+        std::fs::write(dep.join("src/lib.rs"), &library).unwrap();
+        std::fs::write(app.join("src/main.rs"), consumer).unwrap();
+        let rustc = stock_rustc::stock_rustc();
+        let rlib = base.join("libexport_dependency.rlib");
+        let stock_lib = Command::new(&rustc)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args([
+                "--edition=2024",
+                "--crate-name=export_dependency",
+                "--crate-type=rlib",
+            ])
+            .arg(dep.join("src/lib.rs"))
+            .arg("-o")
+            .arg(&rlib)
+            .output()
+            .unwrap();
+        let stock_image = base.join("stock-export");
+        let stock_success = if stock_lib.status.success() {
+            Command::new(&rustc)
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args(["--edition=2024", "--crate-name=export_app"])
+                .arg(app.join("src/main.rs"))
+                .arg("--extern")
+                .arg(format!("renamed={}", rlib.display()))
+                .arg("-o")
+                .arg(&stock_image)
+                .output()
+                .unwrap()
+                .status
+                .success()
+        } else {
+            false
+        };
+        assert_eq!(stock_success, success, "stock {name}:{stock_lib:?}");
+        if success {
+            let run = Command::new(&stock_image).output().unwrap();
+            assert!(run.status.success(), "{run:?}");
+            assert_eq!(run.stdout, b"export7\n");
+        }
+        for workers in ["1", "8"] {
+            for command in ["check", "build", "run"] {
+                let output = native_command()
+                    .args([command, "-j", workers])
+                    .current_dir(&app)
+                    .env("CARGO_HOME", base.join("home"))
+                    .env(
+                        "CARGO_TARGET_DIR",
+                        base.join(format!("native-{workers}-{command}")),
+                    )
+                    .env("RUSTC", base.join("missing-rustc"))
+                    .env("PATH", base.join("missing-tools"))
+                    .output()
+                    .unwrap();
+                assert_eq!(
+                    output.status.success(),
+                    success,
+                    "native {name} workers{workers} {command}:{output:?}"
+                );
+                if success && command == "run" {
+                    assert_eq!(output.stdout, b"export7\n");
+                }
+                if !success {
+                    let message = String::from_utf8_lossy(&output.stderr);
+                    assert!(!message.contains("unsupported:"), "{name}:{message}");
+                    assert!(!message.contains("panicked at"), "{name}:{message}");
+                }
+            }
+        }
+        assert_eq!(
+            std::fs::read_to_string(dep.join("src/lib.rs")).unwrap(),
+            library
+        );
+    }
+}

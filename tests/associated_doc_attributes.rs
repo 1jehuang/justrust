@@ -11,6 +11,25 @@ use justrust_engine::compiler::{
     source::{self, SourceErrorKind, SourceOptions},
 };
 use std::{fs, os::unix::fs::PermissionsExt, process::Command};
+#[path = "support/source_macro_binding_oracle.rs"]
+mod file_oracle;
+
+#[test]
+fn original_generic_inline_and_must_use_function_metadata_matches_stock() {
+    let source = r#"
+        struct Holder<T>{value:T}
+        impl<T> Holder<T>{
+            #[inline] #[must_use]
+            fn new(value:T)->Holder<T>{Holder{value}}
+            #[inline(always)] #[must_use="keep the value"]
+            fn take(self)->T where T:Copy{self.value}
+        }
+        fn main(){let value=Holder::new(7i32).take();assert_eq!(value,7);println!("{}",value);}
+    "#;
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    let invalid = "struct Holder<T>{value:T}impl<T> Holder<T>{#[inline]#[must_use]fn unused(value:T)->bool{7u8}}fn main(){}";
+    file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+}
 
 #[test]
 fn original_associated_function_docs_check_build_execute_workers1_8() {
@@ -155,7 +174,6 @@ fn stock_valid_forms_outside_docs_only_a1_remain_explicitly_unsupported() {
         "#![deny(unused_attributes)] trait T { #[inline] fn f(); }",
         "struct Foo<const N:usize>; trait T { #[inline] fn f()->Foo<{1}>; }",
         "macro_rules! ty {()=>{u8}} trait T { #[inline] fn f()->ty!{}; }",
-        "struct S{v:i32} impl S { #[inline] extern \"C\" fn f(){} }",
     ] {
         let error = source::prepare_text("a1.rs", text, &SourceOptions::default()).unwrap_err();
         assert_eq!(error.kind, SourceErrorKind::Unsupported, "{text}: {error}");
@@ -238,10 +256,8 @@ fn associated_docs_keep_source_span_offsets_and_literal_macro_fences() {
     let literal = "struct S{v:i32}impl S{fn f(){let s=\"#[doc=42] fn fake()\";}}fn main(){}";
     let prepared = source::prepare_text("literal.rs", literal, &SourceOptions::default()).unwrap();
     assert!(prepared.text.contains("#[doc=42] fn fake()"));
-    for text in [
-        "struct S{v:i32}impl S{m!{#[doc=\"generated\"] fn f(){}}}fn main(){}",
-        "macro_rules! m {()=>{#[doc=\"generated\"] fn f(){}}}m!();fn main(){}",
-    ] {
+    {
+        let text = "struct S{v:i32}impl S{m!{#[doc=\"generated\"] fn f(){}}}fn main(){}";
         assert!(
             compiler::compile_observed(text.into(), 1, true).is_err(),
             "generated docs admitted: {text}"

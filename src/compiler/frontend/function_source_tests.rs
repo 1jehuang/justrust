@@ -171,9 +171,9 @@ fn reject_token_ranges_with_owner(
         line: closing.line,
         column: closing.column,
         string: closing.string,
-        kind: closing.kind,
+        kind: closing.kind.clone(),
         whole: TokenPart::expanded(closing.whole.span, 1, 1).unwrap(),
-        constituents: closing.constituents,
+        constituents: closing.constituents.clone(),
         suffixes: closing.suffixes.clone(),
         name: closing.name,
     };

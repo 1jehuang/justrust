@@ -981,21 +981,32 @@ impl CompilerProvider {
         let handles = cx.request_all(file_keys.iter(), 0);
         let base_handles = cx.request_all(base_keys.iter(), 0);
         let mut parsed_files = Vec::with_capacity(handles.len());
-        let mut retry = false;
+        let mut retry = None;
         for handle in handles {
             let parsed: Arc<Result<frontend::ParsedProgram, ParseFileFailure>> =
                 cx.read_fact(handle).await?;
             match parsed.as_ref() {
                 Ok(_) => parsed_files.push(parsed),
-                Err(error) if ParseFileFailure::ordered_retry(error.kind) => retry = true,
+                Err(error) if ParseFileFailure::ordered_retry(error.kind) => {
+                    retry.get_or_insert_with(|| error.message.clone());
+                }
                 Err(error) => return Err(Error::new(error.to_string())),
             }
         }
         // Only syntax/unsupported errors replay the assembled parser for
         // splice-order diagnostics. Authority, resource, source and
         // infrastructure failures always fail closed.
-        let parsed = if retry {
+        let parsed = if let Some(graph_diagnostic) = retry {
             let prepared = self.assemble(cx).await?;
+            // The assembled tooling parser has no per-crate declaration
+            // namespace. Do not replace the actual ordered graph diagnostic
+            // with its generic multi-crate export boundary (including when
+            // the extra root is only the injected standard library).
+            if !prepared.macro_exports.is_empty()
+                && prepared.crate_roots.iter().any(|root| root.0 != 0)
+            {
+                return Err(Error::new(graph_diagnostic.to_string()));
+            }
             frontend::parse_prepared_owned(&prepared, budget, snapshot, owner)
                 .map_err(|error| Error::new(error.to_string()))?
         } else {
@@ -1045,7 +1056,7 @@ impl Provider for CompilerProvider {
             | OPAQUE_CALL_DISPATCH => 2,
             UNIVERSAL_EFFECTS_READY if key.params.first() == Some(&(u64::MAX - 1)) => 1,
             UNIVERSAL_EFFECTS_READY => 2,
-            TEMPLATE_BODY => 3,
+            TEMPLATE_BODY | SOURCE => 3,
             SOURCE_ADMISSION if key.params.first() == Some(&(u64::MAX - 2)) => 1,
             SOURCE_ADMISSION if keys::opaque_declaration::OpaqueDeclaration::recognizes(key) => 1,
             SOURCE_ADMISSION => 6,
@@ -1222,7 +1233,30 @@ impl Provider for CompilerProvider {
                             cx.request_item(&file.child(index));
                         }
                     }
-                    cx.publish_fact(0, unit)
+                    // Preserve the one declaration projection across publication,
+                    // not a copy of the source fact and not a self-output read.
+                    // Admission supplies its diagnostic base after output0 exists.
+                    let child_count = unit.as_ref().map_or(0, |unit| unit.children.len());
+                    let export_view = match &unit {
+                        Ok(unit) => source::FileView::for_graph(
+                            unit,
+                            0,
+                            &options.for_ordinal(&key.params),
+                            &key.params,
+                            None,
+                        ),
+                        Err(failure) => {
+                            Err(source::copy_error(&failure.error, failure.error.primary))
+                        }
+                    };
+                    cx.publish_fact(0, unit)?;
+                    source_item_macro::exports::producer::finish(
+                        &cx,
+                        file,
+                        export_view,
+                        child_count,
+                    )
+                    .await
                 }
                 PARSE_FILE => {
                     let file = keys::SourceFile::from_words(&key.params)?;
@@ -1233,7 +1267,40 @@ impl Provider for CompilerProvider {
                     let harness = (key.params == [0]
                         && this.0.source_options.cfg.names.contains("test"))
                     .then(|| cx.request_item(&keys::Admit(file.clone())).get(1));
-                    let source = cx.request_item(&file).get(0);
+                    let source_request = cx.request_item(&file);
+                    let source = source_request.get(0);
+                    let local_exports = source_request.get(1);
+                    let budget = expansion_budget::ExpansionBudget::default();
+                    budget
+                        .charge(
+                            expansion_budget::Counter::Work,
+                            (this.0.source_options.externs.len() as u64).saturating_add(2),
+                        )
+                        .map_err(|error| Error::new(error.to_string()))?;
+                    let mut export_roots = token_session::BudgetVec::new(
+                        &budget,
+                        expansion_budget::Storage::Temporary,
+                    )
+                    .map_err(|error| Error::new(error.to_string()))?;
+                    export_roots
+                        .push(keys::SourceFile::input())
+                        .map_err(|error| Error::new(error.to_string()))?;
+                    if key.params[0] != 0 {
+                        export_roots
+                            .push(keys::SourceFile::from_words(&[key.params[0]])?)
+                            .map_err(|error| Error::new(error.to_string()))?;
+                    }
+                    for index in 0..this.0.source_options.externs.len() {
+                        // Roots have no ordinal-path backing. Deduplicate by
+                        // canonical crate ordinal, without a quadratic scan.
+                        let ordinal = index as u64 + 2;
+                        if ordinal != key.params[0] {
+                            export_roots
+                                .push(keys::SourceFile::from_words(&[ordinal])?)
+                                .map_err(|error| Error::new(error.to_string()))?;
+                        }
+                    }
+                    let exported_namespaces = cx.request_all(export_roots.as_slice().iter(), 2);
                     let parent = file
                         .parent()
                         .or_else(|| attachment.then(keys::SourceFile::input))
@@ -1269,30 +1336,65 @@ impl Provider for CompilerProvider {
                             Some(handle) => Some(cx.read_fact(handle).await?),
                             None => None,
                         };
-                    let budget = expansion_budget::ExpansionBudget::default();
                     let mut issuer = owner_path::OwnerIssuer::new(cx.owner_root()?, &budget)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let snapshot = issuer
-                        .issue(owner_path::OwnerDomain::SourceSnapshot)
+                        .issue(owner_path::OwnerDomain::PreparedView)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
                     let owner = issuer
                         .issue(owner_path::OwnerDomain::TokenSession)
                         .map_err(|error| Error::new(format!("owner issuance failed: {error:?}")))?;
-                    let parsed = match parent.as_deref() {
-                        None => {
-                            frontend::parse_file_view_owned(&view, budget.clone(), snapshot, owner)
+                    let local_exports: Arc<source_item_macro::exports::producer::LocalResult> =
+                        cx.read_fact(local_exports).await?;
+                    let local_exports = match local_exports.as_ref() {
+                        Ok(local) => local.clone(),
+                        Err(error) => {
+                            return cx.publish_fact(
+                                0,
+                                Err::<frontend::ParsedProgram, _>(error.inherited(&budget)?),
+                            );
                         }
-                        Some(Ok(parent)) if attachment => frontend::parse_attachment_view_owned(
+                    };
+                    let mut trees =
+                        token_session::BudgetVec::new(&budget, expansion_budget::Storage::Retained)
+                            .map_err(|error| Error::new(error.to_string()))?;
+                    for handle in exported_namespaces {
+                        let tree: Arc<source_item_macro::exports::producer::SubtreeResult> =
+                            cx.read_fact(handle).await?;
+                        match tree.as_ref() {
+                            Ok(tree) => trees
+                                .push(tree.clone())
+                                .map_err(|error| Error::new(error.to_string()))?,
+                            Err(error) => {
+                                return cx.publish_fact(
+                                    0,
+                                    Err::<frontend::ParsedProgram, _>(error.inherited(&budget)?),
+                                );
+                            }
+                        }
+                    }
+                    let namespace = source_item_macro::exports::ExportNamespace::new(
+                        local_exports,
+                        trees,
+                        Arc::from(this.0.source_options.externs.as_slice()),
+                    )
+                    .map_err(|error| Error::new(error.to_string()))?;
+                    let namespace = Arc::new(namespace);
+                    let parsed = match parent.as_deref() {
+                        None => frontend::parse_graph_view_owned(
                             &view,
-                            parent,
+                            None,
+                            None,
+                            namespace,
                             budget.clone(),
                             snapshot,
                             owner,
                         ),
-                        Some(Ok(parent)) => frontend::parse_child_view_owned(
+                        Some(Ok(parent)) => frontend::parse_graph_view_owned(
                             &view,
-                            parent,
-                            *key.params.last().unwrap() as usize,
+                            Some(parent),
+                            (!attachment).then(|| *key.params.last().unwrap() as usize),
+                            namespace,
                             budget.clone(),
                             snapshot,
                             owner,

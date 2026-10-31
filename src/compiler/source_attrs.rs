@@ -47,8 +47,25 @@ pub struct InactiveItem {
     pub range: Range<usize>,
     pub text: String,
 }
+/// Sealed by the configured item walker, never a textual macro scanner.
+#[derive(Clone, Debug)]
+pub(super) struct MacroExport {
+    attribute: Range<usize>,
+    item: Range<usize>,
+}
+impl MacroExport {
+    pub(super) fn attribute(&self) -> Range<usize> {
+        self.attribute.clone()
+    }
+    pub(super) fn item(&self) -> Range<usize> {
+        self.item.clone()
+    }
+}
 #[derive(Clone, Debug)]
 pub struct AttributeOutput {
+    pub(super) macro_exports: Vec<MacroExport>,
+    pub(super) has_item_macro_invocations: bool,
+    pub(super) has_root_use_items: bool,
     pub forbid_unsafe_code: bool,
     /// This file lowers the `unsafe_code` lint level (`allow`/`warn`/`expect`).
     pub unsafe_code_relaxed: bool,
@@ -110,6 +127,7 @@ struct Attr {
 enum AttributePath {
     Doc,
     Inline,
+    MustUse,
     Other,
 }
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -120,6 +138,7 @@ enum Owner {
     AssociatedFunction,
     AssociatedDeclaration,
     FreeItem,
+    MacroDefinition,
     Unsupported,
 }
 
@@ -168,6 +187,9 @@ fn prepare_with_context(
         tokens,
         bytes: text.as_bytes().to_vec(),
         records: Vec::new(),
+        macro_exports: Vec::new(),
+        has_item_macro_invocations: false,
+        has_root_use_items: false,
         inactive_items: Vec::new(),
         derives: Vec::new(),
         consumed: Vec::new(),
@@ -203,6 +225,9 @@ fn prepare_with_context(
         filter.forbid_unsafe_code = true;
     }
     Ok(AttributeOutput {
+        macro_exports: filter.macro_exports,
+        has_item_macro_invocations: filter.has_item_macro_invocations,
+        has_root_use_items: filter.has_root_use_items,
         forbid_unsafe_code: filter.forbid_unsafe_code,
         unsafe_code_relaxed: filter.unsafe_code_relaxed,
         text: String::from_utf8(filter.bytes).expect("masking preserves UTF-8"),
@@ -227,6 +252,9 @@ struct Filter<'a> {
     tokens: Vec<Token>,
     bytes: Vec<u8>,
     records: Vec<AttributeRecord>,
+    macro_exports: Vec<MacroExport>,
+    has_item_macro_invocations: bool,
+    has_root_use_items: bool,
     inactive_items: Vec<InactiveItem>,
     derives: Vec<(usize, String)>,
     /// Helper attributes (`#[default]`) consumed by a built-in derive.
@@ -552,7 +580,8 @@ impl Filter<'_> {
         owner: Owner,
         item: Option<Range<usize>>,
     ) -> Result<bool, AttributeError> {
-        // Only literal docs and a preflighted single inline hint are admitted.
+        // Only literal docs, function must_use metadata, and a preflighted
+        // single inline hint are admitted.
         // Never activate cfg/cfg_attr or semantic attributes at this position.
         if matches!(
             owner,
@@ -662,9 +691,11 @@ impl Filter<'_> {
                 raw.name.as_str(),
                 "doc"
                     | "inline"
+                    | "must_use"
                     | "repr"
                     | "unsafe"
                     | "no_std"
+                    | "macro_export"
                     | "forbid"
                     | "deny"
                     | "warn"
@@ -723,8 +754,63 @@ impl Filter<'_> {
                     }
                     retained_abi.push(original.unwrap().range.clone());
                 }
+                "macro_export" => {
+                    if owner != Owner::MacroDefinition {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range,
+                            "macro_export requires a macro_rules declaration",
+                        ));
+                    }
+                    match &meta.value {
+                        MetaValue::Word => {}
+                        MetaValue::List(values)
+                            if values.len() == 1
+                                && values[0].name == "local_inner_macros"
+                                && matches!(values[0].value, MetaValue::Word) =>
+                        {
+                            return Err(error(
+                                AttributeErrorKind::Unsupported,
+                                meta.range,
+                                "macro_export(local_inner_macros) is unsupported",
+                            ));
+                        }
+                        _ => {
+                            return Err(error(
+                                AttributeErrorKind::Syntax,
+                                meta.range,
+                                "malformed macro_export attribute",
+                            ));
+                        }
+                    }
+                    let item = item.clone().ok_or_else(|| {
+                        error(
+                            AttributeErrorKind::Syntax,
+                            meta.range.clone(),
+                            "macro_export requires an original macro declaration",
+                        )
+                    })?;
+                    // Stock warns about repeated attributes on one declaration.
+                    if !self.macro_exports.iter().any(|export| export.item == item) {
+                        self.macro_exports.push(MacroExport {
+                            attribute: meta.range,
+                            item,
+                        });
+                    }
+                }
                 "derive" => self.derive(&meta, owner, item.clone())?,
                 "doc" => doc_metadata::validate(&meta, owner)?,
+                "must_use" => {
+                    if !matches!(owner, Owner::Function | Owner::AssociatedFunction)
+                        || !matches!(meta.value, MetaValue::Word | MetaValue::String(_))
+                    {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range,
+                            "must_use requires a function owner and an optional literal message",
+                        ));
+                    }
+                }
                 "inline" => {
                     if !matches!(owner, Owner::Function | Owner::AssociatedFunction) {
                         return Err(error(
@@ -888,8 +974,9 @@ impl Filter<'_> {
             let item_owner = match kind {
                 "fn" => Owner::Function,
                 "mod" => Owner::Module,
+                "macro_rules" => Owner::MacroDefinition,
                 "struct" | "enum" | "impl" | "trait" | "union" | "extern" | "use" | "const"
-                | "static" | "type" | "macro_rules" => Owner::FreeItem,
+                | "static" | "type" => Owner::FreeItem,
                 _ => Owner::Unsupported,
             };
             if !self.attributes(
@@ -902,6 +989,21 @@ impl Filter<'_> {
                 )?;
                 self.mask(self.tokens[first].range.start..self.tokens[stop - 1].range.end);
             } else {
+                // Item calls may introduce exported declarations. Until their
+                // declaration output is admitted, original export inventories
+                // must not claim a complete macro namespace. Function bodies
+                // and macro rule payloads are deliberately not scanned here.
+                if kind == "unknown"
+                    && self.tokens[item_start..body.map_or(stop, |(open, _)| open)]
+                        .iter()
+                        .any(|token| token.text(self.text) == "!")
+                {
+                    self.has_item_macro_invocations = true;
+                }
+                // Original root imports can introduce macro aliases and
+                // reexports. Until configured import bindings are admitted,
+                // they cannot establish export absence or uniqueness.
+                self.has_root_use_items |= kind == "use" && self.module_path.is_empty();
                 self.admit_test_item(kind, item_start, keyword);
                 // Only modules introduce supported nested item attachment positions.
                 let header_end = body.map_or(stop, |(open, _)| open);
@@ -1186,19 +1288,31 @@ impl Filter<'_> {
             let mut body = None;
             let mut stop = end;
             let mut ambiguous_inline_header = false;
+            let mut inline_type_depth = 0usize;
             while cursor < end {
                 self.tick(self.tokens[cursor].range.clone(), 0)?;
                 let token = self.tokens[cursor].text(self.text);
-                // A const-generic or type-macro header group is not a body.
-                // Keep A1 docs unchanged, but fail closed for inline until an
-                // unambiguous body envelope can be proven without a parser.
-                if token == "<"
-                    || token == "where"
-                    || token == "!"
-                    || (token == ">"
-                        && (cursor == member || self.tokens[cursor - 1].text(self.text) != "-"))
+                // Ordinary generic arguments and where predicates do not
+                // change the outer function-body envelope. A header brace
+                // inside type arguments is not that body. Type macros and
+                // const-generic brace envelopes remain explicitly unsupported.
+                if token == "<" {
+                    inline_type_depth = inline_type_depth.saturating_add(1);
+                } else if token == ">"
+                    && (cursor == member || self.tokens[cursor - 1].text(self.text) != "-")
                 {
+                    if inline_type_depth == 0 {
+                        ambiguous_inline_header = true;
+                    } else {
+                        inline_type_depth -= 1;
+                    }
+                } else if token == "!" {
                     ambiguous_inline_header = true;
+                }
+                if token == "{" && inline_type_depth != 0 {
+                    ambiguous_inline_header = true;
+                    cursor = self.tokens[cursor].close.unwrap() + 1;
+                    continue;
                 }
                 match self.tokens[cursor].text(self.text) {
                     ";" => {
@@ -1230,7 +1344,11 @@ impl Filter<'_> {
             for attr in &attrs {
                 self.tick(attr.range.clone(), 0)?;
                 if attr.path == AttributePath::Inline {
-                    if inline.is_some() || body.is_none() || ambiguous_inline_header {
+                    if inline.is_some()
+                        || body.is_none()
+                        || ambiguous_inline_header
+                        || inline_type_depth != 0
+                    {
                         return Err(error(
                             AttributeErrorKind::Unsupported,
                             attr.range.clone(),
@@ -1475,6 +1593,7 @@ fn outer_shape(text: &str, range: Range<usize>) -> Result<AttributePath, Attribu
     let path = match (i, ts[0].text(source)) {
         (1, "doc") => AttributePath::Doc,
         (1, "inline") => AttributePath::Inline,
+        (1, "must_use") => AttributePath::MustUse,
         _ => AttributePath::Other,
     };
     if i == ts.len() {
@@ -2069,7 +2188,7 @@ mod tests {
             "target_feature(enable=\"sse2\")",
             "deny(warnings)",
             "forbid(unused)",
-            "must_use",
+            "must_use(foo)",
             "stable(feature=\"x\",since=\"1.0\")",
             "deny(missing_docs)",
             "forbid(dead_code)",
@@ -2143,6 +2262,9 @@ mod tests {
                 "trait T { ATTR fn f()->i32{7} }",
                 "impl T for S { ATTR fn f()->i32{7} }",
                 "impl<T> S<T> { ATTR fn f(x:(i32,i32))->[u8;2]{[1,2]} }",
+                "impl<T,F> S<T,F> { ATTR fn f(x:T)->S<T,F>{loop{}} }",
+                "impl S { ATTR fn f<T>(x:T)->T{x} }",
+                "impl S { ATTR fn f()where Self:Sized{} }",
             ] {
                 let text = owner.replace("ATTR", &format!("/// docs\n#[{inline}]"));
                 let out = prep(&text).unwrap();
@@ -2164,8 +2286,8 @@ mod tests {
             "impl S{#![inline]fn f(){}}",
             "trait T{#[inline]fn f()->Foo<{1}>;}",
             "trait T{#[inline]fn f()->ty!{u8};}",
-            "impl S{#[inline]fn f<T>(x:T)->T{x}}",
-            "impl S{#[inline]fn f()where Self:Sized{}}",
+            "impl S{#[inline]fn f<T:Trait<{1}>>(x:T)->T{x}}",
+            "impl S{#[inline]fn f()->ty!{u8}{0}}",
         ] {
             assert_eq!(
                 prep(text).unwrap_err().kind,
@@ -2186,6 +2308,39 @@ mod tests {
         // The new body proof must not narrow the already admitted A1 docs.
         assert!(prep("trait T{#[doc=\"required\"]fn f()->Foo<{1}>;}").is_ok());
     }
+    #[test]
+    fn original_function_must_use_preserves_owner_and_literal_policy() {
+        for attribute in ["must_use", "must_use=\"keep the result\""] {
+            for owner in [
+                "ATTR fn value()->i32{7}",
+                "impl<T> S<T>{#[inline] ATTR fn value(x:T)->S<T>{loop{}}}",
+                "trait Trait{ATTR fn value()->i32;}",
+            ] {
+                let source = owner.replace("ATTR", &format!("#[{attribute}]"));
+                let prepared = prep(&source).unwrap();
+                assert_eq!(prepared.text.len(), source.len());
+                assert!(!prepared.text.contains("#[must_use"));
+                assert!(
+                    prepared
+                        .attributes
+                        .iter()
+                        .any(|record| record.name == "must_use")
+                );
+            }
+        }
+        for source in [
+            "impl S{#[must_use(foo)]fn value()->i32{7}}",
+            "impl S{#[must_use]const VALUE:i32=7;}",
+            "impl S{#[must_use]type Value=i32;}",
+            "#[must_use] macro_rules! value{()=>{7};}",
+        ] {
+            assert_eq!(
+                prep(source).unwrap_err().kind,
+                AttributeErrorKind::Unsupported
+            );
+        }
+    }
+
     #[test]
     fn retained_abi_headers_and_attributes_are_checked_not_erased() {
         use std::{fs, os::unix::fs::PermissionsExt, process::Command};
@@ -2565,6 +2720,73 @@ mod tests {
                     "module nesting exceeds limit 128"
                 );
             }
+        }
+    }
+    #[test]
+    fn macro_export_records_only_active_original_macro_owners() {
+        let source = "mod hidden { #[cfg_attr(all(), macro_export)] macro_rules! active {()=>{7};} } #[cfg(any())] #[macro_export] macro_rules! absent {()=>{9};} fn main(){}";
+        let output = prep(source).unwrap();
+        assert_eq!(output.macro_exports.len(), 1);
+        let export = &output.macro_exports[0];
+        assert_eq!(&source[export.attribute()], "macro_export");
+        assert_eq!(&source[export.item()], "macro_rules! active {()=>{7};}");
+        assert!(output.text.contains("macro_rules! active"));
+        assert!(!output.text.contains("macro_export"));
+        assert!(!output.text.contains("macro_rules! absent"));
+        let repeated = prep("#[macro_export] #[macro_export] macro_rules! one {()=>{1};}").unwrap();
+        assert_eq!(repeated.macro_exports.len(), 1);
+        let disabled =
+            prep("#[cfg(any())] mod absent { #[macro_export] macro_rules! one {()=>{1};} }")
+                .unwrap();
+        assert!(disabled.macro_exports.is_empty());
+    }
+    #[test]
+    fn macro_export_unadmitted_options_never_issue_declaration_authority() {
+        for source in [
+            "#[macro_export(local_inner_macros)] macro_rules! m {()=>{1};}",
+            "#[macro_export] fn main(){}",
+            "#![macro_export] fn main(){}",
+        ] {
+            assert_eq!(
+                prep(source).unwrap_err().kind,
+                AttributeErrorKind::Unsupported
+            );
+        }
+        for source in [
+            "#[macro_export = true] macro_rules! m {()=>{1};}",
+            "#[macro_export(unknown)] macro_rules! m {()=>{1};}",
+        ] {
+            assert_eq!(prep(source).unwrap_err().kind, AttributeErrorKind::Syntax);
+        }
+    }
+    #[test]
+    fn exported_namespace_completeness_tracks_only_active_item_calls() {
+        // Activity tracking does not grant unsupported lint-owner semantics.
+        for source in [
+            "#[cfg_attr(all(), allow(dead_code))] make!(); fn main(){}",
+            "#[cfg(all())] make!(); fn main(){}",
+            "#[cfg_attr(all(), cfg(all()))] make!(); fn main(){}",
+            "#[cfg_attr(any(), cfg(any()))] make!(); fn main(){}",
+        ] {
+            assert_eq!(
+                prep(source).unwrap_err().kind,
+                AttributeErrorKind::Unsupported
+            );
+        }
+        for source in [
+            "make!(); fn main(){}",
+            "mod private { maker::make!{} } fn main(){}",
+        ] {
+            assert!(prep(source).unwrap().has_item_macro_invocations);
+        }
+        for source in [
+            "#[cfg(any())] make!(); fn main(){}",
+            "#[cfg_attr(all(), cfg(any()))] make!(); fn main(){}",
+            "#[cfg(any())] mod absent { make!(); } fn main(){}",
+            "macro_rules! make {()=>{nested!();};} fn main(){make!();}",
+            "fn main(){nested!();}",
+        ] {
+            assert!(!prep(source).unwrap().has_item_macro_invocations);
         }
     }
     #[test]

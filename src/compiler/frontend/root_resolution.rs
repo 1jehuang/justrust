@@ -1005,7 +1005,7 @@ impl Resolver<'_> {
                 return Ok(None);
             }
             let prefix = GenericPath {
-                anchor: path.anchor,
+                anchor: path.anchor.clone(),
                 segments: path.segments[..end].to_vec(),
                 resolved_use: None,
             }
@@ -1639,6 +1639,7 @@ impl Resolver<'_> {
                     .source_root()
                     .map_err(module_diagnostic)?,
             }),
+            PathAnchor::DefiningCrate(anchor) => Some(self.defining_crate_module(anchor)?),
             PathAnchor::SelfModule => Some(from),
             PathAnchor::Super(levels) => {
                 let mut current = from;
@@ -1774,6 +1775,60 @@ impl Resolver<'_> {
             at += 1;
         }
         Ok((current.module == namespace).then_some(current))
+    }
+    /// `$crate` is the sealed original definition crate, not whichever extern
+    /// spelling or lexical requester happens to be resolving this path.
+    fn defining_crate_module(
+        &self,
+        anchor: crate::compiler::semantic_path::RetainedDollarCrateAnchor,
+    ) -> Result<ModuleId, String> {
+        let names = self.names();
+        let root = anchor
+            .root(names.session())
+            .map_err(|error| error.to_string())?;
+        let sources = names.session().sources();
+        let input = sources
+            .file(0)
+            .and_then(|file| sources.source_crate_root(file))
+            .map_err(|error| error.to_string())?;
+        if root == input {
+            return self
+                .program
+                .modules
+                .source_root()
+                .map_err(module_diagnostic);
+        }
+        let mut selected = None;
+        for module in self
+            .program
+            .extern_mounts
+            .iter()
+            .copied()
+            .chain(self.program.prelude_module)
+        {
+            names
+                .budget()
+                .charge(crate::compiler::expansion_budget::Counter::Work, 1)
+                .map_err(|error| error.to_string())?;
+            let Some(name) = self
+                .program
+                .modules
+                .name(module)
+                .map_err(module_diagnostic)?
+            else {
+                continue;
+            };
+            let declared = crate::compiler::source_macro_binding::definition_root(
+                names.session(),
+                names.span(name).map_err(native_adapter::name_diagnostic)?,
+            )
+            .map_err(|error| error.to_string())?;
+            if declared == root && selected.replace(module).is_some() {
+                return Err("ambiguous definition-crate source mount".into());
+            }
+        }
+        selected
+            .ok_or_else(|| "definition-crate original source has no admitted module mount".into())
     }
     /// The mounted dependency crate root containing `module`, if any.
     fn extern_root_of(&self, module: ModuleId) -> Result<Option<ModuleId>, String> {
@@ -2093,7 +2148,7 @@ impl Resolver<'_> {
             .map_err(native_adapter::name_diagnostic)?;
         clone_vector(&path.segments[..=at], &self.alias_budget)?;
         let prefix = GenericPath {
-            anchor: path.anchor,
+            anchor: path.anchor.clone(),
             segments: path.segments[..=at].to_vec(),
             resolved_use: None,
         }
@@ -2160,7 +2215,7 @@ impl Resolver<'_> {
         }
         clone_vector(&path.segments, &self.alias_budget)?;
         let mut prefix = GenericPath {
-            anchor: path.anchor,
+            anchor: path.anchor.clone(),
             segments: path.segments[..path.segments.len() - 1].to_vec(),
             resolved_use: None,
         };
@@ -5321,6 +5376,9 @@ fn validate_declared_path(resolver: &mut Resolver<'_>, path: &AstPath) -> Result
             let type_target = resolver.import(path, index, true)?;
             let value_target = resolver.import(path, index, false)?;
             if type_target.is_none() && value_target.is_none() {
+                if item.macro_import_open {
+                    return Err("unsupported: unresolved import requires configured macro import/export completeness".into());
+                }
                 return Err(format!(
                     "unresolved or cyclic import {}",
                     resolver.display(path)?

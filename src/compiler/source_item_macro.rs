@@ -1,4 +1,5 @@
 //! Original module textual macros. Item expansion is not function expansion.
+pub(in crate::compiler) mod exports;
 use super::expansion_budget::{ByteLease, Counter, Storage};
 use super::expansion_span::SpanId;
 use super::macro_cursor::TokenSlice;
@@ -791,5 +792,233 @@ mod tests {
         linked
             .expand(selected, foreign_args, call, &mut foreign_names)
             .unwrap();
+    }
+
+    fn export_fixture(
+        text: &str,
+        key: crate::compiler::keys::SourceFile,
+        base: u32,
+        parent: Option<&exports::LocalExports>,
+    ) -> Arc<exports::LocalExports> {
+        use crate::compiler::{owner_path, source};
+        let budget = ExpansionBudget::default();
+        let options = source::SourceOptions::default();
+        let unit = source::prepare_text_unit("original.rs", text, &options).unwrap();
+        let view = source::FileView::of(&unit, base, &options).unwrap();
+        let snapshot =
+            owner_path::standalone_issued(&budget, owner_path::OwnerDomain::SourceSnapshot)
+                .unwrap();
+        let projection = match parent {
+            Some(parent) => PreparedLexInput::child_file_view(
+                &view,
+                parent.names().session().sources(),
+                &budget,
+                snapshot,
+            ),
+            None => PreparedLexInput::file_view(&view, &budget, snapshot),
+        }
+        .unwrap();
+        let owner =
+            owner_path::standalone_issued(&budget, owner_path::OwnerDomain::TokenSession).unwrap();
+        Arc::new(
+            exports::LocalExports::collect(
+                key,
+                unit.children.len(),
+                &view.prepared,
+                &projection,
+                budget.clone(),
+                owner,
+                parent,
+            )
+            .unwrap(),
+        )
+    }
+    fn export_leaf(local: Arc<exports::LocalExports>) -> Arc<exports::ExportSubtree> {
+        let budget = ExpansionBudget::default();
+        Arc::new(
+            exports::ExportSubtree::complete(
+                local,
+                BudgetVec::new(&budget, Storage::Retained).unwrap(),
+                &budget,
+            )
+            .unwrap(),
+        )
+    }
+    /// Demand genuine per-file SOURCE facts from a closed original file tree.
+    /// The adversarial tests below recombine those immutable outputs, never
+    /// inventing child ownership or using text input to admit external modules.
+    fn export_graph_children(
+        children: [&str; 2],
+    ) -> (Arc<exports::LocalExports>, [Arc<exports::ExportSubtree>; 2]) {
+        use crate::compiler::{
+            CompilerProvider, Input, Snapshot, ir::PlanBudget, keys::SourceFile, source,
+        };
+        use crate::engine::Engine;
+        let root_path = std::path::PathBuf::from("/macro-export-authority");
+        let snapshot = source::SourceSnapshot::new(
+            root_path.clone(),
+            [
+                ("original.rs".into(), b"mod a; mod b; fn main(){}".to_vec()),
+                ("a.rs".into(), children[0].as_bytes().to_vec()),
+                ("b.rs".into(), children[1].as_bytes().to_vec()),
+            ],
+        )
+        .unwrap();
+        let options = source::SourceOptions {
+            source_snapshot: Some(snapshot),
+            compiler_image: Some(crate::compiler::procfs::CompilerImage::current().unwrap()),
+            ..source::SourceOptions::default()
+        };
+        let engine = Engine::new(CompilerProvider(Arc::new(Snapshot {
+            input: Input::File(root_path.join("original.rs")),
+            source_options: options,
+            budget: PlanBudget::default(),
+        })));
+        let root = engine.request_item(&SourceFile::input());
+        let a = engine.request_item(&SourceFile::input().child(0));
+        let b = engine.request_item(&SourceFile::input().child(1));
+        let report = engine.run(8).unwrap();
+        assert_eq!(report.failures, 0, "{:?}", report.node_errors);
+        let local = root.fact::<exports::producer::LocalResult>(1).unwrap();
+        let a = a.fact::<exports::producer::SubtreeResult>(2).unwrap();
+        let b = b.fact::<exports::producer::SubtreeResult>(2).unwrap();
+        (
+            local.as_ref().as_ref().unwrap().clone(),
+            [
+                a.as_ref().as_ref().unwrap().clone(),
+                b.as_ref().as_ref().unwrap().clone(),
+            ],
+        )
+    }
+    #[test]
+    fn export_completeness_rejects_real_swapped_missing_and_foreign_children() {
+        use crate::compiler::keys::SourceFile;
+        let (root, [a, b]) = export_graph_children([
+            "#[macro_export] macro_rules! first {()=>{1};}",
+            "#[macro_export] macro_rules! second {()=>{2};}",
+        ]);
+        let foreign = export_leaf(export_fixture(
+            "#[macro_export] macro_rules! first {()=>{1};}",
+            SourceFile::input(),
+            0,
+            None,
+        ));
+        for entries in [
+            vec![],
+            vec![a.clone()],
+            vec![b.clone(), a.clone()],
+            vec![a.clone(), a.clone()],
+            vec![a.clone(), foreign],
+        ] {
+            let budget = ExpansionBudget::default();
+            let mut children = BudgetVec::new(&budget, Storage::Retained).unwrap();
+            for child in entries {
+                children.push(child).unwrap();
+            }
+            let error =
+                exports::ExportSubtree::complete(root.clone(), children, &budget).unwrap_err();
+            assert_eq!(
+                error.kind,
+                crate::compiler::source::SourceErrorKind::Contract
+            );
+        }
+        let budget = ExpansionBudget::default();
+        let mut children = BudgetVec::new(&budget, Storage::Retained).unwrap();
+        children.push(a).unwrap();
+        children.push(b).unwrap();
+        exports::ExportSubtree::complete(root, children, &budget).unwrap();
+    }
+    #[test]
+    fn export_namespace_rejects_unused_duplicates_in_distinct_original_modules() {
+        let (root, original_children) = export_graph_children([
+            "#[macro_export] macro_rules! same {()=>{7};}",
+            "#[macro_export] macro_rules! same {()=>{7};}",
+        ]);
+        let budget = ExpansionBudget::default();
+        let mut children = BudgetVec::new(&budget, Storage::Retained).unwrap();
+        for child in original_children {
+            children.push(child).unwrap();
+        }
+        let error = exports::ExportSubtree::complete(root, children, &budget).unwrap_err();
+        assert_eq!(error.kind, crate::compiler::source::SourceErrorKind::Syntax);
+        assert!(error.message.contains("duplicate exported macro"));
+    }
+    #[test]
+    fn exported_selection_is_bound_to_real_call_and_exact_source_crate() {
+        use crate::compiler::{keys::SourceFile, owner_path};
+        let local = export_fixture(
+            "mod hidden { #[macro_export] macro_rules! exported {()=>{$crate};} } fn main(){}",
+            SourceFile::input(),
+            0,
+            None,
+        );
+        let tree = export_leaf(local.clone());
+        let budget = ExpansionBudget::default();
+        let projection = PreparedLexInput::identity(
+            Path::new("caller.rs"),
+            "exported!(); exported!();",
+            &budget,
+            owner_path::standalone_issued(&budget, owner_path::OwnerDomain::SourceSnapshot)
+                .unwrap(),
+        )
+        .unwrap();
+        let sources = projection
+            .snapshot()
+            .linked_with(vec![local.names().session().sources().clone()], &budget)
+            .unwrap();
+        let (mut session, cap) =
+            super::super::token_session::TokenSession::standalone(sources, budget).unwrap();
+        let lexed =
+            super::super::lexer::lex_prepared(&projection, Edition::E2024, &mut session).unwrap();
+        let events: Vec<_> = lexed.events().iter().map(|event| event.token).collect();
+        let stream = group(&mut session, &events, GroupPolicy::OriginalSource).unwrap();
+        let root = TokenSlice::roots(&session, stream).unwrap();
+        let mut names = NameStoreBuilder::new(session, cap, Edition::E2024).unwrap();
+        names.link_crate_files(vec![local.names().clone()]).unwrap();
+        let calls: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                crate::compiler::token::InputToken::Leaf(token)
+                    if matches!(token.kind, TokenKind::Ident(_)) =>
+                {
+                    Some(*token)
+                }
+                _ => None,
+            })
+            .collect();
+        let first = names.from_token(calls[0], Edition::E2024).unwrap();
+        let second = names.from_token(calls[1], Edition::E2024).unwrap();
+        let selected = tree.select(local.root(), first, &names).unwrap().unwrap();
+        assert!(
+            selected
+                .check_call(&names, names.span(second).unwrap())
+                .is_err()
+        );
+        let args = root.children(names.session(), 2).unwrap().unwrap();
+        let expanded = selected
+            .expand(
+                &mut names,
+                args,
+                CallSite {
+                    span: calls[0].span,
+                    parent: None,
+                },
+            )
+            .unwrap();
+        let tokens = expanded.tokens(names.session()).unwrap();
+        let Node::Leaf(token) = tokens.node(names.session(), 0).unwrap() else {
+            panic!("real crate token");
+        };
+        let TokenKind::DollarCrate(krate) = token.kind else {
+            panic!("not a spelling replacement");
+        };
+        assert_eq!(names.session().crate_root(krate).unwrap(), local.root());
+        let foreign = export_fixture(
+            "#[macro_export] macro_rules! exported {()=>{1};}",
+            SourceFile::input(),
+            0,
+            None,
+        );
+        assert!(tree.select(foreign.root(), first, &names).is_err());
     }
 }

@@ -698,14 +698,33 @@ fn empty_record_check_has_no_codegen_and_build_retains_nominal_shape() {
         let checked = compiler::compile(source.into(), workers, true).unwrap();
         assert!(checked.report.capture_complete);
         assert!(checked.executable.is_none());
-        assert!(checked.control_flow.is_empty());
+        assert_eq!(checked.report.events_dropped, 0);
+        assert_eq!(checked.report.failures, 0);
+        // CHECK exposes the source CFG analyzed by SOURCE_ADMISSION output 2,
+        // not a physical executable instance. Keep the nominal shape proof in
+        // both modes while forbidding every instance/codegen path below.
+        assert!(!checked.control_flow.is_empty());
+        assert!(!checked.analyses.is_empty());
         assert!(
-            !checked
-                .report
-                .node_evaluations
+            checked
+                .analyses
                 .iter()
-                .any(|(key, _)| matches!(key.kind, 103 | 105 | 113)),
-            "CHECK must not demand OBJECT, BUILD or MONO_PLAN"
+                .all(|analysis| analysis.complete && analysis.passed())
+        );
+        assert!(checked.control_flow.iter().flat_map(|body| &body.locals).any(|local| matches!(&local.ty, ir::Ty::Struct(ty) if ty.def().fields.is_empty() && !local.ty.is_copy())));
+        assert!(
+            checked.report.published_kind(128),
+            "CHECK must analyze SOURCE_ADMISSION"
+        );
+        assert!(
+            checked.report.node_evaluations.iter().all(|(key, count)| {
+                *count == 1
+                    && !matches!(
+                        key.kind,
+                        102 | 103 | 105 | 108 | 109 | 113 | 125 | 130..=133 | 142
+                    )
+            }),
+            "CHECK must not demand executable BODY/LOWER/ANALYZE, OBJECT/BUILD, retired MONO_PLAN, instance cleanup, optimizer or INSTANCE"
         );
         let built = compiler::compile(source.into(), workers, false).unwrap();
         assert!(built.executable.is_some());

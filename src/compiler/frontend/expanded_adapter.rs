@@ -96,6 +96,7 @@ pub(super) fn literal_buffer(
         session,
         LogicalToken::Leaf(parts.value),
         names.edition(),
+        admission,
     )?;
     output.push_expanded(
         session,
@@ -214,7 +215,7 @@ fn lower_in(
                     .map_err(transport_error)?;
             }
             Some(logical) => {
-                push_logical(&mut output, session, logical, edition)?;
+                push_logical(&mut output, session, logical, edition, admission)?;
                 frames.push(frame).map_err(transport_error)?;
             }
         }
@@ -293,6 +294,7 @@ fn push_logical(
     session: &TokenSession,
     logical: LogicalToken,
     edition: Edition,
+    admission: &ExpansionTokenAdmission,
 ) -> Result<(), ParseError> {
     match logical {
         LogicalToken::Leaf(token) => {
@@ -401,11 +403,21 @@ fn push_logical(
                 TokenKind::Opaque(_) => {
                     output.push_opaque_literal(session, token, part(session, token.span)?)
                 }
-                TokenKind::DollarCrate(_) => Err(failure(
-                    session,
-                    token.span,
-                    "$crate is unsupported by the expression parser",
-                )),
+                TokenKind::DollarCrate(_) => {
+                    let anchor = crate::compiler::semantic_path::DollarCrateAnchor::admitted(
+                        session, token, admission,
+                    )
+                    .map_err(scope_error)?
+                    .retain(session)
+                    .map_err(transport_error)?;
+                    output.push_expanded(
+                        session,
+                        "$crate",
+                        ParserTokenKind::DollarCrate(anchor),
+                        &[part(session, token.span)?],
+                        None,
+                    )
+                }
                 TokenKind::Punct { ch, .. } => {
                     let mut bytes = [0; 4];
                     let text = ch.encode_utf8(&mut bytes);
@@ -1242,8 +1254,8 @@ mod tests {
         assert!(token.name.is_some());
         assert_eq!(token.provenance, super::super::TokenProvenance::Expanded);
         assert_eq!(token.bytes, 0..0);
-        assert_eq!(buffer[0].constituents.iter().flatten().count(), 2);
-        for span in buffer[0].constituents.iter().flatten() {
+        assert_eq!(buffer[0].constituents.iter().count(), 2);
+        for span in buffer[0].constituents.iter() {
             source.names.session().original(*span, 512).unwrap();
         }
     }
@@ -1257,7 +1269,7 @@ mod tests {
         assert!(view.is_lifetime());
         let name = buffer.mint_name(&view, &mut source.names).unwrap();
         assert!(source.names.data(name).unwrap().raw);
-        assert_eq!(buffer[0].constituents.iter().flatten().count(), 2);
+        assert_eq!(buffer[0].constituents.iter().count(), 2);
         let mut forged = view.clone();
         forged.text = "'type";
         assert!(buffer.mint_name(&forged, &mut source.names).is_err());
@@ -1267,25 +1279,28 @@ mod tests {
     fn expanded_suffixes_select_actual_constituent_spans_and_restore_exactly() {
         let mut source = fixture(">>= &&");
         let buffer = run(&mut source).unwrap();
-        let spans = buffer[0].constituents;
+        let spans = &buffer[0].constituents;
         let mut cursor = super::super::TokenCursor::new(&buffer);
         let start = cursor.checkpoint();
         assert!(cursor.consume_type_gt());
         let suffix = cursor.current();
         assert_eq!(suffix.text, ">=");
-        assert_eq!(suffix.span, spans[1].unwrap());
+        assert_eq!(suffix.span, spans.get(1).unwrap());
         assert_eq!(suffix.bytes, 0..0);
         assert_eq!(suffix.provenance, super::super::TokenProvenance::Expanded);
         let original = source.names.session().original(suffix.span, 512).unwrap();
         let (_, line, column) = source.names.session().sources().location(original).unwrap();
         assert_eq!((suffix.line, suffix.column), (line, column));
         assert!(cursor.consume_type_gt());
-        assert_eq!(cursor.current().span, spans[2].unwrap());
+        assert_eq!(cursor.current().span, spans.get(2).unwrap());
         assert!(cursor.restore(start));
         assert_eq!(cursor.current().text, ">>=");
         cursor.bump();
         assert!(cursor.consume_type_amp_prefix());
-        assert_eq!(cursor.current().span, buffer[1].constituents[1].unwrap());
+        assert_eq!(
+            cursor.current().span,
+            buffer[1].constituents.get(1).unwrap()
+        );
     }
 
     #[test]
@@ -1341,7 +1356,7 @@ mod tests {
             .render_span(suffix_source)
             .unwrap();
         assert!(suffix_source.lo < whole_source.lo);
-        assert_eq!(suffix.span, buffer[0].constituents[2].unwrap());
+        assert_eq!(suffix.span, buffer[0].constituents.get(2).unwrap());
         assert_ne!(suffix.column, whole.column + 2);
         assert_eq!(whole.bytes, 0..0);
         assert_eq!(suffix.bytes, 0..0);

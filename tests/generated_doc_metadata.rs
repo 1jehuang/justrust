@@ -6,6 +6,14 @@ mod file_oracle;
 mod oracle;
 
 #[test]
+fn generated_free_function_docs_preserve_callable_receipts() {
+    let source = "macro_rules! item{()=>{#[doc=\"first\"]fn first()->i32{7}#[doc=\"second\"]fn second()->i32{11}}}item!();fn main(){println!(\"{}\",first()+second());}";
+    file_oracle::Fixture::new(source, &[], None).assert_positive();
+    let invalid = "macro_rules! item{()=>{#[doc=\"not body authority\"]fn unused()->u8{true}}}item!();fn main(){}";
+    file_oracle::Fixture::new(invalid, &[], None).assert_negative();
+}
+
+#[test]
 fn generated_metadata_in_file_views_preserves_issuing_owner() {
     for source in [SOURCE, COMBINED_SOURCE] {
         file_oracle::Fixture::new(source, &[], None).assert_positive();

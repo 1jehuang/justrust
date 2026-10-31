@@ -746,7 +746,7 @@ impl FunctionSource {
                         return Err("embedded parser call changed authored occurrence".into());
                     }
                 }
-                let source_path = AstPath::new(names, *anchor, &identifiers)
+                let source_path = AstPath::new(names, anchor.clone(), &identifiers)
                     .map_err(native_adapter::name_diagnostic)?;
                 let Some(target) = resolve(&source_path)? else {
                     return Ok(None);

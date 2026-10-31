@@ -24,6 +24,33 @@ impl ScopeArenaBuilder {
         })
     }
 
+    /// An exported module definition has an empty function-local environment.
+    /// Only a selection bound to the actual invocation and canonical source
+    /// crate may authenticate this otherwise invisible definition frontier.
+    pub(in crate::compiler) fn exported_definition_frontier(
+        &mut self,
+        selection: &super::super::source_item_macro::exports::ExportSelection<'_>,
+        names: &super::super::semantic_name::NameStoreBuilder,
+        span: super::super::expansion_span::SpanId,
+        call: FrontierId,
+    ) -> Result<FrontierId, ScopeError> {
+        self.check_names(names)?;
+        selection
+            .check_call(names, span)
+            .map_err(|error| match error {
+                super::super::source_macro::DriverError::Token(error) => ScopeError::Token(error),
+                super::super::source_macro::DriverError::Name(error) => ScopeError::Name(error),
+                super::super::source_macro::DriverError::Scope(error) => error,
+                _ => ScopeError::ConflictingAssociation,
+            })?;
+        let function = self.function(call)?;
+        self.arena.transition()?;
+        self.arena.push_frontier(FrontierRecord {
+            scope: function,
+            head: None,
+        })
+    }
+
     pub(crate) fn receiver_function_root(
         &mut self,
         names: &impl NameAccess,

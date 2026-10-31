@@ -81,6 +81,47 @@ impl<'a> PreparedLexInput<'a> {
         .map_err(SourceError::from_token)?;
         Self::new(&prepared.text, Some(&prepared.origins), snapshot, budget)
     }
+    /// Reuse the canonical original-file authority published by the declaration
+    /// producer, without confusing a different prepared transport with that
+    /// producer's lexical view. Only the issued PreparedView owner names this view.
+    pub(in crate::compiler) fn existing_file_view(
+        view: &'a super::FileView,
+        snapshot: &SourceSnapshot,
+        budget: &ExpansionBudget,
+        owner: super::super::owner_path::Issued,
+    ) -> Result<Self, SourceError> {
+        if owner.path().domain() != Some(super::super::owner_path::OwnerDomain::PreparedView)
+            || !owner.path().paid_by(budget)
+            || snapshot.file(view.prepared.sources.files.len()).is_ok()
+        {
+            return Err(Self::contract("foreign canonical source view authority"));
+        }
+        for (index, original) in view.prepared.sources.files.iter().enumerate() {
+            let file = snapshot.file(index).map_err(SourceError::from_token)?;
+            let span = snapshot.span(file, 0, 0).map_err(SourceError::from_token)?;
+            let rendered = snapshot
+                .render_span(span)
+                .map_err(SourceError::from_token)?;
+            let (path, _, _) = snapshot.location(span).map_err(SourceError::from_token)?;
+            if snapshot.text(file).map_err(SourceError::from_token)? != original.contents.as_ref()
+                || path != original.lexical_path
+                || Some(rendered.file.0) != view.base.checked_add(index as u32)
+            {
+                return Err(Self::contract(
+                    "canonical source view changed original file ownership",
+                ));
+            }
+        }
+        let identity = PreparedViewId(owner.tag().bits());
+        let mut input = Self::new(
+            &view.prepared.text,
+            Some(&view.prepared.origins),
+            snapshot.clone(),
+            budget,
+        )?;
+        input.view = identity;
+        Ok(input)
+    }
     /// A child file's view whose snapshot links its parent file's snapshot
     /// and joins the crate rooted there (PARSE-SPLIT.md step C2).
     pub fn child_file_view(
@@ -90,16 +131,6 @@ impl<'a> PreparedLexInput<'a> {
         owner: super::super::owner_path::Issued,
     ) -> Result<Self, SourceError> {
         Self::linked_file_view(view, parent, true, budget, owner)
-    }
-
-    /// A separate crate shares namespace stores, not its original-source root.
-    pub(in crate::compiler) fn attachment_file_view(
-        view: &'a super::FileView,
-        parent: &SourceSnapshot,
-        budget: &ExpansionBudget,
-        owner: super::super::owner_path::Issued,
-    ) -> Result<Self, SourceError> {
-        Self::linked_file_view(view, parent, false, budget, owner)
     }
 
     fn linked_file_view(

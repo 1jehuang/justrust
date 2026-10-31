@@ -1013,6 +1013,13 @@ impl TokenSession {
     pub(super) fn linked_stores(&self) -> Vec<Arc<super::semantic_name::NameStore>> {
         self.linked.stores.iter().map(|(_, s)| s.clone()).collect()
     }
+    /// Borrow the explicitly linked immutable stores without allocating a
+    /// second unmetered list when a consumer retains their owner closure.
+    pub(super) fn linked_stores_iter(
+        &self,
+    ) -> impl ExactSizeIterator<Item = &Arc<super::semantic_name::NameStore>> {
+        self.linked.stores.iter().map(|(_, store)| store)
+    }
     /// Whether `owner` is this session or one of its linked crate siblings.
     pub(super) fn serves(&self, owner: SessionId) -> bool {
         self.admits(owner) || self.linked.get(owner).is_ok()
