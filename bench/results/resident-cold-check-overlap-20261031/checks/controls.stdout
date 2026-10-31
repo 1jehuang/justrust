@@ -1,0 +1,178 @@
+{
+  "status": "PASS",
+  "relocation": {
+    "status": "PASS",
+    "isolated_python": true,
+    "empty_home_path": true,
+    "audited_external_reads": true,
+    "native_network_forbidden": true
+  },
+  "negative_controls": 33,
+  "controls": [
+    {
+      "control": "stale runtime nonce",
+      "rejection": "original semantic oracle: ['fresh invocation marker/count mismatch']",
+      "resealed": true
+    },
+    {
+      "control": "duplicate runtime challenge",
+      "rejection": "original semantic oracle: ['fresh invocation marker/count mismatch']",
+      "resealed": true
+    },
+    {
+      "control": "wrong exact test identity",
+      "rejection": "original semantic oracle: ['exact reference test names/status/counts/filtered mismatch']",
+      "resealed": true
+    },
+    {
+      "control": "missing diagnostic code",
+      "rejection": "original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "type error must not run",
+      "rejection": "original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "type error wrong exit",
+      "rejection": "original semantic oracle: ['fresh type-error diagnostic/no-runtime oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "stale assertion freshness",
+      "rejection": "original semantic oracle: ['fresh assertion failure oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "assertion wrong exit",
+      "rejection": "original semantic oracle: ['fresh assertion failure oracle failed']",
+      "resealed": true
+    },
+    {
+      "control": "source edit recipe drift",
+      "rejection": "actual phase input recipe",
+      "resealed": true
+    },
+    {
+      "control": "positive reuse removed",
+      "rejection": "exact cumulative asynchronous startup marker snapshots",
+      "resealed": true
+    },
+    {
+      "control": "disabled reuse invented",
+      "rejection": "exact cumulative asynchronous startup marker snapshots",
+      "resealed": true
+    },
+    {
+      "control": "duplicate per-process marker",
+      "rejection": "exact cumulative asynchronous startup marker snapshots",
+      "resealed": true
+    },
+    {
+      "control": "marker not fixed line",
+      "rejection": "exact cumulative asynchronous startup marker snapshots",
+      "resealed": true
+    },
+    {
+      "control": "coherent toolchain mutation",
+      "rejection": "exact whole4020 pinned toolchain anchor",
+      "resealed": true
+    },
+    {
+      "control": "native differential fixture renamed",
+      "rejection": "exact native test identities/statuses",
+      "resealed": true
+    },
+    {
+      "control": "coherent frozen source mutation",
+      "rejection": "candidate anchor",
+      "resealed": true
+    },
+    {
+      "control": "phase order drift",
+      "rejection": "exact seven phase order",
+      "resealed": true
+    },
+    {
+      "control": "noise certainty invented",
+      "rejection": "finite elapsed/unknown noise boundary",
+      "resealed": true
+    },
+    {
+      "control": "promotion invented",
+      "rejection": "rejection and missing-coverage boundaries",
+      "resealed": true
+    },
+    {
+      "control": "speed claim invented",
+      "rejection": "rejection and missing-coverage boundaries",
+      "resealed": true
+    },
+    {
+      "control": "zero overhead claim invented",
+      "rejection": "rejection and missing-coverage boundaries",
+      "resealed": true
+    },
+    {
+      "control": "debug gate pass invented",
+      "rejection": "rejection and missing-coverage boundaries",
+      "resealed": true
+    },
+    {
+      "control": "restoration claim corrupted",
+      "rejection": "exact main restoration",
+      "resealed": true
+    },
+    {
+      "control": "original analysis rewritten",
+      "rejection": "exact original runtime analysis",
+      "resealed": true
+    },
+    {
+      "control": "fixture precise diagnostic changed",
+      "rejection": "complete original/OFF/ON diagnostics unused_error",
+      "resealed": true
+    },
+    {
+      "control": "coherent all-mode diagnostic mutation",
+      "rejection": "complete original diagnostic anchor",
+      "resealed": true
+    },
+    {
+      "control": "included file diagnostics changed",
+      "rejection": "complete original/OFF/ON diagnostics include_error",
+      "resealed": true
+    },
+    {
+      "control": "macro diagnostics changed",
+      "rejection": "complete original/OFF/ON diagnostics macro_error",
+      "resealed": true
+    },
+    {
+      "control": "fixture wrong exit",
+      "rejection": "fixture exact status",
+      "resealed": true
+    },
+    {
+      "control": "fixture stop failed",
+      "rejection": "actual post-observation stop",
+      "resealed": true
+    },
+    {
+      "control": "fixture startup flag changed",
+      "rejection": "fixture startup controls",
+      "resealed": true
+    },
+    {
+      "control": "alternate lint controls invented",
+      "rejection": "rejection and missing-coverage boundaries",
+      "resealed": true
+    },
+    {
+      "control": "long lived include proof invented",
+      "rejection": "rejection and missing-coverage boundaries",
+      "resealed": true
+    }
+  ]
+}

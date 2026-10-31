@@ -1,0 +1,13 @@
+{
+  "status": "RESTORED",
+  "observed": "2026-10-31T06:56:09Z",
+  "released": "2026-10-31T06:56:18Z",
+  "base_head": "dc50f17c44ed81e91f7659136e11e124f2fb9a27",
+  "files": {
+    "toolchain/resident/crates/ra-jit/src/main.rs": {
+      "sha256": "3ef8143a8f6294335168f9a987d3266ce347f06209e1e3c3f209b72d9c6447fd",
+      "cmp_original": true,
+      "cmp_head": true
+    }
+  }
+}

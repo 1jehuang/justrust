@@ -1,0 +1,30 @@
+bench/results/resident-cold-check-overlap-20261031/frozen/v54/candidate.patch:6: trailing whitespace.
++ 
+bench/results/resident-cold-check-overlap-20261031/frozen/v54b/candidate.patch:6: trailing whitespace.
++ 
+bench/results/resident-cold-check-overlap-20261031/frozen/v54b/candidate.patch:76: trailing whitespace.
++ 
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off-repeat/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off-repeat/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off-repeat/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off-repeat/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off-repeat/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off-repeat/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-off/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on-repeat/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on-repeat/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on-repeat/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on-repeat/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on-repeat/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on-repeat/06-assert-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on/00-cold-prepare.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on/01-repeated-noop-1.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on/02-manifest-feature-add.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on/04-type-recovery.stdout:10: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on/05-assert-failure.stdout:15: new blank line at EOF.
+bench/results/resident-cold-check-overlap-20261031/raw/cold-check-overlap-v54-on/06-assert-recovery.stdout:10: new blank line at EOF.

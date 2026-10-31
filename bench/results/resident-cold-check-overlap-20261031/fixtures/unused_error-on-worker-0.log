@@ -1,0 +1,109 @@
+symbols: read 527.6µs (0 of 0 files ahead), added 572.0ns, indexed 10.9µs
+symbols: 0 copies of statics renamed or private, 0 not to be shared
+symbols: 0 in 594.1µs
+load-us: metadata=37508 plan=3206 scripts=37800
+load-us: workspaces=78628 files=83962
+load-us: loaded=163743 toolchain=246 cargo=0
+load workspace: 164.0ms
+listing: name resolution 1.2µs, scopes 18.6µs, 0 bodies 2.2µs
+resolved cfg_if: names 1.1s, impls 293.9ms, +437262944 bytes Lang(Dependency)
+listing: name resolution 6.4µs, scopes 195.2µs, 16 bodies 831.3µs
+resolved adler2: names 1.1s, impls 294.1ms, +443318472 bytes Lang(Dependency)
+listing: name resolution 1.3µs, scopes 147.0µs, 63 bodies 8.2ms
+resolved rustc_demangle: names 1.2s, impls 299.1ms, +474115888 bytes Lang(Dependency)
+listing: name resolution 1.1µs, scopes 338.0µs, 91 bodies 16.6ms
+resolved miniz_oxide: names 1.4s, impls 97.7ms, +495500616 bytes Lang(Dependency)
+listing: name resolution 834.0ns, scopes 352.8µs, 651 bodies 17.9ms
+resolved hashbrown: names 1.4s, impls 85.0ms, +503720416 bytes Lang(Dependency)
+listing: name resolution 226.0ns, scopes 51.4µs, 2 bodies 292.1µs
+resolved panic_abort: names 562.1µs, impls 1.1ms, +4252920 bytes Lang(Other)
+listing: name resolution 1.2µs, scopes 1.1ms, 486 bodies 32.1ms
+resolved memchr: names 1.2s, impls 296.9ms, +518141096 bytes Lang(Dependency)
+listing: name resolution 646.0ns, scopes 238.2µs, 47 bodies 1.9ms
+resolved rustc_literal_escaper: names 4.1ms, impls 4.0ms, -7846728 bytes Lang(Dependency)
+listing: name resolution 855.0ns, scopes 1.7ms, 2942 bodies 47.3ms
+resolved alloc: names 1.4s, impls 136.2ms, +513390360 bytes Lang(Alloc)
+listing: name resolution 6.0µs, scopes 10.1ms, 2580 bodies 58.0ms
+resolved compiler_builtins: names 1.3s, impls 237.3ms, +519722376 bytes Lang(Other)
+listing: name resolution 1.4µs, scopes 678.7µs, 82 bodies 25.3ms
+resolved addr2line: names 1.6s, impls 102.4ms, +735686976 bytes Lang(Dependency)
+listing: name resolution 453.0ns, scopes 1.0ms, 3712 bodies 82.2ms
+resolved gimli: names 1.6s, impls 165.2ms, +777789880 bytes Lang(Dependency)
+listing: name resolution 2.3µs, scopes 27.1µs, 6 bodies 529.9µs
+listing: name resolution 3.4µs, scopes 96.4µs, 6 bodies 592.0µs
+resolved unwind: names 291.3ms, impls 64.2ms, +324802664 bytes Lang(Other)
+resolved panic_unwind: names 301.1ms, impls 64.1ms, +349973872 bytes Lang(Other)
+listing: name resolution 1.3µs, scopes 2.3ms, 6972 bodies 75.8ms
+resolved object: names 1.6s, impls 198.0ms, +847557376 bytes Lang(Dependency)
+listing: name resolution 3.1µs, scopes 2.7ms, 6490 bodies 31.8ms
+resolved libc: names 305.4ms, impls 101.8ms, +403443968 bytes Lang(Dependency)
+listing: name resolution 1.1µs, scopes 1.3ms, 114 bodies 2.6ms
+resolved std_detect: names 362.8ms, impls 53.3ms, +412468672 bytes Lang(Other)
+listing: name resolution 273.0ns, scopes 81.6ms, 25307 bodies 446.9ms
+resolved core: names 1.1s, impls 823.3ms, +890247336 bytes Lang(Core)
+listing: name resolution 1.5µs, scopes 107.6µs, 73 bodies 4.1ms
+resolved getopts: names 2.0s, impls 41.4ms, +926294920 bytes Lang(Dependency)
+resolved unused_error: names 2.0s, impls 53.7ms, +934960352 bytes Local { repo: None, name: Some("cold-check-overlap-fixtures") }
+listing: name resolution 1.8µs, scopes 1.3ms, 341 bodies 13.0ms
+resolved test: names 2.1s, impls 28.6ms, +940802456 bytes Lang(Test)
+listing: name resolution 720.0ns, scopes 6.8ms, 3992 bodies 46.9ms
+resolved std: names 2.0s, impls 97.1ms, +947217064 bytes Lang(Std)
+listing: name resolution 1.5µs, scopes 493.9µs, 510 bodies 61.8ms
+resolved proc_macro: names 599.7ms, impls 80.5ms, +431664072 bytes Lang(ProcMacro)
+resolve: 23 crates in 2.1s
+frozen, of 22 crates: def maps of 0, impls of 0, lang items of 0 from the store, 66 written in 117.8ms
+manifest: none used, the store has none of this build (1.9ms)
+cold-check-overlap: asynchronous diagnostics started
+listing: name resolution 509.0ns, scopes 56.1µs, 2 bodies 131.6µs
+check: FileId(41): the bodies of 2 of 2 functions asked
+listing: name resolution 1.2µs, scopes 8.8µs, 6 bodies 115.3µs
+listing: name resolution 1.5µs, scopes 33.0µs, 6 bodies 218.3µs
+listing: name resolution 1.0µs, scopes 632.0ns, 0 bodies 863.0ns
+listing: name resolution 2.7µs, scopes 36.7µs, 91 bodies 1.2ms
+listing: name resolution 1.2µs, scopes 34.5µs, 16 bodies 231.3µs
+listing: name resolution 1.6µs, scopes 9.6µs, 63 bodies 1.3ms
+listing: name resolution 3.1µs, scopes 35.4µs, 82 bodies 1.4ms
+listing: name resolution 1.6µs, scopes 52.8µs, 114 bodies 2.7ms
+listing: name resolution 1.1µs, scopes 43.5µs, 651 bodies 4.7ms
+listing: name resolution 6.2µs, scopes 46.7µs, 486 bodies 4.7ms
+listing: name resolution 3.3µs, scopes 111.4µs, 3992 bodies 5.1ms
+listing: name resolution 1.6µs, scopes 61.4µs, 2580 bodies 5.2ms
+listing: name resolution 1.5µs, scopes 58.0µs, 3712 bodies 5.8ms
+listing: name resolution 1.8µs, scopes 132.6µs, 6972 bodies 5.5ms
+listing: name resolution 1.8µs, scopes 92.3µs, 6490 bodies 5.9ms
+listing: name resolution 1.1µs, scopes 50.2µs, 2942 bodies 6.0ms
+listing: name resolution 839.0ns, scopes 243.8µs, 25307 bodies 10.3ms
+entries: 140.8µs
+setup-us: module=78 debug=0 mixed=13 settled=0 names=32
+stored roots: 0 of 25962 in 42.1ms
+base from the store: 0 roots, 0 other functions of the checkout (0 called by code compiled here)
+steps: infer 1.3s, mir 829.7ms, monomorphize 562.8ms, translate 9.9s, describe 0.0ns, store read 12.1ms, store write 209.4ms
+cranelift passes:
+======== ========  ==================================
+   Total     Self  Pass
+-------- --------  ----------------------------------
+   1.694    0.338  Compilation passes
+   0.172    0.172  Try loading from incremental cache
+   0.085    0.085  Store in incremental cache
+   0.053    0.053  Control flow graph
+   0.065    0.065  Dominator tree
+   0.006    0.006  Remove unreachable blocks
+   0.060    0.060  Remove constant phi-nodes
+   0.313    0.313  VCode lowering
+   0.229    0.213  VCode emission
+   0.016    0.016  VCode emission finalization
+   0.690    0.690  Register allocation
+======== ========  ==================================
+backend: cranelift compiled 8219 functions, 1886956 bytes, 2.2s (264.0µs each)
+roots: 233.3ms, revalidate: 717.5µs, compile: 1.4s
+cold: compiled 2049 of 2049 fns (+6170 instances) in 1.6s (+2.2µs emit)
+check: 1 files in 1.7ms
+store: 0 functions found, 8228 compiled and added
+entries: 0 found, 8173 added, 0 as stored, 0 not as stored, 0 instances and 43 requests without a stable name
+not kept: [("call of no instance", 43)]
+not found: [("no entry", 6167)]
+Error: error[E0308]: expected u32, found &'static str
+ --> src/bin/unused_error.rs:1:34
+  |
+1 | fn unused_but_invalid() -> u32 { "not a number" }
+  |                                  ^^^^^^^^^^^^^^

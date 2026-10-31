@@ -1,0 +1,13 @@
+{
+  "decision": "REJECTED",
+  "promotion": false,
+  "latency_claim": false,
+  "zero_overhead_claim": false,
+  "noise": "unknown",
+  "strict_rows": 28,
+  "fixture_rows": 30,
+  "worker_snapshots_are_cumulative": true,
+  "injected_panic_unset_procmacro_tests": false,
+  "alternate_lint_borrow_controls": false,
+  "long_lived_include_recovery": false
+}

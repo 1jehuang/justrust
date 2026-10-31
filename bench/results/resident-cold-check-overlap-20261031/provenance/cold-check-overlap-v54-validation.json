@@ -1,0 +1,123 @@
+{
+  "status": "passed",
+  "strict_rows": 28,
+  "noise": "unknown",
+  "scope": "Strict same-binary cold-check overlap OFF/ON scoped replay, not comprehensive performance acceptance.",
+  "marker_counts": {
+    "off": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ],
+    "on": [
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0
+    ],
+    "on-repeat": [
+      1,
+      1,
+      1,
+      1,
+      0,
+      0,
+      0
+    ],
+    "off-repeat": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "rows": [
+    {
+      "phase": "cold-prepare",
+      "seconds": {
+        "off": 20.37993978400482,
+        "on": 18.04317342999275,
+        "on-repeat": 28.97183347400278,
+        "off-repeat": 20.972436990996357
+      },
+      "first_percent": -11.466012062734743,
+      "reverse_percent": 38.14242706482145
+    },
+    {
+      "phase": "repeated-noop-1",
+      "seconds": {
+        "off": 0.04126703197835013,
+        "on": 0.04074498699628748,
+        "on-repeat": 0.043178286985494196,
+        "off-repeat": 0.0422225029906258
+      },
+      "first_percent": -1.2650412618395501,
+      "reverse_percent": 2.2636838822194028
+    },
+    {
+      "phase": "manifest-feature-add",
+      "seconds": {
+        "off": 8.542017914995085,
+        "on": 7.504159645002801,
+        "on-repeat": 8.516977171006147,
+        "off-repeat": 8.72841597799561
+      },
+      "first_percent": -12.150036212993376,
+      "reverse_percent": -2.4224189993064194
+    },
+    {
+      "phase": "type-error",
+      "seconds": {
+        "off": 8.830985929002054,
+        "on": 7.713825948012527,
+        "on-repeat": 10.27312675898429,
+        "off-repeat": 9.82583869798691
+      },
+      "first_percent": -12.650455905728887,
+      "reverse_percent": 4.552161649967035
+    },
+    {
+      "phase": "type-recovery",
+      "seconds": {
+        "off": 7.9399853280046955,
+        "on": 11.207148618996143,
+        "on-repeat": 8.95051793998573,
+        "off-repeat": 8.568764932017075
+      },
+      "first_percent": 41.14822831558658,
+      "reverse_percent": 4.455169572247697
+    },
+    {
+      "phase": "assert-failure",
+      "seconds": {
+        "off": 1.797886550979456,
+        "on": 6.218085370026529,
+        "on-repeat": 1.9041664719989058,
+        "off-repeat": 1.7311498589988332
+      },
+      "first_percent": 245.85526915694592,
+      "reverse_percent": 9.994317482146364
+    },
+    {
+      "phase": "assert-recovery",
+      "seconds": {
+        "off": 0.4197957080032211,
+        "on": 1.1697081339953002,
+        "on-repeat": 0.46646383000188507,
+        "off-repeat": 0.4603169260080904
+      },
+      "first_percent": 178.6374685818191,
+      "reverse_percent": 1.3353634521114044
+    }
+  ]
+}

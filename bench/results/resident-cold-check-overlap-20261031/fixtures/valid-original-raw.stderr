@@ -1,0 +1,19 @@
+   Compiling cold-check-overlap-fixtures v0.0.0 (/home/jeremy/.jcode/scratch/blaze-native-engine-20261030/cold-check-overlap-v54-fixture-observations/source)
+    Finished `dev` profile [blaze] target(s) in 4.75s
+     Running `/home/jeremy/cf5400/engine/target/debug/valid`
+blaze time: 4758.1 ms: daemon 4734.1 (99%), client planning 7.4 (0%), client command 6.9 (0%), client↔daemon 5.9 (0%), client run execution 1.2 (0%), client metadata 0.6 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     6.9 ms   0.1%
+blaze    client build                       0.1 ms   0.0%
+blaze    client metadata                    0.6 ms   0.0%
+blaze    client planning                    7.4 ms   0.2%
+blaze    client checkout                    0.2 ms   0.0%
+blaze    client whole build                 0.0 ms   0.0%
+blaze    client↔daemon                      5.9 ms   0.1%
+blaze    daemon read request                0.6 ms   0.0%
+blaze    daemon                          4734.1 ms  99.5%
+blaze    daemon↔worker                      0.6 ms   0.0%
+blaze    client install artifacts           0.3 ms   0.0%
+blaze    client run execution               1.2 ms   0.0%
+blaze    total                           4758.1 ms 100.0%

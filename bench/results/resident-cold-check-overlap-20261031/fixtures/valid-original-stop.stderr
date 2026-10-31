@@ -1,0 +1,5 @@
+blaze time: 42.1 ms: client command 42.1 (100%), unaccounted 0.1 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.2%
+blaze    client command                    42.1 ms  99.8%
+blaze    total                             42.1 ms 100.0%

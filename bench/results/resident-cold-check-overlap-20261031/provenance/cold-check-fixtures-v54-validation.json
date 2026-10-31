@@ -1,0 +1,68 @@
+{
+  "status": "passed",
+  "scope": "Exact original/OFF/ON fixture diagnostic replay, not performance proof.",
+  "rows": 30,
+  "cases": [
+    {
+      "case": "valid",
+      "status": 0,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "unused_error",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "reached_error",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "denied_lint",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "borrow_error",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "include_valid",
+      "status": 0,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "include_error",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "include_module",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "macro_error",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    },
+    {
+      "case": "syntax_error",
+      "status": 101,
+      "complete_diagnostics_identical": true,
+      "activation_controls_passed": true
+    }
+  ],
+  "limitations": "No injected panic/unset/procmacro failure proof, no long-lived include recovery or lint/borrow alternate policy coverage in this fixture batch."
+}

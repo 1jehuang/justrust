@@ -1,0 +1,138 @@
+symbols: read 484.4µs (0 of 0 files ahead), added 550.0ns, indexed 2.8µs
+symbols: 0 copies of statics renamed or private, 0 not to be shared
+symbols: 0 in 548.6µs
+load-us: metadata=31796 plan=3112 scripts=36670
+load-us: workspaces=71699 files=79937
+load-us: loaded=152597 toolchain=195 cargo=0
+load workspace: 152.8ms
+listing: name resolution 1.4µs, scopes 21.2µs, 0 bodies 3.4µs
+resolved cfg_if: names 1.5s, impls 374.7ms, +441551072 bytes Lang(Dependency)
+listing: name resolution 1.3µs, scopes 61.6µs, 16 bodies 1.9ms
+resolved adler2: names 1.5s, impls 376.0ms, +457095392 bytes Lang(Dependency)
+listing: name resolution 7.3µs, scopes 260.1µs, 63 bodies 9.4ms
+resolved rustc_demangle: names 1.5s, impls 381.2ms, +483044272 bytes Lang(Dependency)
+listing: name resolution 1.2µs, scopes 440.0µs, 91 bodies 15.8ms
+resolved miniz_oxide: names 1.7s, impls 142.9ms, +478522616 bytes Lang(Dependency)
+listing: name resolution 4.3µs, scopes 928.1µs, 486 bodies 19.9ms
+resolved memchr: names 1.5s, impls 355.9ms, +490810784 bytes Lang(Dependency)
+listing: name resolution 283.0ns, scopes 52.5µs, 2 bodies 286.8µs
+resolved panic_abort: names 656.5µs, impls 1.2ms, +4070616 bytes Lang(Other)
+listing: name resolution 1.2µs, scopes 2.6ms, 651 bodies 32.2ms
+resolved hashbrown: names 1.7s, impls 143.9ms, +512802224 bytes Lang(Dependency)
+listing: name resolution 607.0ns, scopes 576.5µs, 47 bodies 2.4ms
+resolved rustc_literal_escaper: names 3.6ms, impls 5.2ms, +7597072 bytes Lang(Dependency)
+listing: name resolution 1.1µs, scopes 2.1ms, 2942 bodies 70.7ms
+resolved alloc: names 1.7s, impls 206.9ms, +523408504 bytes Lang(Alloc)
+listing: name resolution 1.1µs, scopes 25.6ms, 2580 bodies 57.4ms
+resolved compiler_builtins: names 1.6s, impls 309.6ms, +523648256 bytes Lang(Other)
+listing: name resolution 1.8µs, scopes 1.3ms, 82 bodies 11.3ms
+resolved addr2line: names 2.0s, impls 152.2ms, +775810536 bytes Lang(Dependency)
+listing: name resolution 1.3µs, scopes 5.5ms, 6972 bodies 82.4ms
+resolved object: names 2.0s, impls 179.1ms, +801674704 bytes Lang(Dependency)
+listing: name resolution 180.0ns, scopes 1.7ms, 3712 bodies 54.4ms
+resolved gimli: names 2.0s, impls 200.6ms, +804729472 bytes Lang(Dependency)
+listing: name resolution 1.5µs, scopes 21.0µs, 6 bodies 403.2µs
+resolved unwind: names 314.8ms, impls 58.8ms, +346920088 bytes Lang(Other)
+listing: name resolution 1.0µs, scopes 83.5µs, 6 bodies 1.0ms
+resolved panic_unwind: names 321.9ms, impls 59.3ms, +351066640 bytes Lang(Other)
+listing: name resolution 1.3µs, scopes 1.7ms, 6490 bodies 16.7ms
+resolved libc: names 326.7ms, impls 79.7ms, +389665400 bytes Lang(Dependency)
+listing: name resolution 1.0µs, scopes 1.2ms, 114 bodies 2.3ms
+resolved std_detect: names 386.5ms, impls 39.6ms, +404221504 bytes Lang(Other)
+listing: name resolution 521.0ns, scopes 91.5ms, 25307 bodies 423.7ms
+resolved core: names 1.5s, impls 891.0ms, +883736344 bytes Lang(Core)
+listing: name resolution 1.5µs, scopes 102.1µs, 73 bodies 5.6ms
+resolved getopts: names 2.5s, impls 42.0ms, +923521480 bytes Lang(Dependency)
+resolved syntax_error: names 2.5s, impls 53.3ms, +931964776 bytes Local { repo: None, name: Some("cold-check-overlap-fixtures") }
+listing: name resolution 4.4µs, scopes 1.3ms, 341 bodies 12.6ms
+resolved test: names 2.5s, impls 27.0ms, +936458648 bytes Lang(Test)
+listing: name resolution 4.0µs, scopes 8.1ms, 3992 bodies 40.9ms
+resolved std: names 2.5s, impls 90.7ms, +946203520 bytes Lang(Std)
+listing: name resolution 1.4µs, scopes 510.4µs, 510 bodies 66.4ms
+resolved proc_macro: names 640.7ms, impls 85.2ms, +443670752 bytes Lang(ProcMacro)
+resolve: 23 crates in 2.6s
+frozen, of 22 crates: def maps of 0, impls of 0, lang items of 0 from the store, 66 written in 110.7ms
+manifest: none used, the store has none of this build (1.8ms)
+listing: name resolution 1.2µs, scopes 40.5µs, 1 bodies 171.2µs
+listing: name resolution 2.3µs, scopes 38.2µs, 6 bodies 126.8µs
+listing: name resolution 1.6µs, scopes 7.6µs, 6 bodies 189.1µs
+listing: name resolution 1.8µs, scopes 29.6µs, 16 bodies 191.8µs
+listing: name resolution 1.2µs, scopes 789.0ns, 0 bodies 985.0ns
+listing: name resolution 2.9µs, scopes 42.1µs, 91 bodies 1.2ms
+listing: name resolution 3.3µs, scopes 16.9µs, 63 bodies 1.4ms
+listing: name resolution 1.9µs, scopes 39.3µs, 114 bodies 1.4ms
+listing: name resolution 1.5µs, scopes 11.7µs, 82 bodies 2.6ms
+listing: name resolution 2.1µs, scopes 63.2µs, 486 bodies 5.2ms
+listing: name resolution 1.7µs, scopes 45.3µs, 651 bodies 5.3ms
+listing: name resolution 588.0ns, scopes 48.6µs, 6490 bodies 5.0ms
+listing: name resolution 1.3µs, scopes 66.7µs, 3712 bodies 5.6ms
+listing: name resolution 1.5µs, scopes 62.4µs, 2942 bodies 5.4ms
+listing: name resolution 2.2µs, scopes 115.5µs, 3992 bodies 6.8ms
+listing: name resolution 930.0ns, scopes 78.1µs, 2580 bodies 7.1ms
+listing: name resolution 869.0ns, scopes 78.7µs, 6972 bodies 7.1ms
+listing: name resolution 1.8µs, scopes 269.4µs, 25307 bodies 10.0ms
+entries: 123.5µs
+setup-us: module=75 debug=0 mixed=17 settled=0 names=22
+stored roots: 0 of 25962 in 39.3ms
+base from the store: 0 roots, 0 other functions of the checkout (0 called by code compiled here)
+steps: infer 17.2s, mir 7.4s, monomorphize 1.3s, translate 97.9s, describe 0.0ns, store read 25.5ms, store write 1.1s
+cranelift passes:
+======== ========  ==================================
+   Total     Self  Pass
+-------- --------  ----------------------------------
+   9.316    1.676  Compilation passes
+   0.875    0.875  Try loading from incremental cache
+   0.583    0.583  Store in incremental cache
+   0.198    0.198  Control flow graph
+   0.246    0.246  Dominator tree
+   0.026    0.026  Remove unreachable blocks
+   0.254    0.254  Remove constant phi-nodes
+   1.863    1.863  VCode lowering
+   1.296    1.212  VCode emission
+   0.083    0.083  VCode emission finalization
+   4.004    4.004  Register allocation
+======== ========  ==================================
+backend: cranelift compiled 42125 functions, 10271380 bytes, 11.9s (282.2µs each)
+roots: 271.3ms, revalidate: 589.9µs, compile: 10.5s
+cold: compiled 25926 of 25962 fns (+16200 instances) in 10.8s (+77.5µs emit)
+      3  unsupported: a call of `_mm512_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm512_mask_fmsubadd_ph)
+      3  unsupported: a call of `_mm256_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm256_mask_fmsubadd_ph)
+      3  unsupported: a call of `_mm_fmsubadd_ph`, whose fused multiply-add rustc's MIR inliner may or may not have put into this function, where LLVM fuses it by its context  (e.g. core::core_arch::x86::avx512fp16::_mm_mask_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tilezero.internal`  (e.g. core::core_arch::x86_64::amx::__tile_zero)
+      1  unsupported: LLVM intrinsic `x86.tdpbf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbf8ps)
+      1  unsupported: LLVM intrinsic `x86.tilestored64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stored)
+      1  unsupported: LLVM intrinsic `x86.tdpbssd.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbssd)
+      1  unsupported: LLVM intrinsic `x86.tdphbf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dphbf8ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2bf16h.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2bf16h)
+      1  unsupported: a call of `_mm256_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm256_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tcmmrlfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cmmrlfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tilemovrow.internal`  (e.g. core::core_arch::x86_64::amx::__tile_movrow)
+      1  unsupported: LLVM intrinsic `x86.tdphf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dphf8ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbsud.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbsud)
+      1  unsupported: LLVM intrinsic `x86.tileloaddt164.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stream_loadd)
+      1  unsupported: LLVM intrinsic `x86.tileloaddrst164.internal`  (e.g. core::core_arch::x86_64::amx::__tile_stream_loaddrs)
+      1  unsupported: LLVM intrinsic `x86.tcmmimfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cmmimfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tdpfp16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpfp16ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowd2ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowd2ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbf16ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbf16ps)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2phl.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2phl)
+      1  unsupported: a call of `_mm_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tileloadd64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_loadd)
+      1  unsupported: LLVM intrinsic `x86.tdpbhf8ps.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbhf8ps)
+      1  unsupported: LLVM intrinsic `x86.tdpbuud.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbuud)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2bf16l.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2bf16l)
+      1  unsupported: a call of `_mm512_fmaddsub_ph`, which rustc's MIR inliner puts into this function, where LLVM fuses its fused multiply-add by the context: an operand is passed a negation or a lane  (e.g. core::core_arch::x86::avx512fp16::_mm512_fmsubadd_ph)
+      1  unsupported: LLVM intrinsic `x86.tileloaddrs64.internal`  (e.g. core::core_arch::x86_64::amx::__tile_loaddrs)
+      1  unsupported: LLVM intrinsic `x86.tdpbusd.internal`  (e.g. core::core_arch::x86_64::amx::__tile_dpbusd)
+      1  unsupported: LLVM intrinsic `x86.tcvtrowps2phh.internal`  (e.g. core::core_arch::x86_64::amx::__tile_cvtrowps2phh)
+check: FileId(40): the bodies of 2 of 2 functions asked
+check: 1 files in 1.2ms
+store: 0 functions found, 42133 compiled and added
+entries: 0 found, 42075 added, 0 as stored, 0 not as stored, 0 instances and 43 requests without a stable name
+not kept: [("call of no instance", 43)]
+not found: [("no entry", 16192)]
+Error: error: expected value parameter
+ --> src/bin/syntax_error.rs:1:24
+  |
+1 | fn unused_syntax_error( {
+  |                        ^

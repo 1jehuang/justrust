@@ -1,0 +1,10 @@
+
+running 4 tests
+test summary::tests::parses_libtest_results ... ok
+test summary::tests::shares_overlapping_time ... JR_MATRIX_RUNTIME_e963f7a5f18e4b1e84659ce655030c74
+ok
+test summary::tests::splits_passes_without_double_counting ... ok
+test summary::tests::test_failures_are_not_compile_errors ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.02s
+
