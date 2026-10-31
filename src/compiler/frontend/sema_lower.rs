@@ -191,6 +191,19 @@ impl<'a> Lower<'a> {
 
     fn ty(&mut self, t: &Type) -> R<st::Ty> {
         Ok(match t {
+            Type::PhantomData(source) => {
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or_else(|| Unsupported("missing PhantomData type argument".into()))?;
+                let mut arguments =
+                    ir::FnPointerTy::storage(1, &self.plan.budget).map_err(Unsupported)?;
+                arguments.push(self.ty(argument)?);
+                st::mk(st::TyKind::Adt(
+                    def(self.plan.catalog.id(tr::CatalogItem::PhantomData)),
+                    arguments,
+                ))
+            }
             Type::FnPointer { inputs, output } => {
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), &self.plan.budget)
                     .map_err(Unsupported)?;
@@ -1221,6 +1234,7 @@ impl<'a> Lower<'a> {
                     args: a,
                 })
             }
+            Expr::PhantomData(_) => return un("canonical PhantomData constructor semantic HIR"),
             Expr::Invoke { .. } => return un("callee expression invocation"),
             Expr::ByteStr(_) => return un("byte string"),
             Expr::TypeAlignment(_)

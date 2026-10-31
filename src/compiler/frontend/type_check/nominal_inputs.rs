@@ -11,6 +11,64 @@ mod fn_pointer_shape_tests {
     use super::*;
 
     #[test]
+    fn phantom_data_recipe_preserves_argument_and_rejects_foreign_catalog_or_leaf() {
+        let source = parse("struct Other;fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let main = plan.function_decl(0).unwrap();
+        let signatures = plan.environment(Some(main)).unwrap();
+        let function = plan.callable_body(&plan.program, main).unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let declaration_schema = |_| Ok(None);
+        let source_type = |_: &Type| Ok(None);
+        let nominal_type = |_: &NominalDemand| Ok(None);
+        let inputs =
+            NominalPreparationInputs::new(&declaration_schema, &source_type, &nominal_type);
+        let ty = ir::Ty::PhantomData(
+            ir::PhantomDataTy::new(&plan.catalog, ir::Ty::Bool, &budget).unwrap(),
+        );
+        let shape = type_shape(&checker, &ty, 0).unwrap();
+        let mut missing = Vec::new();
+        assert_eq!(
+            recipe_type(&checker, &inputs, &shape, &mut missing, 0)
+                .unwrap()
+                .unwrap(),
+            ty
+        );
+        assert!(missing.is_empty());
+        assert!(
+            recipe_type(
+                &checker,
+                &inputs,
+                &NominalShape::Leaf(ty.clone()),
+                &mut missing,
+                0
+            )
+            .is_err()
+        );
+        let foreign = NominalShape::PhantomData(
+            plan.nominal_declaration(0).unwrap(),
+            Arc::new(NominalShape::Leaf(ir::Ty::Bool)),
+        );
+        assert!(recipe_type(&checker, &inputs, &foreign, &mut missing, 0).is_err());
+        let swapped = NominalShape::PhantomData(
+            plan.catalog.id(tr::CatalogItem::PhantomData),
+            Arc::new(NominalShape::Leaf(ir::Ty::Int(ir::IntTy::I32))),
+        );
+        assert!(
+            !shape
+                .same_with(&swapped, 0, &mut |depth| checker.infer_work(depth))
+                .unwrap()
+        );
+        let other_budget = ir::PlanBudget::default();
+        let other = PlanCtx::from_program(&source, &other_budget).unwrap();
+        let foreign = ir::Ty::PhantomData(
+            ir::PhantomDataTy::new(&other.catalog, ir::Ty::Bool, &other_budget).unwrap(),
+        );
+        assert!(type_shape(&checker, &foreign, 0).is_err());
+    }
+
+    #[test]
     fn nominal_pointer_recipe_roundtrips_signature_and_collects_both_sides() {
         let source = parse("struct Ingress;struct Other;fn main(){}").unwrap();
         let budget = ir::PlanBudget::default();
@@ -366,6 +424,12 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
         ir::Ty::Struct(n) => NominalShape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Enum(n) => NominalShape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Tuple(fields) => NominalShape::Tuple(children(fields)?),
+        ir::Ty::PhantomData(marker) => {
+            let budget = &checker.signatures.plan()?.budget;
+            marker.validate(&checker.signatures.plan()?.catalog, budget)?;
+            budget.retain_bytes(std::mem::size_of::<NominalShape>() + 2 * std::mem::size_of::<usize>())?;
+            NominalShape::PhantomData(marker.declaration(), Arc::new(type_shape(checker, marker.argument(), depth + 1)?))
+        }
         ir::Ty::FnPointer(pointer) => {
             let budget = &checker.signatures.plan()?.budget;
             pointer.validate(budget)?;
@@ -439,6 +503,24 @@ fn recipe_type(
                 missing.push(demand);
             }
             return Ok(None);
+        }
+        NominalShape::PhantomData(declaration, argument) => {
+            let plan = checker.signatures.plan()?;
+            if *declaration != plan.catalog.id(tr::CatalogItem::PhantomData) {
+                return Err("contract: foreign PhantomData recipe owner".into());
+            }
+            let Some(argument) = recipe_type(checker, inputs, argument, missing, depth + 1)? else {
+                return Ok(None);
+            };
+            let ty = ir::Ty::PhantomData(ir::PhantomDataTy::new(
+                &plan.catalog,
+                argument,
+                &plan.budget,
+            )?);
+            checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+            ty
         }
         NominalShape::FnPointer(signature_inputs, output) => {
             let budget = &checker.signatures.plan()?.budget;

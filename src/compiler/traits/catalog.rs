@@ -5,9 +5,9 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 6;
+pub const CATALOG_VERSION: u32 = 9;
 
-const BASE_COUNT: u32 = 8;
+const BASE_COUNT: u32 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
@@ -20,6 +20,8 @@ pub enum RecipeDescriptor {
     CloneTuple { arity: u16 },
     CloneArray { len: u16 },
     CloneSharedRef,
+    ClonePhantomData,
+    CloneFromPhantomData,
 }
 impl RecipeDescriptor {
     fn order(self) -> (u8, u16) {
@@ -46,6 +48,8 @@ impl RecipeDescriptor {
             Self::CloneTuple { arity } => (4, arity),
             Self::CloneArray { len } => (5, len),
             Self::CloneSharedRef => (6, 0),
+            Self::ClonePhantomData => (10, 0),
+            Self::CloneFromPhantomData => (11, 0),
             Self::CloneFloat(float) => (
                 7,
                 match float {
@@ -66,12 +70,13 @@ pub enum CatalogItem {
     Copy,
     Drop,
     DropItem,
+    PhantomData,
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
     pub fn module(self) -> CatalogModule {
         match self {
-            Self::Sized | Self::Copy => CatalogModule::Marker,
+            Self::Sized | Self::Copy | Self::PhantomData => CatalogModule::Marker,
             Self::Clone
             | Self::CloneItem
             | Self::CloneFromItem
@@ -86,6 +91,7 @@ impl CatalogItem {
             Self::Clone => Some(BuiltinAtom::Clone),
             Self::Copy => Some(BuiltinAtom::Copy),
             Self::Drop => Some(BuiltinAtom::Drop),
+            Self::PhantomData => Some(BuiltinAtom::PhantomData),
             _ => None,
         }
     }
@@ -99,6 +105,7 @@ impl CatalogItem {
             Self::Copy => 5,
             Self::Drop => 6,
             Self::DropItem => 7,
+            Self::PhantomData => 8,
             Self::Recipe(_) => return None,
         })
     }
@@ -302,6 +309,7 @@ impl CoreCatalogBuilder {
             CatalogItem::Copy,
             CatalogItem::Drop,
             CatalogItem::DropItem,
+            CatalogItem::PhantomData,
         ] {
             let declaration = id(snapshot, item);
             let is_trait = matches!(
@@ -315,7 +323,11 @@ impl CoreCatalogBuilder {
                 CatalogItem::DropItem => Some(id(snapshot, CatalogItem::Drop)),
                 _ => None,
             };
-            let own = scope(declaration, usize::from(is_trait), budget)?;
+            let own = scope(
+                declaration,
+                usize::from(is_trait || item == CatalogItem::PhantomData),
+                budget,
+            )?;
             let mut scopes = Vec::new();
             if let Some(owner) = owner {
                 push(budget, &mut scopes, scope(owner, 1, budget)?)?;
@@ -333,7 +345,9 @@ impl CoreCatalogBuilder {
                 },
                 _ => ReceiverMode::None,
             };
-            let kind = if is_trait {
+            let kind = if item == CatalogItem::PhantomData {
+                DeclKind::Struct
+            } else if is_trait {
                 DeclKind::Trait
             } else if item == CatalogItem::CloneFromDefault {
                 DeclKind::AssociatedFunction
@@ -349,6 +363,7 @@ impl CoreCatalogBuilder {
                 CatalogItem::Copy => "Copy",
                 CatalogItem::Drop => "Drop",
                 CatalogItem::DropItem => "drop",
+                CatalogItem::PhantomData => "PhantomData",
                 CatalogItem::Recipe(_) => unreachable!(),
             };
             let info = SchemaDecl {
@@ -412,7 +427,7 @@ impl CoreCatalogBuilder {
                         supertraits: supers.into(),
                     },
                 )?;
-            } else {
+            } else if item != CatalogItem::PhantomData {
                 let owner = owner
                     .ok_or_else(|| FactsError::invalid(budget, "catalog item owner missing"))?;
                 let self_ty = Ty::Param(ParamId {
@@ -577,6 +592,17 @@ impl CoreCatalogBuilder {
                 *descriptor,
                 self.id(CatalogItem::Sized),
                 self.id(CatalogItem::Clone),
+                if matches!(
+                    descriptor,
+                    RecipeDescriptor::ClonePhantomData | RecipeDescriptor::CloneFromPhantomData
+                ) {
+                    Some(charged(
+                        budget,
+                        ir::PhantomDataFactory::from_builder(&self, budget),
+                    )?)
+                } else {
+                    None
+                },
                 budget,
             )?;
             let own = s
@@ -594,7 +620,11 @@ impl CoreCatalogBuilder {
                 module: self.modules.catalog_module(CatalogModule::Clone),
                 visibility: crate::compiler::ir::Visibility::Public,
                 receiver: ReceiverMode::Borrowed {
-                    kind: BorrowKind::Shared,
+                    kind: if *descriptor == RecipeDescriptor::CloneFromPhantomData {
+                        BorrowKind::Mut
+                    } else {
+                        BorrowKind::Shared
+                    },
                 },
                 region_contract_mode: RegionContractMode::Positioned,
             };
@@ -649,11 +679,15 @@ fn recipe_schema(
     descriptor: RecipeDescriptor,
     sized: DeclId,
     clone: DeclId,
+    marker_factory: Option<ir::PhantomDataFactory>,
     budget: &PlanBudget,
 ) -> Result<GenericSchema> {
     let arity = match descriptor {
         RecipeDescriptor::CloneTuple { arity } => usize::from(arity),
-        RecipeDescriptor::CloneArray { .. } | RecipeDescriptor::CloneSharedRef => 1,
+        RecipeDescriptor::CloneArray { .. }
+        | RecipeDescriptor::CloneSharedRef
+        | RecipeDescriptor::ClonePhantomData
+        | RecipeDescriptor::CloneFromPhantomData => 1,
         _ => 0,
     };
     let own = if matches!(descriptor, RecipeDescriptor::CloneSharedRef) {
@@ -683,7 +717,10 @@ fn recipe_schema(
                 args: Arc::from([]),
             }),
         )?;
-        {
+        if !matches!(
+            descriptor,
+            RecipeDescriptor::ClonePhantomData | RecipeDescriptor::CloneFromPhantomData
+        ) {
             push(
                 budget,
                 &mut predicates,
@@ -717,14 +754,38 @@ fn recipe_schema(
             }
         }
         RecipeDescriptor::CloneSharedRef => reference(types.remove(0), BorrowKind::Shared, budget)?,
+        RecipeDescriptor::ClonePhantomData | RecipeDescriptor::CloneFromPhantomData => {
+            Ty::PhantomData(charged(
+                budget,
+                marker_factory
+                    .ok_or_else(|| {
+                        FactsError::invalid(budget, "marker clone recipe lost sealed factory")
+                    })?
+                    .with_argument(types.remove(0), budget),
+            )?)
+        }
     };
     let mut params = Vec::new();
-    push(
-        budget,
-        &mut params,
-        reference(value.clone(), BorrowKind::Shared, budget)?,
-    )?;
-    schema(env, params, value, predicates, budget)
+    if descriptor == RecipeDescriptor::CloneFromPhantomData {
+        push(
+            budget,
+            &mut params,
+            reference(value.clone(), BorrowKind::Mut, budget)?,
+        )?;
+        push(
+            budget,
+            &mut params,
+            reference(value, BorrowKind::Shared, budget)?,
+        )?;
+        schema(env, params, Ty::Unit, predicates, budget)
+    } else {
+        push(
+            budget,
+            &mut params,
+            reference(value.clone(), BorrowKind::Shared, budget)?,
+        )?;
+        schema(env, params, value, predicates, budget)
+    }
 }
 impl CoreCatalog {
     pub fn modules(&self) -> &Arc<ModuleArena> {
@@ -874,10 +935,109 @@ mod wide_tests {
                 .validate_for(&modules, declaration.info.module)
                 .unwrap();
         }
+        let factory = ir::PhantomDataFactory::from_builder(&builder, &budget).unwrap();
+        let marker_schema = recipe_schema(
+            DeclId {
+                snapshot,
+                index: 100,
+            },
+            RecipeDescriptor::ClonePhantomData,
+            id(snapshot, CatalogItem::Sized),
+            id(snapshot, CatalogItem::Clone),
+            Some(factory),
+            &budget,
+        )
+        .unwrap();
+        let Ty::PhantomData(marker) = &marker_schema.signature.result else {
+            panic!("marker clone must return its canonical descriptor");
+        };
+        assert_eq!(marker.declaration(), id(snapshot, CatalogItem::PhantomData));
+        assert_eq!(marker_schema.env.ordered_params().count(), 1);
+        assert_eq!(marker_schema.predicates.len(), 1);
+        assert!(
+            matches!(&marker_schema.predicates[0], Predicate::Implements(goal)
+            if goal.declaration == id(snapshot, CatalogItem::Sized)
+                && &goal.self_ty == marker.argument())
+        );
+        assert!(matches!(marker_schema.signature.params.as_slice(),
+            [Ty::Ref { kind: BorrowKind::Shared, referent }]
+                if referent.as_ref() == &marker_schema.signature.result));
+        assert!(
+            recipe_schema(
+                DeclId {
+                    snapshot,
+                    index: 100
+                },
+                RecipeDescriptor::ClonePhantomData,
+                id(snapshot, CatalogItem::Sized),
+                id(snapshot, CatalogItem::Clone),
+                None,
+                &budget,
+            )
+            .is_err()
+        );
+        let clone_from_schema = recipe_schema(
+            DeclId {
+                snapshot,
+                index: 101,
+            },
+            RecipeDescriptor::CloneFromPhantomData,
+            id(snapshot, CatalogItem::Sized),
+            id(snapshot, CatalogItem::Clone),
+            Some(factory),
+            &budget,
+        )
+        .unwrap();
+        assert_eq!(clone_from_schema.signature.result, Ty::Unit);
+        assert_eq!(clone_from_schema.predicates.len(), 1);
+        assert!(
+            matches!(&clone_from_schema.predicates[0], Predicate::Implements(goal)
+            if goal.declaration == id(snapshot, CatalogItem::Sized))
+        );
+        let [
+            Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: destination,
+            },
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: source,
+            },
+        ] = clone_from_schema.signature.params.as_slice()
+        else {
+            panic!("marker clone_from must retain mutable destination and shared source");
+        };
+        assert_eq!(destination, source);
+        assert!(matches!(destination.as_ref(), Ty::PhantomData(marker)
+            if marker.declaration() == id(snapshot, CatalogItem::PhantomData)
+                && matches!(marker.argument(), Ty::Param(parameter)
+                    if parameter.owner.declaration.index == 101)));
         let source_end = builder.source_start();
-        let catalog = builder
-            .finish(source_end, RecipeShapeInventory::new(), &budget)
-            .unwrap();
+        let mut inventory = RecipeShapeInventory::new();
+        for descriptor in [
+            RecipeDescriptor::ClonePhantomData,
+            RecipeDescriptor::CloneFromPhantomData,
+        ] {
+            inventory
+                .record(
+                    descriptor,
+                    &super::super::super::ownership::RecipePlanCounts::default(),
+                    &budget,
+                )
+                .unwrap();
+        }
+        let catalog = builder.finish(source_end, inventory, &budget).unwrap();
+        for (descriptor, kind) in [
+            (RecipeDescriptor::ClonePhantomData, BorrowKind::Shared),
+            (RecipeDescriptor::CloneFromPhantomData, BorrowKind::Mut),
+        ] {
+            let recipe = catalog.recipe(descriptor).unwrap();
+            assert_eq!(recipe.info.receiver, ReceiverMode::Borrowed { kind });
+            assert!(
+                matches!(recipe.schema.as_ref().unwrap().signature.params.first(),
+                Some(Ty::Ref { kind: actual, .. }) if *actual == kind)
+            );
+        }
         assert!(Arc::ptr_eq(catalog.modules(), &modules));
         assert_eq!(CatalogItem::Sized.binding_atom(), Some(BuiltinAtom::Sized));
         assert_eq!(CatalogItem::CloneItem.binding_atom(), None);
@@ -924,6 +1084,7 @@ mod wide_tests {
             RecipeDescriptor::CloneChar,
             id(snapshot, CatalogItem::Sized),
             id(snapshot, CatalogItem::Clone),
+            None,
             &budget,
         )
         .unwrap();
@@ -953,6 +1114,7 @@ mod wide_tests {
                 RecipeDescriptor::CloneInt(kind),
                 id(snapshot, CatalogItem::Sized),
                 id(snapshot, CatalogItem::Clone),
+                None,
                 &budget,
             )
             .unwrap();

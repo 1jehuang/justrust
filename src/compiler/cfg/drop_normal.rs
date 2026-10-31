@@ -65,6 +65,7 @@ pub(super) fn descriptor(
             | Ty::Bool
             | Ty::Char
             | Ty::Unit
+            | Ty::PhantomData(_)
             | Ty::Never
             | Ty::Ref { .. }
             | Ty::RawPtr { .. }

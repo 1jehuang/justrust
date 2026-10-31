@@ -349,6 +349,138 @@ fn require_empty_physical_capture(actual: &ir::Ty, budget: &ir::PlanBudget) -> R
     Ok(())
 }
 
+fn specialize_marker_constants(
+    function: &mut cfg::Function,
+    specialization: &mut opaque_specialization::Specialization<'_>,
+    budget: &ir::PlanBudget,
+) -> Result<(), Error> {
+    fn operand(
+        operand: &mut cfg::Operand,
+        specialization: &mut opaque_specialization::Specialization<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), Error> {
+        budget.charge_work(1).map_err(Error::new)?;
+        if let cfg::Operand::Constant(cfg::Constant::PhantomData(marker)) = operand {
+            let ir::Ty::PhantomData(mapped) =
+                specialization.ty(&ir::Ty::PhantomData(marker.clone()))?
+            else {
+                return Err(Error::new(
+                    "physical marker substitution changed its type kind",
+                ));
+            };
+            if mapped.declaration() != marker.declaration() {
+                return Err(Error::new(
+                    "physical marker substitution changed canonical owner",
+                ));
+            }
+            *marker = mapped;
+        }
+        Ok(())
+    }
+    fn rvalue(
+        value: &mut cfg::Rvalue,
+        specialization: &mut opaque_specialization::Specialization<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), Error> {
+        use cfg::Rvalue::*;
+        match value {
+            OpaquePack { value, .. }
+            | Use(value)
+            | CharToInt { value, .. }
+            | U8ToChar { value }
+            | PtrCast { value, .. }
+            | LeadingZeros { value }
+            | IntCast { value, .. }
+            | FloatCast { value, .. }
+            | Unary { value, .. }
+            | Repeat { value, .. }
+            | ArrayToSlice { reference: value }
+            | RefToDyn {
+                reference: value, ..
+            }
+            | SliceDataPointer { slice: value }
+            | SliceLen { slice: value }
+            | IndexCopy { index: value, .. } => operand(value, specialization, budget)?,
+            SliceIndex { slice, index } => {
+                operand(slice, specialization, budget)?;
+                operand(index, specialization, budget)?;
+            }
+            Subslice {
+                slice, start, end, ..
+            } => {
+                operand(slice, specialization, budget)?;
+                operand(start, specialization, budget)?;
+                if let Some(end) = end {
+                    operand(end, specialization, budget)?;
+                }
+            }
+            Binary { left, right, .. } => {
+                operand(left, specialization, budget)?;
+                operand(right, specialization, budget)?;
+            }
+            NativeSyscall(fields)
+            | RawSlice { args: fields, .. }
+            | Aggregate { fields, .. }
+            | EnumVariant { fields, .. }
+            | Intrinsic { args: fields, .. }
+            | Format {
+                arguments: fields, ..
+            } => {
+                for field in fields {
+                    operand(field, specialization, budget)?;
+                }
+            }
+            TypeAlignment(_)
+            | Borrow(_)
+            | Discriminant(_)
+            | Println(_)
+            | Output(_)
+            | Str(_)
+            | ByteStr(_)
+            | PromotedScalar(_)
+            | ByteRepeat { .. } => {}
+        }
+        Ok(())
+    }
+    for block in &mut function.blocks {
+        budget.charge_work(1).map_err(Error::new)?;
+        for statement in &mut block.statements {
+            budget.charge_work(1).map_err(Error::new)?;
+            match &mut statement.value {
+                cfg::Statement::Assign { value, .. } => rvalue(value, specialization, budget)?,
+                cfg::Statement::IndexAssignOp { index, value, .. }
+                | cfg::Statement::IndexAssign { index, value, .. } => {
+                    operand(index, specialization, budget)?;
+                    operand(value, specialization, budget)?;
+                }
+                cfg::Statement::IndexInspect { index, .. } => {
+                    operand(index, specialization, budget)?
+                }
+                cfg::Statement::Inspect(_)
+                | cfg::Statement::StorageLive(_)
+                | cfg::Statement::StorageDead(_) => {}
+            }
+        }
+        match &mut block.terminator.value {
+            cfg::Terminator::Call { args, .. } => {
+                for argument in args {
+                    operand(argument, specialization, budget)?;
+                }
+            }
+            cfg::Terminator::Switch { condition, .. } => {
+                operand(condition, specialization, budget)?
+            }
+            cfg::Terminator::Drop { .. }
+            | cfg::Terminator::SwitchVariant { .. }
+            | cfg::Terminator::Goto(_)
+            | cfg::Terminator::Return
+            | cfg::Terminator::Panic(_)
+            | cfg::Terminator::Unreachable => {}
+        }
+    }
+    Ok(())
+}
+
 /// Materialize an exactly carrier-preserving boundary from canonical
 /// lowering. CFG blocks, argument snapshots, loans and evaluation order are
 /// copied intact. Only types and independently authorized call/pack operations
@@ -571,6 +703,10 @@ pub(super) fn normalize(
             }
         }
     }
+    // Original pack operands and call occurrences above must remain universal
+    // until their source proofs have been authenticated. Only now close marker
+    // constants; they retain full canonical type metadata despite zero storage.
+    specialize_marker_constants(&mut output, &mut specialization, budget)?;
     // Original source evidence is retained in `original`, not relabeled as
     // closed evidence. The physical shape protocol must replay it separately.
     output.lowering_proof = None;
@@ -594,6 +730,153 @@ pub(super) fn normalize(
 #[cfg(test)]
 mod captured_family_tests {
     use super::*;
+
+    #[test]
+    fn marker_constant_specialization_preserves_original_source_and_closed_actuals() {
+        use crate::compiler::memory_layout::domain::compact::closed_engine_fixture;
+        let (engine, budget, plan, _) = closed_engine_fixture(
+            "use core::marker::PhantomData;fn marker<T>()->PhantomData<T>{PhantomData::<T>}fn main(){let _m=marker::<i32>();let _a=std::mem::align_of::<u16>();}",
+            "main",
+            Arc::from([]),
+        );
+        let declaration = (0..plan.callable_count()).map(|index| plan.callable_decl(index).unwrap()).find(|id| matches!(plan.persistent_decl_path(*id).unwrap().item(), frontend::PersistentDeclItem::Name(name) if name == "marker")).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("original marker source required")
+        };
+        let template = cfg::lower_source_template(&publication, &budget).unwrap();
+        let original = template.function().as_ref().clone();
+        original
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        let target = ir::CallTarget {
+            declaration,
+            type_args: Arc::from([ir::Ty::Int(ir::IntTy::I32)]),
+        };
+        let mut specialization = opaque_specialization::Specialization::new(
+            &publication,
+            &target,
+            &plan,
+            &budget,
+            engine.authority(),
+        )
+        .unwrap();
+        let markers = |function: &cfg::Function| {
+            let mut result = Vec::new();
+            for block in &function.blocks {
+                for statement in &block.statements {
+                    statement
+                        .value
+                        .visit_operands(&mut |operand| {
+                            if let cfg::Operand::Constant(cfg::Constant::PhantomData(marker)) =
+                                operand
+                            {
+                                result.push(marker.clone());
+                            }
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+                block
+                    .terminator
+                    .value
+                    .visit_operands(&mut |operand| {
+                        if let cfg::Operand::Constant(cfg::Constant::PhantomData(marker)) = operand
+                        {
+                            result.push(marker.clone());
+                        }
+                        Ok(())
+                    })
+                    .unwrap();
+            }
+            result
+        };
+        let source_markers = markers(&original);
+        assert!(!source_markers.is_empty());
+        assert!(
+            source_markers
+                .iter()
+                .all(|marker| matches!(marker.argument(), ir::Ty::Param(_)))
+        );
+        let mut physical = original.clone();
+        specialize_marker_constants(&mut physical, &mut specialization, &budget).unwrap();
+        let actual_markers = markers(&physical);
+        assert_eq!(actual_markers.len(), source_markers.len());
+        let closed = plan.instance_facts(&target).unwrap();
+        for (source, actual) in source_markers.iter().zip(&actual_markers) {
+            assert_eq!(source.declaration(), actual.declaration());
+            assert_eq!(actual.argument(), &ir::Ty::Int(ir::IntTy::I32));
+            closed
+                .validate_ty_with_budget(&ir::Ty::PhantomData(actual.clone()), &budget)
+                .unwrap();
+            let expected = specialization
+                .ty(&ir::Ty::PhantomData(source.clone()))
+                .unwrap();
+            assert!(
+                ir::identical_type(&expected, &ir::Ty::PhantomData(actual.clone()), &budget)
+                    .unwrap()
+            );
+        }
+        // The universal source and original operand proof stay unchanged.
+        assert_eq!(markers(&original), source_markers);
+        original
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        let changed =
+            ir::PhantomDataTy::new(closed.world().canonical_catalog(), ir::Ty::Bool, &budget)
+                .unwrap();
+        let foreign_target = ir::CallTarget {
+            declaration,
+            type_args: Arc::from([ir::Ty::Bool]),
+        };
+        let mut foreign_specialization = opaque_specialization::Specialization::new(
+            &publication,
+            &foreign_target,
+            &plan,
+            &budget,
+            engine.authority(),
+        )
+        .unwrap();
+        let mut other = original.clone();
+        specialize_marker_constants(&mut other, &mut foreign_specialization, &budget).unwrap();
+        assert_eq!(markers(&other), vec![changed.clone(); source_markers.len()]);
+        assert!(
+            !ir::identical_type(
+                &ir::Ty::PhantomData(actual_markers[0].clone()),
+                &ir::Ty::PhantomData(changed.clone()),
+                &budget
+            )
+            .unwrap()
+        );
+        let mut forged_source = original.clone();
+        for block in &mut forged_source.blocks {
+            for statement in &mut block.statements {
+                if let cfg::Statement::Assign {
+                    value:
+                        cfg::Rvalue::Use(cfg::Operand::Constant(cfg::Constant::PhantomData(marker))),
+                    ..
+                } = &mut statement.value
+                {
+                    *marker = changed.clone();
+                }
+            }
+        }
+        assert!(
+            forged_source
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            specialize_marker_constants(&mut original.clone(), &mut specialization, &denied)
+                .is_err()
+        );
+        assert!(denied.first_resource_failure().is_some());
+    }
 
     #[test]
     fn closed_capture_family_refuses_fixed_and_nested_reference_carriers() {

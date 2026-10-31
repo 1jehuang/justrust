@@ -1,6 +1,102 @@
 use super::*;
 
 #[test]
+fn marker_probe_defers_source_associated_constant_owners() {
+    let text = "struct Number;impl Number{const GOOD:i32=7;const OTHER:i32=Self::GOOD;}fn read()->i32{Number::GOOD}fn main(){let _:i32=crate::Number::GOOD;}";
+    let source = parse(text).unwrap();
+    assert!(matches!(
+        source.functions[0].body.tail.as_deref(),
+        Some(Expr::AssociatedConst(_))
+    ));
+    assert!(matches!(
+        &source.functions[1].body.statements[0],
+        Stmt::LetPattern {
+            pattern: Pattern::Wildcard,
+            ty: Type::Int(ir::IntTy::I32),
+            value: Expr::AssociatedConst(_),
+        }
+    ));
+    let budget = ir::PlanBudget::default();
+    PlanCtx::from_program(&source, &budget).unwrap();
+    for workers in [1, 8] {
+        crate::compiler::opaque_source_tests::source_check(text, workers).unwrap();
+    }
+}
+
+#[test]
+fn catalog_marker_does_not_create_a_source_nominal_schema() {
+    let source = parse("struct Cell<T>{value:T}fn main(){}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&source, &budget).unwrap();
+    let marker = plan.catalog.id(tr::CatalogItem::PhantomData);
+    let info = plan.declaration(marker).unwrap();
+    assert_eq!(info.param_env.arity(), 1);
+    assert!(matches!(
+        info.path.item,
+        DeclItemName::Catalog(tr::CatalogItem::PhantomData)
+    ));
+    assert!(plan.nominal_schema(marker, &budget).is_err());
+}
+
+#[test]
+fn phantom_data_catalog_aliases_preserve_source_and_canonical_argument_identity() {
+    let source = parse("use core::marker::PhantomData as Renamed;fn a(x:core::marker::PhantomData<i32>){}fn b(x:std::marker::PhantomData<i32>){}fn c(x:Renamed<i32>){}fn main(){let x:Renamed<i32>=Renamed;}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&source, &budget).unwrap();
+    let mut actual = None;
+    for index in 0..3 {
+        let schema = plan
+            .function_schema(plan.function_decl(index).unwrap())
+            .unwrap();
+        let ir::Ty::PhantomData(marker) = &schema.signature.params[0] else {
+            panic!("canonical marker became a source nominal");
+        };
+        assert_eq!(
+            marker.declaration(),
+            plan.catalog.id(tr::CatalogItem::PhantomData)
+        );
+        assert_eq!(marker.argument(), &ir::Ty::Int(ir::IntTy::I32));
+        if let Some(expected) = &actual {
+            assert_eq!(&schema.signature.params[0], expected);
+        }
+        actual = Some(schema.signature.params[0].clone());
+    }
+    let Type::PhantomData(alias) = &source.functions[2].params[0].1 else {
+        panic!("lost source marker use");
+    };
+    let written = alias.original.checked_path(source.names.as_ref()).unwrap();
+    assert_eq!(
+        source.names.spelling(written.single().unwrap()).unwrap(),
+        "Renamed"
+    );
+    assert!(
+        !alias
+            .occurrence
+            .source_occurrences(source.names.as_ref())
+            .unwrap()
+            .is_empty()
+    );
+    let Stmt::Let {
+        value: Expr::PhantomData(constructor),
+        ..
+    } = &source.functions[3].body.statements[0]
+    else {
+        panic!("bare marker constructor became a source struct or function item");
+    };
+    assert!(constructor.argument.is_none());
+
+    let foreign = parse("fn a(x:core::marker::PhantomData<i32>){}fn main(){}").unwrap();
+    let mut transplanted = source.clone();
+    transplanted.functions[0].params[0].1 = foreign.functions[0].params[0].1.clone();
+    assert!(name_validation::validate_program_names(&transplanted).is_err());
+    assert!(PlanCtx::from_program(&transplanted, &budget).is_err());
+
+    let local = parse("struct PhantomData{n:i32}fn f(x:PhantomData){}fn main(){}").unwrap();
+    assert!(matches!(local.functions[0].params[0].1, Type::Named(_)));
+    assert!(parse("fn f(x:PhantomData<i32>){}fn main(){}").is_err());
+}
+
+#[test]
 fn unsafe_trait_impl_safety_replays_original_pair_and_source_flags() {
     let source =
         parse("unsafe trait A{}trait B{}struct S;unsafe impl A for S{}impl B for S{}fn main(){}")

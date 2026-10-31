@@ -427,7 +427,14 @@ fn type_requires_carrier_proof(
     // Their checked outer shape proves absence without an associated-type walk.
     if matches!(
         ty,
-        Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Char | Ty::Unit | Ty::Never | Ty::RawPtr { .. }
+        Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Unit
+            | Ty::Never
+            | Ty::PhantomData(_)
+            | Ty::RawPtr { .. }
     ) {
         return Ok(false);
     }
@@ -2030,6 +2037,7 @@ impl<'a> MoveShape<'a> {
             | Ty::Unit
             | Ty::Ref { .. }
             | Ty::FnPointer(_)
+            | Ty::PhantomData(_)
             | Ty::RawPtr { .. } => Self::Scalar,
         })
     }
@@ -3456,6 +3464,7 @@ impl Transfer<'_> {
                 | Ty::Bool
                 | Ty::Char
                 | Ty::Unit
+                | Ty::PhantomData(_)
                 | Ty::Never
                 | Ty::Ref { .. }
                 | Ty::RawPtr { .. }

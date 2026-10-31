@@ -116,6 +116,14 @@ impl Inference<'_, '_> {
                     .infer_type_term(&normal, None, depth + 1)
                     .map(Some);
             }
+            InferKind::PhantomData(declaration, argument) => {
+                let Some(argument) =
+                    self.normalize_schema_projections(argument, depth + 1, defaults)?
+                else {
+                    return Ok(None);
+                };
+                InferKind::PhantomData(*declaration, argument)
+            }
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.checker.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
@@ -206,6 +214,19 @@ impl Inference<'_, '_> {
                     return Ok(None);
                 };
                 return self.resolve(&normal, defaults, depth + 1);
+            }
+            InferKind::PhantomData(declaration, argument) => {
+                let Some(argument) = map(argument)? else {
+                    return Ok(None);
+                };
+                return self
+                    .materialize(*declaration, &[argument])
+                    .map(Some)
+                    .map_err(|error| {
+                        error.into_legacy_diagnostic(
+                            &self.checker.signatures.plan.as_ref().unwrap().budget,
+                        )
+                    });
             }
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.checker.signatures.plan()?.budget;
@@ -377,6 +398,9 @@ impl Inference<'_, '_> {
     ) -> Result<(), String> {
         self.checker.infer_work(depth)?;
         match (formal.as_ref(), actual.as_ref()) {
+            (InferKind::PhantomData(a, left), InferKind::PhantomData(b, right)) if a == b => {
+                self.split_projected_constraint(left.clone(), right.clone(), output, depth + 1)?;
+            }
             (InferKind::FnPointer(left, lo), InferKind::FnPointer(right, ro))
                 if left.len() == right.len() =>
             {

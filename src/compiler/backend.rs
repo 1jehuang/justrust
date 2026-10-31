@@ -214,6 +214,7 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
         | ir::Ty::Char
         | ir::Ty::Bool
         | ir::Ty::Unit
+        | ir::Ty::PhantomData(_)
         | ir::Ty::Never
         | ir::Ty::Ref { .. }
         | ir::Ty::RawPtr { .. } => Ok(false),
@@ -315,6 +316,7 @@ pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, St
             | ir::Ty::Char
             | ir::Ty::Bool
             | ir::Ty::Unit
+            | ir::Ty::PhantomData(_)
             | ir::Ty::Never
             | ir::Ty::Ref { .. }
             | ir::Ty::RawPtr { .. } => Ok(8),
@@ -351,7 +353,7 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
                     "unsupported: array element extent exceeds native memory limit".into()
                 })
         }
-        ir::Ty::Unit | ir::Ty::FnItem(_) => Ok(0),
+        ir::Ty::Unit | ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
         ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Float(_) => {
             Ok(scalar_memory_bytes(ty) as i32)
@@ -389,7 +391,7 @@ fn zero_array_element_extent(
 /// Owning snapshots reserve rounded storage, but transport only real elements.
 fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     match ty {
-        ir::Ty::FnItem(_) => Ok(0),
+        ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
         ir::Ty::Array { .. } => {
             value_size(ty, budget)?;
@@ -401,7 +403,7 @@ fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, Strin
 
 fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     match ty {
-        ir::Ty::Unit => 0,
+        ir::Ty::Unit | ir::Ty::PhantomData(_) => 0,
         ir::Ty::Int(integer) => integer.bits() / 8,
         ir::Ty::Bool => 1,
         ir::Ty::Char | ir::Ty::Float(ir::FloatTy::F32) => 4,
@@ -1731,7 +1733,7 @@ impl<'a> Emitter<'a> {
                     unreachable!("numeric constants use typed full-width immediates")
                 }
                 cfg::Constant::Bool(value) => i32::from(*value),
-                cfg::Constant::Unit => 0,
+                cfg::Constant::Unit | cfg::Constant::PhantomData(_) => 0,
                 cfg::Constant::Enum { ty, variant } => {
                     if ty.has_payload() {
                         return Err("payload enum constants require constructor storage".into());

@@ -162,6 +162,7 @@ impl TyMap<'_> {
                     item: def(p.item),
                 })))
             }
+            ir::Ty::PhantomData(_) => un("PhantomData type in the semantic core"),
             ir::Ty::Opaque(_) => un("opaque type in the semantic core"),
             ir::Ty::Closure(_) => un("closure type in a declaration"),
             ir::Ty::FnPointer(pointer) => {

@@ -16,6 +16,7 @@ pub(super) enum InferKind {
     Unknown(bool),
     Tuple(Arc<[InferTerm]>),
     FnPointer(Arc<[InferTerm]>, InferTerm),
+    PhantomData(ir::DeclId, InferTerm),
     Array(InferTerm, usize),
     Slice(InferTerm),
     Ref(ir::BorrowKind, InferTerm),
@@ -64,6 +65,33 @@ impl CallInferenceState {
         self.work(depth)?;
         Ok(match term.as_ref() {
             InferKind::Rigid(ty) => Some(ty.clone()),
+            InferKind::PhantomData(declaration, argument) => {
+                let Some(argument) = self.resolve(argument, fallback, depth + 1, materialize)?
+                else {
+                    return Ok(None);
+                };
+                let ty = materialize(*declaration, std::slice::from_ref(&argument))?;
+                let ir::Ty::PhantomData(marker) = &ty else {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "marker inference materialized a non-marker type",
+                    ));
+                };
+                if marker.declaration() != *declaration
+                    || !replay_types_equal_at(
+                        marker.argument(),
+                        &argument,
+                        &self.budget,
+                        depth + 1,
+                    )?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "marker inference changed original owner or actual",
+                    ));
+                }
+                Some(ty)
+            }
             InferKind::Projection(declaration, item, terms) => {
                 self.storage(terms.len())?;
                 let mut actuals = Vec::new();
@@ -259,6 +287,9 @@ impl CallInferenceState {
     ) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match schema.as_ref() {
+            InferKind::PhantomData(owner, argument) => {
+                InferKind::PhantomData(*owner, self.bind_schema(argument, slots, depth + 1)?)
+            }
             InferKind::Slot(index) => {
                 let bound = slots.get(*index).ok_or_else(|| {
                     FactsError::invalid(&self.budget, "result schema slot outside inferred binder")
@@ -445,6 +476,9 @@ impl CallInferenceState {
     fn taint(&self, term: &InferTerm, depth: usize) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match term.as_ref() {
+            InferKind::PhantomData(owner, argument) => {
+                InferKind::PhantomData(*owner, self.taint(argument, depth + 1)?)
+            }
             InferKind::Integer => InferKind::Unknown(true),
             InferKind::Float | InferKind::UnknownFloat => InferKind::UnknownFloat,
             InferKind::Unknown(numeric) => InferKind::Unknown(*numeric),
@@ -549,6 +583,9 @@ impl CallInferenceState {
                 if frontend::replay_type_equal(x, y, &self.budget)? =>
             {
                 Ok(a.clone())
+            }
+            (InferKind::PhantomData(a, x), InferKind::PhantomData(b, y)) if a == b => {
+                self.node(InferKind::PhantomData(*a, self.merge(x, y, depth + 1)?))
             }
             (InferKind::FnPointer(x, xo), InferKind::FnPointer(y, yo)) if x.len() == y.len() => {
                 self.node(InferKind::FnPointer(
@@ -655,7 +692,8 @@ impl CallInferenceState {
                     self.occurs(slot, f, depth + 1)?;
                 }
             }
-            InferKind::Array(element, _)
+            InferKind::PhantomData(_, element)
+            | InferKind::Array(element, _)
             | InferKind::Slice(element)
             | InferKind::Ref(_, element)
             | InferKind::RawPtr(_, element) => self.occurs(slot, element, depth + 1)?,
@@ -689,6 +727,16 @@ impl CallInferenceState {
                 self.slots[*slot] = Some(value);
                 Ok(())
             }
+            InferKind::PhantomData(owner, argument) => match evidence.as_ref() {
+                InferKind::PhantomData(actual_owner, actual) if owner == actual_owner => {
+                    self.constrain(argument, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(argument, evidence, depth + 1),
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic marker inference owner or shape mismatch",
+                )),
+            },
             InferKind::FnPointer(inputs, output) => match evidence.as_ref() {
                 InferKind::FnPointer(actual, result) if inputs.len() == actual.len() => {
                     for (t, a) in inputs.iter().zip(actual.iter()) {
@@ -880,6 +928,10 @@ impl CallInferenceState {
                 }
                 InferKind::Slot(param.index as usize)
             }
+            ir::Ty::PhantomData(marker) => InferKind::PhantomData(
+                marker.declaration(),
+                self.type_term(marker.argument(), schema, depth + 1)?,
+            ),
             ir::Ty::FnPointer(pointer) => InferKind::FnPointer(
                 self.collect_pointer_terms(
                     pointer.inputs.len(),
@@ -1192,6 +1244,8 @@ fn replay_types_equal_at(
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             replay_types_equal_at(a, b, budget, at + 1)
         }
+        (ir::Ty::PhantomData(a), ir::Ty::PhantomData(b)) => Ok(a.declaration() == b.declaration()
+            && replay_types_equal_at(a.argument(), b.argument(), budget, at + 1)?),
         (ir::Ty::FnPointer(a), ir::Ty::FnPointer(b)) => {
             a.try_eq(b, |a, b| replay_types_equal_at(a, b, budget, at + 1))
         }
@@ -1913,6 +1967,9 @@ fn terms_equal(
                 }
             }
             true
+        }
+        (InferKind::PhantomData(a, x), InferKind::PhantomData(b, y)) => {
+            a == b && terms_equal(x, y, budget, at + 1)?
         }
         (InferKind::FnPointer(x, xo), InferKind::FnPointer(y, yo)) => {
             if x.len() != y.len() {

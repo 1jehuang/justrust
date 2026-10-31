@@ -268,6 +268,7 @@ fn resolve<'a>(
     cx: &'a Context,
     term: Term,
     world: u64,
+    catalog: &'a traits::CoreCatalog,
     b: &'a ir::PlanBudget,
     depth: usize,
 ) -> Pending<'a, ir::Ty> {
@@ -284,26 +285,36 @@ fn resolve<'a>(
             Term::Str => ir::Ty::Str,
             Term::Ref(kind, t) => ir::Ty::Ref {
                 kind,
-                referent: Arc::new(resolve(cx, *t, world, b, depth + 1).await?),
+                referent: Arc::new(resolve(cx, *t, world, catalog, b, depth + 1).await?),
             },
             Term::RawPtr(kind, t) => ir::Ty::RawPtr {
                 kind,
-                pointee: Arc::new(resolve(cx, *t, world, b, depth + 1).await?),
+                pointee: Arc::new(resolve(cx, *t, world, catalog, b, depth + 1).await?),
             },
             Term::Slice(t) => ir::Ty::Slice {
-                element: Arc::new(resolve(cx, *t, world, b, depth + 1).await?),
+                element: Arc::new(resolve(cx, *t, world, catalog, b, depth + 1).await?),
             },
             Term::Array(t, len) => ir::Ty::Array {
-                element: Arc::new(resolve(cx, *t, world, b, depth + 1).await?),
+                element: Arc::new(resolve(cx, *t, world, catalog, b, depth + 1).await?),
                 len,
             },
+            Term::PhantomData(declaration, argument) => {
+                let argument = resolve(cx, *argument, world, catalog, b, depth + 1).await?;
+                let marker = ir::PhantomDataTy::new(catalog, argument, b).map_err(Error::new)?;
+                if marker.declaration() != declaration {
+                    return Err(Error::new(
+                        "nominal marker coordinate changed canonical catalog authority",
+                    ));
+                }
+                ir::Ty::PhantomData(marker)
+            }
             Term::FnPointer(inputs, output) => {
                 let count = inputs.len().checked_add(1).ok_or_else(|| {
                     Error::new("resource limit: function pointer branch count overflow")
                 })?;
                 let mut pending = ir::FnPointerTy::storage(count, b).map_err(Error::new)?;
                 for t in inputs.into_iter().chain(std::iter::once(*output)) {
-                    pending.push(resolve(cx, t, world, b, depth + 1));
+                    pending.push(resolve(cx, t, world, catalog, b, depth + 1));
                 }
                 let mut values = all_pointer(pending, b).await?;
                 let output = values
@@ -314,7 +325,7 @@ fn resolve<'a>(
             Term::Tuple(ts) => ir::Ty::Tuple(
                 all(ts
                     .into_iter()
-                    .map(|t| resolve(cx, t, world, b, depth + 1))
+                    .map(|t| resolve(cx, t, world, catalog, b, depth + 1))
                     .collect())
                 .await?
                 .into(),
@@ -324,12 +335,13 @@ fn resolve<'a>(
             Term::Dyn(principal, args, assigned) => {
                 let args = all(args
                     .into_iter()
-                    .map(|t| resolve(cx, t, world, b, depth + 1))
+                    .map(|t| resolve(cx, t, world, catalog, b, depth + 1))
                     .collect())
                 .await?;
                 let mut associated_types = Vec::new();
                 for (item, t) in assigned {
-                    associated_types.push((item, resolve(cx, t, world, b, depth + 1).await?));
+                    associated_types
+                        .push((item, resolve(cx, t, world, catalog, b, depth + 1).await?));
                 }
                 let object = ir::DynTy {
                     principal,
@@ -369,6 +381,15 @@ fn field<'a>(
             ir::Ty::Param(p) => world
                 .nominal_realization_parameter(input, &p)
                 .map_err(error)?,
+            ir::Ty::PhantomData(marker) => {
+                marker
+                    .validate(world.canonical_catalog(), b)
+                    .map_err(Error::new)?;
+                let (argument, proofs) =
+                    field(cx, marker.argument().clone(), input, world, depth + 1).await?;
+                dependencies = proofs;
+                ir::Ty::PhantomData(marker.try_map(b, Error::new, |_| Ok(argument))?)
+            }
             ir::Ty::FnPointer(pointer) => {
                 let count = pointer.inputs.len().checked_add(1).ok_or_else(|| {
                     Error::new("resource limit: function pointer field branch count overflow")
@@ -405,7 +426,15 @@ fn field<'a>(
                         "unsupported: nominal-valued associated field realization requires an expanded closed dependency cycle protocol",
                     ));
                 }
-                resolve(cx, term, world.nominal_realization_world(), b, depth + 1).await?
+                resolve(
+                    cx,
+                    term,
+                    world.nominal_realization_world(),
+                    world.canonical_catalog(),
+                    b,
+                    depth + 1,
+                )
+                .await?
             }
             ir::Ty::Struct(n) => {
                 let args = all(n
@@ -425,6 +454,7 @@ fn field<'a>(
                     cx,
                     Term::Nominal(n.def().source_decl, coordinates),
                     world.nominal_realization_world(),
+                    world.canonical_catalog(),
                     b,
                     depth + 1,
                 )
@@ -448,6 +478,7 @@ fn field<'a>(
                     cx,
                     Term::Nominal(n.def().source_decl, coordinates),
                     world.nominal_realization_world(),
+                    world.canonical_catalog(),
                     b,
                     depth + 1,
                 )
@@ -530,7 +561,7 @@ pub(super) async fn run(cx: &Context, key_words: Key) -> Result<(), Error> {
     }
     let actuals: Arc<[ir::Ty]> = all(terms
         .into_iter()
-        .map(|t| resolve(cx, t, world_key, b, 0))
+        .map(|t| resolve(cx, t, world_key, world.canonical_catalog(), b, 0))
         .collect())
     .await?
     .into();

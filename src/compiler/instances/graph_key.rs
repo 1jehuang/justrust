@@ -167,6 +167,11 @@ fn ty(
             types(words, value.owner_args(), budget, depth + 1)?;
             17
         }
+        ir::Ty::PhantomData(value) => {
+            declaration(words, value.declaration());
+            ty(words, value.argument(), budget, depth + 1)?;
+            20
+        }
         ir::Ty::FnPointer(value) => {
             types(words, &value.inputs, budget, depth + 1)?;
             ty(words, &value.output, budget, depth + 1)?;
@@ -546,6 +551,17 @@ impl Reader<'_> {
                     type_args: type_args.into(),
                 }))
             }
+            20 => {
+                let declaration = self.declaration()?;
+                let argument = self.ty(facts, depth + 1)?;
+                let world = self.context.trait_world()?;
+                let marker =
+                    ir::PhantomDataTy::new(world.canonical_catalog(), argument, self.budget)?;
+                if marker.declaration() != declaration {
+                    return Err("instance graph marker changed canonical catalog authority".into());
+                }
+                ir::Ty::PhantomData(marker)
+            }
             19 => {
                 let inputs = self.types(facts, depth + 1)?;
                 if inputs.len() > 32 {
@@ -595,6 +611,14 @@ mod tests {
     fn canonical_decode_roundtrips_and_rejects_foreign_or_malformed_keys() {
         let (context, budget, declaration) = fixture();
         for value in [
+            ir::Ty::PhantomData(
+                ir::PhantomDataTy::new(
+                    context.trait_world().unwrap().canonical_catalog(),
+                    ir::Ty::Bool,
+                    &budget,
+                )
+                .unwrap(),
+            ),
             ir::Ty::Bool,
             ir::Ty::Int(ir::IntTy::I32),
             ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Int(ir::IntTy::U8)])),
@@ -771,6 +795,35 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn phantom_data_graph_keys_replay_catalog_owner_and_exact_ordered_argument() {
+        let (context, budget, declaration) = fixture();
+        let world = context.trait_world().unwrap();
+        let marker = |argument| {
+            ir::Ty::PhantomData(
+                ir::PhantomDataTy::new(world.canonical_catalog(), argument, &budget).unwrap(),
+            )
+        };
+        let target = |argument| ir::CallTarget {
+            declaration,
+            type_args: Arc::from([marker(argument)]),
+        };
+        let original = target(ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Unit])));
+        let words = encode(&original, &budget).unwrap();
+        assert_eq!(decode(&words, &context, &budget).unwrap(), original);
+        let changed = target(ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::Bool])));
+        assert_ne!(encode(&changed, &budget).unwrap(), words);
+        let mut wrong_owner = words.clone();
+        wrong_owner[7] = world
+            .canonical_catalog()
+            .id(traits::CatalogItem::Copy)
+            .index;
+        assert!(decode(&wrong_owner, &context, &budget).is_err());
+        let mut foreign = words;
+        foreign[6] = ir::SnapshotId::standalone().unwrap().graph_word();
+        assert!(decode(&foreign, &context, &budget).is_err());
     }
 
     #[test]

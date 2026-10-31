@@ -14,6 +14,172 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[path = "support/stock_rustc.rs"]
 mod defaults_stock;
 
+const PHANTOM_DATA_VALID: &[(&str, &str)] = &[
+    (
+        "clone_from_nonclone_argument",
+        r#"use core::marker::PhantomData;struct Token;fn reset<T>(x:&mut PhantomData<T>,y:&PhantomData<T>){x.clone_from(y)}fn main(){let mut x=PhantomData::<Token>;let y=PhantomData::<Token>;reset(&mut x,&y);println!("7");}"#,
+    ),
+    (
+        "clone_canonical_marker_provider",
+        r#"use core::marker::PhantomData;fn main(){let x=PhantomData::<i32>;let y=x.clone();println!("7");}"#,
+    ),
+    (
+        "clone_nonclone_argument",
+        r#"use core::marker::PhantomData;struct Token;fn copy<T>(x:PhantomData<T>)->PhantomData<T>{x.clone()}fn main(){let x=copy::<Token>(PhantomData);println!("7");}"#,
+    ),
+    (
+        "canonical_core_std",
+        r#"fn take(x:core::marker::PhantomData<i32>){}fn main(){take(std::marker::PhantomData::<i32>);println!("7");}"#,
+    ),
+    (
+        "imported_alias_context",
+        r#"use core::marker::PhantomData as Renamed;fn take(x:Renamed<i32>){}fn main(){let x:Renamed<i32>=Renamed;take(x);println!("7");}"#,
+    ),
+    (
+        "scopeguard_shaped_field",
+        r#"use core::marker::PhantomData;struct Guard<T,S>{value:T,strategy:PhantomData<S>}fn take(x:Guard<i32,bool>)->i32{x.value}fn main(){println!("{}",take(Guard::<i32,bool>{value:7,strategy:PhantomData}));}"#,
+    ),
+    (
+        "universal_sized_argument",
+        r#"use core::marker::PhantomData;fn marker<T>()->PhantomData<T>{PhantomData}fn main(){let x=marker::<bool>();println!("7");}"#,
+    ),
+    (
+        "unconditional_copy_noncopy_argument",
+        r#"use core::marker::PhantomData;struct Token;fn twice<T>(x:PhantomData<T>)->(PhantomData<T>,PhantomData<T>){(x,x)}fn main(){let pair=twice::<Token>(PhantomData);println!("7");}"#,
+    ),
+    (
+        "uninhabited_argument_not_runtime_payload",
+        r#"use core::marker::PhantomData;enum Void{}fn take(x:PhantomData<Void>){}fn main(){take(PhantomData::<Void>);println!("7");}"#,
+    ),
+    (
+        "source_struct_same_spelling",
+        r#"struct PhantomData{value:i32}fn take(x:PhantomData)->i32{x.value}fn main(){println!("{}",take(PhantomData{value:7}));}"#,
+    ),
+];
+const PHANTOM_DATA_INVALID: &[(&str, &str)] = &[
+    (
+        "clone_from_aliasing_source",
+        r#"use core::marker::PhantomData;fn main(){let mut x=PhantomData::<i32>;let source=&x;x.clone_from(source);}"#,
+    ),
+    (
+        "clone_from_wrong_actual",
+        r#"use core::marker::PhantomData;fn main(){let mut x=PhantomData::<i32>;let y=PhantomData::<bool>;x.clone_from(&y);}"#,
+    ),
+    (
+        "not_implicit_prelude",
+        "fn bad(x:PhantomData<i32>){}fn main(){}",
+    ),
+    (
+        "unimported_constructor",
+        "fn main(){let x=PhantomData::<i32>;}",
+    ),
+    (
+        "missing_type_actual",
+        "fn bad(x:core::marker::PhantomData){}fn main(){}",
+    ),
+    (
+        "too_many_actuals",
+        "fn bad(x:core::marker::PhantomData<i32,bool>){}fn main(){}",
+    ),
+    (
+        "wrong_context_actual",
+        "use core::marker::PhantomData;fn bad(){let x:PhantomData<i32>=PhantomData::<bool>;}fn main(){}",
+    ),
+    (
+        "parenthesized_not_function",
+        "fn main(){let x=core::marker::PhantomData::<i32>();}",
+    ),
+];
+const PHANTOM_DATA_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "unsized_argument",
+        r#"fn bad(x:core::marker::PhantomData<str>){}fn main(){println!("7");}"#,
+    ),
+    (
+        "borrowed_argument",
+        r#"fn bad(x:core::marker::PhantomData<&'static i32>){}fn main(){println!("7");}"#,
+    ),
+];
+
+#[test]
+fn phantom_data_exact_stock_baseline() {
+    let rustc = defaults_stock::stock_rustc();
+    for (label, source) in PHANTOM_DATA_VALID.iter().chain(PHANTOM_DATA_UNSUPPORTED) {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "stock.rmeta"
+            } else {
+                "stock-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=phantom_data"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(result.status.success(), "{label} check{check}: {result:?}");
+            if !check {
+                let result = capture(&mut Command::new(&output), &scratch, 5);
+                assert!(result.status.success(), "{label}: {result:?}");
+                assert_eq!(result.stdout, b"7\n", "{label}");
+            }
+        }
+    }
+    for (label, source) in PHANTOM_DATA_INVALID {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "invalid.rmeta"
+            } else {
+                "invalid-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=phantom_data"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(
+                !result.status.success(),
+                "{label}: stock accepted check{check}"
+            );
+            assert!(!output.exists(), "{label}: invalid stock output");
+        }
+    }
+}
+
+#[test]
+fn phantom_data_native_check_build_run_workers_1_8() {
+    for (label, source) in PHANTOM_DATA_VALID {
+        eprintln!("PhantomData valid: {label}");
+        runs(source, "7\n");
+    }
+    for (label, source) in PHANTOM_DATA_INVALID {
+        rejects(label, source);
+    }
+    for (label, source) in PHANTOM_DATA_UNSUPPORTED {
+        rejects(label, source);
+        for workers in [1, 8] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path("unsupported-output");
+            for check in [true, false] {
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(diagnostic.contains("unsupported:"), "{label}: {diagnostic}");
+                assert!(!output.exists(), "{label}: unsupported output");
+            }
+        }
+    }
+}
+
 const NOMINAL_DEFAULT_VALID: &[(&str, &str, &str)] = &[
     (
         "struct_annotation",

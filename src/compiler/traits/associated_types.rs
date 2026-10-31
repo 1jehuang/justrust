@@ -394,6 +394,13 @@ impl ValidatedTraitWorld {
                     child(ty, replays)?;
                 }
             }
+            Ty::PhantomData(marker) => {
+                marker
+                    .validate(&self.catalog, &self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                child(marker.argument(), replays)?;
+                self.validate_phantom_sized_argument(marker.argument(), None, depth + 1)?;
+            }
             Ty::FnPointer(pointer) => {
                 pointer
                     .validate(&self.budget)
@@ -950,6 +957,11 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::PhantomData(marker) => {
+                if !self.raw_associated_ty_is_closed(marker.argument(), depth + 1)? {
+                    return Ok(false);
+                }
+            }
             Ty::FnPointer(closure) => {
                 for value in closure.types() {
                     if !self.raw_associated_ty_is_closed(value, depth + 1)? {
@@ -1329,6 +1341,11 @@ impl ValidatedTraitWorld {
                 push(&self.budget, dependencies, evidence)?;
                 Ok(normal)
             }
+            Ty::PhantomData(marker) => Ok(Ty::PhantomData(marker.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |t| self.normalize_type_in(t, context, stack, dependencies, depth + 1),
+            )?)),
             Ty::FnPointer(pointer) => Ok(Ty::FnPointer(pointer.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),
@@ -1885,6 +1902,18 @@ impl ValidatedTraitWorld {
             self.validate_rhs_substitution(left, right, env, arguments, depth + 1)
         };
         match (raw, actual) {
+            (Ty::PhantomData(left), Ty::PhantomData(right)) => {
+                if !left.try_eq(right, |left, right| {
+                    child(left, right)?;
+                    Ok::<_, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "PhantomData RHS substitution changed canonical declaration",
+                    ));
+                }
+                return Ok(());
+            }
             (Ty::FnPointer(left), Ty::FnPointer(right)) => {
                 if !left.try_eq(right, |left, right| {
                     child(left, right)?;

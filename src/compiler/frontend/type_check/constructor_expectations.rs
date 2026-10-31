@@ -175,6 +175,10 @@ impl Checker<'_> {
             InferKind::Slice(inner) => {
                 InferKind::Slice(self.replace_constructor_slots(inner, arguments, depth + 1)?)
             }
+            InferKind::PhantomData(declaration, argument) => InferKind::PhantomData(
+                *declaration,
+                self.replace_constructor_slots(argument, arguments, depth + 1)?,
+            ),
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;

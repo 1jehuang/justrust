@@ -35,6 +35,10 @@ impl Checker<'_> {
                     .map_err(|error| error.into_legacy_diagnostic(&plan.budget))?;
                 return self.infer_type_term(&normal, None, depth + 1);
             }
+            InferKind::PhantomData(declaration, argument) => InferKind::PhantomData(
+                *declaration,
+                self.method_owner_term(argument, bindings, depth + 1)?,
+            ),
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;

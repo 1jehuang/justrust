@@ -16,6 +16,7 @@ enum ResolvedPath {
     Source(AstPath),
     CatalogModule(CatalogModule),
     Builtin(BuiltinTrait),
+    PhantomData,
 }
 #[derive(Clone, Debug)]
 struct ResolvedItem {
@@ -34,6 +35,7 @@ impl ResolvedItem {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResolvedKind {
+    PhantomData,
     TypeAlias,
     Trait,
     Module,
@@ -125,6 +127,11 @@ impl Resolver<'_> {
         self.alias_budget.charge_work(1)?;
         let mut found = false;
         match ty {
+            Type::PhantomData(source) => {
+                if let Some(argument) = &source.argument {
+                    found |= self.contains_projection(argument, depth + 1)?;
+                }
+            }
             Type::Projection(_) => found = true,
             Type::Apply(path) => {
                 self.alias_budget.charge_work(path.segments.len())?;
@@ -649,6 +656,11 @@ impl Resolver<'_> {
                                 }
                             }
                         }
+                        Type::PhantomData(source) => {
+                            if let Some(argument) = &source.argument {
+                                pending.push(argument);
+                            }
+                        }
                         Type::Named(path) => spellings.push(path.clone()),
                         Type::Apply(path) => {
                             spellings.push(path.path(self.names())?);
@@ -750,6 +762,11 @@ impl Resolver<'_> {
                 Type::Slice(_) => return Err("unsized type aliases are unsupported".into()),
                 Type::Dyn(_) => {
                     return Err("unsupported: trait object type aliases are unsupported".into());
+                }
+                Type::PhantomData(source) => {
+                    if let Some(argument) = &source.argument {
+                        check_target(argument)?;
+                    }
                 }
                 Type::Array(t, _) => check_target(t)?,
                 Type::FnPointer { inputs, output } => {
@@ -864,6 +881,11 @@ impl Resolver<'_> {
                     }
                 }
             }
+            Type::PhantomData(source) => {
+                if let Some(argument) = &source.argument {
+                    self.collect_params(argument, used, depth + 1)?;
+                }
+            }
             Type::FnPointer { inputs, output } => {
                 for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
                     self.collect_params(field, used, depth + 1)?;
@@ -955,6 +977,12 @@ impl Resolver<'_> {
                     }
                 }
             }
+            Type::PhantomData(marker) => {
+                marker.occurrence = self.resolved_use(&marker.occurrence, source)?;
+                if let Some(argument) = &mut marker.argument {
+                    self.alias_use(argument, source, depth + 1)?;
+                }
+            }
             Type::FnPointer { inputs, output } => {
                 for field in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
                     self.alias_use(field, source, depth + 1)?;
@@ -1028,6 +1056,11 @@ impl Resolver<'_> {
                     ) {
                         self.substitute(arg, params, args, depth + 1)?;
                     }
+                }
+            }
+            Type::PhantomData(source) => {
+                if let Some(argument) = &mut source.argument {
+                    self.substitute(argument, params, args, depth + 1)?;
                 }
             }
             Type::FnPointer { inputs, output } => {
@@ -1124,6 +1157,16 @@ impl Resolver<'_> {
         ident: AstIdent,
         namespace: bool,
     ) -> Result<Option<ResolvedItem>, String> {
+        if module == CatalogModule::Marker
+            && self.atom_is(ident, BuiltinAtom::PhantomData, Namespace::Type)?
+        {
+            return Ok(Some(ResolvedItem {
+                visibility: ir::Visibility::Public,
+                path: ResolvedPath::PhantomData,
+                module: namespace,
+                kind: ResolvedKind::PhantomData,
+            }));
+        }
         if !namespace {
             return Ok(None);
         }
@@ -1310,7 +1353,7 @@ impl Resolver<'_> {
                     }
                     *path = TraitPath::Builtin(id);
                 }
-                ResolvedPath::CatalogModule(_) => {
+                ResolvedPath::CatalogModule(_) | ResolvedPath::PhantomData => {
                     return Err("resolved declaration is not a trait".into());
                 }
             }
@@ -1822,7 +1865,7 @@ impl Resolver<'_> {
                         importing && at + 1 == parts.len(),
                     )?
                 }
-                ResolvedPath::Builtin(_) => None,
+                ResolvedPath::Builtin(_) | ResolvedPath::PhantomData => None,
             };
             let Some(item) = next else {
                 return Ok(None);
@@ -2373,6 +2416,92 @@ impl Resolver<'_> {
         }
         Ok(Some((owner, item.name, args)))
     }
+    /// An optional catalog query must not preempt source associated owners.
+    fn is_phantom_data_path(
+        &mut self,
+        path: &AstPath,
+        module: ModuleId,
+        namespace: bool,
+    ) -> Result<bool, String> {
+        path.check(self.names())
+            .map_err(native_adapter::name_diagnostic)?;
+        // This is an optional catalog lookup, not associated-item resolution.
+        // Stop at the first genuine nonmodule owner so the ordinary resolver
+        // can retain and authenticate its complete associated use instead.
+        if path.anchor() == PathAnchor::SelfType {
+            return Ok(false);
+        }
+        for end in 1..path.len() {
+            self.alias_budget.charge_work(1)?;
+            let prefix = path
+                .semantic_slice(self.names(), 0..end, path.anchor())
+                .map_err(native_adapter::name_diagnostic)?;
+            let Some(owner) = self.path(&prefix, module, true, false)? else {
+                return Ok(false);
+            };
+            if owner.kind != ResolvedKind::Module {
+                return Ok(false);
+            }
+        }
+        Ok(self
+            .path(path, module, namespace, false)?
+            .is_some_and(|item| matches!(item.path, ResolvedPath::PhantomData)))
+    }
+
+    /// The catalog target comes only from namespace resolution. Keep the exact
+    /// original path rather than making a source nominal or rewriting its name.
+    fn phantom_data_source(
+        &mut self,
+        path: &GenericPath,
+        module: ModuleId,
+        constructor: bool,
+    ) -> Result<Option<Box<SourcePhantomData>>, String> {
+        let original = path.path(self.names())?;
+        if !self.is_phantom_data_path(&original, module, !constructor)? {
+            return Ok(None);
+        }
+        self.reject_nonbound_equalities(path, module)?;
+        let last = path.segments.last().ok_or("empty PhantomData path")?;
+        if path.segments[..path.segments.len() - 1]
+            .iter()
+            .any(|segment| !segment.args.is_empty() || !segment.region_args.is_empty())
+        {
+            return Err("generic arguments are not allowed on PhantomData modules".into());
+        }
+        if !last.region_args.is_empty() {
+            return Err("PhantomData takes no lifetime arguments".into());
+        }
+        if last.args.len() > 1 || (!constructor && last.args.is_empty()) {
+            return Err("E0107: PhantomData requires exactly one type argument".into());
+        }
+        source_clone::clone_path(path, &self.alias_budget)?;
+        for segment in &path.segments {
+            for argument in &segment.args {
+                walk_depth(DepthNode::Type(argument), Some(&self.alias_budget))?;
+            }
+        }
+        self.alias_budget.retain_bytes(
+            std::mem::size_of::<SourcePhantomData>()
+                + std::mem::size_of::<GenericPath>()
+                + 2 * std::mem::size_of::<usize>()
+                + std::mem::size_of::<Type>(),
+        )?;
+        let argument = match last.args.first() {
+            Some(argument) => {
+                walk_depth(DepthNode::Type(argument), Some(&self.alias_budget))?;
+                let mut argument = argument.clone();
+                self.ty(&mut argument, module)?;
+                Some(Box::new(argument))
+            }
+            None => None,
+        };
+        Ok(Some(Box::new(SourcePhantomData {
+            original: Arc::new(path.clone()),
+            occurrence: original,
+            argument,
+        })))
+    }
+
     fn ty(&mut self, ty: &mut Type, module: ModuleId) -> Result<(), String> {
         if self.type_depth >= 128 {
             return Err("type resolution nesting exceeds resource limit 128".into());
@@ -2386,7 +2515,30 @@ impl Resolver<'_> {
         result
     }
     fn ty_inner(&mut self, ty: &mut Type, module: ModuleId) -> Result<(), String> {
+        let phantom = match ty {
+            Type::Apply(path) => self.phantom_data_source(path, module, false)?,
+            Type::Named(path) => {
+                if self.is_phantom_data_path(path, module, true)? {
+                    let generic = self.alias_source_path(path)?;
+                    self.phantom_data_source(&generic, module, false)?
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(source) = phantom {
+            *ty = Type::PhantomData(source);
+            return Ok(());
+        }
         match ty {
+            Type::PhantomData(source) => {
+                if let Some(argument) = &mut source.argument {
+                    self.ty(argument, module)?;
+                } else {
+                    return Err("missing PhantomData source argument".into());
+                }
+            }
             Type::Opaque(opaque) => {
                 for bound in &mut opaque.bounds {
                     // Opaque result bounds are retained declaration bounds, not
@@ -3464,6 +3616,24 @@ impl Resolver<'_> {
         module: ModuleId,
         locals: &mut Vec<std::collections::HashSet<LocalKey>>,
     ) -> Result<(), String> {
+        let phantom = match expr {
+            Expr::Apply { path, value } if matches!(value.as_ref(), Expr::Var(_)) => {
+                self.phantom_data_source(path, module, true)?
+            }
+            Expr::Var(path) if !self.local_contains(path, locals)? => {
+                if self.is_phantom_data_path(path, module, false)? {
+                    let generic = self.alias_source_path(path)?;
+                    self.phantom_data_source(&generic, module, true)?
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        if let Some(source) = phantom {
+            *expr = Expr::PhantomData(source);
+            return Ok(());
+        }
         if let Expr::Var(name) = expr
             && self.stored_closure_value(name, module, locals)?
         {
@@ -3633,6 +3803,11 @@ impl Resolver<'_> {
             return Ok(());
         }
         match expr {
+            Expr::PhantomData(source) => {
+                if let Some(argument) = &mut source.argument {
+                    self.ty(argument, module)?;
+                }
+            }
             Expr::Apply { path, value } => {
                 if matches!(value.as_ref(), Expr::Call { .. })
                     && let Some((owner, name, type_args)) = self.associated_path(path, module)?
@@ -5338,7 +5513,7 @@ fn collect_trait_imports(
             let path = match &target.path {
                 ResolvedPath::Source(path) => TraitPath::Source(resolver.alias_source_path(path)?),
                 ResolvedPath::Builtin(id) => TraitPath::Builtin(*id),
-                ResolvedPath::CatalogModule(_) => {
+                ResolvedPath::CatalogModule(_) | ResolvedPath::PhantomData => {
                     return Err("trait import names a module".into());
                 }
             };

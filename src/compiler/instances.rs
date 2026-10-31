@@ -211,6 +211,7 @@ impl Encoder<'_> {
             traits::CatalogItem::Copy => 5,
             traits::CatalogItem::Drop => 6,
             traits::CatalogItem::DropItem => 7,
+            traits::CatalogItem::PhantomData => 9,
             traits::CatalogItem::Recipe(descriptor) => {
                 self.append(&[8])?;
                 return self.recipe(descriptor);
@@ -242,6 +243,8 @@ impl Encoder<'_> {
                 self.count(usize::from(len))
             }
             traits::RecipeDescriptor::CloneSharedRef => self.append(&[6]),
+            traits::RecipeDescriptor::ClonePhantomData => self.append(&[9]),
+            traits::RecipeDescriptor::CloneFromPhantomData => self.append(&[10]),
         }
     }
 
@@ -274,6 +277,11 @@ impl Encoder<'_> {
                     self.pattern(ty, env, depth + 1)?;
                 }
                 Ok(())
+            }
+            ir::Ty::PhantomData(marker) => {
+                self.append(b"M")?;
+                self.declaration(marker.declaration())?;
+                self.pattern(marker.argument(), env, depth + 1)
             }
             ir::Ty::FnPointer(pointer) => {
                 self.append(b"P")?;
@@ -409,6 +417,11 @@ impl Encoder<'_> {
                     self.ty(ty, depth + 1)?;
                 }
                 Ok(())
+            }
+            ir::Ty::PhantomData(marker) => {
+                self.append(b"M")?;
+                self.declaration(marker.declaration())?;
+                self.ty(marker.argument(), depth + 1)
             }
             ir::Ty::FnPointer(pointer) => {
                 self.append(b"P")?;
@@ -605,6 +618,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
                     walk(ty, depth + 1, budget)?;
                 }
             }
+            ir::Ty::PhantomData(marker) => walk(marker.argument(), depth + 1, budget)?,
             ir::Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     walk(ty, depth + 1, budget)?;

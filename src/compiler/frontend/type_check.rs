@@ -944,6 +944,22 @@ impl<'c, 's> Inference<'c, 's> {
         actuals: &[ir::Ty],
     ) -> Result<ir::Ty, FactsError> {
         let plan = self.checker.signatures.plan.as_ref().unwrap();
+        if declaration == plan.catalog.id(tr::CatalogItem::PhantomData) {
+            let [argument] = actuals else {
+                return Err(source_error(
+                    &plan.budget,
+                    "PhantomData requires exactly one argument",
+                ));
+            };
+            let marker = ir::PhantomDataTy::new(&plan.catalog, argument.clone(), &plan.budget)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            let ty = ir::Ty::PhantomData(marker);
+            self.checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &plan.budget)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            return Ok(ty);
+        }
         if let Some(inputs) = self.checker.nominal_inputs {
             if nominal_inputs::parent_local::contains_closure(actuals, &plan.budget, 0)
                 .map_err(|e| source_error(&plan.budget, &e))?
@@ -1107,6 +1123,18 @@ impl<'s> Checker<'s> {
             .as_ref()
             .ok_or("inference requires planning context")?;
         let term = match expr {
+            Expr::PhantomData(source) => {
+                let argument = match &source.argument {
+                    Some(argument) => {
+                        self.infer_type_term(&self.source_type_actual(argument)?, None, depth + 1)?
+                    }
+                    None => self.infer_node(InferKind::Unknown(false))?,
+                };
+                self.infer_node(InferKind::PhantomData(
+                    plan.catalog.id(tr::CatalogItem::PhantomData),
+                    argument,
+                ))?
+            }
             Expr::NativeSyscall(_) | Expr::TypeAlignment(_) => {
                 self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
             }
@@ -1889,7 +1917,8 @@ impl<'s> Checker<'s> {
                     self.check_slot_free_evidence(field, depth + 1)?;
                 }
             }
-            InferKind::Array(inner, _)
+            InferKind::PhantomData(_, inner)
+            | InferKind::Array(inner, _)
             | InferKind::Slice(inner)
             | InferKind::Ref(_, inner)
             | InferKind::RawPtr(_, inner) => self.check_slot_free_evidence(inner, depth + 1)?,
@@ -2747,6 +2776,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         return plan.source_ty(ty, &env.params, caller, &plan.budget);
     }
     match ty {
+        Type::PhantomData(_) => Err("unsupported: PhantomData requires authoritative catalog planning".into()),
         Type::FnPointer { .. } => Err("unsupported: function pointer signatures require authoritative planning".into()),
         Type::SelfType => env
             .self_ty
@@ -12619,6 +12649,29 @@ impl<'a> Checker<'a> {
             }
             Expr::RawSlice { kind, arguments } => self.raw_slice(*kind, arguments)?,
             Expr::SliceDataPointer(slice) => self.slice_data_pointer(slice)?,
+            Expr::PhantomData(source) => {
+                source
+                    .original
+                    .checked_path(self.names()?)
+                    .map_err(native_adapter::name_diagnostic)?;
+                let plan = self.signatures.plan()?;
+                let marker = if let Some(argument) = &source.argument {
+                    let argument = self.source_type_actual(argument)?;
+                    ir::PhantomDataTy::new(&plan.catalog, argument, &plan.budget)?
+                } else {
+                    match expectation.hard() {
+                        Some(ir::Ty::PhantomData(marker)) => {
+                            marker.validate(&plan.catalog, &plan.budget)?;
+                            marker.clone()
+                        }
+                        _ => return Err("unsupported generic inference: PhantomData requires an explicit argument or contextual marker type".into()),
+                    }
+                };
+                let ty = ir::Ty::PhantomData(marker.clone());
+                self.facts()
+                    .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+                (ir::ExprKind::PhantomData(marker), Flow::value(ty))
+            }
             Expr::TypeAlignment(queried) => self.type_alignment(queried)?,
             Expr::NativeSyscall(arguments) => {
                 if self.unsafe_depth == 0 {

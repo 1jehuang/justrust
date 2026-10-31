@@ -21,6 +21,7 @@ pub(in crate::compiler) enum Shape {
     Nominal(ir::DeclId, Arc<[Shape]>),
     Tuple(Arc<[Shape]>),
     FnPointer(Arc<[Shape]>, Arc<Shape>),
+    PhantomData(ir::DeclId, Arc<Shape>),
     Ref(ir::BorrowKind, Arc<Shape>),
     RawPtr(ir::BorrowKind, Arc<Shape>),
     Array(Arc<Shape>, usize),
@@ -52,6 +53,9 @@ impl Shape {
             }
             (Shape::Nominal(a, left), Shape::Nominal(b, right)) => {
                 a == b && same_children(left, right, depth + 1, meter)?
+            }
+            (Shape::PhantomData(a, left), Shape::PhantomData(b, right)) => {
+                a == b && left.same_with(right, depth + 1, meter)?
             }
             (Shape::FnPointer(left, lo), Shape::FnPointer(right, ro)) => {
                 same_children(left, right, depth + 1, meter)
@@ -743,6 +747,22 @@ impl<'s> Solver<'_, '_, 's> {
                 *declaration,
                 self.manifest_terms(arguments, params, depth + 1)?,
             ),
+            Shape::PhantomData(declaration, argument) => {
+                if *declaration
+                    != self
+                        .checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::PhantomData)
+                {
+                    return Err("contract: foreign PhantomData recipe owner".into());
+                }
+                Domain::PhantomData(
+                    *declaration,
+                    self.manifest_term_in(argument, params, depth + 1)?,
+                )
+            }
             Shape::FnPointer(inputs, output) => {
                 let mut mapped = ir::FnPointerTy::storage(
                     inputs.len(),
@@ -830,7 +850,8 @@ impl<'s> Solver<'_, '_, 's> {
                 Domain::Nominal(_, terms) | Domain::Tuple(terms) | Domain::Opaque(_, terms) => {
                     self.manifest_ready_with_defaults(&terms, depth + 1, numeric_defaults)?
                 }
-                Domain::Ref(_, inner)
+                Domain::PhantomData(_, inner)
+                | Domain::Ref(_, inner)
                 | Domain::RawPtr(_, inner)
                 | Domain::Array(inner, _)
                 | Domain::Slice(inner) => {
@@ -955,6 +976,16 @@ impl<'s> Solver<'_, '_, 's> {
             },
             Domain::Nominal(declaration, terms) => {
                 Shape::Nominal(declaration, self.manifest_children(&terms, depth + 1)?)
+            }
+            Domain::PhantomData(declaration, argument) => {
+                let budget = &self.checker.signatures.plan()?.budget;
+                budget.retain_bytes(
+                    std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>(),
+                )?;
+                Shape::PhantomData(
+                    declaration,
+                    Arc::new(self.manifest_shape(argument, depth + 1)?),
+                )
             }
             Domain::FnPointer(inputs, output) => {
                 let budget = &self.checker.signatures.plan()?.budget;

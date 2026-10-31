@@ -871,6 +871,15 @@ impl<'a> Validator<'a> {
                 Type::Param(name) => self.push(Visit::Ident(*name, LookupClass::TypeParameter))?,
                 Type::Named(path) => self.push(Visit::Path(path))?,
                 Type::Apply(path) => self.push(Visit::GenericPath(path))?,
+                Type::PhantomData(source) => {
+                    self.push(Visit::Path(&source.occurrence))?;
+                    self.push(Visit::GenericPath(&source.original))?;
+                    if let Some(argument) = &source.argument {
+                        self.push(Visit::Type(argument))?;
+                    } else {
+                        return Err("missing PhantomData type argument".into());
+                    }
+                }
                 Type::Projection(projection) => match projection.as_ref() {
                     SourceProjection::Qualified {
                         self_ty,
@@ -1143,6 +1152,13 @@ impl<'a> Validator<'a> {
                 Expr::Cast { value, target } => {
                     self.push(Visit::Expr(value))?;
                     self.push(Visit::Type(target))?;
+                }
+                Expr::PhantomData(source) => {
+                    self.push(Visit::Path(&source.occurrence))?;
+                    self.push(Visit::GenericPath(&source.original))?;
+                    if let Some(argument) = &source.argument {
+                        self.push(Visit::Type(argument))?;
+                    }
                 }
                 Expr::TypeAlignment(target) => self.push(Visit::Type(target))?,
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,

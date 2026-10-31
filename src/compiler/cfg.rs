@@ -282,6 +282,17 @@ fn same_operand_types(a: &Operand, b: &Operand, budget: &ir::PlanBudget) -> Resu
     {
         return ir::identical_type(&Ty::Enum(a.clone()), &Ty::Enum(b.clone()), budget);
     }
+    if let (
+        Operand::Constant(Constant::PhantomData(a)),
+        Operand::Constant(Constant::PhantomData(b)),
+    ) = (a, b)
+    {
+        return ir::identical_type(
+            &Ty::PhantomData(a.clone()),
+            &Ty::PhantomData(b.clone()),
+            budget,
+        );
+    }
     Ok(true)
 }
 fn same_operand_list(
@@ -512,6 +523,7 @@ pub enum Statement {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Constant {
     AssociatedConst(std::sync::Arc<ir::AssociatedConstOperand>),
+    PhantomData(std::sync::Arc<ir::PhantomDataTy>),
     Enum { ty: ir::EnumTy, variant: usize },
     Int(IntValue),
     Char(ir::CharValue),
@@ -1823,6 +1835,9 @@ impl Function {
                 Operand::Constant(Constant::AssociatedConst(operand)) => {
                     operand.validate_context(facts, budget)?
                 }
+                Operand::Constant(Constant::PhantomData(marker)) => {
+                    facts.validate_ty_with_budget(&Ty::PhantomData(marker.clone()), budget)?
+                }
                 Operand::Constant(Constant::Enum { ty, .. }) => {
                     facts.validate_ty_with_budget(&Ty::Enum(ty.clone()), budget)?
                 }
@@ -2072,6 +2087,15 @@ impl Function {
             }
             Operand::Constant(Constant::Bool(_)) => Ok(Ty::Bool),
             Operand::Constant(Constant::Unit) => Ok(Ty::Unit),
+            Operand::Constant(Constant::PhantomData(marker)) => {
+                let ty = Ty::PhantomData(marker.clone());
+                if let Some(budget) = budget {
+                    facts.validate_ty_with_budget_scratch(&ty, budget, scratch)?;
+                } else {
+                    facts.validate_ty_scratch(&ty, scratch)?;
+                }
+                Ok(ty)
+            }
             Operand::Constant(Constant::Enum { ty, variant }) => {
                 ty.validate()?;
                 if *variant >= ty.def().variants.len() {
@@ -5069,6 +5093,11 @@ impl Lowerer<'_> {
                     .collect::<Result<Vec<_>, _>>()?;
                 self.assign(destination.clone(), Rvalue::NativeSyscall(operands), origin);
             }
+            ir::ExprKind::PhantomData(marker) => self.assign(
+                destination.clone(),
+                Rvalue::Use(Operand::Constant(Constant::PhantomData(marker.clone()))),
+                origin,
+            ),
             ir::ExprKind::FnItem => self.assign(
                 destination.clone(),
                 Rvalue::Aggregate {
@@ -6356,6 +6385,110 @@ mod original_replay_transport_tests {
             panic!("canonical source publication required")
         };
         publication
+    }
+
+    #[test]
+    fn phantom_data_cfg_retains_exact_actual_and_original_constructor() {
+        let budget = ir::PlanBudget::default();
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "marker-cfg.rs",
+            "use core::marker::PhantomData;fn f()->PhantomData<i32>{PhantomData}fn g()->PhantomData<bool>{PhantomData}fn main(){}",
+            &crate::compiler::source::SourceOptions::default(),
+        ).unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 0, &budget);
+        let other = published(&plan, 1, &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        let other = lower_source_closed(&other, &budget).unwrap();
+        let find_marker = |function: &Function| {
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.statements)
+                .find_map(|statement| {
+                    if let Statement::Assign {
+                        value: Rvalue::Use(Operand::Constant(Constant::PhantomData(marker))),
+                        ..
+                    } = &statement.value
+                    {
+                        Some(marker.clone())
+                    } else {
+                        None
+                    }
+                })
+                .expect("genuine marker constructor must survive CFG lowering")
+        };
+        let original = find_marker(&function);
+        let foreign = find_marker(&other);
+        assert_eq!(original.declaration(), foreign.declaration());
+        assert!(
+            !same_operand_types(
+                &Operand::Constant(Constant::PhantomData(original.clone())),
+                &Operand::Constant(Constant::PhantomData(foreign.clone())),
+                &budget
+            )
+            .unwrap()
+        );
+        function
+            .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+            .unwrap();
+        function
+            .validate_provenance(publication.facts(), &budget)
+            .unwrap();
+        for change in 0..2 {
+            let mut forged = function.clone();
+            let statement = forged
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find(|statement| {
+                    matches!(
+                        statement.value,
+                        Statement::Assign {
+                            value: Rvalue::Use(Operand::Constant(Constant::PhantomData(_))),
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            if change == 0 {
+                let Statement::Assign {
+                    value: Rvalue::Use(Operand::Constant(Constant::PhantomData(marker))),
+                    ..
+                } = &mut statement.value
+                else {
+                    unreachable!()
+                };
+                *marker = foreign.clone();
+                assert!(
+                    forged
+                        .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+                        .is_err()
+                );
+            } else {
+                statement.origin = None;
+            }
+            assert!(
+                forged
+                    .validate_provenance(publication.facts(), &budget)
+                    .is_err()
+            );
+        }
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            same_operand_types(
+                &Operand::Constant(Constant::PhantomData(original.clone())),
+                &Operand::Constant(Constant::PhantomData(original)),
+                &denied
+            )
+            .is_err()
+        );
+        assert!(denied.first_resource_failure().is_some());
     }
 
     #[test]

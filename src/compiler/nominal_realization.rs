@@ -481,6 +481,7 @@ impl AcyclicRead {
                         }
                     }
                 }
+                ir::Ty::PhantomData(marker) => child(marker.argument())?,
                 ir::Ty::Tuple(types) => {
                     for ty in types.iter() {
                         child(ty)?;

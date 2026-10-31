@@ -185,6 +185,7 @@ impl ValidatedFacts {
                 | Ty::Bool
                 | Ty::Char
                 | Ty::Unit
+                | Ty::PhantomData(_)
                 | Ty::Never
                 | Ty::Str
         ) {
@@ -364,6 +365,7 @@ impl ValidatedFacts {
                 | Ty::Bool
                 | Ty::Char
                 | Ty::Unit
+                | Ty::PhantomData(_)
                 | Ty::Never
                 | Ty::Str
         ) {

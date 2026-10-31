@@ -342,6 +342,11 @@ impl DeclRegistry {
                 | Type::Slice(inner) => {
                     return find(inner, site, budget, depth + 1);
                 }
+                Type::PhantomData(source) => {
+                    if let Some(argument) = &source.argument {
+                        return find(argument, site, budget, depth + 1);
+                    }
+                }
                 Type::FnPointer { inputs, output } => {
                     for field in inputs.iter().chain(std::iter::once(output.as_ref())) {
                         if let Some(found) = find(field, site, budget, depth + 1)? {

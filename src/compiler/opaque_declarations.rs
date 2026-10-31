@@ -114,6 +114,10 @@ fn collect(
                 collect(child, output, budget, facts, depth + 1)?;
             }
         }
+        // Zero runtime storage does not erase declaration metadata dependencies.
+        ir::Ty::PhantomData(value) => {
+            collect(value.argument(), output, budget, facts, depth + 1)?;
+        }
         ir::Ty::FnPointer(value) => {
             for child in value.types() {
                 collect(child, output, budget, facts, depth + 1)?;

@@ -46,6 +46,7 @@ enum Domain {
     Nominal(ir::DeclId, Vec<Term>),
     Tuple(Vec<Term>),
     FnPointer(Vec<Term>, Term),
+    PhantomData(ir::DeclId, Term),
     Ref(ir::BorrowKind, Term),
     RawPtr(ir::BorrowKind, Term),
     Array(Term, usize),
@@ -407,6 +408,10 @@ impl<'s> Solver<'_, '_, 's> {
                 Domain::Array(self.schema(element, params, depth + 1)?, *len)
             }
             ir::Ty::Slice { element } => Domain::Slice(self.schema(element, params, depth + 1)?),
+            ir::Ty::PhantomData(marker) => Domain::PhantomData(
+                marker.declaration(),
+                self.schema(marker.argument(), params, depth + 1)?,
+            ),
             ir::Ty::FnPointer(pointer) => {
                 let mut inputs = ir::FnPointerTy::storage(
                     pointer.inputs.len(),
@@ -430,6 +435,10 @@ impl<'s> Solver<'_, '_, 's> {
     fn source_has_inference(&self, ty: &Type, depth: usize) -> Result<bool, String> {
         self.checker.infer_work(depth)?;
         Ok(match ty {
+            Type::PhantomData(source) => match &source.argument {
+                Some(argument) => self.source_has_inference(argument, depth + 1)?,
+                None => true,
+            },
             Type::Infer => true,
             Type::Apply(path) => {
                 let mut found = false;
@@ -489,6 +498,21 @@ impl<'s> Solver<'_, '_, 's> {
             return self.fixed(ty);
         }
         match ty {
+            Type::PhantomData(source) => {
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or("missing PhantomData type argument")?;
+                let argument = self.source_ty(argument)?;
+                self.node(Domain::PhantomData(
+                    self.checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::PhantomData),
+                    argument,
+                ))
+            }
             Type::Infer => self.fresh(),
             Type::Apply(path) => {
                 if partial
@@ -586,6 +610,7 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(true);
         }
         match &self.variables[term].domain {
+            Domain::PhantomData(_, argument) => self.occurs(needle, *argument, depth + 1),
             Domain::FnPointer(inputs, output) => {
                 for t in inputs.iter().chain(std::iter::once(output)) {
                     if self.occurs(needle, *t, depth + 1)? {
@@ -702,6 +727,10 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Domain::Nominal(*d, x.clone())
             }
+            (Domain::PhantomData(a, x), Domain::PhantomData(b, y)) if a == b => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::PhantomData(*a, *x)
+            }
             (Domain::FnPointer(x, xo), Domain::FnPointer(y, yo)) if x.len() == y.len() => {
                 for (x, y) in x.iter().zip(y) {
                     self.unify_at(*x, *y, depth + 1)?;
@@ -761,6 +790,7 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Callable(_) => true,
+            Domain::PhantomData(_, argument) => self.contains_callable(argument, depth + 1)?,
             Domain::FnPointer(inputs, output) => {
                 let mut found = self.contains_callable(output, depth + 1)?;
                 for t in inputs {
@@ -797,6 +827,24 @@ impl<'s> Solver<'_, '_, 's> {
             Domain::Integer => ir::Ty::Int(ir::IntTy::I32),
             Domain::Float => ir::Ty::Float(ir::FloatTy::F64),
             Domain::Fixed(ty) => ty,
+            Domain::PhantomData(declaration, argument) => {
+                let plan = self.checker.signatures.plan()?;
+                if declaration != plan.catalog.id(tr::CatalogItem::PhantomData) {
+                    return Err("contract: foreign PhantomData inference owner".into());
+                }
+                let Some(argument) = self.resolve(argument, depth + 1)? else {
+                    return Ok(None);
+                };
+                let ty = ir::Ty::PhantomData(ir::PhantomDataTy::new(
+                    &plan.catalog,
+                    argument,
+                    &plan.budget,
+                )?);
+                self.checker
+                    .facts()
+                    .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+                ty
+            }
             Domain::Opaque(descriptor, children) => {
                 let Some(ty) = self.resolve_opaque(&descriptor, &children, depth + 1)? else {
                     return Ok(None);
@@ -1232,6 +1280,9 @@ impl<'s> Solver<'_, '_, 's> {
             // reveal a Deref or array carrier for a lazy coercion.
             Domain::Integer | Domain::Float => true,
             Domain::Callable(_) => false,
+            Domain::PhantomData(_, argument) => {
+                self.lazy_input_frontier(argument, targets, depth + 1)?
+            }
             Domain::FnPointer(inputs, output) => {
                 for t in inputs.into_iter().chain(std::iter::once(output)) {
                     if !self.lazy_input_frontier(t, targets, depth + 1)? {
@@ -2552,6 +2603,20 @@ impl<'s> Solver<'_, '_, 's> {
                 let ty = self.checker.associated_fn_item(value)?;
                 self.fixed(ty)
             }
+            Expr::PhantomData(source) => {
+                let argument = match &source.argument {
+                    Some(argument) => self.source_ty(argument)?,
+                    None => self.fresh()?,
+                };
+                self.node(Domain::PhantomData(
+                    self.checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::PhantomData),
+                    argument,
+                ))
+            }
             Expr::Var(path) => {
                 if let Some(term) = self.stored_callable(path, depth + 1)? {
                     return Ok(term);
@@ -3144,6 +3209,10 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
                 "const"
             },
             diagnostic_ty(pointee, plan)
+        ),
+        ir::Ty::PhantomData(marker) => format!(
+            "core::marker::PhantomData<{}>",
+            diagnostic_ty(marker.argument(), plan)
         ),
         ir::Ty::FnPointer(pointer) => format!(
             "fn({})->{}",

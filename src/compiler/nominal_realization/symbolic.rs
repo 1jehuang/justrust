@@ -57,6 +57,11 @@ pub(super) fn close_term(
         ir::Ty::RawPtr { kind, pointee } => Term::RawPtr(*kind, Box::new(child(pointee)?)),
         ir::Ty::Array { element, len } => Term::Array(Box::new(child(element)?), *len),
         ir::Ty::Slice { element } => Term::Slice(Box::new(child(element)?)),
+        ir::Ty::PhantomData(marker) => {
+            b.retain_bytes(std::mem::size_of::<Term>())
+                .map_err(Error::new)?;
+            Term::PhantomData(marker.declaration(), Box::new(child(marker.argument())?))
+        }
         ir::Ty::FnPointer(pointer) => {
             b.retain_bytes(std::mem::size_of::<Term>())
                 .map_err(Error::new)?;
@@ -99,6 +104,7 @@ pub(super) fn visit_dependencies(
         Term::Ref(_, child) | Term::RawPtr(_, child) | Term::Slice(child) => {
             visit_dependencies(child, false, b, depth + 1, visit)?;
         }
+        Term::PhantomData(_, child) => visit_dependencies(child, false, b, depth + 1, visit)?,
         Term::Array(child, _) => visit_dependencies(child, by_value, b, depth + 1, visit)?,
         Term::FnPointer(inputs, output) => {
             for child in inputs.iter().chain(std::iter::once(output.as_ref())) {
@@ -147,6 +153,7 @@ pub(super) fn dependencies(
         Term::Ref(_, child) | Term::RawPtr(_, child) | Term::Slice(child) => {
             dependencies(child, false, out, b, depth + 1)?
         }
+        Term::PhantomData(_, child) => dependencies(child, false, out, b, depth + 1)?,
         Term::Array(child, _) => dependencies(child, by_value, out, b, depth + 1)?,
         Term::FnPointer(inputs, output) => {
             for child in inputs.iter().chain(std::iter::once(output.as_ref())) {

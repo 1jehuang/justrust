@@ -236,6 +236,19 @@ impl Capabilities {
                     element: Arc::new(ty),
                 }
             }
+            Shape::PhantomData(declaration, argument) => {
+                let Some(argument) = child(argument)? else {
+                    return Ok(None);
+                };
+                let marker = ir::PhantomDataTy::new(world.canonical_catalog(), argument, budget)
+                    .map_err(Error::new)?;
+                if marker.declaration() != *declaration {
+                    return Err(Error::new(
+                        "nominal marker source shape changed canonical catalog authority",
+                    ));
+                }
+                ir::Ty::PhantomData(marker)
+            }
             Shape::FnPointer(inputs, output) => {
                 let mut types =
                     ir::FnPointerTy::storage(inputs.len(), budget).map_err(Error::new)?;
@@ -461,6 +474,15 @@ pub(in crate::compiler) fn shape(
     Ok(match ty {
         ir::Ty::Struct(n) => Shape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
         ir::Ty::Enum(n) => Shape::Nominal(n.def().source_decl, children(&n.def().type_args)?),
+        ir::Ty::PhantomData(marker) => {
+            budget
+                .retain_bytes(std::mem::size_of::<Shape>() + 2 * std::mem::size_of::<usize>())
+                .map_err(Error::new)?;
+            Shape::PhantomData(
+                marker.declaration(),
+                Arc::new(shape(marker.argument(), budget, depth + 1)?),
+            )
+        }
         ir::Ty::FnPointer(pointer) => Shape::FnPointer(
             children(&pointer.inputs)?,
             Arc::new(shape(&pointer.output, budget, depth + 1)?),

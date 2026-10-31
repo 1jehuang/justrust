@@ -124,6 +124,11 @@ pub(super) fn bind_owner(
                 referent: Arc::new(bind_owner(referent, bindings, budget)?),
             }
         }
+        ir::Ty::PhantomData(marker) => ir::Ty::PhantomData(marker.try_map(
+            budget,
+            |error| error,
+            |ty| bind_owner(ty, bindings, budget),
+        )?),
         ir::Ty::FnPointer(pointer) => ir::Ty::FnPointer(pointer.try_map(
             budget,
             |e| e,

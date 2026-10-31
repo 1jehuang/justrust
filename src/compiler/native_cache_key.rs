@@ -114,8 +114,10 @@ impl Encoder<'_, '_> {
                 self.n(11)?;
                 self.ty(element, depth + 1)
             }
-            Opaque(_) | Closure(_) | FnPointer(_) | FnItem(_) | AssociatedType(_) | Param(_)
-            | Struct(_) | Enum(_) | Dyn(_) => Err(Failure::Unsupported),
+            PhantomData(_) | Opaque(_) | Closure(_) | FnPointer(_) | FnItem(_)
+            | AssociatedType(_) | Param(_) | Struct(_) | Enum(_) | Dyn(_) => {
+                Err(Failure::Unsupported)
+            }
         }
     }
     fn place(&mut self, p: &ir::Place) -> Result<()> {
@@ -162,9 +164,9 @@ impl Encoder<'_, '_> {
                 self.flag(*v)
             }
             cfg::Constant::Unit => self.n(4),
-            cfg::Constant::AssociatedConst(_) | cfg::Constant::Enum { .. } => {
-                Err(Failure::Unsupported)
-            }
+            cfg::Constant::PhantomData(_)
+            | cfg::Constant::AssociatedConst(_)
+            | cfg::Constant::Enum { .. } => Err(Failure::Unsupported),
         }
     }
     fn operand(&mut self, o: &cfg::Operand) -> Result<()> {

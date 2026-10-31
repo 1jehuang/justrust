@@ -98,6 +98,7 @@ impl Ty {
     pub(in crate::compiler) fn is_closed_shallow(&self) -> bool {
         match self {
             Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => false,
+            Ty::PhantomData(marker) => marker.argument().is_closed_shallow(),
             Ty::FnPointer(p) => p.types().all(Ty::is_closed_shallow),
             Ty::Closure(c) => c.types().all(Ty::is_closed_shallow),
             Ty::Struct(n) => {
@@ -699,7 +700,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
+            Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -871,7 +872,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                             "unsupported: opaque carrier requires its defining body fact".into(),
                         );
                     }
-                    Ty::FnItem(_) | Ty::FnPointer(_) => {}
+                    Ty::FnItem(_) | Ty::FnPointer(_) | Ty::PhantomData(_) => {}
                     Ty::Closure(closure) => {
                         for (index, ty) in closure.captures().iter().enumerate() {
                             child(CarrierStep::Field(index), ty)?;
@@ -1588,6 +1589,9 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         ) => an == bn && Arc::ptr_eq(a, b),
         (Ty::Slice { element: a }, Ty::Slice { element: b }) => Arc::ptr_eq(a, b),
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
+        (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+            a.try_eq(b, |a, b| identical_type(a, b, budget))?
+        }
         (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| identical_type(a, b, budget))?,
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -3418,6 +3422,11 @@ fn substitute_ty_walk(
                 Ty::Closure(Arc::new(mapped))
             }
         }
+        Ty::PhantomData(marker) => Ty::PhantomData(marker.try_map(
+            budget,
+            |e| e,
+            |ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1),
+        )?),
         Ty::FnPointer(pointer) => Ty::FnPointer(pointer.try_map(
             budget,
             |e| e,
@@ -3783,6 +3792,22 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         budget.charge_work(1)?;
         expression.ty = visitor.ty(&expression.ty)?;
         match &mut expression.kind {
+            ExprKind::PhantomData(marker) => {
+                let Ty::PhantomData(mapped) = visitor.ty(&Ty::PhantomData(marker.clone()))? else {
+                    return Err("PhantomData substitution changed canonical type kind".into());
+                };
+                if !closed_facts
+                    .world()
+                    .types_equal(
+                        std::slice::from_ref(&expression.ty),
+                        std::slice::from_ref(&Ty::PhantomData(mapped.clone())),
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                {
+                    return Err("PhantomData substitution changed expression descriptor".into());
+                }
+                *marker = mapped;
+            }
             ExprKind::AssociatedConst(operand) => {
                 operand.validate(template.facts(), budget)?;
                 let value =
@@ -4545,6 +4570,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                     walk(ty, budget, depth + 1, seen)?;
                 }
             }
+            Ty::PhantomData(marker) => walk(marker.argument(), budget, depth + 1, seen)?,
             Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     walk(ty, budget, depth + 1, seen)?;
@@ -5935,6 +5961,7 @@ pub enum Ty {
     FnItem(Arc<CallTarget>),
     /// Safe, nonvariadic Rust ABI function pointer, distinct from an item.
     FnPointer(Arc<FnPointerTy>),
+    PhantomData(Arc<PhantomDataTy>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
@@ -5977,6 +6004,205 @@ pub enum Ty {
     Dyn(Arc<DynTy>),
     /// The semantic never type, distinct from runtime completion information.
     Never,
+}
+
+/// Sealed source-construction authority, issued only by a private catalog builder.
+/// No type argument, semantic proof, planning budget or runtime payload is retained.
+#[derive(Clone, Copy, Debug)]
+pub struct PhantomDataFactory {
+    declaration: DeclId,
+}
+impl PhantomDataFactory {
+    pub fn from_builder(
+        builder: &super::traits::CoreCatalogBuilder,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.charge_work(builder.base_declarations().len())?;
+        let entry = builder
+            .base_declarations()
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry.origin,
+                    super::traits::DeclOrigin::CoreCatalog {
+                        item: super::traits::CatalogItem::PhantomData,
+                        ..
+                    }
+                )
+            })
+            .ok_or("missing canonical PhantomData builder declaration")?;
+        Ok(Self {
+            declaration: entry.declaration,
+        })
+    }
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn with_argument(
+        &self,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<PhantomDataTy>, String> {
+        PhantomDataTy::validate_argument(&argument, budget, 0)?;
+        PhantomDataTy::allocate(self.declaration, argument, budget)
+    }
+}
+
+/// Canonical non-owning marker metadata. Its argument is not a runtime payload.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct PhantomDataTy {
+    declaration: DeclId,
+    argument: Ty,
+}
+impl PhantomDataTy {
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn argument(&self) -> &Ty {
+        &self.argument
+    }
+    fn allocate(
+        declaration: DeclId,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let bytes = std::mem::size_of::<Self>()
+            .checked_add(2 * std::mem::size_of::<usize>())
+            .ok_or("resource limit: PhantomData backing size overflow")?;
+        budget.retain_bytes(bytes)?;
+        Ok(Arc::new(Self {
+            declaration,
+            argument,
+        }))
+    }
+    pub fn from_builder(
+        builder: &super::traits::CoreCatalogBuilder,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        PhantomDataFactory::from_builder(builder, budget)?.with_argument(argument, budget)
+    }
+    pub fn new(
+        catalog: &super::traits::CoreCatalog,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let value = Self::allocate(
+            catalog.id(super::traits::CatalogItem::PhantomData),
+            argument,
+            budget,
+        )?;
+        value.validate(catalog, budget)?;
+        Ok(value)
+    }
+    pub fn validate(
+        &self,
+        catalog: &super::traits::CoreCatalog,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        let canonical = catalog.id(super::traits::CatalogItem::PhantomData);
+        if self.declaration != canonical {
+            return Err("invalid canonical PhantomData declaration authority".into());
+        }
+        let entry = catalog
+            .declaration(canonical)
+            .ok_or("missing canonical PhantomData declaration")?;
+        if entry.info.kind != DeclKind::Struct
+            || entry.info.owner.is_some()
+            || entry.info.own_env.arity() != 1
+            || entry.origin
+                != (super::traits::DeclOrigin::CoreCatalog {
+                    version: catalog.version(),
+                    item: super::traits::CatalogItem::PhantomData,
+                })
+        {
+            return Err("invalid canonical PhantomData catalog schema".into());
+        }
+        Self::validate_argument(&self.argument, budget, 0)
+    }
+    fn validate_argument(ty: &Ty, budget: &PlanBudget, depth: usize) -> Result<(), String> {
+        budget.check_depth(depth)?;
+        budget.charge_work(1)?;
+        let child = |ty: &Ty| Self::validate_argument(ty, budget, depth + 1);
+        match ty {
+            Ty::Ref { .. }
+            | Ty::Str
+            | Ty::Slice { .. }
+            | Ty::Dyn(_)
+            | Ty::AssociatedType(_)
+            | Ty::Opaque(_)
+            | Ty::Closure(_)
+            | Ty::FnItem(_) => {
+                return Err("unsupported: PhantomData borrow, lifetime, unsized, projection or opaque argument contract".into());
+            }
+            Ty::PhantomData(marker) => child(marker.argument())?,
+            Ty::FnPointer(pointer) => {
+                pointer.validate(budget)?;
+                for component in pointer.types() {
+                    child(component)?;
+                }
+            }
+            Ty::Struct(nominal) => {
+                if nominal.is_back_edge() {
+                    return Err("unsupported: recursive PhantomData argument contract".into());
+                }
+                for argument in nominal.def().type_args.iter() {
+                    child(argument)?;
+                }
+                for field in nominal.def().fields.read(budget)?.iter() {
+                    child(&field.ty)?;
+                }
+            }
+            Ty::Enum(nominal) => {
+                if nominal.is_back_edge() {
+                    return Err("unsupported: recursive PhantomData argument contract".into());
+                }
+                for argument in nominal.def().type_args.iter() {
+                    child(argument)?;
+                }
+                for variant in nominal.def().variants.iter() {
+                    for field in variant.fields.read(budget)?.iter() {
+                        child(&field.ty)?;
+                    }
+                }
+            }
+            Ty::Tuple(types) => {
+                for ty in types.iter() {
+                    child(ty)?;
+                }
+            }
+            Ty::Array { element, .. } => child(element)?,
+            Ty::RawPtr { pointee, .. } => child(pointee)?,
+            Ty::Param(_)
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => {}
+        }
+        Ok(())
+    }
+    pub fn try_map<E>(
+        &self,
+        budget: &PlanBudget,
+        error: impl FnOnce(String) -> E,
+        map: impl FnOnce(&Ty) -> Result<Ty, E>,
+    ) -> Result<Arc<Self>, E> {
+        let argument = map(&self.argument)?;
+        Self::allocate(self.declaration, argument, budget).map_err(error)
+    }
+    pub fn try_eq<'a, 'b, E>(
+        &'a self,
+        other: &'b Self,
+        equal: impl FnOnce(&'a Ty, &'b Ty) -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        if self.declaration != other.declaration {
+            return Ok(false);
+        }
+        equal(&self.argument, &other.argument)
+    }
 }
 
 /// Canonical safe Rust ABI function pointer metadata. Unsupported ABI, safety,
@@ -6040,6 +6266,7 @@ impl FnPointerTy {
                 Ty::Ref { .. } => return Err("unsupported: function pointer reference lifetime signatures are not implemented".into()),
                 Ty::RawPtr { pointee, .. } | Ty::Array { element: pointee, .. } | Ty::Slice { element: pointee } => component(pointee, budget, depth + 1)?,
                 Ty::Tuple(fields) => { for t in fields.iter() { component(t, budget, depth + 1)?; } }
+                Ty::PhantomData(marker) => component(marker.argument(), budget, depth + 1)?,
                 Ty::FnPointer(pointer) => { for t in pointer.types() { component(t, budget, depth + 1)?; } }
                 Ty::Struct(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
                 Ty::Enum(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
@@ -6319,6 +6546,7 @@ fn type_metadata_walk(
         }
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
+            Ty::PhantomData(marker) => (12, Arc::as_ptr(marker) as usize),
             Ty::FnPointer(pointer) => (11, Arc::as_ptr(pointer) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
             Ty::FnItem(item) => (10, Arc::as_ptr(item) as usize),
@@ -6411,6 +6639,7 @@ fn type_metadata_walk(
                     child(ty)?;
                 }
             }
+            Ty::PhantomData(marker) => child(marker.argument())?,
             Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     child(ty)?;
@@ -6873,7 +7102,8 @@ impl Ty {
                         }
                     }
                 }
-                Self::FnPointer(_)
+                Self::PhantomData(_)
+                | Self::FnPointer(_)
                 | Self::FnItem(_)
                 | Self::Param(_)
                 | Self::Int(_)
@@ -6932,6 +7162,7 @@ impl Ty {
             | Self::Bool
             | Self::Unit
             | Self::Never
+            | Self::PhantomData(_)
             | Self::FnPointer(_)
             | Self::FnItem(_)
             | Self::RawPtr { .. } => true,
@@ -8216,7 +8447,7 @@ pub(in crate::compiler) fn reference_type_summary(
             Ok(())
         };
         match ty {
-            Ty::Opaque(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
+            Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -8290,6 +8521,26 @@ pub(in crate::compiler) fn reference_type_summary(
     )
 }
 
+fn marker_expression_types_equal(
+    value: &Ty,
+    marker: &Arc<PhantomDataTy>,
+    facts: FactsCtx<'_>,
+    budget: &PlanBudget,
+) -> Result<bool, String> {
+    let descriptor = Ty::PhantomData(marker.clone());
+    if let Some(authority) = facts.validated() {
+        authority
+            .world()
+            .types_equal(
+                std::slice::from_ref(value),
+                std::slice::from_ref(&descriptor),
+            )
+            .map_err(|error| error.into_legacy_diagnostic(budget))
+    } else {
+        ref_types_equal(value, &descriptor, budget, 0)
+    }
+}
+
 fn ref_types_equal(
     left: &Ty,
     right: &Ty,
@@ -8325,6 +8576,7 @@ fn ref_types_equal(
         };
         let equal = match (left, right) {
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
+            (Ty::PhantomData(a), Ty::PhantomData(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, &mut child)?,
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -8906,6 +9158,14 @@ fn pattern_types_equal_with_facts(
                     return Ok(false);
                 }
             }
+            (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    pending.push((a, b, depth + 1));
+                    Ok::<bool, String>(true)
+                })? {
+                    return Ok(false);
+                }
+            }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 if !a.try_eq(b, |a, b| {
                     pending.push((a, b, depth + 1));
@@ -9455,6 +9715,8 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    /// Canonical non-owning marker constructor, retaining its exact type argument.
+    PhantomData(Arc<PhantomDataTy>),
     /// Universally typed member use, replaced only by graph-sealed closed CTFE.
     AssociatedConst(Arc<AssociatedConstOperand>),
     /// A defining return seals a value behind its canonical opaque identity.
@@ -10285,6 +10547,16 @@ impl CheckedFunction {
         for expression in &self.exprs {
             facts.validate_value_ty_with_budget_scratch(&expression.ty, budget, scratch)?;
             match &expression.kind {
+                ExprKind::PhantomData(marker) => {
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::PhantomData(marker.clone()),
+                        budget,
+                        scratch,
+                    )?;
+                    if !marker_expression_types_equal(&expression.ty, marker, facts, budget)? {
+                        return Err("PhantomData expression descriptor type mismatch".into());
+                    }
+                }
                 ExprKind::OpaqueWrap { opaque, .. } => {
                     facts.validate_ty_with_budget_scratch(
                         &Ty::Opaque(opaque.clone()),
@@ -11027,6 +11299,25 @@ impl CheckedFunction {
             .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
+                ExprKind::PhantomData(marker) => {
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::PhantomData(marker.clone()),
+                        conditional_budget,
+                        scratch,
+                    )?;
+                    facts.validate_ty_with_budget_scratch(
+                        &value.ty,
+                        conditional_budget,
+                        scratch,
+                    )?;
+                    if !marker_expression_types_equal(&value.ty, marker, facts, conditional_budget)?
+                    {
+                        return Err("PhantomData expression descriptor type mismatch".into());
+                    }
+                    if value.completion != Completion::Returns {
+                        return Err("PhantomData constructor completion mismatch".into());
+                    }
+                }
                 ExprKind::OpaqueWrap {
                     opaque,
                     value: source,
@@ -12960,6 +13251,73 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn phantom_data_factory_and_metadata_reject_forged_owner_and_preserve_backing_admission() {
+        use super::*;
+        use crate::compiler::traits as tr;
+        let budget = PlanBudget::default();
+        let builder = tr::CoreCatalogBuilder::new(
+            SnapshotId::standalone().unwrap(),
+            fixture_modules(),
+            &budget,
+        )
+        .unwrap();
+        let factory = PhantomDataFactory::from_builder(&builder, &budget).unwrap();
+        let start = builder.source_start();
+        let catalog = builder
+            .finish(start, tr::RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        let before = budget.usage_for_tests(|usage| usage.bytes);
+        let marker = factory.with_argument(Ty::Bool, &budget).unwrap();
+        assert_eq!(
+            budget.usage_for_tests(|usage| usage.bytes) - before,
+            std::mem::size_of::<PhantomDataTy>() + 2 * std::mem::size_of::<usize>()
+        );
+        marker.validate(&catalog, &budget).unwrap();
+        assert_eq!(
+            marker.declaration(),
+            catalog.id(tr::CatalogItem::PhantomData)
+        );
+        let same = PhantomDataTy::new(&catalog, Ty::Bool, &budget).unwrap();
+        assert!(
+            marker
+                .try_eq(&same, |a, b| Ok::<_, String>(a == b))
+                .unwrap()
+        );
+        let changed = marker
+            .try_map(&budget, |e| e, |_| Ok::<_, String>(Ty::Unit))
+            .unwrap();
+        assert!(
+            !marker
+                .try_eq(&changed, |a, b| Ok::<_, String>(a == b))
+                .unwrap()
+        );
+        let mut forged = marker.as_ref().clone();
+        forged.declaration = catalog.id(tr::CatalogItem::Copy);
+        assert!(forged.validate(&catalog, &budget).is_err());
+        forged.declaration = DeclId {
+            snapshot: SnapshotId::standalone().unwrap(),
+            index: marker.declaration().index,
+        };
+        assert!(forged.validate(&catalog, &budget).is_err());
+        let denied = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            ..PlanLimits::default()
+        });
+        assert!(
+            factory
+                .with_argument(Ty::Bool, &denied)
+                .unwrap_err()
+                .contains("resource")
+        );
+        assert!(
+            factory
+                .with_argument(Ty::Str, &budget)
+                .unwrap_err()
+                .starts_with("unsupported:")
+        );
+    }
+
     fn fixture_modules() -> std::sync::Arc<super::super::module_identity::ModuleArena> {
         super::super::module_identity::ModuleArenaBuilder::for_catalog(
             super::super::expansion_budget::ExpansionBudget::default(),

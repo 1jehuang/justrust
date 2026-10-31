@@ -272,6 +272,8 @@ impl Representations {
                 let hidden = self.get(opaque, budget)?.hidden().clone();
                 self.prepare_type(&hidden, budget, depth + 1)?;
             }
+            // Marker arguments are authenticated metadata, not stored values.
+            ir::Ty::PhantomData(_) => {}
             ir::Ty::FnPointer(pointer) => {
                 for t in pointer.types() {
                     self.prepare_type(t, budget, depth + 1)?;
@@ -638,6 +640,7 @@ pub(super) fn contains(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Err
                 }
                 Ok(false)
             }
+            ir::Ty::PhantomData(_) => Ok(false),
             ir::Ty::FnPointer(value) => {
                 for component in value.types() {
                     if visit(component, budget, depth + 1)? {
@@ -698,6 +701,7 @@ fn collect_closures(
                 visit(arg)?;
             }
         }
+        ir::Ty::PhantomData(_) => {}
         ir::Ty::FnItem(value) => {
             for arg in value.type_args.iter() {
                 visit(arg)?;
@@ -777,6 +781,7 @@ fn collect(
                 collect(actual, output, budget, depth + 1)?;
             }
         }
+        ir::Ty::PhantomData(_) => {}
         ir::Ty::FnPointer(value) => {
             for component in value.types() {
                 collect(component, output, budget, depth + 1)?;

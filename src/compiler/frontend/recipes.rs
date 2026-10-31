@@ -8,6 +8,8 @@ enum Event {
     Load,
     Borrow { index: usize, array: bool },
     Clone,
+    PhantomData,
+    PhantomDataCloneFrom,
     Product { array: bool, len: usize },
 }
 fn walk(
@@ -39,6 +41,8 @@ fn walk(
             })
         }
         tr::RecipeDescriptor::CloneNever => Ok(()),
+        tr::RecipeDescriptor::ClonePhantomData => emit(Event::PhantomData),
+        tr::RecipeDescriptor::CloneFromPhantomData => emit(Event::PhantomDataCloneFrom),
         _ => {
             emit(Event::Read)?;
             emit(Event::Load)
@@ -57,17 +61,32 @@ pub(super) fn counts(
     let mut c = RecipePlanCounts {
         binders: match descriptor {
             tr::RecipeDescriptor::CloneTuple { arity } => usize::from(arity),
-            tr::RecipeDescriptor::CloneArray { .. } | tr::RecipeDescriptor::CloneSharedRef => 1,
+            tr::RecipeDescriptor::CloneArray { .. }
+            | tr::RecipeDescriptor::CloneSharedRef
+            | tr::RecipeDescriptor::ClonePhantomData
+            | tr::RecipeDescriptor::CloneFromPhantomData => 1,
             _ => 0,
         },
-        locals: 2,
-        blocks: 1,
-        formal_origins: if descriptor == tr::RecipeDescriptor::CloneSharedRef {
+        locals: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+            3
+        } else {
+            2
+        },
+        blocks: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+            2
+        } else {
+            1
+        },
+        formal_origins: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+            2
+        } else if descriptor == tr::RecipeDescriptor::CloneSharedRef {
             3
         } else {
             1 + components
         },
-        carrier_slots: if descriptor == tr::RecipeDescriptor::CloneSharedRef {
+        carrier_slots: if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+            2
+        } else if descriptor == tr::RecipeDescriptor::CloneSharedRef {
             5
         } else {
             1 + 2 * components
@@ -115,6 +134,7 @@ pub(super) fn counts(
                     c.carrier_slots += 2;
                 }
             }
+            Event::PhantomData | Event::PhantomDataCloneFrom => {}
             Event::Product { len, .. } => c.carrier_slots += len,
         }
         Ok(())
@@ -215,6 +235,8 @@ pub(super) fn inventory_validated(
         tr::RecipeDescriptor::CloneChar,
         tr::RecipeDescriptor::CloneUnit,
         tr::RecipeDescriptor::CloneSharedRef,
+        tr::RecipeDescriptor::ClonePhantomData,
+        tr::RecipeDescriptor::CloneFromPhantomData,
         tr::RecipeDescriptor::CloneNever,
     ] {
         add(&mut descriptors, d, budget)?;
@@ -749,6 +771,14 @@ pub(super) fn inventory_validated(
     Ok(inventory)
 }
 
+fn marker_clone_from_unit_body(budget: &ir::PlanBudget) -> Result<ir::ExprKind, String> {
+    budget.retain_bytes(std::mem::size_of::<ir::TypedBlock>())?;
+    Ok(ir::ExprKind::Block(ir::TypedBlock {
+        statements: Vec::new(),
+        tail: None,
+    }))
+}
+
 pub(super) fn checked_body(
     plan: &PlanCtx,
     target: &ir::CallTarget,
@@ -758,6 +788,9 @@ pub(super) fn checked_body(
 ) -> Result<ir::CheckedFunction, String> {
     let signature = plan.function_schema(target.declaration)?.signature;
     let footprint = counts(descriptor, budget)?;
+    if descriptor == tr::RecipeDescriptor::CloneFromPhantomData && signature.params.len() != 2 {
+        return Err("marker clone_from recipe parameter arity changed".into());
+    }
     budget.retain_bytes(footprint.ir_retained_bytes)?;
     let mut f = ir::CheckedFunction {
         runtime_sites: Default::default(),
@@ -778,6 +811,22 @@ pub(super) fn checked_body(
             tail: None,
         },
     };
+    if descriptor == tr::RecipeDescriptor::CloneFromPhantomData {
+        budget.retain_bytes(2 * std::mem::size_of::<ir::LocalId>())?;
+        f.params.try_reserve_exact(1).map_err(|_| {
+            "infrastructure: marker clone_from parameter allocation failed".to_string()
+        })?;
+        budget.retain_bytes(2 * std::mem::size_of::<ir::LocalDecl>())?;
+        f.locals
+            .try_reserve_exact(1)
+            .map_err(|_| "infrastructure: marker clone_from local allocation failed".to_string())?;
+        f.params.push(ir::LocalId(1));
+        f.locals.push(ir::LocalDecl {
+            name: String::new(),
+            ty: signature.params[1].clone(),
+            mutable: false,
+        });
+    }
     let mut children = Vec::new();
     let mut call_evidence = Vec::new();
     let mut last = None;
@@ -795,6 +844,55 @@ pub(super) fn checked_body(
     let mut child_ty = None;
     walk(descriptor, |event| {
         match event {
+            Event::PhantomDataCloneFrom => {
+                let [
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: destination,
+                    },
+                    ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: source,
+                    },
+                ] = signature.params.as_slice()
+                else {
+                    return Err("marker clone_from recipe lost exact borrow parameters".into());
+                };
+                if !matches!(destination.as_ref(), ir::Ty::PhantomData(_))
+                    || !matches!(source.as_ref(), ir::Ty::PhantomData(_))
+                    || signature.result != ir::Ty::Unit
+                {
+                    return Err("marker clone_from recipe changed canonical signature".into());
+                }
+                for parameter in &signature.params {
+                    facts
+                        .validate_ty(parameter)
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                }
+                if !facts
+                    .world()
+                    .types_equal(
+                        std::slice::from_ref(destination.as_ref()),
+                        std::slice::from_ref(source.as_ref()),
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                {
+                    return Err("marker clone_from recipe changed exact source descriptor".into());
+                }
+                last = Some(emit(marker_clone_from_unit_body(budget)?, ir::Ty::Unit)?);
+            }
+            Event::PhantomData => {
+                let ir::Ty::PhantomData(marker) = &signature.result else {
+                    return Err("marker clone recipe lost canonical result descriptor".into());
+                };
+                facts
+                    .validate_ty(&signature.result)
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?;
+                last = Some(emit(
+                    ir::ExprKind::PhantomData(marker.clone()),
+                    signature.result.clone(),
+                )?);
+            }
             Event::Read => {
                 last = Some(emit(
                     ir::ExprKind::Local(ir::LocalId(0)),
@@ -909,6 +1007,7 @@ pub(super) fn checked_body(
     f.call_evidence = call_evidence.into();
     let mut actual_loans = 0usize;
     let mut actual_calls = 0usize;
+    let mut actual_blocks = 1usize;
     let mut actual_carriers = ir::carrier_locations(&f.result, budget)?.len();
     for local in &f.locals {
         budget.charge_work(1)?;
@@ -919,11 +1018,12 @@ pub(super) fn checked_body(
         actual_carriers += ir::carrier_locations(&expression.ty, budget)?.len();
         actual_loans += usize::from(matches!(expression.kind, ir::ExprKind::Borrow { .. }));
         actual_calls += usize::from(matches!(expression.kind, ir::ExprKind::Call { .. }));
+        actual_blocks += usize::from(matches!(expression.kind, ir::ExprKind::Block(_)));
     }
     if f.exprs.len() != footprint.expressions
         || f.locals.len() + f.exprs.len() + 1 != footprint.locals
         || actual_loans != footprint.loan_sites
-        || actual_calls + 1 != footprint.blocks
+        || actual_calls + actual_blocks != footprint.blocks
         || actual_carriers != footprint.carrier_slots
     {
         return Err("recipe footprint/emission mismatch".into());
@@ -1131,6 +1231,62 @@ mod wide_tests {
         let failure = budget.first_resource_failure().unwrap();
         assert_eq!(failure.kind, ir::ResourceBudgetKind::Depth);
         assert_eq!(failure.requested, 2);
+    }
+
+    #[test]
+    fn marker_clone_from_recipe_retains_two_formals_without_payload_work() {
+        let mut events = Vec::new();
+        walk(tr::RecipeDescriptor::CloneFromPhantomData, |event| {
+            events.push(event);
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(events.as_slice(), [Event::PhantomDataCloneFrom]));
+        let budget = ir::PlanBudget::default();
+        let footprint = counts(tr::RecipeDescriptor::CloneFromPhantomData, &budget).unwrap();
+        assert_eq!(footprint.binders, 1);
+        assert_eq!(footprint.formal_origins, 2);
+        assert_eq!(footprint.blocks, 2);
+        let mut body = ir::CheckedFunction {
+            runtime_sites: Default::default(),
+            name: "marker_clone_from_unit".into(),
+            ref_contract: Default::default(),
+            params: Vec::new(),
+            result: ir::Ty::Unit,
+            locals: Vec::new(),
+            exprs: vec![ir::TypedExpr {
+                kind: marker_clone_from_unit_body(&budget).unwrap(),
+                ty: ir::Ty::Unit,
+                completion: ir::Completion::Returns,
+            }],
+            call_evidence: Arc::from([]),
+            body_substitution: None,
+            body: ir::TypedBlock {
+                statements: Vec::new(),
+                tail: Some(ir::ExprId(0)),
+            },
+        };
+        body.validate().unwrap();
+        body.exprs[0].kind = ir::ExprKind::Tuple(Vec::new());
+        assert!(body.validate().is_err());
+        assert_eq!(footprint.loan_sites, 0);
+        assert_eq!(footprint.call_result_origins, 0);
+    }
+
+    #[test]
+    fn marker_clone_recipe_constructs_exact_descriptor_without_runtime_argument() {
+        let mut events = Vec::new();
+        walk(tr::RecipeDescriptor::ClonePhantomData, |event| {
+            events.push(event);
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(events.as_slice(), [Event::PhantomData]));
+        let budget = ir::PlanBudget::default();
+        let footprint = counts(tr::RecipeDescriptor::ClonePhantomData, &budget).unwrap();
+        assert_eq!(footprint.binders, 1);
+        assert_eq!(footprint.loan_sites, 0);
+        assert_eq!(footprint.call_result_origins, 0);
     }
 
     #[test]

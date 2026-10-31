@@ -2,6 +2,27 @@ use super::stock_rustc;
 use super::*;
 
 #[test]
+fn opaque_marker_hidden_types_preserve_generic_source_metadata_without_component_copy_bounds() {
+    native_matches_stock_with_dispatch(
+        r#"
+        use std::marker::PhantomData;
+        struct NotCopy { value: i32 }
+        fn make<T>() -> impl Sized + Copy { PhantomData::<T> }
+        fn unused<T>() -> impl Sized { PhantomData::<fn(T) -> T> }
+        fn main() {
+            let value = make::<NotCopy>();
+            let first = value;
+            let second = value;
+            let _first = first;
+            let _second = second;
+            println!("marker source ok");
+        }
+        "#,
+        false,
+    );
+}
+
+#[test]
 fn closed_opaque_public_projection_metadata_matches_stock() {
     native_matches_stock_with_dispatch(
         r#"
@@ -22,7 +43,7 @@ fn closed_opaque_public_projection_metadata_matches_stock() {
     );
 }
 
-fn source_check(source: &str, workers: usize) -> Result<(), String> {
+pub(super) fn source_check(source: &str, workers: usize) -> Result<(), String> {
     let snapshot = Arc::new(Snapshot {
         input: Input::Text(source.into()),
         source_options: source::SourceOptions::default(),
@@ -570,9 +591,12 @@ fn native_matches_stock_with_dispatch(source: &str, requires_dispatch: bool) {
         let build = engine.request(key.clone());
         let report = engine.run(workers).unwrap();
         assert!(report.capture_complete);
-        build
-            .completion()
-            .unwrap_or_else(|error| panic!("opaque BUILD workers={workers}: {error:?}"));
+        build.completion().unwrap_or_else(|error| {
+            panic!(
+                "opaque BUILD workers={workers}: {error:?}; node errors: {:?}",
+                report.node_errors
+            )
+        });
         if requires_dispatch {
             assert!(
                 report

@@ -325,6 +325,12 @@ impl ValidatedTraitWorld {
             .charge_work(1)
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let valid = match (source, realized) {
+            (Ty::PhantomData(source), Ty::PhantomData(realized)) => {
+                source.try_eq(realized, |source, realized| {
+                    self.replay_nominal_field_term(replays, input, source, realized, depth + 1)?;
+                    Ok::<_, FactsError>(true)
+                })?
+            }
             (Ty::FnPointer(source), Ty::FnPointer(realized)) => {
                 source.try_eq(realized, |source, realized| {
                     self.replay_nominal_field_term(replays, input, source, realized, depth + 1)?;
@@ -514,6 +520,17 @@ impl ValidatedTraitWorld {
                             depth + 1,
                         )?;
                     }
+                }
+                Ty::PhantomData(marker) => {
+                    walk(
+                        world,
+                        replays,
+                        input,
+                        marker.argument(),
+                        dependencies,
+                        cursor,
+                        depth + 1,
+                    )?;
                 }
                 Ty::FnPointer(pointer) => {
                     for component in pointer.types() {
@@ -757,6 +774,11 @@ impl ValidatedTraitWorld {
             .charge_work(1)
             .map_err(|e| FactsError::from_message(&self.budget, &e))?;
         let result = match ty {
+            Ty::PhantomData(marker) => Ty::PhantomData(marker.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |ty| self.close_nominal_bound_term(replays, ty, env, actuals, depth + 1),
+            )?),
             Ty::FnPointer(pointer) => Ty::FnPointer(pointer.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),

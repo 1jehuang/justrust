@@ -132,6 +132,9 @@ pub(super) fn preflight_clone_node(
     budget.retain_bytes(1024)?;
     match node {
         DepthNode::Type(ty) => match ty {
+            Type::PhantomData(_) => budget.retain_bytes(
+                std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
+            )?,
             Type::Named(path) => clone_ast_path(path, budget)?,
             Type::FnPointer { inputs, .. } => clone_vector(inputs, budget)?,
             Type::Tuple(fields) => clone_vector(fields, budget)?,
@@ -174,6 +177,9 @@ pub(super) fn preflight_clone_node(
             _ => {}
         },
         DepthNode::Expr(expr) => match expr {
+            Expr::PhantomData(_) => budget.retain_bytes(
+                std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
+            )?,
             Expr::UnexpandedMacro(_) => {
                 return Err("unexpanded macro syntax cannot enter active AST cloning".into());
             }

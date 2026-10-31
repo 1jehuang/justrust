@@ -2638,6 +2638,12 @@ fn compare_source_type_work(
                 }
             }
         }
+        Type::PhantomData(source) => {
+            compare_source_path_work(&source.original, budget, at + 1)?;
+            if let Some(argument) = &source.argument {
+                compare_source_type_work(argument, budget, at + 1)?;
+            }
+        }
         Type::Apply(path) => compare_source_path_work(path, budget, at + 1)?,
         Type::Projection(projection) => {
             sr::work(budget, 1)?;
@@ -2834,6 +2840,21 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
     sr::depth(budget, at)?;
     sr::work(budget, 1)?;
     Ok(match ty {
+        Type::PhantomData(source) => {
+            sr::retain(
+                budget,
+                std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
+            )?;
+            Type::PhantomData(Box::new(SourcePhantomData {
+                original: source.original.clone(),
+                occurrence: source.occurrence.clone(),
+                argument: source
+                    .argument
+                    .as_ref()
+                    .map(|argument| copy_source_type(argument, budget, at + 1).map(Box::new))
+                    .transpose()?,
+            }))
+        }
         Type::Opaque(opaque) => Type::Opaque(Box::new(opaque.copy(budget, at + 1)?)),
         Type::Apply(path) => Type::Apply(copy_source_path(path, budget, at + 1)?),
         Type::Projection(projection) => {
@@ -2956,6 +2977,12 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
     sr::work(budget, 1)?;
     sr::retain(budget, 2 * std::mem::size_of::<Type>() + 32)?;
     match ty {
+        Type::PhantomData(source) => {
+            sr::retain(budget, 2 * std::mem::size_of::<SourcePhantomData>())?;
+            if let Some(argument) = &source.argument {
+                retain_source_type(argument, budget, depth + 1)?;
+            }
+        }
         Type::Opaque(opaque) => opaque.retain(budget, depth + 1)?,
         Type::Apply(path) => retain_source_path(path, budget, depth + 1)?,
         Type::Projection(projection) => {
@@ -3019,6 +3046,10 @@ fn source_type_mentions_self(
             }
             found
         }
+        Type::PhantomData(source) => match &source.argument {
+            Some(argument) => source_type_mentions_self(argument, budget, depth + 1)?,
+            None => false,
+        },
         Type::SelfType => true,
         Type::Projection(projection) => match projection.as_ref() {
             SourceProjection::SelfItem { .. } => false,
@@ -4388,7 +4419,8 @@ impl SourceInventory {
                     budget,
                 )?;
             }
-            Expr::TypeAlignment(_)
+            Expr::PhantomData(_)
+            | Expr::TypeAlignment(_)
             | Expr::Integer(_)
             | Expr::Float(_)
             | Expr::Char(_)
@@ -5274,6 +5306,7 @@ pub(super) fn replay_nominal_source_id(
                     admit(ty, budget, depth + 1)?;
                 }
             }
+            ir::Ty::PhantomData(marker) => admit(marker.argument(), budget, depth + 1)?,
             ir::Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     admit(ty, budget, depth + 1)?;
@@ -9208,8 +9241,18 @@ impl GenericPath {
         Ok((segment.name, &segment.args))
     }
 }
+/// Resolver-issued canonical marker use. The original path and all written
+/// arguments stay immutable through specialization and public AST transport.
+#[derive(Clone, Debug)]
+pub struct SourcePhantomData {
+    original: Arc<GenericPath>,
+    occurrence: AstPath,
+    argument: Option<Box<Type>>,
+}
+
 #[derive(Clone, Debug)]
 pub enum Type {
+    PhantomData(Box<SourcePhantomData>),
     Opaque(Box<SourceOpaqueType>),
     /// Safe, nonvariadic Rust ABI function pointer source signature.
     FnPointer {
@@ -9852,6 +9895,7 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    PhantomData(Box<SourcePhantomData>),
     TypeAlignment(Type),
     /// Source callee-expression invocation, resolved to the canonical callable
     /// trait method before active checking. Arguments retain one tuple value.
@@ -20298,6 +20342,16 @@ fn walk_depth_inspecting<'source>(
                     push(DepthNode::Type(field))?;
                 }
             }
+            DepthNode::Type(Type::PhantomData(source)) => {
+                if let Some(argument) = &source.argument {
+                    push(DepthNode::Type(argument))?;
+                }
+                for segment in &source.original.segments {
+                    for argument in &segment.args {
+                        push(DepthNode::Type(argument))?;
+                    }
+                }
+            }
             DepthNode::Type(Type::Apply(path)) => {
                 for segment in &path.segments {
                     name_walk_work(names, 1)?;
@@ -20477,6 +20531,16 @@ fn walk_depth_inspecting<'source>(
                         push(DepthNode::Expr(&arm.body))?;
                         if let Some(guard) = &arm.guard {
                             push(DepthNode::Expr(guard))?;
+                        }
+                    }
+                }
+                Expr::PhantomData(source) => {
+                    if let Some(argument) = &source.argument {
+                        push(DepthNode::Type(argument))?;
+                    }
+                    for segment in &source.original.segments {
+                        for argument in &segment.args {
+                            push(DepthNode::Type(argument))?;
                         }
                     }
                 }
@@ -20792,6 +20856,16 @@ fn exact_source_type(
                 pointee: b,
             },
         ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
+        (Type::PhantomData(a), Type::PhantomData(b)) => {
+            let original =
+                exact_source_generic_path(names, &a.original, &b.original, budget, depth + 1)?;
+            let argument = match (&a.argument, &b.argument) {
+                (Some(a), Some(b)) => exact_source_type(names, a, b, budget, depth + 1)?,
+                (None, None) => true,
+                _ => false,
+            };
+            original && argument
+        }
         (Type::Opaque(a), Type::Opaque(b)) => a.exact(b, names, budget, depth + 1)?,
         (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
             (TraitPath::Builtin(a), TraitPath::Builtin(b)) => a == b,
@@ -20973,6 +21047,7 @@ pub struct DeclInfo {
 }
 #[derive(Debug)]
 pub struct DeclRegistry {
+    phantom_data_factory: ir::PhantomDataFactory,
     program: Arc<Program>,
     names: Arc<NameStore>,
     modules: Arc<ModuleArena>,
@@ -21622,6 +21697,7 @@ impl DeclRegistry {
             names: self.names.clone(),
             modules: self.modules.clone(),
             symbols: self.symbols.clone(),
+            phantom_data_factory: self.phantom_data_factory,
             declarations: Vec::new(),
             slots: HashMap::new(),
             functions: HashMap::new(),
@@ -21880,6 +21956,12 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                     }
                 }
                 SourceProjection::SelfItem { .. } => {}
+            }
+        }
+        Type::PhantomData(source) => {
+            add(std::mem::size_of::<SourcePhantomData>())?;
+            if let Some(argument) = &source.argument {
+                add(source_type_storage(argument, budget, depth + 1)?)?;
             }
         }
         Type::Named(_) | Type::Param(_) => {}
@@ -22378,6 +22460,7 @@ impl PlanCtx {
             names: program.names.clone(),
             modules: program.modules.clone(),
             symbols: program.symbols.clone(),
+            phantom_data_factory: ir::PhantomDataFactory::from_builder(&catalog_builder, budget)?,
             declarations: Vec::new(),
             slots: HashMap::new(),
             functions: HashMap::new(),
@@ -23185,7 +23268,9 @@ impl PlanCtx {
         let mut registry = Arc::new(registry);
         // Every schema, including unused generic declarations, gets authoritative symbolic arguments.
         for info in &registry.declarations {
-            if !matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum) {
+            if !matches!(info.kind, ir::DeclKind::Struct | ir::DeclKind::Enum)
+                || !matches!(info.path.item, DeclItemName::Source(_))
+            {
                 continue;
             }
             let args = symbolic_args(&info.param_env, budget)?;
@@ -27081,6 +27166,11 @@ fn collect_source_params(
                         .map_err(native_adapter::name_diagnostic)?;
                     collect_source_params(names, &binding.value, used, budget, depth + 1)?;
                 }
+            }
+        }
+        Type::PhantomData(source) => {
+            if let Some(argument) = &source.argument {
+                collect_source_params(names, argument, used, budget, depth + 1)?;
             }
         }
         Type::FnPointer { inputs, output } => {

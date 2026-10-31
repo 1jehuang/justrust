@@ -103,6 +103,78 @@ println!("function pointer metadata 8 8 8 8 24");
 }
 
 #[test]
+fn semantic_phantom_data_metadata_matches_stock_without_argument_storage() {
+    let source = r#"
+use core::marker::PhantomData;
+struct NotCopy{value:i32}
+fn size<T>()->usize{std::mem::size_of::<T>()}
+fn alignment<T>()->usize{std::mem::align_of::<T>()}
+fn main(){
+assert_eq!(size::<PhantomData<NotCopy>>(),0usize);
+assert_eq!(alignment::<PhantomData<NotCopy>>(),1usize);
+assert_eq!(size::<[PhantomData<NotCopy>;7]>(),0usize);
+assert_eq!(alignment::<[PhantomData<NotCopy>;7]>(),1usize);
+assert_eq!(size::<&PhantomData<NotCopy>>(),8usize);
+assert_eq!(size::<std::marker::PhantomData<i32>>(),0usize);
+let marker:PhantomData<NotCopy> = PhantomData;let first=marker;let second=marker;
+let borrowed=&first;let _=borrowed;let _=second;
+println!("marker metadata 0 1 0 1 8 0");
+}
+"#;
+    physical_matches_stock(source, "semantic_phantom_data_metadata");
+    let (root, compiled) = stock(source, "semantic_phantom_data_metadata_check");
+    assert!(compiled.status.success(), "{compiled:?}");
+    let checked = Command::new(stock_rustc::stock_rustc())
+        .env_remove("RUSTC_BOOTSTRAP")
+        .args(["--edition=2024", "--emit=metadata"])
+        .arg(root.join("main.rs"))
+        .arg("-o")
+        .arg(root.join("stock.rmeta"))
+        .output()
+        .unwrap();
+    assert!(checked.status.success(), "stock CHECK: {checked:?}");
+    fs::remove_dir_all(root).unwrap();
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        for kind in [102, 103, 108, 137, 140, 142] {
+            assert!(
+                !checked.report.published_kind(kind),
+                "marker metadata CHECK demanded backend/instance kind {kind}"
+            );
+        }
+    }
+}
+
+#[test]
+fn phantom_data_unproven_unsized_and_borrow_contracts_are_explicitly_unsupported() {
+    for (tag, source) in [
+        (
+            "phantom-str",
+            "fn main(){let marker:core::marker::PhantomData<str> = core::marker::PhantomData;let _=marker;}",
+        ),
+        (
+            "phantom-reference",
+            "fn main(){let marker:core::marker::PhantomData<&i32> = core::marker::PhantomData;let _=marker;}",
+        ),
+    ] {
+        let (root, output) = stock(source, tag);
+        assert!(output.status.success(), "{tag}: {output:?}");
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let error = compiler::compile(source.into(), workers, check)
+                    .err()
+                    .expect("unproved marker contracts must not gain ownership permission")
+                    .to_string();
+                assert!(error.contains("unsupported: PhantomData borrow, lifetime, unsized, projection or opaque argument contract"), "{tag}: workers={workers} check={check}: {error}");
+                assert!(!error.contains("InvalidMetadata"), "{error}");
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
 fn semantic_scalars_arrays_matches_stock() {
     physical_matches_stock(
         r#"

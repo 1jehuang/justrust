@@ -555,6 +555,11 @@ fn substitute(
             region(registry, lifetime, regions)?;
             **referent = substitute(registry, referent, types, regions, budget, depth + 1)?;
         }
+        Type::PhantomData(source) => {
+            if let Some(argument) = &mut source.argument {
+                **argument = substitute(registry, argument, types, regions, budget, depth + 1)?;
+            }
+        }
         Type::FnPointer { inputs, output } => {
             for t in inputs.iter_mut().chain(std::iter::once(output.as_mut())) {
                 *t = substitute(registry, t, types, regions, budget, depth + 1)?;

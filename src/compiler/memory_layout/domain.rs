@@ -137,7 +137,7 @@ fn normalize(
                 .ok_or("alignment obligation contains a foreign rigid parameter")?;
             out.parameters[slot] = true;
         }
-        ir::Ty::Char | ir::Ty::FnPointer(_) | ir::Ty::Ref { .. } => {}
+        ir::Ty::Char | ir::Ty::FnPointer(_) | ir::Ty::PhantomData(_) | ir::Ty::Ref { .. } => {}
         ir::Ty::RawPtr { pointee, .. } if matches!(pointee.as_ref(), ir::Ty::Dyn(_)) => {}
         ir::Ty::Array { element, .. } => normalize(element, parameters, out, budget, depth + 1)?,
         ir::Ty::Tuple(fields) => {
@@ -308,6 +308,7 @@ impl SizeArgument {
             // Full query/signature authority is validated before this size-only
             // reduction. Inputs/results are not stored pointer components.
             ir::Ty::FnPointer(_) => SizeLeaf::Bytes(8),
+            ir::Ty::PhantomData(_) => SizeLeaf::Bytes(0),
             ir::Ty::Char => SizeLeaf::Bytes(4),
             ir::Ty::AssociatedType(_) => SizeLeaf::Deferred,
             _ => match super::super::c_abi::layout::scalar_size_align(leaf_ty) {

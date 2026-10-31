@@ -8,7 +8,7 @@ use super::*;
 #[derive(Debug)]
 pub struct ProgramSymbols {
     owner: SessionId,
-    keys: [NameKey; 13],
+    keys: [NameKey; 14],
     budget: ExpansionBudget,
     _lease: ByteLease,
 }
@@ -37,6 +37,7 @@ impl ProgramSymbols {
             names.catalog_member_key(CloneMethod)?,
             names.catalog_member_key(CloneFromMethod)?,
             names.catalog_member_key(DropMethod)?,
+            names.catalog_key(PhantomData, Namespace::Type)?,
         ];
         budget.check()?;
         Ok(Arc::new(Self {
@@ -74,6 +75,7 @@ impl ProgramSymbols {
             BuiltinAtom::CloneMethod => 10,
             BuiltinAtom::CloneFromMethod => 11,
             BuiltinAtom::DropMethod => 12,
+            BuiltinAtom::PhantomData => 13,
         };
         Ok(self.keys[index])
     }

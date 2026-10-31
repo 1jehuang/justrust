@@ -54,6 +54,34 @@ match show(&mk(5)){5=>println!("five"),_=>{}}let c=RefCell::new(5i32);*c.borrow_
     );
 }
 
+#[test]
+fn phantom_data_is_copy_without_constructing_or_dropping_its_argument() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "phantom-data-drop",
+        &[
+            Case {
+                name: "marker_is_nonowning_even_for_destructor_argument",
+                source: r#"use core::marker::PhantomData;
+struct D{id:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.id);}}
+struct Holder<T>{marker:PhantomData<T>,value:i32}
+fn consume<T>(marker:PhantomData<T>){drop(marker);}
+fn main(){let marker:PhantomData<D> = PhantomData;consume(marker);consume(marker);
+let holder=Holder::<D>{marker:PhantomData,value:7};let copied=holder.marker;drop(copied);
+println!("value {}",holder.value);drop(holder);println!("marker done");
+let real=D{id:9};drop(real);}"#,
+                expect: Expect::Run("value 7\nmarker done\ndrop 9\n"),
+            },
+            Case {
+                name: "marker_actuals_remain_distinct",
+                source: "use core::marker::PhantomData;fn take(value:PhantomData<i32>){}fn main(){let value:PhantomData<bool> = PhantomData;take(value);}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+        Path::new(&stock_rustc()),
+    );
+}
+
 const INDEX: &str = include_str!("fixtures/drop_normal/receipts-v9/fixture-index.tsv");
 const MANIFEST_HASH: &str = "afc7b27b95496aa84316d9e21485fb7c4f2c18d57701251bcffc152593aee7fe";
 const INDEX_HASH: &str = "213e1c312094ffb078cd49c04e508721188e4b0308b1c990b939ce3af5b585e7";

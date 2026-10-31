@@ -1654,6 +1654,7 @@ fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
     }
     match (left, right) {
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
+        (Ty::PhantomData(a), Ty::PhantomData(b)) => Arc::ptr_eq(a, b),
         (Ty::FnPointer(a), Ty::FnPointer(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
@@ -2029,6 +2030,7 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
         | (Ty::Str, Ty::Str) => true,
         (Ty::Opaque(x), Ty::Opaque(y)) => Arc::ptr_eq(x, y),
         (Ty::Closure(x), Ty::Closure(y)) => Arc::ptr_eq(x, y),
+        (Ty::PhantomData(x), Ty::PhantomData(y)) => Arc::ptr_eq(x, y),
         (Ty::FnPointer(x), Ty::FnPointer(y)) => Arc::ptr_eq(x, y),
         (Ty::FnItem(x), Ty::FnItem(y)) => Arc::ptr_eq(x, y),
         (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
@@ -2668,6 +2670,7 @@ enum TypeNode {
     Reference(usize, ir::BorrowKind),
     Closure(usize),
     FnPointer(usize),
+    PhantomData(usize),
 }
 #[derive(Default)]
 struct TypeWalk {
@@ -2703,6 +2706,7 @@ impl TypeWalk {
                 t.def().id,
                 t.def() as *const ir::EnumDef as usize,
             )),
+            Ty::PhantomData(marker) => Some(TypeNode::PhantomData(Arc::as_ptr(marker) as usize)),
             Ty::FnPointer(pointer) => Some(TypeNode::FnPointer(Arc::as_ptr(pointer) as usize)),
             Ty::Closure(closure) => Some(TypeNode::Closure(Arc::as_ptr(closure) as usize)),
             Ty::Tuple(t) => Some(TypeNode::Tuple(t.as_ptr() as usize, t.len())),
@@ -2858,6 +2862,9 @@ pub struct ValidatedTraitWorld {
 
 impl ValidatedTraitWorld {
     /// Immutable implementation headers retained by this validated world.
+    pub(in crate::compiler) fn canonical_catalog(&self) -> &CoreCatalog {
+        &self.catalog
+    }
     pub fn impl_headers(&self) -> &[ImplHeader] {
         &self.headers.impls
     }
@@ -3638,6 +3645,119 @@ impl ValidatedTraitWorld {
         )
         .map(|_| ())
     }
+    fn validate_phantom_sized_argument(
+        &self,
+        ty: &Ty,
+        caller: Option<&ValidatedFacts>,
+        depth: usize,
+    ) -> Result<()> {
+        charged(&self.budget, self.budget.check_depth(depth))?;
+        charged(&self.budget, self.budget.charge_work(1))?;
+        if let Some(caller) = caller {
+            retain::<Ty>(&self.budget, 0)?;
+            let outcome = self.prove_in(
+                &Predicate::Implements(TraitRef {
+                    declaration: self.catalog.id(CatalogItem::Sized),
+                    self_ty: ty.clone(),
+                    args: Arc::from([]),
+                }),
+                ProofContext::from_facts(caller),
+                &mut ProofScratch::default(),
+            )?;
+            return match outcome {
+                ProofOutcome::Proved(_) => Ok(()),
+                ProofOutcome::NotProven => Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: PhantomData argument requires an authoritative Sized proof",
+                )),
+            };
+        }
+        let child = |ty: &Ty| self.validate_phantom_sized_argument(ty, None, depth + 1);
+        let sized = match ty {
+            Ty::Param(parameter) => {
+                let owner = parameter.owner.declaration;
+                let info = self.info(owner)?;
+                match info.kind {
+                    DeclKind::Struct | DeclKind::Enum => {
+                        let schema = self.schema.nominal_declaration_schema(owner)?;
+                        self.predicates_prove_sized(*parameter, &schema.predicates)?
+                    }
+                    DeclKind::Function | DeclKind::AssociatedFunction | DeclKind::TraitItem => {
+                        let schema = self.schema.declaration_schema(owner)?;
+                        self.predicates_prove_sized(*parameter, &schema.predicates)?
+                    }
+                    DeclKind::Trait => {
+                        let header = self.trait_header(owner)?;
+                        let mut sized = false;
+                        for bound in header.supertraits.iter() {
+                            charged(&self.budget, self.budget.charge_work(1))?;
+                            if bound.declaration == self.catalog.id(CatalogItem::Sized)
+                                && bound.args.is_empty()
+                                && matches!(bound.self_ty, Ty::Param(p) if p == *parameter)
+                            {
+                                sized = true;
+                            }
+                        }
+                        sized
+                    }
+                    _ => false,
+                }
+            }
+            Ty::Tuple(parts) => {
+                for ty in parts.iter() {
+                    child(ty)?;
+                }
+                true
+            }
+            Ty::Array { element, .. } => {
+                child(element)?;
+                true
+            }
+            Ty::Struct(nominal) => {
+                for field in nominal
+                    .def()
+                    .fields
+                    .read(&self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?
+                    .iter()
+                {
+                    child(&field.ty)?;
+                }
+                true
+            }
+            Ty::Enum(nominal) => {
+                for variant in nominal.def().variants.iter() {
+                    for field in variant
+                        .fields
+                        .read(&self.budget)
+                        .map_err(|e| FactsError::from_message(&self.budget, &e))?
+                        .iter()
+                    {
+                        child(&field.ty)?;
+                    }
+                }
+                true
+            }
+            Ty::PhantomData(_)
+            | Ty::FnPointer(_)
+            | Ty::RawPtr { .. }
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Char
+            | Ty::Bool
+            | Ty::Unit
+            | Ty::Never => true,
+            _ => false,
+        };
+        if sized {
+            Ok(())
+        } else {
+            Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: PhantomData argument requires an authoritative Sized proof",
+            ))
+        }
+    }
     fn validate_actual(&self, ty: &Ty, env: &GenericEnv) -> Result<()> {
         // A bare `str` root actual is well-formed metadata. The binder's
         // implicit `Sized` row rejects it unless the parameter is `?Sized`.
@@ -3790,6 +3910,13 @@ impl ValidatedTraitWorld {
                 for ty in closure.types() {
                     child(ty, TypeUse::Root)?;
                 }
+            }
+            Ty::PhantomData(marker) => {
+                marker
+                    .validate(&self.catalog, &self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                child(marker.argument(), TypeUse::Actual)?;
+                self.validate_phantom_sized_argument(marker.argument(), caller, depth + 1)?;
             }
             Ty::FnPointer(pointer) => {
                 pointer
@@ -4482,7 +4609,7 @@ impl ValidatedTraitWorld {
                         }
                     }
                 }
-                Ty::FnPointer(_) => {}
+                Ty::FnPointer(_) | Ty::PhantomData(_) => {}
                 Ty::FnItem(item) => {
                     for actual in item.type_args.iter() {
                         enqueue(actual)?;
@@ -4604,6 +4731,9 @@ impl ValidatedTraitWorld {
                 && self.eq_ty(&a.trait_ref.self_ty, &b.trait_ref.self_ty, depth + 1)?
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
+            (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+                a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1))
+            }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::FnItem(a), Ty::FnItem(b)) => Ok(a.declaration == b.declaration
@@ -6279,9 +6409,12 @@ impl ValidatedTraitWorld {
                 Ty::Struct(n) => all(&n.def().type_args)?,
                 Ty::Enum(n) => all(&n.def().type_args)?,
                 // Opaque, closure, object and fn-item payloads: conservative.
-                Ty::Opaque(_) | Ty::Closure(_) | Ty::Dyn(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {
-                    true
-                }
+                Ty::Opaque(_)
+                | Ty::Closure(_)
+                | Ty::Dyn(_)
+                | Ty::PhantomData(_)
+                | Ty::FnPointer(_)
+                | Ty::FnItem(_) => true,
                 _ => false,
             })
         }
@@ -6452,6 +6585,17 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
+            (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    Ok::<bool, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "PhantomData declaration changed during transport",
+                    ));
+                }
+            }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 if !a.try_eq(b, |a, b| {
                     self.collect_nominal_mappings(a, b, output, depth + 1)?;
@@ -7565,6 +7709,20 @@ impl ValidatedTraitWorld {
         if let Ty::Param(p) = term.ty {
             return Ok(term.side == side && *p == parameter);
         }
+        if let Ty::PhantomData(marker) = term.ty
+            && self.occurs(
+                side,
+                parameter,
+                Term {
+                    side: term.side,
+                    ty: marker.argument(),
+                },
+                bindings,
+                depth + 1,
+            )?
+        {
+            return Ok(true);
+        }
         if let Ty::FnPointer(pointer) = term.ty {
             for child in pointer.types() {
                 if self.occurs(
@@ -7650,6 +7808,22 @@ impl ValidatedTraitWorld {
             return self.unify(right, left, bindings, depth + 1);
         }
         match (left.ty, right.ty) {
+            (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+                return a.try_eq(b, |a, b| {
+                    self.unify(
+                        Term {
+                            side: left.side,
+                            ty: a,
+                        },
+                        Term {
+                            side: right.side,
+                            ty: b,
+                        },
+                        bindings,
+                        depth + 1,
+                    )
+                });
+            }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 return a.try_eq(b, |a, b| {
                     self.unify(
@@ -9350,7 +9524,7 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
-            Ty::FnPointer(_) | Ty::FnItem(_) => true,
+            Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => true,
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Struct(t) if item == CatalogItem::Sized => {
                 for f in nominal_fields(&t.def().fields, &self.budget)?.iter() {
@@ -9739,6 +9913,9 @@ impl ValidatedTraitWorld {
             };
         }
         match (pattern, actual) {
+            (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+                return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
+            }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
             }
@@ -10329,7 +10506,9 @@ impl TraitCx for ValidatedTraitWorld {
             item: CatalogItem::Clone,
         } = &evidence.0.origin
         {
-            if call.item != self.catalog.id(CatalogItem::CloneItem) {
+            let marker_clone_from = call.item == self.catalog.id(CatalogItem::CloneFromItem)
+                && matches!(&call.trait_ref.self_ty, Ty::PhantomData(_));
+            if call.item != self.catalog.id(CatalogItem::CloneItem) && !marker_clone_from {
                 if let Some(default) = self.item_header(call.item)?.default {
                     self.ensure_provider(default)?;
                 }
@@ -10340,6 +10519,15 @@ impl TraitCx for ValidatedTraitWorld {
             }
             let mut args = Vec::new();
             let descriptor = match &call.trait_ref.self_ty {
+                Ty::PhantomData(marker) => {
+                    facts.validate_ty(&call.trait_ref.self_ty)?;
+                    push(&self.budget, &mut args, marker.argument().clone())?;
+                    if marker_clone_from {
+                        RecipeDescriptor::CloneFromPhantomData
+                    } else {
+                        RecipeDescriptor::ClonePhantomData
+                    }
+                }
                 Ty::Int(i) => RecipeDescriptor::CloneInt(*i),
                 Ty::Float(float) => RecipeDescriptor::CloneFloat(*float),
                 Ty::Bool => RecipeDescriptor::CloneBool,
@@ -11723,6 +11911,73 @@ mod tests {
             caller_parameter,
             leaf,
             boxed,
+        }
+    }
+
+    #[test]
+    fn phantom_data_metadata_keeps_argument_authority_without_copy_component_bounds() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let pointer = Ty::FnPointer(
+            ir::FnPointerTy::new(
+                vec![c.caller_parameter.clone()],
+                c.caller_parameter.clone(),
+                &c.budget,
+            )
+            .unwrap(),
+        );
+        let marker =
+            Ty::PhantomData(ir::PhantomDataTy::new(&world.catalog, pointer, &c.budget).unwrap());
+        facts.validate_ty(&marker).unwrap();
+        assert!(
+            world
+                .callable_facts(c.body)
+                .unwrap()
+                .validate_ty(&marker)
+                .is_err(),
+            "foreign hidden parameter was erased"
+        );
+        let noncopy = Ty::PhantomData(
+            ir::PhantomDataTy::new(&world.catalog, c.leaf.clone(), &c.budget).unwrap(),
+        );
+        facts.validate_ty(&noncopy).unwrap();
+        for ty in [&marker, &noncopy] {
+            for item in [CatalogItem::Copy, CatalogItem::Clone, CatalogItem::Sized] {
+                let goal = Predicate::Implements(TraitRef {
+                    declaration: world.catalog.id(item),
+                    self_ty: ty.clone(),
+                    args: Arc::from([]),
+                });
+                assert!(matches!(
+                    world.prove_goal(&goal, &facts).unwrap(),
+                    ProofOutcome::Proved(_)
+                ));
+            }
+        }
+        let changed =
+            Ty::PhantomData(ir::PhantomDataTy::new(&world.catalog, Ty::Bool, &c.budget).unwrap());
+        assert!(
+            !world
+                .types_equal(
+                    std::slice::from_ref(&marker),
+                    std::slice::from_ref(&changed)
+                )
+                .unwrap()
+        );
+        for unsupported in [
+            Ty::Str,
+            Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(Ty::Bool),
+            },
+        ] {
+            let message =
+                ir::PhantomDataTy::new(&world.catalog, unsupported, &c.budget).unwrap_err();
+            assert_eq!(
+                FactsError::from_message(&c.budget, &message).kind(),
+                FactsErrorKind::Unsupported
+            );
         }
     }
 

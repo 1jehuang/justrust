@@ -210,6 +210,11 @@ impl ReadComponent {
                 element: Arc::new(child(t)?),
                 len: *len,
             },
+            Term::PhantomData(..) => {
+                return Err(Error::new(
+                    "unsupported: recursive PhantomData materialization requires sealed catalog construction authority",
+                ));
+            }
             Term::FnPointer(inputs, output) => {
                 let mut types = ir::FnPointerTy::storage(inputs.len(), b).map_err(Error::new)?;
                 for t in inputs {

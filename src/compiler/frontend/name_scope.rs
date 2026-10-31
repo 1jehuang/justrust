@@ -143,6 +143,15 @@ fn validate_type_names(ty: &Type, names: &impl NameAccess) -> Result<(), String>
                     .key(*name, LookupClass::TypeParameter)
                     .map_err(native_adapter::name_diagnostic)?;
             }
+            Type::PhantomData(source) => {
+                source
+                    .original
+                    .checked_path(names)
+                    .map_err(native_adapter::name_diagnostic)?;
+                if let Some(argument) = &source.argument {
+                    pending.push(argument.as_ref()).map_err(transport)?;
+                }
+            }
             Type::Named(path) => {
                 path_key(names, path, Namespace::Type)?;
             }
@@ -303,6 +312,13 @@ impl Type {
                 (Type::Param(a), Type::Param(b)) => {
                     equal &= ident_eq(names, *a, *b, LookupClass::TypeParameter)?
                 }
+                (Type::PhantomData(a), Type::PhantomData(b)) => match (&a.argument, &b.argument) {
+                    (Some(a), Some(b)) => {
+                        pending.push((a.as_ref(), b.as_ref())).map_err(transport)?;
+                    }
+                    (None, None) => (),
+                    _ => equal = false,
+                },
                 (Type::Named(a), Type::Named(b)) => {
                     equal &=
                         path_key(names, a, Namespace::Type)? == path_key(names, b, Namespace::Type)?
