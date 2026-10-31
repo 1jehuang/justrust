@@ -1331,6 +1331,9 @@ impl CodegenUnit {
                         .map_err(|e| CodegenError::Backend(format!("layout log: {e}")))?;
                 }
                 // The object frees them as it is written, on a thread of its own.
+                if let Some(entries) = entries.as_ref() {
+                    entries.report_misses();
+                }
                 drop(entries.take());
                 let start = stdx::time::Instant::now();
                 let inventory = cg.inventory(roots, &compiled, &skipped, denied);

@@ -593,6 +593,62 @@ impl Entry {
     }
 }
 
+#[derive(Clone, Copy)]
+#[repr(usize)]
+enum Miss {
+    KeyUnavailable,
+    DirectKeyMissing,
+    Banned,
+    DecodeOrSound,
+    DebugTypes,
+    PathRemap,
+    Arrived,
+    GetPositive,
+    GetNegative,
+    SettledPositive,
+    SettledNegative,
+    DirectUnavailable,
+    NativeImports,
+    DependencySettledPositive,
+    DependencySettledNegative,
+    DependencyUnavailable,
+    DependencyNativeImports,
+    TransitiveFailure,
+    UsablePositive,
+}
+const MISS_LABELS: [&str; 19] = [
+    "key_unavailable",
+    "direct_key_missing",
+    "banned",
+    "decode_or_sound",
+    "debug_types",
+    "path_remap",
+    "arrived",
+    "get_positive",
+    "get_negative",
+    "settled_positive",
+    "settled_negative",
+    "direct_unavailable",
+    "native_imports",
+    "dependency_settled_positive",
+    "dependency_settled_negative",
+    "dependency_unavailable",
+    "dependency_native_imports",
+    "transitive_failure",
+    "usable_positive",
+];
+struct MissStats([std::sync::atomic::AtomicU64; MISS_LABELS.len()]);
+impl MissStats {
+    fn enabled(value: Option<&std::ffi::OsStr>) -> bool {
+        value == Some(std::ffi::OsStr::new("1"))
+    }
+    fn startup() -> bool {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED
+            .get_or_init(|| Self::enabled(std::env::var_os("RA_JIT_CACHE_MISS_STATS").as_deref()))
+    }
+}
+
 /// The entries of the store that one program was asked about.
 pub(super) struct Entries {
     store: &'static Store,
@@ -609,6 +665,7 @@ pub(super) struct Entries {
     /// Whether the program can be built from an entry and everything it calls.
     usable: Sharded<Arc<str>, bool>,
     types: Sharded<[u8; KEY], Arc<OnceLock<Option<TypeSet>>>>,
+    miss_stats: Option<Box<MissStats>>,
 }
 
 /// A map behind a lock for each of its shards: a restart has every thread look up the stored
@@ -809,6 +866,26 @@ struct Visit {
 }
 
 impl Entries {
+    fn count(&self, reason: Miss) {
+        if let Some(stats) = &self.miss_stats {
+            stats.0[reason as usize].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    pub(super) fn report_misses(&self) {
+        let Some(stats) = &self.miss_stats else { return };
+        let counts = MISS_LABELS
+            .iter()
+            .zip(&stats.0)
+            .map(|(label, count)| {
+                format!("{label}={}", count.load(std::sync::atomic::Ordering::Relaxed))
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let _ = std::io::Write::write_fmt(
+            &mut std::io::stderr().lock(),
+            format_args!("ra-jit cache-miss-stats v1 {counts}\n"),
+        );
+    }
     pub(super) fn new(
         store: &'static Store,
         debug: Told,
@@ -817,7 +894,10 @@ impl Entries {
         library: Option<super::LibrarySources>,
     ) -> Entries {
         let (entries, usable, types) = Default::default();
-        Entries { store, debug, program, cargo_home, library, entries, usable, types }
+        let miss_stats = MissStats::startup().then(|| {
+            Box::new(MissStats(std::array::from_fn(|_| std::sync::atomic::AtomicU64::new(0))))
+        });
+        Entries { store, debug, program, cargo_home, library, entries, usable, types, miss_stats }
     }
 
     /// Never use the entry again in this process: it did not fit the object it was read for.
@@ -833,16 +913,30 @@ impl Entries {
     pub(super) fn get(&self, name: &str) -> Option<Arc<Entry>> {
         let cell = self.cell(name);
         let read = || {
-            let key = Entry::key(name, self.debug, self.program.as_ref())?;
-            self.arrived(&self.store.get(&key)?)
+            let Some(key) = Entry::key(name, self.debug, self.program.as_ref()) else {
+                self.count(Miss::KeyUnavailable);
+                return None;
+            };
+            let Some(bytes) = self.store.get(&key) else {
+                self.count(Miss::DirectKeyMissing);
+                return None;
+            };
+            self.arrived(&bytes)
         };
-        cell.get_or_init(|| {
-            let tally = super::backend::Tally::global();
-            let entry =
-                (!Self::is_banned(name)).then(|| tally.step(super::backend::Step::StoreRead, read));
-            entry.flatten().map(Arc::new)
-        })
-        .clone()
+        let found = cell
+            .get_or_init(|| {
+                let tally = super::backend::Tally::global();
+                let entry = if Self::is_banned(name) {
+                    self.count(Miss::Banned);
+                    None
+                } else {
+                    Some(tally.step(super::backend::Step::StoreRead, read))
+                };
+                entry.flatten().map(Arc::new)
+            })
+            .clone();
+        self.count(if found.is_some() { Miss::GetPositive } else { Miss::GetNegative });
+        found
     }
 
     fn cell(&self, name: &str) -> Arc<OnceLock<Option<Arc<Entry>>>> {
@@ -859,15 +953,21 @@ impl Entries {
 
     /// The entry the store keeps as `bytes`, as this build reads it.
     fn arrived(&self, bytes: &[u8]) -> Option<Entry> {
-        let entry = Entry::decode(bytes)?;
+        let Some(entry) = Entry::decode(bytes) else {
+            self.count(Miss::DecodeOrSound);
+            return None;
+        };
         // The types are read when the function is described (`describe`), which a build
         // whose object is the one it has already never does.
         let stored = |key: &[u8; KEY]| self.store.has_used(key) || self.types(key).is_some();
         let debug = entry.debug.as_ref();
         if !debug.is_none_or(|it| it.stored_types.iter().all(stored)) {
+            self.count(Miss::DebugTypes);
             return None;
         }
-        entry.arrived(self.cargo_home.as_deref(), self.library.as_ref())
+        let entry = entry.arrived(self.cargo_home.as_deref(), self.library.as_ref());
+        self.count(if entry.is_some() { Miss::Arrived } else { Miss::PathRemap });
+        entry
     }
 
     /// Reads the entries of `names` and of everything they call, as [`Entries::get`] would
@@ -889,9 +989,19 @@ impl Entries {
                 .filter(|(_, cell)| cell.get().is_none())
                 .collect();
             let keyed: Vec<(usize, [u8; KEY])> = (cells.iter().enumerate())
-                .filter(|(_, (name, _))| !Self::is_banned(name))
+                .filter(|(_, (name, _))| {
+                    let banned = Self::is_banned(name);
+                    if banned {
+                        self.count(Miss::Banned);
+                    }
+                    !banned
+                })
                 .filter_map(|(at, (name, _))| {
-                    Some((at, Entry::key(name, self.debug, self.program.as_ref())?))
+                    let key = Entry::key(name, self.debug, self.program.as_ref());
+                    if key.is_none() {
+                        self.count(Miss::KeyUnavailable);
+                    }
+                    Some((at, key?))
                 })
                 .collect();
             let keys: Vec<[u8; KEY]> = keyed.iter().map(|it| it.1).collect();
@@ -899,6 +1009,9 @@ impl Entries {
                 tally.step(super::backend::Step::StoreRead, || self.store.get_many(&keys, threads));
             let mut read: Vec<Option<Vec<u8>>> = vec![None; cells.len()];
             for ((at, _), value) in keyed.iter().zip(values) {
+                if value.is_none() {
+                    self.count(Miss::DirectKeyMissing);
+                }
                 read[*at] = value;
             }
             let next = std::sync::atomic::AtomicUsize::new(0);
@@ -964,10 +1077,18 @@ impl Entries {
     pub(super) fn usable(&self, name: &str, defines: &dyn Fn(&str) -> bool) -> bool {
         let settled = |name: &str| self.usable.shard(name).get(name).copied();
         if let Some(usable) = settled(name) {
+            self.count(if usable { Miss::SettledPositive } else { Miss::SettledNegative });
             return usable;
         }
         let name: Arc<str> = Arc::from(name);
-        let Some(entry) = self.get(&name).filter(|it| it.links(defines)) else {
+        let Some(entry) = self.get(&name).filter(|it| {
+            let links = it.links(defines);
+            if !links {
+                self.count(Miss::NativeImports);
+            }
+            links
+        }) else {
+            self.count(Miss::DirectUnavailable);
             self.settle(name, false);
             return false;
         };
@@ -1001,12 +1122,31 @@ impl Entries {
                 continue;
             }
             let found = match settled(callee) {
-                Some(true) => continue,
-                Some(false) => None,
-                None => self.get(callee).filter(|it| it.links(defines)),
+                Some(true) => {
+                    self.count(Miss::DependencySettledPositive);
+                    continue;
+                }
+                Some(false) => {
+                    self.count(Miss::DependencySettledNegative);
+                    None
+                }
+                None => {
+                    let found = self.get(callee);
+                    if found.is_none() {
+                        self.count(Miss::DependencyUnavailable);
+                    }
+                    found.filter(|it| {
+                        let links = it.links(defines);
+                        if !links {
+                            self.count(Miss::DependencyNativeImports);
+                        }
+                        links
+                    })
+                }
             };
             let callee: Arc<str> = Arc::from(callee);
             let Some(entry) = found else {
+                self.count(Miss::TransitiveFailure);
                 self.settle(callee, false);
                 for visit in path {
                     self.settle(visit.name, false);
@@ -1023,6 +1163,7 @@ impl Entries {
                 below: unsettled.len() - 1,
             });
         }
+        self.count(Miss::UsablePositive);
         true
     }
 }
@@ -1046,6 +1187,149 @@ mod tests {
         },
         *,
     };
+
+    fn stats_fixture() -> (Entries, std::path::PathBuf) {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ra-jit-miss-fixture-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let store = Box::leak(Box::new(Store::open_by_content(&dir).unwrap()));
+        let mut entries = Entries::new(store, Told::of(false, false), None, None, None);
+        entries.miss_stats = Some(Box::new(MissStats(std::array::from_fn(|_| {
+            std::sync::atomic::AtomicU64::new(0)
+        }))));
+        (entries, dir)
+    }
+
+    fn store_fixture(entries: &Entries, name: &str, entry: &Entry) {
+        let key = Entry::key(name, entries.debug, entries.program.as_ref()).unwrap();
+        let bytes = entry.encode().unwrap();
+        assert!(Entry::decode(&bytes).is_some());
+        entries.store.insert(&key, &bytes);
+        // Reads see sealed packs, not the open pack that insert appends to.
+        // Publish through the real native boundary before exercising get/usable.
+        entries.store.seal();
+        assert_eq!(entries.store.get(&key).as_deref(), Some(bytes.as_slice()));
+    }
+
+    fn dependency_fixture(callee: &str) -> Entry {
+        let mut entry = entry();
+        entry.debug = None;
+        entry.datas.clear();
+        entry.code = code(Vec::new());
+        entry.funcs =
+            vec![CachedFunc { target: CachedTarget::Named(callee.to_owned()), sig: signature() }];
+        entry
+    }
+
+    fn observed(entries: &Entries, reason: Miss) -> u64 {
+        entries.miss_stats.as_ref().unwrap().0[reason as usize]
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[test]
+    fn cache_miss_stats_gate_is_exact() {
+        use std::ffi::OsStr;
+        assert!(MissStats::enabled(Some(OsStr::new("1"))));
+        for value in [None, Some(""), Some("0"), Some("true"), Some("01"), Some("1 ")] {
+            assert!(!MissStats::enabled(value.map(OsStr::new)));
+        }
+    }
+
+    #[test]
+    fn native_miss_arrival_reasons_follow_real_decode_and_remap() {
+        let (entries, dir) = stats_fixture();
+        assert!(entries.arrived(&[255]).is_none());
+        assert_eq!(observed(&entries, Miss::DecodeOrSound), 1);
+        let mut invalid = entry();
+        invalid.code = code(vec![reloc(0, 0, 999)]);
+        assert!(entries.arrived(&invalid.encode().unwrap()).is_none());
+        assert_eq!(observed(&entries, Miss::DecodeOrSound), 2);
+        let mut fetched = fetched_to(super::super::CARGO_HOME);
+        fetched.debug = None;
+        assert!(entries.arrived(&fetched.encode().unwrap()).is_none());
+        assert_eq!(observed(&entries, Miss::PathRemap), 1);
+        let mut valid = entry();
+        valid.debug = None;
+        assert!(entries.arrived(&valid.encode().unwrap()).is_some());
+        assert_eq!(observed(&entries, Miss::Arrived), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_cache_stats_cover_debug_imports_bans_and_positive_scc() {
+        let (entries, dir) = stats_fixture();
+        let mut debug_entry = entry();
+        debug_entry.debug.as_mut().unwrap().stored_types = vec![[251; KEY]];
+        assert!(entries.arrived(&debug_entry.encode().unwrap()).is_none());
+        assert_eq!(observed(&entries, Miss::DebugTypes), 1);
+        let banned = "c:1f:miss_stats::banned";
+        Entries::ban(banned);
+        assert!(entries.get(banned).is_none());
+        assert_eq!(observed(&entries, Miss::Banned), 1);
+        let imported = "c:1f:miss_stats::imported";
+        store_fixture(&entries, imported, &entry());
+        assert!(!entries.usable(imported, &|_| false));
+        assert_eq!(observed(&entries, Miss::NativeImports), 1);
+        let a = "c:1f:miss_stats::cycle_a";
+        let b = "c:1f:miss_stats::cycle_b";
+        for (name, callee) in [(a, b), (b, a)] {
+            store_fixture(&entries, name, &dependency_fixture(callee));
+        }
+        assert!(entries.usable(a, &|_| true));
+        assert!(entries.usable(b, &|_| true));
+        assert_eq!(observed(&entries, Miss::UsablePositive), 1);
+        assert_eq!(observed(&entries, Miss::SettledPositive), 1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_prefetch_missing_and_dependency_failures_are_distinct() {
+        let (entries, dir) = stats_fixture();
+        let absent = "c:1f:miss_stats::prefetch_absent";
+        let banned = "c:1f:miss_stats::prefetch_banned";
+        Entries::ban(banned);
+        entries.prefetch([Arc::from(absent), Arc::from(banned)]);
+        assert_eq!(observed(&entries, Miss::DirectKeyMissing), 1);
+        assert_eq!(observed(&entries, Miss::Banned), 1);
+        assert!(entries.get(absent).is_none());
+        assert_eq!(observed(&entries, Miss::DirectKeyMissing), 1);
+        let parent = "c:1f:miss_stats::prefetch_parent";
+        store_fixture(&entries, parent, &dependency_fixture(absent));
+        assert!(!entries.usable(parent, &|_| true));
+        assert_eq!(observed(&entries, Miss::DependencyUnavailable), 1);
+        assert_eq!(observed(&entries, Miss::TransitiveFailure), 1);
+        let imports = "c:1f:miss_stats::dependency_imports";
+        store_fixture(&entries, imports, &entry());
+        let parent = "c:1f:miss_stats::import_parent";
+        store_fixture(&entries, parent, &dependency_fixture(imports));
+        assert!(!entries.usable(parent, &|_| false));
+        assert_eq!(observed(&entries, Miss::DependencyNativeImports), 1);
+        assert_eq!(observed(&entries, Miss::TransitiveFailure), 2);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn native_usable_negative_memo_is_not_a_fresh_missing_key() {
+        let (entries, dir) = stats_fixture();
+        let root = "c:1f:miss_stats::root";
+        assert!(!entries.usable(root, &|_| true));
+        let missing = observed(&entries, Miss::DirectKeyMissing);
+        assert_eq!(missing, 1);
+        assert!(!entries.usable(root, &|_| true));
+        assert_eq!(observed(&entries, Miss::DirectKeyMissing), missing);
+        assert_eq!(observed(&entries, Miss::SettledNegative), 1);
+        let parent_name = "c:1f:miss_stats::parent";
+        store_fixture(&entries, parent_name, &dependency_fixture(root));
+        assert!(!entries.usable(parent_name, &|_| true));
+        assert_eq!(observed(&entries, Miss::DependencySettledNegative), 1);
+        assert_eq!(observed(&entries, Miss::TransitiveFailure), 1);
+        assert_eq!(observed(&entries, Miss::DirectKeyMissing), missing);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 
     fn signature() -> Signature {
         let mut signature = Signature::new(CallConv::SystemV);
