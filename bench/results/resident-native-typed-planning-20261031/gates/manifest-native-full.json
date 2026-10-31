@@ -1,0 +1,2367 @@
+[
+  {
+    "l": "warning: unused workspace dependency `arrayvec`",
+    "s": "e",
+    "t": 1793470298.2968903
+  },
+  {
+    "l": "   --> Cargo.toml:154:1",
+    "s": "e",
+    "t": 1793470298.2968981
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.296902
+  },
+  {
+    "l": "154 | arrayvec = \"0.7.6\"",
+    "s": "e",
+    "t": 1793470298.2969055
+  },
+  {
+    "l": "    | ^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969093
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969131
+  },
+  {
+    "l": "    = note: `cargo::unused_workspace_dependencies` is set to `warn` by default",
+    "s": "e",
+    "t": 1793470298.296917
+  },
+  {
+    "l": "help: consider removing the workspace dependency `arrayvec`",
+    "s": "e",
+    "t": 1793470298.2969208
+  },
+  {
+    "l": "warning: unused workspace dependency `bitflags`",
+    "s": "e",
+    "t": 1793470298.2969244
+  },
+  {
+    "l": "   --> Cargo.toml:155:1",
+    "s": "e",
+    "t": 1793470298.296928
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969313
+  },
+  {
+    "l": "155 | bitflags = \"2.9.1\"",
+    "s": "e",
+    "t": 1793470298.2969346
+  },
+  {
+    "l": "    | ^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.296938
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969444
+  },
+  {
+    "l": "help: consider removing the workspace dependency `bitflags`",
+    "s": "e",
+    "t": 1793470298.296948
+  },
+  {
+    "l": "warning: unused workspace dependency `camino`",
+    "s": "e",
+    "t": 1793470298.2969515
+  },
+  {
+    "l": "   --> Cargo.toml:157:1",
+    "s": "e",
+    "t": 1793470298.2969549
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969584
+  },
+  {
+    "l": "157 | camino = \"1.2.2\"",
+    "s": "e",
+    "t": 1793470298.2969618
+  },
+  {
+    "l": "    | ^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969651
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969685
+  },
+  {
+    "l": "help: consider removing the workspace dependency `camino`",
+    "s": "e",
+    "t": 1793470298.296972
+  },
+  {
+    "l": "warning: unused workspace dependency `crossbeam-channel`",
+    "s": "e",
+    "t": 1793470298.296973
+  },
+  {
+    "l": "   --> Cargo.toml:158:1",
+    "s": "e",
+    "t": 1793470298.2969737
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969742
+  },
+  {
+    "l": "158 | crossbeam-channel = \"0.5.15\"",
+    "s": "e",
+    "t": 1793470298.296975
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969756
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.296976
+  },
+  {
+    "l": "help: consider removing the workspace dependency `crossbeam-channel`",
+    "s": "e",
+    "t": 1793470298.296977
+  },
+  {
+    "l": "warning: unused workspace dependency `dashmap`",
+    "s": "e",
+    "t": 1793470298.296978
+  },
+  {
+    "l": "   --> Cargo.toml:217:1",
+    "s": "e",
+    "t": 1793470298.2969787
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969792
+  },
+  {
+    "l": "217 | dashmap = { version = \"=6.2.1\", features = [\"raw-api\", \"inline\"] }",
+    "s": "e",
+    "t": 1793470298.2969797
+  },
+  {
+    "l": "    | ^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969813
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969818
+  },
+  {
+    "l": "help: consider removing the workspace dependency `dashmap`",
+    "s": "e",
+    "t": 1793470298.2969823
+  },
+  {
+    "l": "warning: unused workspace dependency `dissimilar`",
+    "s": "e",
+    "t": 1793470298.2969832
+  },
+  {
+    "l": "   --> Cargo.toml:159:1",
+    "s": "e",
+    "t": 1793470298.296984
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969842
+  },
+  {
+    "l": "159 | dissimilar = \"1.0.10\"",
+    "s": "e",
+    "t": 1793470298.2969847
+  },
+  {
+    "l": "    | ^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969854
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969859
+  },
+  {
+    "l": "help: consider removing the workspace dependency `dissimilar`",
+    "s": "e",
+    "t": 1793470298.2969863
+  },
+  {
+    "l": "warning: unused workspace dependency `dot`",
+    "s": "e",
+    "t": 1793470298.2969873
+  },
+  {
+    "l": "   --> Cargo.toml:160:1",
+    "s": "e",
+    "t": 1793470298.296988
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969885
+  },
+  {
+    "l": "160 | dot = \"0.1.4\"",
+    "s": "e",
+    "t": 1793470298.296989
+  },
+  {
+    "l": "    | ^^^",
+    "s": "e",
+    "t": 1793470298.2969897
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969902
+  },
+  {
+    "l": "help: consider removing the workspace dependency `dot`",
+    "s": "e",
+    "t": 1793470298.2969906
+  },
+  {
+    "l": "warning: unused workspace dependency `edition`",
+    "s": "e",
+    "t": 1793470298.2969913
+  },
+  {
+    "l": "   --> Cargo.toml:134:1",
+    "s": "e",
+    "t": 1793470298.296992
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969925
+  },
+  {
+    "l": "134 | edition = { path = \"vendor/rust-analyzer/crates/edition\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2969933
+  },
+  {
+    "l": "    | ^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969942
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969947
+  },
+  {
+    "l": "help: consider removing the workspace dependency `edition`",
+    "s": "e",
+    "t": 1793470298.2969952
+  },
+  {
+    "l": "warning: unused workspace dependency `hashbrown`",
+    "s": "e",
+    "t": 1793470298.2969959
+  },
+  {
+    "l": "   --> Cargo.toml:212:1",
+    "s": "e",
+    "t": 1793470298.2969966
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.296997
+  },
+  {
+    "l": "212 | hashbrown = { version = \"0.17.0\", features = [",
+    "s": "e",
+    "t": 1793470298.2969975
+  },
+  {
+    "l": "    | ^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2969983
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2969987
+  },
+  {
+    "l": "help: consider removing the workspace dependency `hashbrown`",
+    "s": "e",
+    "t": 1793470298.2969992
+  },
+  {
+    "l": "warning: unused workspace dependency `hir-ide`",
+    "s": "e",
+    "t": 1793470298.2970002
+  },
+  {
+    "l": "   --> Cargo.toml:108:1",
+    "s": "e",
+    "t": 1793470298.2970014
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970018
+  },
+  {
+    "l": "108 | hir-ide = { path = \"vendor/rust-analyzer/crates/hir-ide\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970023
+  },
+  {
+    "l": "    | ^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970033
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970037
+  },
+  {
+    "l": "help: consider removing the workspace dependency `hir-ide`",
+    "s": "e",
+    "t": 1793470298.2970042
+  },
+  {
+    "l": "warning: unused workspace dependency `hir-ty-wfcheck`",
+    "s": "e",
+    "t": 1793470298.297005
+  },
+  {
+    "l": "  --> Cargo.toml:93:1",
+    "s": "e",
+    "t": 1793470298.2970078
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2970083
+  },
+  {
+    "l": "93 | hir-ty-wfcheck = { path = \"vendor/rust-analyzer/crates/hir-ty-wfcheck\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970095
+  },
+  {
+    "l": "   | ^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970104
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.297011
+  },
+  {
+    "l": "help: consider removing the workspace dependency `hir-ty-wfcheck`",
+    "s": "e",
+    "t": 1793470298.2970116
+  },
+  {
+    "l": "warning: unused workspace dependency `ide`",
+    "s": "e",
+    "t": 1793470298.2970126
+  },
+  {
+    "l": "   --> Cargo.toml:109:1",
+    "s": "e",
+    "t": 1793470298.2970133
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970138
+  },
+  {
+    "l": "109 | ide = { path = \"vendor/rust-analyzer/crates/ide\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970142
+  },
+  {
+    "l": "    | ^^^",
+    "s": "e",
+    "t": 1793470298.297015
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970154
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ide`",
+    "s": "e",
+    "t": 1793470298.297016
+  },
+  {
+    "l": "warning: unused workspace dependency `ide-assists`",
+    "s": "e",
+    "t": 1793470298.2970166
+  },
+  {
+    "l": "   --> Cargo.toml:110:1",
+    "s": "e",
+    "t": 1793470298.2970173
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970178
+  },
+  {
+    "l": "110 | ide-assists = { path = \"vendor/rust-analyzer/crates/ide-assists\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970183
+  },
+  {
+    "l": "    | ^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970192
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970197
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ide-assists`",
+    "s": "e",
+    "t": 1793470298.2970202
+  },
+  {
+    "l": "warning: unused workspace dependency `ide-completion`",
+    "s": "e",
+    "t": 1793470298.297021
+  },
+  {
+    "l": "   --> Cargo.toml:111:1",
+    "s": "e",
+    "t": 1793470298.2970216
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297022
+  },
+  {
+    "l": "111 | ide-completion = { path = \"vendor/rust-analyzer/crates/ide-completion\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970226
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970235
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297024
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ide-completion`",
+    "s": "e",
+    "t": 1793470298.2970245
+  },
+  {
+    "l": "warning: unused workspace dependency `ide-ssr`",
+    "s": "e",
+    "t": 1793470298.2970252
+  },
+  {
+    "l": "   --> Cargo.toml:114:1",
+    "s": "e",
+    "t": 1793470298.297026
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970262
+  },
+  {
+    "l": "114 | ide-ssr = { path = \"vendor/rust-analyzer/crates/ide-ssr\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970269
+  },
+  {
+    "l": "    | ^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970276
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297028
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ide-ssr`",
+    "s": "e",
+    "t": 1793470298.2970285
+  },
+  {
+    "l": "warning: unused workspace dependency `line-index`",
+    "s": "e",
+    "t": 1793470298.2970295
+  },
+  {
+    "l": "   --> Cargo.toml:148:1",
+    "s": "e",
+    "t": 1793470298.29703
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970304
+  },
+  {
+    "l": "148 | line-index = { version = \"0.1.2\" }",
+    "s": "e",
+    "t": 1793470298.297031
+  },
+  {
+    "l": "    | ^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970316
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297032
+  },
+  {
+    "l": "help: consider removing the workspace dependency `line-index`",
+    "s": "e",
+    "t": 1793470298.2970326
+  },
+  {
+    "l": "warning: unused workspace dependency `lsp-server`",
+    "s": "e",
+    "t": 1793470298.2970333
+  },
+  {
+    "l": "   --> Cargo.toml:150:1",
+    "s": "e",
+    "t": 1793470298.297034
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970345
+  },
+  {
+    "l": "150 | lsp-server = { version = \"0.7.9\" }",
+    "s": "e",
+    "t": 1793470298.297035
+  },
+  {
+    "l": "    | ^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970357
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297036
+  },
+  {
+    "l": "help: consider removing the workspace dependency `lsp-server`",
+    "s": "e",
+    "t": 1793470298.2970366
+  },
+  {
+    "l": "warning: unused workspace dependency `macros`",
+    "s": "e",
+    "t": 1793470298.2970374
+  },
+  {
+    "l": "  --> Cargo.toml:85:1",
+    "s": "e",
+    "t": 1793470298.297038
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2970386
+  },
+  {
+    "l": "85 | macros = { path = \"vendor/rust-analyzer/crates/macros\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970395
+  },
+  {
+    "l": "   | ^^^^^^",
+    "s": "e",
+    "t": 1793470298.2970402
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2970407
+  },
+  {
+    "l": "help: consider removing the workspace dependency `macros`",
+    "s": "e",
+    "t": 1793470298.2970414
+  },
+  {
+    "l": "warning: unused workspace dependency `mbe`",
+    "s": "e",
+    "t": 1793470298.2970421
+  },
+  {
+    "l": "   --> Cargo.toml:117:1",
+    "s": "e",
+    "t": 1793470298.2970445
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970457
+  },
+  {
+    "l": "117 | mbe = { path = \"vendor/rust-analyzer/crates/mbe\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2970467
+  },
+  {
+    "l": "    | ^^^",
+    "s": "e",
+    "t": 1793470298.2970474
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2970479
+  },
+  {
+    "l": "help: consider removing the workspace dependency `mbe`",
+    "s": "e",
+    "t": 1793470298.2970483
+  },
+  {
+    "l": "warning: unused workspace dependency `nohash-hasher`",
+    "s": "e",
+    "t": 1793470298.297109
+  },
+  {
+    "l": "   --> Cargo.toml:166:1",
+    "s": "e",
+    "t": 1793470298.2971096
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971103
+  },
+  {
+    "l": "166 | nohash-hasher = \"0.2.0\"",
+    "s": "e",
+    "t": 1793470298.2971108
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971115
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297112
+  },
+  {
+    "l": "help: consider removing the workspace dependency `nohash-hasher`",
+    "s": "e",
+    "t": 1793470298.2971125
+  },
+  {
+    "l": "warning: unused workspace dependency `oorandom`",
+    "s": "e",
+    "t": 1793470298.2971132
+  },
+  {
+    "l": "   --> Cargo.toml:167:1",
+    "s": "e",
+    "t": 1793470298.297114
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971141
+  },
+  {
+    "l": "167 | oorandom = \"11.1.5\"",
+    "s": "e",
+    "t": 1793470298.2971146
+  },
+  {
+    "l": "    | ^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971153
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971158
+  },
+  {
+    "l": "help: consider removing the workspace dependency `oorandom`",
+    "s": "e",
+    "t": 1793470298.2971163
+  },
+  {
+    "l": "warning: unused workspace dependency `proc-macro-srv`",
+    "s": "e",
+    "t": 1793470298.297117
+  },
+  {
+    "l": "   --> Cargo.toml:121:1",
+    "s": "e",
+    "t": 1793470298.2971177
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971182
+  },
+  {
+    "l": "121 | proc-macro-srv = { path = \"vendor/rust-analyzer/crates/proc-macro-srv\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2971187
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971196
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.29712
+  },
+  {
+    "l": "help: consider removing the workspace dependency `proc-macro-srv`",
+    "s": "e",
+    "t": 1793470298.2971206
+  },
+  {
+    "l": "warning: unused workspace dependency `process-wrap`",
+    "s": "e",
+    "t": 1793470298.2971213
+  },
+  {
+    "l": "   --> Cargo.toml:169:1",
+    "s": "e",
+    "t": 1793470298.297122
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971222
+  },
+  {
+    "l": "169 | process-wrap = { version = \"9.1.0\", features = [\"std\"] }",
+    "s": "e",
+    "t": 1793470298.2971227
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971237
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971241
+  },
+  {
+    "l": "help: consider removing the workspace dependency `process-wrap`",
+    "s": "e",
+    "t": 1793470298.2971246
+  },
+  {
+    "l": "warning: unused workspace dependency `profile`",
+    "s": "e",
+    "t": 1793470298.2971253
+  },
+  {
+    "l": "   --> Cargo.toml:122:1",
+    "s": "e",
+    "t": 1793470298.297126
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971265
+  },
+  {
+    "l": "122 | profile = { path = \"vendor/rust-analyzer/crates/profile\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.297127
+  },
+  {
+    "l": "    | ^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971277
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971282
+  },
+  {
+    "l": "help: consider removing the workspace dependency `profile`",
+    "s": "e",
+    "t": 1793470298.2971287
+  },
+  {
+    "l": "warning: unused workspace dependency `pulldown-cmark-to-cmark`",
+    "s": "e",
+    "t": 1793470298.2971294
+  },
+  {
+    "l": "   --> Cargo.toml:170:1",
+    "s": "e",
+    "t": 1793470298.29713
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971303
+  },
+  {
+    "l": "170 | pulldown-cmark-to-cmark = \"10.0.4\"",
+    "s": "e",
+    "t": 1793470298.2971308
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971315
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297132
+  },
+  {
+    "l": "help: consider removing the workspace dependency `pulldown-cmark-to-cmark`",
+    "s": "e",
+    "t": 1793470298.2971327
+  },
+  {
+    "l": "warning: unused workspace dependency `ra-ap-rustc_next_trait_solver`",
+    "s": "e",
+    "t": 1793470298.2971337
+  },
+  {
+    "l": "   --> Cargo.toml:143:1",
+    "s": "e",
+    "t": 1793470298.2971342
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971346
+  },
+  {
+    "l": "143 | ra-ap-rustc_next_trait_solver = { version = \"0.166\", default-features = false }",
+    "s": "e",
+    "t": 1793470298.297135
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.297136
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971365
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ra-ap-rustc_next_trait_solver`",
+    "s": "e",
+    "t": 1793470298.2971373
+  },
+  {
+    "l": "warning: unused workspace dependency `ra-ap-rustc_parse_format`",
+    "s": "e",
+    "t": 1793470298.297138
+  },
+  {
+    "l": "   --> Cargo.toml:137:1",
+    "s": "e",
+    "t": 1793470298.2971406
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297141
+  },
+  {
+    "l": "137 | ra-ap-rustc_parse_format = { version = \"0.166\", default-features = false }",
+    "s": "e",
+    "t": 1793470298.2971418
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971425
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297143
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ra-ap-rustc_parse_format`",
+    "s": "e",
+    "t": 1793470298.2971437
+  },
+  {
+    "l": "warning: unused workspace dependency `ra-ap-rustc_pattern_analysis`",
+    "s": "e",
+    "t": 1793470298.2971444
+  },
+  {
+    "l": "   --> Cargo.toml:140:1",
+    "s": "e",
+    "t": 1793470298.2971454
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971458
+  },
+  {
+    "l": "140 | ra-ap-rustc_pattern_analysis = { version = \"0.166\", default-features = false }",
+    "s": "e",
+    "t": 1793470298.2971463
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.297147
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971478
+  },
+  {
+    "l": "help: consider removing the workspace dependency `ra-ap-rustc_pattern_analysis`",
+    "s": "e",
+    "t": 1793470298.2971482
+  },
+  {
+    "l": "warning: unused workspace dependency `rowan`",
+    "s": "e",
+    "t": 1793470298.297149
+  },
+  {
+    "l": "   --> Cargo.toml:173:1",
+    "s": "e",
+    "t": 1793470298.2971497
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971501
+  },
+  {
+    "l": "173 | rowan = \"0.17.0\"",
+    "s": "e",
+    "t": 1793470298.2971702
+  },
+  {
+    "l": "    | ^^^^^",
+    "s": "e",
+    "t": 1793470298.2971709
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971716
+  },
+  {
+    "l": "help: consider removing the workspace dependency `rowan`",
+    "s": "e",
+    "t": 1793470298.297172
+  },
+  {
+    "l": "warning: unused workspace dependency `rustc-literal-escaper`",
+    "s": "e",
+    "t": 1793470298.2971728
+  },
+  {
+    "l": "   --> Cargo.toml:188:1",
+    "s": "e",
+    "t": 1793470298.2971735
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297174
+  },
+  {
+    "l": "188 | rustc-literal-escaper = \"0.0.7\"",
+    "s": "e",
+    "t": 1793470298.2971747
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971754
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297176
+  },
+  {
+    "l": "help: consider removing the workspace dependency `rustc-literal-escaper`",
+    "s": "e",
+    "t": 1793470298.2971766
+  },
+  {
+    "l": "warning: unused workspace dependency `smallvec`",
+    "s": "e",
+    "t": 1793470298.2971773
+  },
+  {
+    "l": "   --> Cargo.toml:189:1",
+    "s": "e",
+    "t": 1793470298.297178
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971785
+  },
+  {
+    "l": "189 | smallvec = { version = \"1.15.1\", features = [",
+    "s": "e",
+    "t": 1793470298.297179
+  },
+  {
+    "l": "    | ^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971797
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971802
+  },
+  {
+    "l": "help: consider removing the workspace dependency `smallvec`",
+    "s": "e",
+    "t": 1793470298.2971807
+  },
+  {
+    "l": "warning: unused workspace dependency `smol_str`",
+    "s": "e",
+    "t": 1793470298.2971888
+  },
+  {
+    "l": "   --> Cargo.toml:194:1",
+    "s": "e",
+    "t": 1793470298.2971895
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.29719
+  },
+  {
+    "l": "194 | smol_str = \"0.3.2\"",
+    "s": "e",
+    "t": 1793470298.2971904
+  },
+  {
+    "l": "    | ^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2971911
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2971961
+  },
+  {
+    "l": "help: consider removing the workspace dependency `smol_str`",
+    "s": "e",
+    "t": 1793470298.2971966
+  },
+  {
+    "l": "warning: unused workspace dependency `syntax-bridge`",
+    "s": "e",
+    "t": 1793470298.297231
+  },
+  {
+    "l": "   --> Cargo.toml:127:1",
+    "s": "e",
+    "t": 1793470298.2972317
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2972322
+  },
+  {
+    "l": "127 | syntax-bridge = { path = \"vendor/rust-analyzer/crates/syntax-bridge\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2972329
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.297239
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2972395
+  },
+  {
+    "l": "help: consider removing the workspace dependency `syntax-bridge`",
+    "s": "e",
+    "t": 1793470298.2972403
+  },
+  {
+    "l": "warning: unused workspace dependency `test-utils`",
+    "s": "e",
+    "t": 1793470298.2972693
+  },
+  {
+    "l": "   --> Cargo.toml:129:1",
+    "s": "e",
+    "t": 1793470298.29727
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2972705
+  },
+  {
+    "l": "129 | test-utils = { path = \"vendor/rust-analyzer/crates/test-utils\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.2972765
+  },
+  {
+    "l": "    | ^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2972772
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2972777
+  },
+  {
+    "l": "help: consider removing the workspace dependency `test-utils`",
+    "s": "e",
+    "t": 1793470298.2972782
+  },
+  {
+    "l": "warning: unused workspace dependency `text-size`",
+    "s": "e",
+    "t": 1793470298.2973328
+  },
+  {
+    "l": "   --> Cargo.toml:195:1",
+    "s": "e",
+    "t": 1793470298.2973394
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2973402
+  },
+  {
+    "l": "195 | text-size = \"1.1.1\"",
+    "s": "e",
+    "t": 1793470298.297341
+  },
+  {
+    "l": "    | ^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2973418
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2973425
+  },
+  {
+    "l": "help: consider removing the workspace dependency `text-size`",
+    "s": "e",
+    "t": 1793470298.2973435
+  },
+  {
+    "l": "warning: unused workspace dependency `thin-vec`",
+    "s": "e",
+    "t": 1793470298.2973528
+  },
+  {
+    "l": "   --> Cargo.toml:211:1",
+    "s": "e",
+    "t": 1793470298.2973535
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2973542
+  },
+  {
+    "l": "211 | thin-vec = \"0.2.16\"",
+    "s": "e",
+    "t": 1793470298.2973547
+  },
+  {
+    "l": "    | ^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2973554
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297356
+  },
+  {
+    "l": "help: consider removing the workspace dependency `thin-vec`",
+    "s": "e",
+    "t": 1793470298.2973566
+  },
+  {
+    "l": "warning: unused workspace dependency `tracing-subscriber`",
+    "s": "e",
+    "t": 1793470298.2974036
+  },
+  {
+    "l": "   --> Cargo.toml:199:1",
+    "s": "e",
+    "t": 1793470298.2974052
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974062
+  },
+  {
+    "l": "199 | tracing-subscriber = { version = \"0.3.20\", default-features = false, features = [",
+    "s": "e",
+    "t": 1793470298.2974074
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2974105
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974117
+  },
+  {
+    "l": "help: consider removing the workspace dependency `tracing-subscriber`",
+    "s": "e",
+    "t": 1793470298.2974124
+  },
+  {
+    "l": "warning: unused workspace dependency `tracing-tree`",
+    "s": "e",
+    "t": 1793470298.2974212
+  },
+  {
+    "l": "   --> Cargo.toml:198:1",
+    "s": "e",
+    "t": 1793470298.2974222
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974226
+  },
+  {
+    "l": "198 | tracing-tree = \"0.4.0\"",
+    "s": "e",
+    "t": 1793470298.2974231
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2974238
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974243
+  },
+  {
+    "l": "help: consider removing the workspace dependency `tracing-tree`",
+    "s": "e",
+    "t": 1793470298.297425
+  },
+  {
+    "l": "warning: unused workspace dependency `unicode-width`",
+    "s": "e",
+    "t": 1793470298.2974484
+  },
+  {
+    "l": "   --> Cargo.toml:208:1",
+    "s": "e",
+    "t": 1793470298.297449
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974496
+  },
+  {
+    "l": "208 | unicode-width = \"0.2.2\"",
+    "s": "e",
+    "t": 1793470298.2974503
+  },
+  {
+    "l": "    | ^^^^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.297456
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974565
+  },
+  {
+    "l": "help: consider removing the workspace dependency `unicode-width`",
+    "s": "e",
+    "t": 1793470298.2974575
+  },
+  {
+    "l": "warning: unused workspace dependency `vfs-notify`",
+    "s": "e",
+    "t": 1793470298.2974858
+  },
+  {
+    "l": "   --> Cargo.toml:132:1",
+    "s": "e",
+    "t": 1793470298.2974868
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974873
+  },
+  {
+    "l": "132 | vfs-notify = { path = \"vendor/rust-analyzer/crates/vfs-notify\", version = \"0.0.0\" }",
+    "s": "e",
+    "t": 1793470298.297488
+  },
+  {
+    "l": "    | ^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.2974937
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2974942
+  },
+  {
+    "l": "help: consider removing the workspace dependency `vfs-notify`",
+    "s": "e",
+    "t": 1793470298.297495
+  },
+  {
+    "l": "warning: unused workspace dependency `xshell`",
+    "s": "e",
+    "t": 1793470298.29752
+  },
+  {
+    "l": "   --> Cargo.toml:210:1",
+    "s": "e",
+    "t": 1793470298.2975206
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.297521
+  },
+  {
+    "l": "210 | xshell = \"0.2.7\"",
+    "s": "e",
+    "t": 1793470298.2975218
+  },
+  {
+    "l": "    | ^^^^^^",
+    "s": "e",
+    "t": 1793470298.297527
+  },
+  {
+    "l": "    |",
+    "s": "e",
+    "t": 1793470298.2975276
+  },
+  {
+    "l": "help: consider removing the workspace dependency `xshell`",
+    "s": "e",
+    "t": 1793470298.2975283
+  },
+  {
+    "l": "warning: unused field `categories` in `workspace.package`",
+    "s": "e",
+    "t": 1793470298.297605
+  },
+  {
+    "l": "  --> Cargo.toml:24:1",
+    "s": "e",
+    "t": 1793470298.2976058
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2976065
+  },
+  {
+    "l": "24 | categories = [\"development-tools\", \"development-tools::build-utils\"]",
+    "s": "e",
+    "t": 1793470298.2976131
+  },
+  {
+    "l": "   | ^^^^^^^^^^",
+    "s": "e",
+    "t": 1793470298.297614
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2976146
+  },
+  {
+    "l": "   = note: `cargo::unused_workspace_package_fields` is set to `warn` by default",
+    "s": "e",
+    "t": 1793470298.2976153
+  },
+  {
+    "l": "help: consider removing the field `workspace.package.categories`",
+    "s": "e",
+    "t": 1793470298.2976162
+  },
+  {
+    "l": "warning: workspace (manifest) generated 42 warnings",
+    "s": "e",
+    "t": 1793470298.2976215
+  },
+  {
+    "l": "warning: missing `[lints]` to inherit `[workspace.lints]`",
+    "s": "e",
+    "t": 1793470298.2976925
+  },
+  {
+    "l": "  --> crates/ra-jit-live/Cargo.toml",
+    "s": "e",
+    "t": 1793470298.2976933
+  },
+  {
+    "l": "   = note: `cargo::missing_lints_inheritance` is set to `warn` by default",
+    "s": "e",
+    "t": 1793470298.297694
+  },
+  {
+    "l": "help: to inherit `workspace.lints, add:",
+    "s": "e",
+    "t": 1793470298.2977014
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.297702
+  },
+  {
+    "l": "14 ~ [dependencies]",
+    "s": "e",
+    "t": 1793470298.2977026
+  },
+  {
+    "l": "15 + [lints]",
+    "s": "e",
+    "t": 1793470298.2977033
+  },
+  {
+    "l": "16 + workspace = true",
+    "s": "e",
+    "t": 1793470298.297704
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2977045
+  },
+  {
+    "l": "help: to clarify your intent to not inherit, add:",
+    "s": "e",
+    "t": 1793470298.297705
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2977111
+  },
+  {
+    "l": "14 ~ [dependencies]",
+    "s": "e",
+    "t": 1793470298.2977116
+  },
+  {
+    "l": "15 + [lints]",
+    "s": "e",
+    "t": 1793470298.297712
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2977126
+  },
+  {
+    "l": "warning: `ra-jit-live` (manifest) generated 1 warning",
+    "s": "e",
+    "t": 1793470298.2977133
+  },
+  {
+    "l": "warning: missing `[lints]` to inherit `[workspace.lints]`",
+    "s": "e",
+    "t": 1793470298.2978432
+  },
+  {
+    "l": "  --> crates/ra-jit-cache/Cargo.toml",
+    "s": "e",
+    "t": 1793470298.297844
+  },
+  {
+    "l": "   = note: `cargo::missing_lints_inheritance` is set to `warn` by default",
+    "s": "e",
+    "t": 1793470298.2978446
+  },
+  {
+    "l": "help: to inherit `workspace.lints, add:",
+    "s": "e",
+    "t": 1793470298.2978523
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2978528
+  },
+  {
+    "l": "24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }",
+    "s": "e",
+    "t": 1793470298.2978535
+  },
+  {
+    "l": "25 + [lints]",
+    "s": "e",
+    "t": 1793470298.2978542
+  },
+  {
+    "l": "26 + workspace = true",
+    "s": "e",
+    "t": 1793470298.2978547
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2978551
+  },
+  {
+    "l": "help: to clarify your intent to not inherit, add:",
+    "s": "e",
+    "t": 1793470298.2978559
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2978618
+  },
+  {
+    "l": "24 ~ serde = { version = \"1.0.219\", features = [\"derive\"] }",
+    "s": "e",
+    "t": 1793470298.2978623
+  },
+  {
+    "l": "25 + [lints]",
+    "s": "e",
+    "t": 1793470298.297863
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2978635
+  },
+  {
+    "l": "warning: `ra-jit-cache` (manifest) generated 1 warning",
+    "s": "e",
+    "t": 1793470298.2978642
+  },
+  {
+    "l": "warning: missing `[lints]` to inherit `[workspace.lints]`",
+    "s": "e",
+    "t": 1793470298.2980027
+  },
+  {
+    "l": "  --> crates/ra-jit-cache-macros/Cargo.toml",
+    "s": "e",
+    "t": 1793470298.2980034
+  },
+  {
+    "l": "   = note: `cargo::missing_lints_inheritance` is set to `warn` by default",
+    "s": "e",
+    "t": 1793470298.2980044
+  },
+  {
+    "l": "help: to inherit `workspace.lints, add:",
+    "s": "e",
+    "t": 1793470298.298005
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2980058
+  },
+  {
+    "l": "14 ~ proc-macro = true",
+    "s": "e",
+    "t": 1793470298.298013
+  },
+  {
+    "l": "15 + [lints]",
+    "s": "e",
+    "t": 1793470298.2980134
+  },
+  {
+    "l": "16 + workspace = true",
+    "s": "e",
+    "t": 1793470298.2980142
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2980146
+  },
+  {
+    "l": "help: to clarify your intent to not inherit, add:",
+    "s": "e",
+    "t": 1793470298.298015
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2980156
+  },
+  {
+    "l": "14 ~ proc-macro = true",
+    "s": "e",
+    "t": 1793470298.298016
+  },
+  {
+    "l": "15 + [lints]",
+    "s": "e",
+    "t": 1793470298.2980165
+  },
+  {
+    "l": "   |",
+    "s": "e",
+    "t": 1793470298.2980168
+  },
+  {
+    "l": "warning: `ra-jit-cache-macros` (manifest) generated 1 warning",
+    "s": "e",
+    "t": 1793470298.2980218
+  },
+  {
+    "l": "warning: crates/ra-jit/Cargo.toml: file `<repo>/toolchain/resident/crates/ra-jit/src/main.rs` found to be present in multiple build targets:",
+    "s": "e",
+    "t": 1793470298.298125
+  },
+  {
+    "l": "  * `bin` target `jr-engine`",
+    "s": "e",
+    "t": 1793470298.298126
+  },
+  {
+    "l": "  * `bin` target `ra-jit`",
+    "s": "e",
+    "t": 1793470298.2981267
+  },
+  {
+    "l": "warning: `ra-jit` (manifest) generated 1 warning",
+    "s": "e",
+    "t": 1793470298.298161
+  },
+  {
+    "l": "       Fresh proc-macro2 v1.0.106",
+    "s": "e",
+    "t": 1793470298.6390972
+  },
+  {
+    "l": "       Fresh quote v1.0.45",
+    "s": "e",
+    "t": 1793470298.6391006
+  },
+  {
+    "l": "       Fresh syn v2.0.117",
+    "s": "e",
+    "t": 1793470298.6392055
+  },
+  {
+    "l": "       Fresh serde_core v1.0.228",
+    "s": "e",
+    "t": 1793470298.6392066
+  },
+  {
+    "l": "       Fresh synstructure v0.13.2",
+    "s": "e",
+    "t": 1793470298.6392078
+  },
+  {
+    "l": "       Fresh zerofrom-derive v0.1.7",
+    "s": "e",
+    "t": 1793470298.6392086
+  },
+  {
+    "l": "       Fresh zerofrom v0.1.8",
+    "s": "e",
+    "t": 1793470298.6392093
+  },
+  {
+    "l": "       Fresh yoke-derive v0.8.2",
+    "s": "e",
+    "t": 1793470298.63921
+  },
+  {
+    "l": "       Fresh stable_deref_trait v1.2.1",
+    "s": "e",
+    "t": 1793470298.6393058
+  },
+  {
+    "l": "       Fresh yoke v0.8.3",
+    "s": "e",
+    "t": 1793470298.6393073
+  },
+  {
+    "l": "       Fresh zerovec-derive v0.11.3",
+    "s": "e",
+    "t": 1793470298.639308
+  },
+  {
+    "l": "       Fresh zerovec v0.11.6",
+    "s": "e",
+    "t": 1793470298.639309
+  },
+  {
+    "l": "       Fresh displaydoc v0.2.6",
+    "s": "e",
+    "t": 1793470298.639382
+  },
+  {
+    "l": "       Fresh tinystr v0.8.3",
+    "s": "e",
+    "t": 1793470298.639383
+  },
+  {
+    "l": "       Fresh serde_derive v1.0.228",
+    "s": "e",
+    "t": 1793470298.6394527
+  },
+  {
+    "l": "       Fresh writeable v0.6.3",
+    "s": "e",
+    "t": 1793470298.6394536
+  },
+  {
+    "l": "       Fresh litemap v0.8.2",
+    "s": "e",
+    "t": 1793470298.6395214
+  },
+  {
+    "l": "       Fresh icu_locale_core v2.2.0",
+    "s": "e",
+    "t": 1793470298.639522
+  },
+  {
+    "l": "       Fresh serde v1.0.228",
+    "s": "e",
+    "t": 1793470298.63959
+  },
+  {
+    "l": "       Fresh zerotrie v0.2.4",
+    "s": "e",
+    "t": 1793470298.6395907
+  },
+  {
+    "l": "       Fresh potential_utf v0.1.5",
+    "s": "e",
+    "t": 1793470298.6395917
+  },
+  {
+    "l": "       Fresh utf8_iter v1.0.4",
+    "s": "e",
+    "t": 1793470298.6396601
+  },
+  {
+    "l": "       Fresh icu_provider v2.2.0",
+    "s": "e",
+    "t": 1793470298.6397264
+  },
+  {
+    "l": "       Fresh icu_collections v2.2.0",
+    "s": "e",
+    "t": 1793470298.6397943
+  },
+  {
+    "l": "       Fresh autocfg v1.5.1",
+    "s": "e",
+    "t": 1793470298.6397953
+  },
+  {
+    "l": "       Fresh smallvec v1.15.1",
+    "s": "e",
+    "t": 1793470298.6398609
+  },
+  {
+    "l": "       Fresh icu_properties_data v2.2.0",
+    "s": "e",
+    "t": 1793470298.6399274
+  },
+  {
+    "l": "       Fresh equivalent v1.0.2",
+    "s": "e",
+    "t": 1793470298.6399944
+  },
+  {
+    "l": "       Fresh allocator-api2 v0.2.21",
+    "s": "e",
+    "t": 1793470298.6399956
+  },
+  {
+    "l": "       Fresh icu_normalizer_data v2.2.0",
+    "s": "e",
+    "t": 1793470298.6400619
+  },
+  {
+    "l": "       Fresh foldhash v0.2.0",
+    "s": "e",
+    "t": 1793470298.6400626
+  },
+  {
+    "l": "       Fresh icu_properties v2.2.0",
+    "s": "e",
+    "t": 1793470298.6401298
+  },
+  {
+    "l": "       Fresh hashbrown v0.17.1",
+    "s": "e",
+    "t": 1793470298.640198
+  },
+  {
+    "l": "       Fresh icu_normalizer v2.2.0",
+    "s": "e",
+    "t": 1793470298.640199
+  },
+  {
+    "l": "       Fresh winnow v1.0.3",
+    "s": "e",
+    "t": 1793470298.640266
+  },
+  {
+    "l": "       Fresh num-traits v0.2.19",
+    "s": "e",
+    "t": 1793470298.640267
+  },
+  {
+    "l": "       Fresh typeid v1.0.3",
+    "s": "e",
+    "t": 1793470298.640338
+  },
+  {
+    "l": "       Fresh idna_adapter v1.2.2",
+    "s": "e",
+    "t": 1793470298.6404068
+  },
+  {
+    "l": "       Fresh toml_parser v1.1.2+spec-1.1.0",
+    "s": "e",
+    "t": 1793470298.6404078
+  },
+  {
+    "l": "       Fresh indexmap v2.14.0",
+    "s": "e",
+    "t": 1793470298.6404746
+  },
+  {
+    "l": "       Fresh toml_datetime v1.1.1+spec-1.1.0",
+    "s": "e",
+    "t": 1793470298.6404753
+  },
+  {
+    "l": "       Fresh percent-encoding v2.3.2",
+    "s": "e",
+    "t": 1793470298.6404765
+  },
+  {
+    "l": "       Fresh toml_writer v1.1.1+spec-1.1.0",
+    "s": "e",
+    "t": 1793470298.6405425
+  },
+  {
+    "l": "       Fresh idna v1.1.0",
+    "s": "e",
+    "t": 1793470298.64061
+  },
+  {
+    "l": "       Fresh form_urlencoded v1.2.2",
+    "s": "e",
+    "t": 1793470298.6406772
+  },
+  {
+    "l": "       Fresh ordered-float v2.10.1",
+    "s": "e",
+    "t": 1793470298.640678
+  },
+  {
+    "l": "       Fresh erased-serde v0.4.11",
+    "s": "e",
+    "t": 1793470298.640745
+  },
+  {
+    "l": "       Fresh serde_spanned v1.1.1",
+    "s": "e",
+    "t": 1793470298.6407459
+  },
+  {
+    "l": "       Fresh thiserror-impl v2.0.18",
+    "s": "e",
+    "t": 1793470298.6408117
+  },
+  {
+    "l": "       Fresh jiff-core v0.1.1",
+    "s": "e",
+    "t": 1793470298.6408794
+  },
+  {
+    "l": "       Fresh toml v1.1.2+spec-1.1.0",
+    "s": "e",
+    "t": 1793470298.6409562
+  },
+  {
+    "l": "       Fresh thiserror v2.0.18",
+    "s": "e",
+    "t": 1793470298.6409569
+  },
+  {
+    "l": "       Fresh serde-untagged v0.1.9",
+    "s": "e",
+    "t": 1793470298.641025
+  },
+  {
+    "l": "       Fresh jiff v0.2.38",
+    "s": "e",
+    "t": 1793470298.6410952
+  },
+  {
+    "l": "       Fresh serde-value v0.7.0",
+    "s": "e",
+    "t": 1793470298.641096
+  },
+  {
+    "l": "       Fresh zmij v1.0.21",
+    "s": "e",
+    "t": 1793470298.6411657
+  },
+  {
+    "l": "       Fresh url v2.5.8",
+    "s": "e",
+    "t": 1793470298.6411667
+  },
+  {
+    "l": "       Fresh semver v1.0.28",
+    "s": "e",
+    "t": 1793470298.6411676
+  },
+  {
+    "l": "       Fresh unicode-width v0.2.2",
+    "s": "e",
+    "t": 1793470298.6412363
+  },
+  {
+    "l": "       Fresh unicode-ident v1.0.24",
+    "s": "e",
+    "t": 1793470298.6412375
+  },
+  {
+    "l": "       Fresh anstyle v1.0.14",
+    "s": "e",
+    "t": 1793470298.6413229
+  },
+  {
+    "l": "       Fresh memchr v2.8.1",
+    "s": "e",
+    "t": 1793470298.6413238
+  },
+  {
+    "l": "       Fresh itoa v1.0.18",
+    "s": "e",
+    "t": 1793470298.6413956
+  },
+  {
+    "l": "       Fresh anyhow v1.0.104",
+    "s": "e",
+    "t": 1793470298.6413965
+  },
+  {
+    "l": "       Fresh toml_edit v0.25.12+spec-1.1.0",
+    "s": "e",
+    "t": 1793470298.6413972
+  },
+  {
+    "l": "       Fresh cargo-util-schemas v0.14.3",
+    "s": "e",
+    "t": 1793470298.6414647
+  },
+  {
+    "l": "       Fresh annotate-snippets v0.12.16",
+    "s": "e",
+    "t": 1793470298.641554
+  },
+  {
+    "l": "       Fresh serde_json v1.0.150",
+    "s": "e",
+    "t": 1793470298.641555
+  },
+  {
+    "l": "       Fresh cargo-platform v0.3.3",
+    "s": "e",
+    "t": 1793470298.6416554
+  },
+  {
+    "l": "       Fresh rustc-hash v2.1.2",
+    "s": "e",
+    "t": 1793470298.6416564
+  },
+  {
+    "l": "       Fresh glob v0.3.4",
+    "s": "e",
+    "t": 1793470298.641657
+  },
+  {
+    "l": "       Fresh shell-escape v0.1.5",
+    "s": "e",
+    "t": 1793470298.6417272
+  },
+  {
+    "l": "       Fresh pathdiff v0.2.3",
+    "s": "e",
+    "t": 1793470298.6417282
+  },
+  {
+    "l": "       Fresh dunce v1.0.5",
+    "s": "e",
+    "t": 1793470298.641729
+  },
+  {
+    "l": "       Dirty blaze-manifest v0.20261027.0 (<repo>/toolchain/resident/crates/blaze-manifest): the file `crates/blaze-manifest/src/dependency.rs` has changed (1793469467.531319578s, 27m 21s after last build at 1793467826.616519895s)",
+    "s": "e",
+    "t": 1793470298.6418002
+  },
+  {
+    "l": "   Compiling blaze-manifest v0.20261027.0 (<repo>/toolchain/resident/crates/blaze-manifest)",
+    "s": "e",
+    "t": 1793470298.6418023
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_manifest --edition=2024 crates/blaze-manifest/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=061e20996a4a553a -C extra-filename=-a1e6a40d89629873 --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/a1e6a40d89629873/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470298.6423907
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name blaze_manifest --edition=2024 crates/blaze-manifest/src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type lib --emit=dep-info,metadata,link -Z embed-metadata=no -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=7c9857af37c8f4ba -C extra-filename=-04bd91ce6296fc1a --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470298.6455646
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name fixtures --edition=2024 crates/blaze-manifest/tests/fixtures.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=6beda5c398e3528d -C extra-filename=-6747aa4e307b758e --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/6747aa4e307b758e/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470319.4833906
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name cargo_features --edition=2024 crates/blaze-manifest/tests/cargo_features.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=1b1963bd5630f95e -C extra-filename=-558fb8c4cc4f047f --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/558fb8c4cc4f047f/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470319.4885051
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name config_get --edition=2024 crates/blaze-manifest/tests/config_get.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=9975f404025a0902 -C extra-filename=-35a6aafdc33b7238 --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/35a6aafdc33b7238/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470319.4885974
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name profiles --edition=2024 crates/blaze-manifest/tests/profiles.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=316654b628272947 -C extra-filename=-a5776c3ddaac4b13 --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/a5776c3ddaac4b13/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470319.4903584
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name metadata --edition=2024 crates/blaze-manifest/examples/metadata.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=bbd96b6e67bce8cb --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/3a2d6eaedc61ffd3/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470319.4909947
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name profiles --edition=2024 crates/blaze-manifest/examples/profiles/main.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=04c2d65813785a84 --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/b6370bd5b7025736/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470319.4910774
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name config_typed --edition=2024 crates/blaze-manifest/tests/config_typed.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=f0963c8b883255a7 -C extra-filename=-dacfae80fdc81ccb --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/dacfae80fdc81ccb/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470322.5525208
+  },
+  {
+    "l": "     Running `<native-root>/candidate-unit-v83/justrust-home/bin/shim/aecdd78cd036ca86/rustc --crate-name config --edition=2024 crates/blaze-manifest/examples/config.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --crate-type bin --emit=dep-info,link -C opt-level=3 -C embed-bitcode=no '--warn=clippy::suspicious' '--warn=clippy::style' '--allow=clippy::restriction' '--deny=clippy::perf' '--deny=clippy::correctness' '--warn=clippy::complexity' '--allow=clippy::wrong_self_convention' '--allow=clippy::vec_init_then_push' '--allow=clippy::useless_asref' --warn=unused_lifetimes --warn=unused_extern_crates --warn=unsafe_op_in_unsafe_fn --warn=unreachable_pub '--allow=clippy::unnecessary_map_or' --warn=unexpected_cfgs '--allow=clippy::type_complexity' '--allow=clippy::too_many_arguments' '--allow=clippy::too_long_first_doc_paragraph' '--warn=clippy::todo' '--warn=clippy::str_to_string' '--allow=clippy::single_match' '--allow=clippy::result_unit_err' '--warn=clippy::rc_buffer' '--warn=clippy::print_stdout' '--warn=clippy::print_stderr' '--allow=clippy::new_ret_no_self' '--allow=clippy::literal_string_with_formatting_args' '--allow=clippy::len_without_is_empty' --warn=explicit_outlives_requirements '--allow=clippy::enum_variant_names' --warn=elided_lifetimes_in_paths '--warn=clippy::dbg_macro' '--allow=clippy::assigning_clones' --check-cfg 'cfg(bootstrap)' --check-cfg 'cfg(no_salsa_async_drops)' --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=124c89ef654f6df8 --out-dir <native-root>/candidate-build-v2/target/release/build/blaze-manifest/8c1c08746cd11b99/out -C strip=debuginfo -L dependency=<native-root>/candidate-build-v2/target/release/build/allocator-api2/d6816e127d076781/out -L dependency=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anstyle/0e75f3789286836e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out -L dependency=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out -L dependency=<native-root>/candidate-build-v2/target/release/build/displaydoc/b4e54cd47f69acf5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/equivalent/f60641437efedd8b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/erased-serde/266e6a88fc437348/out -L dependency=<native-root>/candidate-build-v2/target/release/build/foldhash/be15630f2903ac82/out -L dependency=<native-root>/candidate-build-v2/target/release/build/form_urlencoded/4a3dd509df263094/out -L dependency=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/hashbrown/4bbbc7eb04a11ccb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_collections/bde634ba5526bede/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_locale_core/7048af43dcc625ad/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer/9a2490e7919ad0bb/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_normalizer_data/cc88536e9c4c5fe9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties/19b35b2e3607e230/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_properties_data/063e2237b2ca692c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/icu_provider/6aeb316be6679f6c/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna/187c77fe1b2fbaf7/out -L dependency=<native-root>/candidate-build-v2/target/release/build/idna_adapter/9e4696eba43a19cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/indexmap/0b20387ac9ebce4b/out -L dependency=<native-root>/candidate-build-v2/target/release/build/itoa/fdfa82d6981e4d48/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff-core/a19145492a673481/out -L dependency=<native-root>/candidate-build-v2/target/release/build/jiff/e010c35540d8304e/out -L dependency=<native-root>/candidate-build-v2/target/release/build/litemap/bbba73e0cef1dedc/out -L dependency=<native-root>/candidate-build-v2/target/release/build/memchr/bea5ef6ef4010426/out -L dependency=<native-root>/candidate-build-v2/target/release/build/num-traits/6076ac14d3536837/out -L dependency=<native-root>/candidate-build-v2/target/release/build/ordered-float/cb1a3357c05dcea3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/percent-encoding/63e4375395f2f69a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/potential_utf/4d7eacb455652885/out -L dependency=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out -L dependency=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde-value/8cd5ae1a8637d8c1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_core/2a4d6d6ce34c26ce/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_derive/dbc4c205bfb3d0bf/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out -L dependency=<native-root>/candidate-build-v2/target/release/build/serde_spanned/e04667944c1a7e5d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/smallvec/098ed7843f5c6a43/out -L dependency=<native-root>/candidate-build-v2/target/release/build/stable_deref_trait/6af59c95fd80f2a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror-impl/01d74fdaaca8db0a/out -L dependency=<native-root>/candidate-build-v2/target/release/build/thiserror/d57ccfbb658ca8d8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/tinystr/49b1102a6bc05d56/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_datetime/1b3ec8ede9286c01/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_parser/d1822a272b3e4cc3/out -L dependency=<native-root>/candidate-build-v2/target/release/build/toml_writer/ca2facc863a01ed6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/typeid/91b400325c1315b5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-ident/06309c362ba644fa/out -L dependency=<native-root>/candidate-build-v2/target/release/build/unicode-width/c678b6817f2c38e8/out -L dependency=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out -L dependency=<native-root>/candidate-build-v2/target/release/build/utf8_iter/0aad727db90d4d62/out -L dependency=<native-root>/candidate-build-v2/target/release/build/winnow/6013a16cda841ac6/out -L dependency=<native-root>/candidate-build-v2/target/release/build/writeable/f80ea70b60f39f52/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke-derive/ba21770b972c85cd/out -L dependency=<native-root>/candidate-build-v2/target/release/build/yoke/97ea51b9c12680c9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom-derive/a3e374e7bbca79a9/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerofrom/809d5ae6f1568cd1/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerotrie/2d3fc6d3d37a7204/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec-derive/c171ee6cf1027823/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zerovec/18600b5a8959cfb5/out -L dependency=<native-root>/candidate-build-v2/target/release/build/zmij/89e2813fba791572/out --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rlib --extern annotate_snippets=<native-root>/candidate-build-v2/target/release/build/annotate-snippets/ecb6a572a4bcb0b2/out/libannotate_snippets-ecb6a572a4bcb0b2.rmeta --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rlib --extern anyhow=<native-root>/candidate-build-v2/target/release/build/anyhow/297472154127fb87/out/libanyhow-297472154127fb87.rmeta --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rlib --extern blaze_manifest=<native-root>/candidate-build-v2/target/release/build/blaze-manifest/04bd91ce6296fc1a/out/libblaze_manifest-04bd91ce6296fc1a.rmeta --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rlib --extern cargo_platform=<native-root>/candidate-build-v2/target/release/build/cargo-platform/b4bd5166f3aed3c4/out/libcargo_platform-b4bd5166f3aed3c4.rmeta --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rlib --extern cargo_util_schemas=<native-root>/candidate-build-v2/target/release/build/cargo-util-schemas/098adc09f8e5de57/out/libcargo_util_schemas-098adc09f8e5de57.rmeta --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rlib --extern dunce=<native-root>/candidate-build-v2/target/release/build/dunce/2ec3023ff4649113/out/libdunce-2ec3023ff4649113.rmeta --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rlib --extern glob=<native-root>/candidate-build-v2/target/release/build/glob/927f2766e790bff6/out/libglob-927f2766e790bff6.rmeta --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rlib --extern pathdiff=<native-root>/candidate-build-v2/target/release/build/pathdiff/a34d40b3e86f33f1/out/libpathdiff-a34d40b3e86f33f1.rmeta --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rlib --extern rustc_hash=<native-root>/candidate-build-v2/target/release/build/rustc-hash/117723233d994bef/out/librustc_hash-117723233d994bef.rmeta --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rlib --extern semver=<native-root>/candidate-build-v2/target/release/build/semver/4504da1ef93b7ea9/out/libsemver-4504da1ef93b7ea9.rmeta --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rlib --extern serde=<native-root>/candidate-build-v2/target/release/build/serde/a979ff0f13f83cf3/out/libserde-a979ff0f13f83cf3.rmeta --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rlib --extern serde_untagged=<native-root>/candidate-build-v2/target/release/build/serde-untagged/8d239cdd917a7efa/out/libserde_untagged-8d239cdd917a7efa.rmeta --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rlib --extern serde_json=<native-root>/candidate-build-v2/target/release/build/serde_json/118232edd18f2341/out/libserde_json-118232edd18f2341.rmeta --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rlib --extern shell_escape=<native-root>/candidate-build-v2/target/release/build/shell-escape/0bdb18f64135c7c8/out/libshell_escape-0bdb18f64135c7c8.rmeta --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rlib --extern toml=<native-root>/candidate-build-v2/target/release/build/toml/b837c4448c2ed61d/out/libtoml-b837c4448c2ed61d.rmeta --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rlib --extern toml_edit=<native-root>/candidate-build-v2/target/release/build/toml_edit/e66a87888d3ae1a9/out/libtoml_edit-e66a87888d3ae1a9.rmeta --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rlib --extern url=<native-root>/candidate-build-v2/target/release/build/url/6aef094b73158f17/out/liburl-6aef094b73158f17.rmeta --force-warn=unused_crate_dependencies`",
+    "s": "e",
+    "t": 1793470323.5068183
+  },
+  {
+    "l": "    Finished `release` profile [optimized] target(s) in 28.85s",
+    "s": "e",
+    "t": 1793470327.1317966
+  },
+  {
+    "l": "     Running `<home>/.cargo/bin/justrust __test-runner <native-root>/candidate-build-v2/target/release/build/blaze-manifest/a1e6a40d89629873/out/blaze_manifest-a1e6a40d89629873`",
+    "s": "e",
+    "t": 1793470327.1590896
+  },
+  {
+    "l": "running 2 tests",
+    "s": "o",
+    "t": 1793470327.1622128
+  },
+  {
+    "l": "test config::key::tests::env_keys ... ok <0.000s>",
+    "s": "o",
+    "t": 1793470327.1625526
+  },
+  {
+    "l": "test config::key::tests::array_item_key_path_display ... ok <0.000s>",
+    "s": "o",
+    "t": 1793470327.1625555
+  },
+  {
+    "l": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "s": "o",
+    "t": 1793470327.1625674
+  },
+  {
+    "l": "     Running `<home>/.cargo/bin/justrust __test-runner <native-root>/candidate-build-v2/target/release/build/blaze-manifest/558fb8c4cc4f047f/out/cargo_features-558fb8c4cc4f047f`",
+    "s": "e",
+    "t": 1793470327.1630652
+  },
+  {
+    "l": "running 4 tests",
+    "s": "o",
+    "t": 1793470327.1660974
+  },
+  {
+    "l": "test an_unlisted_unstable_feature_is_refused ... ok <0.001s>",
+    "s": "o",
+    "t": 1793470327.1669955
+  },
+  {
+    "l": "test unknown_and_repeated_features_are_refused ... ok <0.001s>",
+    "s": "o",
+    "t": 1793470327.1673708
+  },
+  {
+    "l": "test a_listed_unstable_feature_is_activated ... ok <0.001s>",
+    "s": "o",
+    "t": 1793470327.1675603
+  },
+  {
+    "l": "test a_path_base_joins_the_workspace_root ... ok <0.001s>",
+    "s": "o",
+    "t": 1793470327.1675627
+  },
+  {
+    "l": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "s": "o",
+    "t": 1793470327.167565
+  },
+  {
+    "l": "     Running `<home>/.cargo/bin/justrust __test-runner <native-root>/candidate-build-v2/target/release/build/blaze-manifest/35a6aafdc33b7238/out/config_get-35a6aafdc33b7238`",
+    "s": "e",
+    "t": 1793470327.1682417
+  },
+  {
+    "l": "running 1 test",
+    "s": "o",
+    "t": 1793470327.1712263
+  },
+  {
+    "l": "test config_fixtures_read_as_cargo_reads_them ... ok <0.019s>",
+    "s": "o",
+    "t": 1793470327.1905892
+  },
+  {
+    "l": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+    "s": "o",
+    "t": 1793470327.1906393
+  },
+  {
+    "l": "     Running `<home>/.cargo/bin/justrust __test-runner <native-root>/candidate-build-v2/target/release/build/blaze-manifest/dacfae80fdc81ccb/out/config_typed-dacfae80fdc81ccb`",
+    "s": "e",
+    "t": 1793470327.1912377
+  },
+  {
+    "l": "running 13 tests",
+    "s": "o",
+    "t": 1793470327.194627
+  },
+  {
+    "l": "test build_table_warns_of_keys_it_does_not_know ... ok <0.001s>",
+    "s": "o",
+    "t": 1793470327.1963556
+  },
+  {
+    "l": "test env_table_refuses_cargo_home ... ok <0.002s>",
+    "s": "o",
+    "t": 1793470327.196638
+  },
+  {
+    "l": "test profile_tables_read_as_manifest_profiles_with_their_variables ... ok <0.002s>",
+    "s": "o",
+    "t": 1793470327.1969614
+  },
+  {
+    "l": "test target_cfg_tables_warn_of_keys_they_do_not_know ... ok <0.002s>",
+    "s": "o",
+    "t": 1793470327.1976535
+  },
+  {
+    "l": "test source_replacement_cycles_and_missing_names_are_errors ... ok <0.002s>",
+    "s": "o",
+    "t": 1793470327.197772
+  },
+  {
+    "l": "test env_table_resolves_relative_values_and_yields_to_the_process ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1979153
+  },
+  {
+    "l": "test rustflags_take_the_triple_and_matching_cfgs_by_key_over_build ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1980882
+  },
+  {
+    "l": "test net_table_reads_files_and_variables ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1982553
+  },
+  {
+    "l": "test runner_and_linker_come_from_the_triple_then_one_matching_cfg ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1984577
+  },
+  {
+    "l": "test source_replacement_follows_replace_with ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1984918
+  },
+  {
+    "l": "test two_matching_cfg_runners_are_an_error ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1984959
+  },
+  {
+    "l": "test rustflags_skip_host_units_with_a_target_and_fall_back_to_build ... ok <0.003s>",
+    "s": "o",
+    "t": 1793470327.1985476
+  },
+  {
+    "l": "test source_tables_refuse_what_cargo_refuses ... ok <0.004s>",
+    "s": "o",
+    "t": 1793470327.1991272
+  },
+  {
+    "l": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "s": "o",
+    "t": 1793470327.199139
+  },
+  {
+    "l": "     Running `<home>/.cargo/bin/justrust __test-runner <native-root>/candidate-build-v2/target/release/build/blaze-manifest/6747aa4e307b758e/out/fixtures-6747aa4e307b758e`",
+    "s": "e",
+    "t": 1793470327.1997907
+  },
+  {
+    "l": "running 1 test",
+    "s": "o",
+    "t": 1793470327.2027779
+  },
+  {
+    "l": "test fixtures_read_as_cargo_reads_them ... ok <0.007s>",
+    "s": "o",
+    "t": 1793470327.2105339
+  },
+  {
+    "l": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+    "s": "o",
+    "t": 1793470327.2105708
+  },
+  {
+    "l": "     Running `<home>/.cargo/bin/justrust __test-runner <native-root>/candidate-build-v2/target/release/build/blaze-manifest/a5776c3ddaac4b13/out/profiles-a5776c3ddaac4b13`",
+    "s": "e",
+    "t": 1793470327.21117
+  },
+  {
+    "l": "running 1 test",
+    "s": "o",
+    "t": 1793470327.214281
+  },
+  {
+    "l": "test profiles_match_cargo ... ok <0.024s>",
+    "s": "o",
+    "t": 1793470327.2386894
+  },
+  {
+    "l": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+    "s": "o",
+    "t": 1793470327.2387018
+  }
+]

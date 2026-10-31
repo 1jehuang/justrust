@@ -1,0 +1,7 @@
+PASS six complete originals match accepted c8829bae0
+PASS original programs, described and summary::read byte-identical
+PASS serialized package/dependency/target structs unchanged
+PASS typed final JSON erasure, both summary conversion sites, default-OFF gate, fixed ignored-error marker
+PASS all tracked existing fixture/test files unchanged
+PASS owned-file whitespace checks; unrelated FINDINGS whitespace excluded
+SOURCE ONLY: no compilation, tests, probes or benchmarks executed

@@ -1,0 +1,103 @@
+{
+  "traceEvents": [
+    {
+      "cat": "step",
+      "dur": 2782,
+      "name": "client planning rustc host",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509487127
+    },
+    {
+      "cat": "step",
+      "dur": 911,
+      "name": "client planning target cfg",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509489912
+    },
+    {
+      "cat": "step",
+      "dur": 21,
+      "name": "client planning asked setup",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509490826
+    },
+    {
+      "cat": "step",
+      "dur": 24484,
+      "name": "client planning owned resolver",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509490847
+    },
+    {
+      "cat": "step",
+      "dur": 28251,
+      "name": "client planning",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509487123
+    },
+    {
+      "cat": "detail",
+      "dur": 375,
+      "name": "resolver workspace/config",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509490867
+    },
+    {
+      "cat": "detail",
+      "dur": 16574,
+      "name": "resolver package loading",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509491245
+    },
+    {
+      "cat": "detail",
+      "dur": 2267,
+      "name": "resolver summary preparation",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509507827
+    },
+    {
+      "cat": "detail",
+      "dur": 2929,
+      "name": "resolver version resolve",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509510099
+    },
+    {
+      "cat": "detail",
+      "dur": 559,
+      "name": "resolver finalization",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509513033
+    },
+    {
+      "cat": "detail",
+      "dur": 567,
+      "name": "resolver typed program projection",
+      "ph": "X",
+      "pid": 86941,
+      "tid": 1,
+      "ts": 1793470509513596
+    }
+  ]
+}

@@ -1,0 +1,5 @@
+ra-jit: native-typed-planning-v83 entered
+   Compiling justrust v0.1.0-alpha.1 (<home>/.jcode/scratch/resident-matrix-native-20261030/source63)
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 44.42s
+     Running unittests src/lib.rs (<abba-root>/s2/engine/target/debug/deps/justrust-9079119de940bc7a)

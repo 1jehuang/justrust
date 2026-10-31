@@ -1,0 +1,832 @@
+diff --git a/toolchain/resident/crates/blaze-manifest/src/dependency.rs b/toolchain/resident/crates/blaze-manifest/src/dependency.rs
+index adeecc422..12b08c3b7 100644
+--- a/toolchain/resident/crates/blaze-manifest/src/dependency.rs
++++ b/toolchain/resident/crates/blaze-manifest/src/dependency.rs
+@@ -132,6 +132,37 @@ pub struct SerializedDependency<'a> {
+     path: Option<PathBuf>,
+ }
+ 
++impl SerializedDependency<'_> {
++    /// Exact exported dependency fields, including pinned source and formatted requirement.
++    pub fn planning(&self) -> PlanningDependency<'_> {
++        PlanningDependency {
++            name: self.name,
++            source: self.source.as_deref(),
++            req: &self.req,
++            kind: self.kind,
++            rename: self.rename,
++            optional: self.optional,
++            uses_default_features: self.uses_default_features,
++            features: self.features,
++            target: self.target,
++            path: self.path.as_deref(),
++        }
++    }
++}
++
++pub struct PlanningDependency<'a> {
++    pub name: &'a str,
++    pub source: Option<&'a str>,
++    pub req: &'a str,
++    pub kind: DepKind,
++    pub rename: Option<&'a str>,
++    pub optional: bool,
++    pub uses_default_features: bool,
++    pub features: &'a [String],
++    pub target: Option<&'a Platform>,
++    pub path: Option<&'a std::path::Path>,
++}
++
+ /// One entry of a feature's list.
+ #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+ pub enum FeatureValue {
+diff --git a/toolchain/resident/crates/blaze-manifest/src/metadata.rs b/toolchain/resident/crates/blaze-manifest/src/metadata.rs
+index feb71784a..2576806b2 100644
+--- a/toolchain/resident/crates/blaze-manifest/src/metadata.rs
++++ b/toolchain/resident/crates/blaze-manifest/src/metadata.rs
+@@ -73,6 +73,22 @@ struct SerializedHints<'a> {
+ }
+ 
+ impl SerializedPackage<'_> {
++    /// Borrow the exact exported fields for native planning, not raw manifest fields.
++    pub fn planning(&self) -> PlanningPackage<'_> {
++        PlanningPackage {
++            name: self.name,
++            version: self.version,
++            source: self.source.as_deref(),
++            dependencies: &self.dependencies,
++            targets: &self.targets,
++            features: &self.features,
++            manifest_path: self.manifest_path,
++            links: self.links,
++            license: self.license,
++            repository: self.repository,
++        }
++    }
++
+     /// Has the package's `source` be `source`, as the lock file pins it: a git source with
+     /// its commit. Its dependencies on packages of its own source, as a path in its
+     /// repository names them, are pinned with it.
+@@ -86,6 +102,20 @@ impl SerializedPackage<'_> {
+     }
+ }
+ 
++/// Borrowed view of already-normalized serialized fields. No serialization policy changes.
++pub struct PlanningPackage<'a> {
++    pub name: &'a str,
++    pub version: &'a semver::Version,
++    pub source: Option<&'a str>,
++    pub dependencies: &'a [SerializedDependency<'a>],
++    pub targets: &'a [SerializedTarget<'a>],
++    pub features: &'a BTreeMap<&'a str, Vec<String>>,
++    pub manifest_path: &'a Path,
++    pub links: Option<&'a str>,
++    pub license: Option<&'a str>,
++    pub repository: Option<&'a str>,
++}
++
+ /// The package of the manifest at `manifest_path` as `cargo metadata` prints it.
+ pub fn export_package<'a>(manifest_path: &'a Path, m: &'a Manifest) -> SerializedPackage<'a> {
+     let meta = &m.metadata;
+diff --git a/toolchain/resident/crates/blaze-manifest/src/targets.rs b/toolchain/resident/crates/blaze-manifest/src/targets.rs
+index 3cea0854c..e54b37fdf 100644
+--- a/toolchain/resident/crates/blaze-manifest/src/targets.rs
++++ b/toolchain/resident/crates/blaze-manifest/src/targets.rs
+@@ -315,6 +315,35 @@ pub struct SerializedTarget<'a> {
+     test: bool,
+ }
+ 
++impl SerializedTarget<'_> {
++    /// Membership in the exact serialized `kind` array, including unusual lib kinds.
++    pub fn planning_kind(&self, name: &str) -> bool {
++        match self.kind {
++            TargetKind::Lib(kinds) => kinds.iter().any(|it| it.as_str() == name),
++            TargetKind::Bin => name == "bin",
++            TargetKind::Test => name == "test",
++            TargetKind::Bench => name == "bench",
++            TargetKind::ExampleBin | TargetKind::ExampleLib(_) => name == "example",
++            TargetKind::CustomBuild => name == "custom-build",
++        }
++    }
++    pub fn planning_types(&self) -> &[CrateType] {
++        &self.crate_types
++    }
++    pub fn planning_name(&self) -> &str {
++        self.name
++    }
++    pub fn planning_path(&self) -> &Path {
++        self.src_path
++    }
++    pub fn planning_required(&self) -> &[String] {
++        self.required_features.unwrap_or_default()
++    }
++    pub fn planning_test(&self) -> bool {
++        self.test
++    }
++}
++
+ pub(crate) fn to_targets(
+     features: &Features,
+     original_toml: &TomlManifest,
+diff --git a/toolchain/resident/crates/blaze-metadata/src/lib.rs b/toolchain/resident/crates/blaze-metadata/src/lib.rs
+index 99f733249..fe8f6a447 100644
+--- a/toolchain/resident/crates/blaze-metadata/src/lib.rs
++++ b/toolchain/resident/crates/blaze-metadata/src/lib.rs
+@@ -16,6 +16,10 @@
+ mod graph;
+ mod summary;
+ 
++#[cfg(test)]
++#[path = "../tests/native_typed_planning/mod.rs"]
++mod native_typed_planning_tests;
++
+ use std::collections::BTreeMap;
+ use std::path::{Path, PathBuf};
+ use std::sync::Arc;
+@@ -326,6 +330,164 @@ pub fn programs(asked: &Asked<'_>, targets: Targets<'_>) -> Result<(String, Vec<
+     Ok((json, programs))
+ }
+ 
++/// The native planning experiment is latched on first use, with exact `1` as its only opt-in.
++pub fn native_typed_planning_enabled() -> bool {
++    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
++    *ENABLED
++        .get_or_init(|| std::env::var_os("RA_JIT_NATIVE_TYPED_PLANNING").is_some_and(|v| v == "1"))
++}
++
++/// Licensed Blaze-derived v83 path: typed exported packages through summaries to programs.
++/// Original `programs` and `described` deliberately remain independent JSON oracles.
++pub fn programs_native_typed(asked: &Asked<'_>, targets: Targets<'_>) -> Result<Vec<Program>> {
++    if !native_typed_planning_enabled() {
++        return Ok(programs(asked, targets)?.1);
++    }
++    programs_native_typed_inner(asked, targets)
++}
++
++fn programs_native_typed_inner(asked: &Asked<'_>, targets: Targets<'_>) -> Result<Vec<Program>> {
++    anyhow::ensure!(asked.build.is_some(), "the programs are of a build");
++    resolving_with_mode(asked, None, None, true, |resolved, serialized, ids, _| {
++        let _projection =
++            tracing::info_span!(target: "ra_jit::planning", "resolver typed program projection")
++                .entered();
++        let kinds = match &asked.platform {
++            Some(p) => vec![CompileKind::Target(InternedString::new(p.triple))],
++            None => vec![CompileKind::Host],
++        };
++        let packages =
++            Packages { reads: resolved.packages, platform: asked.platform.as_ref(), host: None };
++        let FeatureRoots { specs, members } = resolved.one_feature_resolve()?;
++        let opts = FeatureOpts::new(resolved.behavior, resolved.has_dev_units, ForceAllTargets::No);
++        let features =
++            FeatureResolver::resolve(&packages, resolved.resolve, &members, &kinds, opts)?;
++        let roots = resolved.selected_ids(&specs);
++        let activated = |p: &Platform| packages.activates(p);
++        let graph = graph::of_build(
++            resolved.resolve,
++            &features,
++            &roots,
++            asked.build.as_ref().expect("checked build").dev_units,
++            resolved.packages,
++            &activated,
++            resolved.members.current,
++        )?;
++        let reached: FxHashMap<PackageId, usize> =
++            ids.iter().enumerate().map(|(at, id)| (*id, at)).collect();
++        let mut listed = Vec::new();
++        for node in &graph.nodes {
++            let id = ids
++                .iter()
++                .find(|id| id.to_spec() == node.id)
++                .copied()
++                .with_context(|| format!("no package {} was read", node.id))?;
++            listed.push((id, reached[&id]));
++        }
++        listed.sort();
++        let unharnessed: Vec<PathBuf> = resolved
++            .ws
++            .members()
++            .flat_map(|(_, m)| &m.targets)
++            .filter(|t| !t.harness)
++            .filter_map(|t| t.src_path.clone())
++            .collect();
++        let mut programs = Vec::new();
++        for (id, at) in listed {
++            if !roots.contains(&id) {
++                continue;
++            }
++            let package = serialized[at].planning();
++            let spec = id.to_spec();
++            let on: Vec<&str> = graph
++                .nodes
++                .iter()
++                .find(|n| n.id == spec)
++                .into_iter()
++                .flat_map(|n| &n.features)
++                .map(|f| f.as_str())
++                .collect();
++            let id = spec.to_string();
++            let mut integration = false;
++            let mut bins = Vec::new();
++            for target in package.targets {
++                let of = |name: &str| target.planning_kind(name);
++                let types = target.planning_types();
++                let only_bin = types.len() == 1 && types[0].as_str() == "bin";
++                let kind = match () {
++                    _ if of("bin") && only_bin => Kind::Bin,
++                    _ if of("example") && only_bin => Kind::Example,
++                    _ if of("test") => Kind::Test,
++                    _ if of("bench") || of("example") => continue,
++                    _ if of("custom-build") => continue,
++                    _ => Kind::Lib,
++                };
++                let kinds: Vec<Kind> = match (kind, targets.test) {
++                    (Kind::Lib, None) => [
++                        ("cdylib", Kind::Cdylib),
++                        ("staticlib", Kind::Staticlib),
++                        ("dylib", Kind::Dylib),
++                    ]
++                    .into_iter()
++                    .filter(|(s, _)| types.iter().any(|t| t.as_str() == *s))
++                    .map(|(_, k)| k)
++                    .collect(),
++                    _ => vec![kind],
++                };
++                let name = target.planning_name();
++                let root = target.planning_path().to_owned();
++                let missing: Vec<&str> = target
++                    .planning_required()
++                    .iter()
++                    .map(String::as_str)
++                    .filter(|s| !s.contains('/') && !on.contains(s))
++                    .collect();
++                if kind == Kind::Bin && missing.is_empty() {
++                    bins.push((name, root.clone()));
++                }
++                for kind in kinds {
++                    let Some(test) = targets.picks(kind, name, target.planning_test()) else {
++                        continue;
++                    };
++                    if !missing.is_empty() && targets.named() {
++                        let listed: Vec<String> =
++                            missing.iter().map(|s| format!("`{s}`")).collect();
++                        bail!(
++                            "target `{name}` in package `{}` requires the features: {}\nConsider enabling them by passing, e.g., `--features=\"{}\"`",
++                            package.name,
++                            listed.join(", "),
++                            missing.join(" ")
++                        );
++                    }
++                    if missing.is_empty() {
++                        integration |= kind == Kind::Test;
++                        let harness = test && !unharnessed.contains(&root);
++                        programs.push(Program {
++                            package: id.clone(),
++                            name: name.to_owned(),
++                            root: root.clone(),
++                            kind,
++                            test,
++                            harness,
++                        });
++                    }
++                }
++            }
++            for (name, root) in bins.into_iter().filter(|_| integration) {
++                programs.push(Program {
++                    package: id.clone(),
++                    name: name.to_owned(),
++                    root,
++                    kind: Kind::Bin,
++                    test: false,
++                    harness: false,
++                });
++            }
++        }
++        Ok(programs)
++    })
++}
++
+ /// The unit graph of a build, as `cargo build --unit-graph` prints it: which of its targets
+ /// and how, as [`blaze_units::Request`] says.
+ pub struct Units<'a> {
+@@ -599,6 +761,16 @@ fn resolving_with<R>(
+     pick: Option<Pick<'_>>,
+     relock: Option<Relock<'_>>,
+     then: impl FnOnce(Resolved<'_>, Vec<SerializedPackage<'_>>, &[PackageId], &[PackageId]) -> Result<R>,
++) -> Result<R> {
++    resolving_with_mode(asked, pick, relock, false, then)
++}
++
++fn resolving_with_mode<R>(
++    asked: &Asked<'_>,
++    pick: Option<Pick<'_>>,
++    relock: Option<Relock<'_>>,
++    typed: bool,
++    then: impl FnOnce(Resolved<'_>, Vec<SerializedPackage<'_>>, &[PackageId], &[PackageId]) -> Result<R>,
+ ) -> Result<R> {
+     let workspace_config =
+         tracing::info_span!(target: "ra_jit::planning", "resolver workspace/config").entered();
+@@ -658,7 +830,11 @@ fn resolving_with<R>(
+     let mut reads = FxHashMap::default();
+     let mut ids = Vec::with_capacity(serialized.len());
+     for package in &serialized {
+-        let mut read = summary::read(&serde_json::to_value(package)?)?;
++        let mut read = if typed {
++            summary::read_typed(package)?
++        } else {
++            summary::read(&serde_json::to_value(package)?)?
++        };
+         let id = read.summary.package_id();
+         if let Some(Some(checksum)) = lock.as_ref().and_then(|it| it.checksums().get(&id)) {
+             read.summary.set_checksum(checksum.clone());
+@@ -754,7 +930,11 @@ fn resolving_with<R>(
+         if let Some(source) = &package.locked_source {
+             it.set_source(source.clone());
+         }
+-        let mut read = summary::read(&serde_json::to_value(&it)?)?;
++        let mut read = if typed {
++            summary::read_typed(&it)?
++        } else {
++            summary::read(&serde_json::to_value(&it)?)?
++        };
+         let id = read.summary.package_id();
+         if let Some(Some(checksum)) = whole.checksums().get(&id) {
+             read.summary.set_checksum(checksum.clone());
+diff --git a/toolchain/resident/crates/blaze-metadata/src/summary.rs b/toolchain/resident/crates/blaze-metadata/src/summary.rs
+index 6bb1cd1ef..33cba1961 100644
+--- a/toolchain/resident/crates/blaze-metadata/src/summary.rs
++++ b/toolchain/resident/crates/blaze-metadata/src/summary.rs
+@@ -127,6 +127,93 @@ pub(crate) fn read(package: &Value) -> Result<Read> {
+     })
+ }
+ 
++/// Native v83 conversion of the exported representation. The JSON reader above remains
++/// an independent oracle. In particular rust-version and publication time remain unset,
++/// just as `read` leaves them, and the caller installs the lock checksum afterwards.
++pub(crate) fn read_typed(
++    package: &blaze_manifest::metadata::SerializedPackage<'_>,
++) -> Result<Read> {
++    let p = package.planning();
++    // Path's serde implementation rejects non-UTF-8. Preserve its exact error on this
++    // exceptional input rather than silently accepting a path the JSON oracle refuses.
++    if p.manifest_path.to_str().is_none()
++        || p.dependencies.iter().any(|d| d.planning().path.is_some_and(|p| p.to_str().is_none()))
++        || p.targets.iter().any(|t| t.planning_path().to_str().is_none())
++    {
++        return read(&serde_json::to_value(package)?);
++    }
++    static ENTERED: std::sync::Once = std::sync::Once::new();
++    ENTERED.call_once(|| {
++        use std::io::Write as _;
++        let _ = writeln!(std::io::stderr().lock(), "ra-jit: native-typed-planning-v83 entered");
++    });
++    let source = match p.source {
++        Some(source) => SourceId::from_url(source)?,
++        None => SourceId::for_path(p.manifest_path.parent().context("a manifest's dir")?)?,
++    };
++    let id = blaze_resolve::PackageId::try_new(p.name, &p.version.to_string(), source)?;
++    let deps = p
++        .dependencies
++        .iter()
++        .map(|dep| {
++            let d = dep.planning();
++            let source = match (d.source, d.path) {
++                (Some(source), _) => SourceId::from_url(source)?,
++                (None, Some(path)) => SourceId::for_path(path)?,
++                (None, None) => SourceId::crates_io(),
++            };
++            let req = match d.req {
++                "*" if !source.is_registry() => None,
++                req => Some(req),
++            };
++            let mut out = Dependency::parse(d.name, req, source)?;
++            out.set_kind(match d.kind {
++                blaze_manifest::dependency::DepKind::Normal => DepKind::Normal,
++                blaze_manifest::dependency::DepKind::Development => DepKind::Development,
++                blaze_manifest::dependency::DepKind::Build => DepKind::Build,
++            });
++            if let Some(rename) = d.rename {
++                out.set_explicit_name_in_toml(rename);
++            }
++            out.set_optional(d.optional);
++            out.set_default_features(d.uses_default_features);
++            out.set_features(d.features.iter().map(String::as_str));
++            if let Some(target) = d.target {
++                // Keep the serialized platform's parse and diagnostics, not an unchecked clone.
++                out.set_platform(Some(target.to_string().parse::<Platform>()?));
++            }
++            Ok(out)
++        })
++        .collect::<Result<Vec<_>>>()?;
++    let features: BTreeMap<InternedString, Vec<InternedString>> = p
++        .features
++        .iter()
++        .map(|(name, values)| {
++            (
++                InternedString::new(name),
++                values.iter().map(|value| InternedString::new(value)).collect(),
++            )
++        })
++        .collect();
++    let summary = Summary::new(id, deps, &features, p.links, None)?;
++    let lib = p.targets.iter().find(|t| LIB_KINDS.iter().any(|k| t.planning_kind(k)));
++    Ok(Read {
++        summary,
++        lib: lib.map(|t| InternedString::new(&t.planning_name().replace('-', "_"))),
++        proc_macro_lib: lib.is_some_and(|t| t.planning_kind("proc-macro")),
++        any_proc_macro: p.targets.iter().any(|t| t.planning_kind("proc-macro")),
++        build_script: p.targets.iter().any(|t| t.planning_kind("custom-build")),
++        bins: p
++            .targets
++            .iter()
++            .filter(|t| t.planning_kind("bin"))
++            .map(|t| t.planning_required().to_vec())
++            .collect(),
++        license: p.license.map(str::to_owned),
++        repository: p.repository.map(str::to_owned),
++    })
++}
++
+ /// `path` with `.` and `..` taken out, as cargo writes a path dependency's source.
+ pub(crate) fn normalize(path: &Path) -> PathBuf {
+     let mut out = PathBuf::new();
+diff --git a/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs b/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
+index 3e68db557..1251f4f66 100644
+--- a/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
++++ b/toolchain/resident/crates/ra-jit/src/cargo/metadata.rs
+@@ -255,7 +255,11 @@ pub(crate) fn programs(
+         };
+         drop(setup_phase);
+         let _resolver_phase = super::Phase::new("client planning owned resolver");
+-        Ok(blaze_metadata::programs(&asked, targets)?.1)
++        if blaze_metadata::native_typed_planning_enabled() {
++            blaze_metadata::programs_native_typed(&asked, targets)
++        } else {
++            Ok(blaze_metadata::programs(&asked, targets)?.1)
++        }
+     }
+ }
+ 
+diff --git a/toolchain/resident/crates/blaze-metadata/tests/native_typed_planning/mod.rs b/toolchain/resident/crates/blaze-metadata/tests/native_typed_planning/mod.rs
+new file mode 100644
+index 000000000..efaff4072
+--- /dev/null
++++ b/toolchain/resident/crates/blaze-metadata/tests/native_typed_planning/mod.rs
+@@ -0,0 +1,323 @@
++//! Licensed Blaze-derived v83 differential tests. Source-only delivery, run by root.
++use super::*;
++
++struct Fixture(PathBuf);
++impl Fixture {
++    fn new() -> Self {
++        let path = std::env::temp_dir().join(format!(
++            "native-typed-v83-{}-{}",
++            std::process::id(),
++            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
++        ));
++        std::fs::create_dir_all(path.join("home")).unwrap();
++        Self(path)
++    }
++    fn put(&self, name: &str, text: &str) {
++        let path = self.0.join(name);
++        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
++        std::fs::write(path, text).unwrap();
++    }
++    fn asked(&self) -> Asked<'_> {
++        Asked {
++            cwd: &self.0,
++            env: vec![("CARGO_HOME".into(), self.0.join("home").display().to_string())],
++            manifest_path: None,
++            config: &[],
++            features: &[],
++            all_features: false,
++            no_default_features: false,
++            build: Some(Build { packages: &[], workspace: true, excludes: &[], dev_units: true }),
++            platform: Some(TargetPlatform { triple: "x86_64-unknown-linux-gnu", cfg: &[] }),
++            offline: true,
++            store: None,
++            rustc_version: Some("1.101.0-nightly"),
++        }
++    }
++}
++impl Drop for Fixture {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_dir_all(&self.0);
++    }
++}
++
++fn same_read(a: &Read, b: &Read) {
++    let (a_sum, b_sum) = (&a.summary, &b.summary);
++    assert_eq!(a_sum.package_id(), b_sum.package_id());
++    // Summary Eq/Hash are ID-only. Dependency Eq compares every inner field.
++    assert_eq!(a_sum.dependencies(), b_sum.dependencies());
++    assert_eq!(a_sum.features(), b_sum.features());
++    assert_eq!(a_sum.links(), b_sum.links());
++    assert_eq!(a_sum.checksum(), b_sum.checksum());
++    assert_eq!(a_sum.rust_version(), b_sum.rust_version());
++    assert_eq!(a_sum.pubtime(), b_sum.pubtime());
++    assert_eq!(a.lib, b.lib);
++    assert_eq!(a.proc_macro_lib, b.proc_macro_lib);
++    assert_eq!(a.any_proc_macro, b.any_proc_macro);
++    assert_eq!(a.build_script, b.build_script);
++    assert_eq!(a.bins, b.bins);
++    assert_eq!(a.license, b.license);
++    assert_eq!(a.repository, b.repository);
++}
++fn chain(e: &anyhow::Error) -> Vec<String> {
++    e.chain().map(ToString::to_string).collect()
++}
++fn same_package(p: &SerializedPackage<'_>) {
++    let json = serde_json::to_value(p).unwrap();
++    match (summary::read(&json), summary::read_typed(p)) {
++        (Ok(mut a), Ok(mut b)) => {
++            same_read(&a, &b);
++            a.summary.set_checksum("fixture-checksum".into());
++            b.summary.set_checksum("fixture-checksum".into());
++            a.summary.set_pubtime("2026-10-31T00:00:00Z".into());
++            b.summary.set_pubtime("2026-10-31T00:00:00Z".into());
++            same_read(&a, &b);
++        }
++        (Err(a), Err(b)) => assert_eq!(chain(&a), chain(&b)),
++        _ => panic!("summary success/error mismatch"),
++    }
++}
++
++#[test]
++fn filesystem_exported_summaries_preserve_complete_state() {
++    let f = Fixture::new();
++    f.put("Cargo.toml", r#"[package]
++name = "typed-app"
++version = "1.2.3-beta.1"
++edition = "2021"
++license = "MIT"
++repository = "https://example.invalid/repo"
++links = "typed_native"
++rust-version = "1.80"
++[features]
++default = ["alias"]
++extra = ["alias?/extra"]
++[dependencies]
++alias = { package = "dep", path = "dep", version = "*", optional = true, default-features = false, features = ["extra"] }
++reg = { package = "registry-dep", version = "1" }
++gitdep = { git = "https://example.invalid/project", branch = "topic" }
++[dev-dependencies]
++dev = { package = "dep", path = "dep" }
++[build-dependencies]
++build = { package = "dep", path = "dep" }
++[target.'cfg(unix)'.dependencies]
++platform = { package = "dep", path = "dep", optional = true }
++[[bin]]
++name = "needs-extra"
++path = "src/main.rs"
++required-features = ["extra", "alias/extra"]
++[lib]
++crate-type = ["rlib", "cdylib", "staticlib"]
++"#);
++    f.put("src/lib.rs", "pub fn value() {}\n");
++    f.put("src/main.rs", "fn main() {}\n");
++    f.put("build.rs", "fn main() {}\n");
++    f.put("dep/Cargo.toml", "[package]\nname='dep'\nversion='0.1.0'\n[features]\nextra=[]\n");
++    f.put("dep/src/lib.rs", "");
++    let ctx = Context::new(Config::load(&f.0, f.asked().env, &[]).unwrap());
++    let path = f.0.join("Cargo.toml");
++    let ws = Workspace::new(&path, &ctx).unwrap();
++    for (path, manifest) in ws.members() {
++        let mut p = export_package(path, manifest);
++        same_package(&p);
++        p.set_source("registry+https://github.com/rust-lang/crates.io-index".into());
++        same_package(&p);
++        p.set_source("git+https://example.invalid/project?branch=topic#0123456789012345678901234567890123456789".into());
++        same_package(&p);
++        p.set_source("not a valid source URL".into());
++        same_package(&p);
++    }
++}
++
++fn workspace(f: &Fixture) {
++    f.put("Cargo.toml", "[workspace]\nmembers=['app','dep']\nresolver='2'\n");
++    f.put(".cargo/config.toml", "[build]\ntarget='x86_64-unknown-linux-gnu'\n");
++    f.put(
++        "app/Cargo.toml",
++        r#"[package]
++name='app'
++version='0.1.0'
++edition='2021'
++[dependencies]
++alias={package='dep',path='../dep',optional=true,features=['extra']}
++[features]
++default=['alias']
++extra=['alias?/extra']
++[build-dependencies]
++alias={package='dep',path='../dep'}
++[dev-dependencies]
++alias={package='dep',path='../dep'}
++[target.'cfg(unix)'.dependencies]
++alias={package='dep',path='../dep'}
++[[bin]]
++name='gated'
++path='src/main.rs'
++required-features=['extra','alias/extra']
++[[test]]
++name='integration'
++path='tests/integration.rs'
++harness=false
++[lib]
++crate-type=['rlib','cdylib','staticlib']
++"#,
++    );
++    for path in [
++        "app/src/lib.rs",
++        "app/src/main.rs",
++        "app/tests/integration.rs",
++        "app/examples/sample.rs",
++        "app/build.rs",
++        "dep/src/lib.rs",
++    ] {
++        f.put(path, "fn main() {}\n");
++    }
++    f.put(
++        "dep/Cargo.toml",
++        "[package]\nname='dep'\nversion='0.1.0'\nedition='2021'\n[features]\nextra=[]\n",
++    );
++}
++fn compare_resolved(asked: &Asked<'_>) {
++    // Own complete Read values across callbacks. No Summary equality shortcuts.
++    let original = resolving_with_mode(asked, None, None, false, |r, s, ids, _| {
++        let json = described(asked, &r, s, ids)?.json;
++        Ok((
++            r.packages
++                .iter()
++                .map(|(id, read)| (*id, clone_read(read)))
++                .collect::<FxHashMap<_, _>>(),
++            json,
++        ))
++    })
++    .unwrap();
++    let native = resolving_with_mode(asked, None, None, true, |r, s, ids, _| {
++        let json = described(asked, &r, s, ids)?.json;
++        Ok((
++            r.packages
++                .iter()
++                .map(|(id, read)| (*id, clone_read(read)))
++                .collect::<FxHashMap<_, _>>(),
++            json,
++        ))
++    })
++    .unwrap();
++    assert_eq!(original.1, native.1, "full metadata JSON bytes/order");
++    assert_eq!(original.0.len(), native.0.len());
++    for (id, read) in &original.0 {
++        same_read(read, &native.0[id]);
++    }
++}
++fn clone_read(r: &Read) -> Read {
++    Read {
++        summary: r.summary.clone(),
++        lib: r.lib,
++        proc_macro_lib: r.proc_macro_lib,
++        any_proc_macro: r.any_proc_macro,
++        build_script: r.build_script,
++        bins: r.bins.clone(),
++        license: r.license.clone(),
++        repository: r.repository.clone(),
++    }
++}
++#[test]
++fn filesystem_programs_json_errors_features_and_revisions() {
++    let f = Fixture::new();
++    workspace(&f);
++    for revision in 0..2 {
++        if revision == 1 {
++            f.put("app/examples/second.rs", "fn main() {}\n");
++        }
++        for mode in 0..4 {
++            let mut asked = f.asked();
++            let cfg = vec!["unix".parse().unwrap()];
++            asked.platform = Some(TargetPlatform { triple: "x86_64-unknown-linux-gnu", cfg: &cfg });
++            asked.all_features = mode == 1;
++            asked.no_default_features = mode == 2;
++            let explicit = vec!["extra".to_owned()];
++            if mode == 3 {
++                asked.features = &explicit;
++            }
++            compare_resolved(&asked);
++            for targets in [
++                Targets::default(),
++                Targets { test: Some(Tests::default()), ..Targets::default() },
++                Targets { bin: Some("gated"), ..Targets::default() },
++                Targets { example: Some("sample"), ..Targets::default() },
++                Targets { lib: true, ..Targets::default() },
++                Targets {
++                    test: Some(Tests { lib: false, test: Some("integration") }),
++                    ..Targets::default()
++                },
++            ] {
++                match (programs(&asked, targets), programs_native_typed_inner(&asked, targets)) {
++                    (Ok((json, a)), Ok(b)) => {
++                        assert_eq!(a, b);
++                        assert_eq!(
++                            serde_json::to_string(&a).unwrap(),
++                            serde_json::to_string(&b).unwrap(),
++                            "program stdout JSON"
++                        );
++                        assert_eq!(
++                            json,
++                            metadata(&asked).unwrap(),
++                            "independent original JSON unchanged"
++                        );
++                    }
++                    (Err(a), Err(b)) => assert_eq!(chain(&a), chain(&b)),
++                    _ => panic!("program success/error mismatch"),
++                }
++            }
++        }
++    }
++    f.put("app/Cargo.toml", "[package\nnot valid\n");
++    let asked = f.asked();
++    let a = programs(&asked, Targets::default()).unwrap_err();
++    let b = programs_native_typed_inner(&asked, Targets::default()).unwrap_err();
++    assert_eq!(chain(&a), chain(&b));
++}
++
++#[test]
++fn serialized_unusual_library_kinds_and_proc_macros_are_not_reinterpreted() {
++    for kinds in ["['proc-macro']", "['dylib']", "['rlib','cdylib','staticlib']", "['bin']"] {
++        let f = Fixture::new();
++        f.put("Cargo.toml", &format!("[package]\nname='odd-kinds'\nversion='0.1.0'\nedition='2021'\n[lib]\ncrate-type={kinds}\n"));
++        f.put("src/lib.rs", "");
++        let ctx = Context::new(Config::load(&f.0, f.asked().env, &[]).unwrap());
++        let manifest = f.0.join("Cargo.toml");
++        let ws = Workspace::new(&manifest, &ctx).unwrap();
++        for (path, m) in ws.members() {
++            same_package(&export_package(path, m));
++        }
++    }
++}
++
++#[test]
++fn source_erasure_and_independent_oracle_boundaries() {
++    let source = include_str!("../../src/lib.rs");
++    let native = source
++        .split("fn programs_native_typed_inner(")
++        .nth(1)
++        .unwrap()
++        .split("pub struct Units")
++        .next()
++        .unwrap();
++    assert!(!native.contains("serde_json"));
++    assert!(!native.contains("described("));
++    assert!(native.contains("resolving_with_mode(asked, None, None, true"));
++    let original = source
++        .split("pub fn programs(")
++        .nth(1)
++        .unwrap()
++        .split("pub fn native_typed_planning_enabled")
++        .next()
++        .unwrap();
++    assert!(original.contains("serde_json::from_str(&json)"));
++    assert!(!original.contains("read_typed"));
++    let summary = include_str!("../../src/summary.rs");
++    let oracle = summary
++        .split("pub(crate) fn read(")
++        .nth(1)
++        .unwrap()
++        .split("pub(crate) fn read_typed(")
++        .next()
++        .unwrap();
++    assert!(!oracle.contains("planning()"));
++}
+diff --git a/docs/resident-native-typed-planning.md b/docs/resident-native-typed-planning.md
+new file mode 100644
+index 000000000..e63eea147
+--- /dev/null
++++ b/docs/resident-native-typed-planning.md
+@@ -0,0 +1,29 @@
++# Resident native typed planning v83
++
++Status: source-only candidate, default OFF, not promoted. This is licensed Blaze-derived resident code, not the clean-room compiler. No build, Rust test, native probe, install, benchmark or commit was run by this worker. Root owns compiler/runtime/strict and same-binary pinned-factor gates. Broad performance benefit is unproven.
++
++## Distinct dataflow
++
++The motivating measured summary-preparation interval is coordinator-reported 3.85 to 5.29 ms, not a measured saving. Rejected v8 removed only the final metadata projection. This candidate additionally removes both initial and newly picked packages' successful `serde_json::to_value` plus `summary::read` round trips from the opted-in caller. Borrowed views expose the already-exported fields, after normalization, ordering, formatted requirements and locked-source substitution. They do not reinterpret raw manifests or change serde implementations.
++
++`RA_JIT_NATIVE_TYPED_PLANNING=1` is the sole opt-in, latched on first use with `OnceLock`. Unset, `0`, and other values remain OFF. Only ra-jit's programs caller chooses the new public endpoint. All existing public JSON APIs, `programs`, `summary::read`, and `described` retain their independent original implementation. Existing callers still select the original summary conversion. No format is sent to stock tools.
++
++The new summary reader retains dependency sequence, source precedence, prerelease wildcard handling, renamed names, kind, optional/default features, feature order, platform reparse, package ID, feature-map construction, links, library-name normalization, proc macro flags, build-script presence, binary required-feature vectors, license and repository. Rust-version and publication time stay unset exactly as in the JSON oracle, rather than being newly imported from the manifest. Existing caller code installs the lock checksum at the same two sites for both paths. All resolution, lock merging/writing, fetching, manifests, config, feature resolution, build-script/native semantics and graph reachability remain.
++
++The typed final selector consumes serialized package/target views and the complete native feature graph, not raw target interpretations. It preserves ID sort order, target order, unusual serialized kind strings, linked-library order, required-feature diagnostics, dependency-qualified features, test filtering, workspace-wide unharnessed paths, and appended integration-test binaries. It does not export or parse final whole-metadata JSON. No cache or invalidation scheme is added.
++
++Non-UTF-8 exported paths are explicitly checked before actual typed conversion. Those exceptional inputs invoke the original package serializer and JSON reader to preserve the exact serialization error and chain. No success path intentionally serializes packages. This exceptional compatibility path is not counted as typed entry. Other serializer failure modes and equivalence remain runtime gate obligations.
++
++On actual typed conversion, a process-local `Once` writes exactly `ra-jit: native-typed-planning-v83 entered` and newline to locked stderr. Write errors are ignored. The flag check itself emits nothing. No dynamic data is printed.
++
++## Independent oracles and source checks
++
++The new narrowly nested `blaze-metadata/tests/native_typed_planning/mod.rs` is wired as a private unit module so it can compare the old private reader and new conversion directly. It creates real temporary filesystem manifests, leaving existing fixtures unchanged. `same_read` explicitly compares package ID, full ordered dependencies (whose Eq is structural), full feature map, links, checksum, rust-version, publication time, and every `Read` field. It never uses Summary Eq/Hash as evidence. Tests cover renamed optional/path/registry/git declarations, pinned exported sources, cfg/dev/build dependencies, feature modes, required-feature errors, multiple target types, proc macros, legal separate dylib and cdylib cases, revisions, program vectors/order, program JSON bytes, original full metadata JSON bytes, and error chains. Registry/git package conversion is tested via exported source substitution, not a claim of full offline registry/git fetch integration coverage. Root must still exercise those full integration paths with its existing pinned native fixtures.
++
++Source-erasure guards check the typed final selector has neither serde_json nor `described`, and that original selectors remain JSON based. Private static checks compare original `programs`, `summary::read`, `described`, serializer structs/implementations and existing fixture bytes against preserved accepted originals or HEAD. Rustfmt only parsed/formatted the exact owned files, with child traversal disabled. This is not Rust typechecking or test execution.
++
++## Frozen handoff
++
++Private root: `<native-root>/native-typed-planning-v83`.
++
++The handoff preserves all six complete accepted originals, complete candidate files, cumulative and incremental patches, SHA-256 manifests, static-check script/output, RELEASE and explicit STOPEDITS. No Cargo manifest or lock file changes. Root must reject or repair any compiler/runtime mismatch before accepting. No speedup, repeatability, full integration coverage, or default promotion is claimed here.

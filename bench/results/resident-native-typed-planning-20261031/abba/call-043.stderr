@@ -1,0 +1,4 @@
+   Compiling justrust v0.1.0-alpha.1 (<home>/.jcode/scratch/resident-matrix-native-20261030/source63)
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 42.97s
+     Running unittests src/lib.rs (<abba-root>/s3/engine/target/debug/deps/justrust-4e43714898cee19e)

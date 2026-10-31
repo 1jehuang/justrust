@@ -1,0 +1,12 @@
+STOPEDITS
+Native typed planning v83 source frozen by swan. No further worker source edits after this receipt.
+Accepted base c8829bae02fd234f46012ce6996baa14c09b3a1c on stable.
+Licensed Blaze-derived resident implementation, not clean-room compiler code.
+Eight owned candidate files: six existing Rust files, one new nested Rust test module, one new doc.
+Source-only: exact-file rustfmt/check and read-only Python static checks passed. No builds, Rust tests, native probes, installs, measurements, commits or pushes performed.
+Original programs, described, summary::read and serialized structs verified byte-identical to full preserved originals, themselves exact accepted HEAD.
+Cumulative patch and incremental-001.patch contain the sole delivered increment from preserved accepted originals. New files included. candidates/ contains full candidate sources. SHA256SUMS seals originals, candidates, patches, static checks and this receipt.
+Root must compile, run differential native fixtures including full registry/git integration, strict/error/status/stdout gates and pinned same-binary OFF=0/ON=1 factor measurement. Root owns runtime repairs. Broad performance goal unproven, default OFF remains required. Nested tests authored but not run.
+Flag: RA_JIT_NATIVE_TYPED_PLANNING exact 1, OnceLock first use. Other values OFF. Marker exactly ra-jit: native-typed-planning-v83 entered plus newline, once process actual conversion, ignored stderr write errors.
+Rare nonUTF exported package paths deliberately take the independent original serializer error path before typed entry to preserve rejection. No successful ordinary typed summary JSON conversion. Final typed selector contains no JSON operations.
+Coverage limit: filesystem summary tests cover registry/git declarations and exported pinned sources without network. They do not establish full registry/git fetch integration. No performance benefit asserted.

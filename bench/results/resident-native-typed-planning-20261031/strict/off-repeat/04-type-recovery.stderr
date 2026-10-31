@@ -1,0 +1,23 @@
+ra-jit: manifest-content-generation-v1 entered
+    Finished `test` profile [blaze] target(s) in 11.76s
+     Running unittests src/lib.rs (<home>/t83-off-repeat/engine/target/debug/deps/justrust-f72d51222d4d6dc4)
+blaze time: 11773.1 ms: daemon 11495.9 (98%), daemon↔worker 231.0 (2%), client planning owned resolver 26.5 (0%), client command 6.8 (0%), client test execution 4.2 (0%), client install artifacts 3.1 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     6.8 ms   0.1%
+blaze    client test                        0.2 ms   0.0%
+blaze    client metadata                    0.7 ms   0.0%
+blaze    client planning                    0.0 ms   0.0%
+blaze    client planning rustc host         2.6 ms   0.0%
+blaze    client planning target cfg         0.9 ms   0.0%
+blaze    client planning asked setup        0.0 ms   0.0%
+blaze    client planning owned resolver      26.5 ms   0.2%
+blaze    client checkout                    0.5 ms   0.0%
+blaze    client whole build                 0.1 ms   0.0%
+blaze    client↔daemon                      0.4 ms   0.0%
+blaze    daemon read request                0.2 ms   0.0%
+blaze    daemon                         11495.9 ms  97.6%
+blaze    daemon↔worker                    231.0 ms   2.0%
+blaze    client install artifacts           3.1 ms   0.0%
+blaze    client test execution              4.2 ms   0.0%
+blaze    total                          11773.1 ms 100.0%

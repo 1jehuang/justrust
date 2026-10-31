@@ -1,0 +1,85 @@
+{
+  "accepted": "c8829bae02fd234f46012ce6996baa14c09b3a1c",
+  "native_jobs_by_worker": 0,
+  "nested_test_absent": true,
+  "preserved_live": {
+    "docs/resident-native-typed-planning.md": {
+      "bytes": 5310,
+      "frozen_candidate_cmp": true,
+      "sha256": "e8c41e82f5292d5588d44e1c2275bdaecbbc31a8ae4b4bc30a7477b59bd8f10a"
+    },
+    "toolchain/resident/crates/blaze-manifest/src/dependency.rs": {
+      "bytes": 13628,
+      "frozen_candidate_cmp": true,
+      "sha256": "ccd890495ec05a8dd4838455f614945dbf5fcbd7c368e9f190e5b76d7317724e"
+    },
+    "toolchain/resident/crates/blaze-manifest/src/metadata.rs": {
+      "bytes": 8744,
+      "frozen_candidate_cmp": true,
+      "sha256": "7ab8a7ffeb6adf7c43c84371d0bd8019222d75b2e3170f77e5c53afc5ad0865a"
+    },
+    "toolchain/resident/crates/blaze-manifest/src/targets.rs": {
+      "bytes": 44673,
+      "frozen_candidate_cmp": true,
+      "sha256": "8bfabd836cd31a2e1b989f1b5852c0dcdaab75f44fd985e7792e5f47edd613b6"
+    },
+    "toolchain/resident/crates/blaze-metadata/src/lib.rs": {
+      "bytes": 65130,
+      "frozen_candidate_cmp": true,
+      "sha256": "b70e797386691743882f79fe5fabb2c4d691bd974bcd6279014fd079a97a6e32"
+    },
+    "toolchain/resident/crates/blaze-metadata/src/summary.rs": {
+      "bytes": 12792,
+      "frozen_candidate_cmp": true,
+      "sha256": "268a339d68f12725d4325d410dbc538562b282a55aa165c829593075e8f5533d"
+    },
+    "toolchain/resident/crates/blaze-metadata/tests/native_typed_planning/mod.rs": {
+      "bytes": 11563,
+      "frozen_candidate_cmp": true,
+      "sha256": "5d5691de01d8e9d581f88912eb26a0d31c69a757bfa3df078bf044d8af955ae8"
+    },
+    "toolchain/resident/crates/ra-jit/src/cargo/metadata.rs": {
+      "bytes": 29113,
+      "frozen_candidate_cmp": true,
+      "sha256": "892de80f3199ac82e3461c452cd4252cdd283e3f6a34cdc9ab58febff3bb4633"
+    }
+  },
+  "production": {
+    "toolchain/resident/crates/blaze-manifest/src/dependency.rs": {
+      "accepted_git_cmp": true,
+      "bytes": 12680,
+      "original_cmp": true,
+      "sha256": "13102b901e4730d27e2b79235289e710fc3da187abcea13be80a7101ef637ffa"
+    },
+    "toolchain/resident/crates/blaze-manifest/src/metadata.rs": {
+      "accepted_git_cmp": true,
+      "bytes": 7669,
+      "original_cmp": true,
+      "sha256": "f709ddb57c5ac588b4e7a895e5c019faa0ea52eaae062eaea76a5c6e63e7cc19"
+    },
+    "toolchain/resident/crates/blaze-manifest/src/targets.rs": {
+      "accepted_git_cmp": true,
+      "bytes": 43692,
+      "original_cmp": true,
+      "sha256": "5e072babe9bfb1a1087d02d16c677b61c76c5feece8ee776a60c34f7f43c4f34"
+    },
+    "toolchain/resident/crates/blaze-metadata/src/lib.rs": {
+      "accepted_git_cmp": true,
+      "bytes": 57666,
+      "original_cmp": true,
+      "sha256": "6c225dd077fb24b8fd83afffa739044d1752bb4581fb41390ac12cfd3fb0b59b"
+    },
+    "toolchain/resident/crates/blaze-metadata/src/summary.rs": {
+      "accepted_git_cmp": true,
+      "bytes": 8842,
+      "original_cmp": true,
+      "sha256": "cc992f02f61c6ee5a7c125901d7766365c0c9e4506cbf357c1b2a8518df1ff4c"
+    },
+    "toolchain/resident/crates/ra-jit/src/cargo/metadata.rs": {
+      "accepted_git_cmp": true,
+      "bytes": 28954,
+      "original_cmp": true,
+      "sha256": "bd0984cfde00b7c8e9db1285409e05360a8ab5908bf799bf53450a87a82c0f49"
+    }
+  }
+}

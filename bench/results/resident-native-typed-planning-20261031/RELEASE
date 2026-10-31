@@ -1,0 +1,12 @@
+STOPEDITS EVIDENCE-ONLY RELEASE
+Experiment: native-typed-planning-v83, licensed Blaze-derived resident lineage.
+Decision: REJECTED / NOT PROMOTED, descriptive -4.43% below requested 10% floor, noise unknown.
+Accepted production source: c8829bae02fd234f46012ce6996baa14c09b3a1c.
+Restoration: all eight live outputs preserved and compared frozen candidates before writes. Six existing Rust files restored through write from immutable originals, exact original cmp and HEAD diff PASS. Only archived nested test module removed. Source ownership released 2026-10-31 18:27:19 UTC. No subsequent native source edits by worker.
+Root historical results: native22/4/53/373,8actualactivation/profile,28strict,54ABBAcalls20samples24nonces,5ABBAstops+4strictstops status0,storesretained. Full registry/git fetch integration NOT established by authored declaration/source-view fixtures.
+Worker execution: source-only implementation/restoration plus Python-only portable evidence processing. No worker native builds/tests/probes/install/measurement or production promotion. No stage/commit/push yet. Index authorization requested separately before publication.
+Export: 477 explicit private input roles, original SHA256 and size, original input recheck unchanged, no ambient environment export/private absolute path/binary payload. Historical raw source-only release remains immutable under source/freeze, not rewritten to claim worker native validation.
+Portable validation: fixed accepted original runtime oracles, source patch replay, unchanged original summary/final JSON oracles, native named journals/source/toolchain identities, raw timing/nonce/worker/stops recomputation. 28 Python-only tests PASS including coherently resealed negative cases and isolated empty HOME/PATH six-denial validation. Actual log offline-tests.log.
+Scope provenance: strict inherited parallel-manifest label preserved, actual typed flag/ELF/source/marker govern identity. Initial wrong-version mock failure retained. Test-only v81-to-v80 mutation repaired to v83-to-v80 without weakening assertion, corrected18mocktests PASS,zero nativejobs.
+History commitment: c8436c34be9f675bfb53189aefa43cfdb15f83b1addd6297ec25d26eff7137a8.
+Observations commitment: 96e830b2f0e439822cc2ad3b4f826f617dd13dde2526d73f67d9995d4b6354a9.

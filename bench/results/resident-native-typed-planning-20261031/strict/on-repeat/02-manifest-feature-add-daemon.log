@@ -1,0 +1,5 @@
+daemon 0.20261027.0-a5c9f6ac-77f11e8-18e3afbbdfe45d29 (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-6118338097fae3352601d80b9c8dfff501e760bbab37705fbcb87aaa94429da1)) of pid 125804 listens on <home>/t83-on-repeat/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 9094d9af56a42e9e of pid 125807 for <home>/.jcode/scratch/resident-matrix-native-20261030/source63/
+<home>/.jcode/scratch/resident-matrix-native-20261030/source63: ready
+worker 9094d9af56a42e9e of pid 131527 for <home>/.jcode/scratch/resident-matrix-native-20261030/source63/
+<home>/.jcode/scratch/resident-matrix-native-20261030/source63: ready

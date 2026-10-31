@@ -1,0 +1,20 @@
+daemon 0.20261027.0-a5c9f6ac-77f11e8-18e3afbbdfe45d29 (jr-engine experimental 0.20261027.0 (Blaze-derived origin 5d4f78f7577cf7170993b74f735099dd03f5c6ca; build resident-v1-6118338097fae3352601d80b9c8dfff501e760bbab37705fbcb87aaa94429da1)) of pid 107742 listens on <home>/t83-on/engine/engine-home/resident-v1/runtime/daemon.sock
+worker 36a388a8b620958c of pid 107745 for <home>/.jcode/scratch/resident-matrix-native-20261030/source63/
+<home>/.jcode/scratch/resident-matrix-native-20261030/source63: ready
+worker 36a388a8b620958c of pid 113300 for <home>/.jcode/scratch/resident-matrix-native-20261030/source63/
+<home>/.jcode/scratch/resident-matrix-native-20261030/source63: ready
+worker 36a388a8b620958c of pid 117234 for <home>/.jcode/scratch/resident-matrix-native-20261030/source63/
+the worker of pid 117234 for <home>/.jcode/scratch/resident-matrix-native-20261030/source63/ ended (exit status: 1); its log <home>/t83-on/engine/engine-home/resident-v1/runtime/workers/36a388a8b620958c/log ends with:
+  check: FileId(599): the bodies of 126 of 126 functions asked
+  check: FileId(592): the bodies of 96 of 96 functions asked
+  check: FileId(597): the bodies of 36 of 36 functions asked
+  check: FileId(609): the bodies of 96 of 96 functions asked
+  check: FileId(608): the bodies of 44 of 44 functions asked
+  check: FileId(611): the bodies of 204 of 204 functions asked
+  check: 31 files in 2.0s
+  Error: error[E0308]: expected u64, found &'static str
+      --> src/summary.rs:1100:14
+       |
+  1100 | let _: u64 = "JR_MATRIX_TYPE_dcd902be24734d2ebb72beea1c20236f";
+       |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<home>/.jcode/scratch/resident-matrix-native-20261030/source63: the source has an error

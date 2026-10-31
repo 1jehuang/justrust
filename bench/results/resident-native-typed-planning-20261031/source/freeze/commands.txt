@@ -1,0 +1,4 @@
+rustfmt --edition 2024 --config skip_children=true [seven exact owned Rust files]
+rustfmt --check --edition 2024 --config skip_children=true [seven exact owned Rust files]: PASS
+python3 sourcechecks.py: PASS
+No builds/tests/native/probes/install/commits

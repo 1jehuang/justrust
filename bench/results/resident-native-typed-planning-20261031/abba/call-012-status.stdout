@@ -1,0 +1,5 @@
+plain cargo: not through blaze (`blaze enable` turns it on)
+daemon: pid 205247, version 0.20261027.0-a5c9f6ac-77f11e8-18e3afbbdfe45d29, exits after 1800s idle, workers hold at most 31897 MB
+  worker: pid 205250, <home>/.jcode/scratch/resident-matrix-native-20261030/source63/, holds 3390 MB, log <abba-root>/s0/engine/engine-home/resident-v1/runtime/workers/21635f8327be8a5c/log
+    <home>/.jcode/scratch/resident-matrix-native-20261030/source63: ready
+store: 122 MB, at most 32768 MB (`blaze cache gc` collects it), <abba-root>/s0/engine/engine-home/resident-v1/store/resident-v1-6118338097fae3352601d80b9c8dfff501e760bbab37705fbcb87aaa94429da1

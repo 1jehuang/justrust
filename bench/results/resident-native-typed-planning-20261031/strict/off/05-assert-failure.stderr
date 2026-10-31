@@ -1,0 +1,49 @@
+ra-jit: manifest-content-generation-v1 entered
+   Compiling justrust v0.1.0-alpha.1 (<home>/.jcode/scratch/resident-matrix-native-20261030/source63)
+    Finished `test` profile [blaze] target(s) in 2.77s
+     Running unittests src/lib.rs (<home>/t83-off/engine/target/debug/deps/justrust-3d05a2564e2e966b)
+
+thread 'summary::tests::shares_overlapping_time' (107230) panicked at src/summary.rs:1102:1:
+assertion `left == right` failed: JR_MATRIX_FAILURE_278cedaf7b7946fc8be0a8c56936b7f9
+  left: 1
+ right: 2
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p justrust --lib`
+blaze time: 2786.0 ms: worker check 2278.9 (82%), worker apply 258.9 (9%), worker roots 153.4 (6%), client planning owned resolver 30.3 (1%), worker read 9.8 (0%), worker setup 8.1 (0%)
+blaze where the time went:
+blaze    unaccounted                        0.1 ms   0.0%
+blaze    client command                     7.8 ms   0.3%
+blaze    client test                        0.2 ms   0.0%
+blaze    client metadata                    0.8 ms   0.0%
+blaze    client planning                    0.0 ms   0.0%
+blaze    client planning rustc host         3.1 ms   0.1%
+blaze    client planning target cfg         1.0 ms   0.0%
+blaze    client planning asked setup        0.0 ms   0.0%
+blaze    client planning owned resolver      30.3 ms   1.1%
+blaze    client checkout                    0.6 ms   0.0%
+blaze    client whole build                 0.9 ms   0.0%
+blaze    client↔daemon                      2.5 ms   0.1%
+blaze    daemon read request                0.2 ms   0.0%
+blaze    daemon                             0.4 ms   0.0%
+blaze    daemon↔worker                      2.6 ms   0.1%
+blaze    worker wait                        0.7 ms   0.0%
+blaze    worker settle                      0.0 ms   0.0%
+blaze    worker read                        9.8 ms   0.4%
+blaze    worker apply                     258.9 ms   9.3%
+blaze    worker roots                     153.4 ms   5.5%
+blaze    worker check                    2278.9 ms  81.8%
+blaze    worker reach                       0.6 ms   0.0%
+blaze    worker resolve                     3.0 ms   0.1%
+blaze    worker define                      0.0 ms   0.0%
+blaze    worker object                      0.9 ms   0.0%
+blaze    worker statics                     2.6 ms   0.1%
+blaze    worker setup                       8.1 ms   0.3%
+blaze    worker compile-rest                1.6 ms   0.1%
+blaze    worker write                       0.0 ms   0.0%
+blaze    worker build-rest                  2.9 ms   0.1%
+blaze    worker report                      0.1 ms   0.0%
+blaze    worker refuse                      7.0 ms   0.3%
+blaze    worker link                        2.2 ms   0.1%
+blaze    client install artifacts           0.2 ms   0.0%
+blaze    client test execution              4.7 ms   0.2%
+blaze    total                           2786.0 ms 100.0%
