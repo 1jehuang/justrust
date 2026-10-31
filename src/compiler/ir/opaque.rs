@@ -204,6 +204,60 @@ fn pack_capture_sources(
     if locations.is_empty() {
         return Ok(locations);
     }
+    if matches!(hidden, Ty::ManuallyDrop(_)) {
+        // The stored wrapper retains exactly its payload's carrier families.
+        // Publication replay and validate_wrap authenticate every wrapper owner
+        // and argument before this structural source mapping is consulted.
+        let mut payload = hidden;
+        let mut prefix = 0usize;
+        while let Ty::ManuallyDrop(wrapper) = payload {
+            budget.check_depth(prefix)?;
+            budget.charge_work(1)?;
+            prefix = prefix
+                .checked_add(1)
+                .ok_or("resource: opaque stored-wrapper path extent overflow")?;
+            payload = wrapper.argument();
+        }
+        let inner = if let Ty::Param(parameter) = payload {
+            budget.charge_work(opaque.owner_args().len())?;
+            if parameter.owner.declaration != opaque.owner()
+                || !opaque.owner_args().contains(&Ty::Param(*parameter))
+            {
+                return Err("opaque stored wrapper changed its original owner parameter".into());
+            }
+            carrier_locations(payload, budget)?
+        } else if matches!(payload, Ty::Closure(_)) {
+            pack_capture_sources(opaque, payload, budget)?
+        } else {
+            return Err("unsupported: opaque stored-wrapper payload requires an exact defining parameter or closure capture contract".into());
+        };
+        if locations.len() != inner.len() {
+            return Err("opaque stored wrapper changed its complete carrier inventory".into());
+        }
+        for (actual, source) in locations.iter().zip(inner.iter()) {
+            let extent = prefix
+                .checked_add(source.path.0.len())
+                .ok_or("resource: opaque stored-wrapper carrier extent overflow")?;
+            budget.charge_work(extent)?;
+            let same_channel = matches!(
+                (&actual.channel, &source.channel),
+                (CarrierChannel::ParamTail { parameter: a, prefix: 0 },
+                 CarrierChannel::ParamTail { parameter: b, prefix: 0 }) if a == b
+            );
+            if !same_channel
+                || actual.path.0.len() != extent
+                || !actual.path.0[..prefix]
+                    .iter()
+                    .all(|step| *step == CarrierStep::ManuallyDropPayload)
+                || actual.path.0[prefix..] != *source.path.0
+            {
+                return Err(
+                    "opaque stored wrapper changed its exact payload carrier mapping".into(),
+                );
+            }
+        }
+        return Ok(locations);
+    }
     if let Ty::Opaque(source) = hidden {
         // Preserve the entire incoming abstract family. The original wrapper
         // proof authenticates both descriptors and the exact source operand.
@@ -716,6 +770,83 @@ mod captured_pack_tests {
             let template = c::cfg::lower_source_template(publication, &budget).unwrap();
             c::ownership::verify_template(template).unwrap();
         }
+    }
+
+    #[test]
+    fn stored_wrapper_pack_preserves_exact_parameter_path_and_rejects_forgery() {
+        let snapshot = Arc::new(c::Snapshot {
+            input: c::Input::Text("fn wrap<T>(value:T)->impl Sized{core::mem::ManuallyDrop::new(core::mem::ManuallyDrop::new(value))}fn main(){}".into()),
+            source_options: c::source::SourceOptions::default(),
+            budget: PlanBudget::default(),
+        });
+        let budget = snapshot.budget.clone();
+        let engine = c::Engine::new(c::CompilerProvider(snapshot));
+        let key = crate::compiler::keys::item(c::TEMPLATE_BODY, 0);
+        let requested = engine.request(key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = engine.fact_of::<c::TemplateBodyFact>(&key, 0).unwrap();
+        let publication = body.publication.as_ref().unwrap();
+        let occurrence = body
+            .checked
+            .exprs
+            .iter()
+            .position(|expr| matches!(expr.kind, ExprKind::OpaqueWrap { .. }))
+            .unwrap();
+        let proof =
+            OpaquePackProof::seal(publication.clone(), ExprId(occurrence), &budget).unwrap();
+        assert_eq!(proof.sources.len(), 1);
+        assert_eq!(
+            proof.sources[0].path.0.as_ref(),
+            &[
+                CarrierStep::ManuallyDropPayload,
+                CarrierStep::ManuallyDropPayload
+            ]
+        );
+        proof
+            .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+            .unwrap();
+        for path in [
+            CarrierPath::default(),
+            CarrierPath(Arc::from([CarrierStep::ManuallyDropPayload])),
+            CarrierPath(Arc::from([
+                CarrierStep::Field(0),
+                CarrierStep::ManuallyDropPayload,
+            ])),
+        ] {
+            let mut changed = proof.clone();
+            let mut rows = changed.sources.to_vec();
+            rows[0].path = path;
+            changed.sources = rows.into();
+            assert!(
+                changed
+                    .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                    .is_err()
+            );
+        }
+        let mut changed = proof.clone();
+        let mut rows = changed.sources.to_vec();
+        let CarrierChannel::ParamTail { parameter, .. } = &mut rows[0].channel else {
+            panic!("expected parameter family")
+        };
+        parameter.index = u16::MAX;
+        changed.sources = rows.into();
+        assert!(
+            changed
+                .validate_occurrence(publication, Some(ExprId(occurrence)), &budget)
+                .is_err()
+        );
+        assert!(
+            pack_capture_sources(
+                &proof.opaque,
+                &proof.hidden,
+                &PlanBudget::new(PlanLimits {
+                    work: 0,
+                    ..PlanLimits::default()
+                })
+            )
+            .is_err()
+        );
     }
 
     #[test]

@@ -287,6 +287,11 @@ pub(super) fn inventory_validated(
             // The slice itself has no Clone recipe, but every written element
             // shape remains part of the source inventory, even in a boundary.
             Type::Slice(element) => ty(element, ds, b, depth + 1)?,
+            Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+                if let Some(argument) = &source.argument {
+                    ty(argument, ds, b, depth + 1)?;
+                }
+            }
             Type::Apply(path) => generic_path(path, ds, b, depth)?,
             _ => {}
         }

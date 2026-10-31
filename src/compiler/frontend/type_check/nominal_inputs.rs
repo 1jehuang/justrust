@@ -151,7 +151,10 @@ impl Checker<'_> {
             .map_err(|error| error.into_legacy_diagnostic(&plan.budget))
     }
 
-    pub(super) fn source_type_actual(&self, source: &Type) -> Result<ir::Ty, String> {
+    pub(in crate::compiler::frontend) fn source_type_actual(
+        &self,
+        source: &Type,
+    ) -> Result<ir::Ty, String> {
         let Some(inputs) = self.nominal_inputs else {
             return checked_ty(source, self.signatures);
         };
@@ -430,6 +433,12 @@ fn type_shape(checker: &Checker<'_>, ty: &ir::Ty, depth: usize) -> Result<Nomina
             budget.retain_bytes(std::mem::size_of::<NominalShape>() + 2 * std::mem::size_of::<usize>())?;
             NominalShape::PhantomData(marker.declaration(), Arc::new(type_shape(checker, marker.argument(), depth + 1)?))
         }
+        ir::Ty::ManuallyDrop(marker) => {
+            let budget = &checker.signatures.plan()?.budget;
+            marker.validate(&checker.signatures.plan()?.catalog, budget)?;
+            budget.retain_bytes(std::mem::size_of::<NominalShape>() + 2 * std::mem::size_of::<usize>())?;
+            NominalShape::ManuallyDrop(marker.declaration(), Arc::new(type_shape(checker, marker.argument(), depth + 1)?))
+        }
         ir::Ty::FnPointer(pointer) => {
             let budget = &checker.signatures.plan()?.budget;
             pointer.validate(budget)?;
@@ -513,6 +522,24 @@ fn recipe_type(
                 return Ok(None);
             };
             let ty = ir::Ty::PhantomData(ir::PhantomDataTy::new(
+                &plan.catalog,
+                argument,
+                &plan.budget,
+            )?);
+            checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+            ty
+        }
+        NominalShape::ManuallyDrop(declaration, argument) => {
+            let plan = checker.signatures.plan()?;
+            if *declaration != plan.catalog.id(tr::CatalogItem::ManuallyDrop) {
+                return Err("contract: foreign ManuallyDrop recipe owner".into());
+            }
+            let Some(argument) = recipe_type(checker, inputs, argument, missing, depth + 1)? else {
+                return Ok(None);
+            };
+            let ty = ir::Ty::ManuallyDrop(ir::ManuallyDropTy::new(
                 &plan.catalog,
                 argument,
                 &plan.budget,

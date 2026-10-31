@@ -195,7 +195,8 @@ impl<'facts> CoverageMatrix<'facts> {
             }
             let next = depth.checked_add(1).ok_or_else(overflow)?;
             match &ty {
-                Ty::PhantomData(_)
+                Ty::ManuallyDrop(_)
+                | Ty::PhantomData(_)
                 | Ty::Opaque(_)
                 | Ty::Closure(_)
                 | Ty::FnPointer(_)
@@ -389,6 +390,9 @@ impl<'facts> CoverageMatrix<'facts> {
         for (index, step) in path.iter().enumerate() {
             self.work(1)?;
             match step {
+                Projection::ManuallyDropPayload => {
+                    return Err("unsupported: ManuallyDrop payload source patterns require a canonical pattern contract".into());
+                }
                 Projection::DynamicIndex(_) => {
                     return Err("runtime index is not a source pattern projection".into());
                 }

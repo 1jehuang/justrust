@@ -62,6 +62,7 @@ mod name_validation;
 mod nominal_defaults;
 mod validation_snapshot;
 pub(in crate::compiler) use validation_snapshot::ValidatedProgram;
+pub(in crate::compiler) mod manually_drop;
 mod pattern_usefulness;
 mod program_symbols;
 pub(crate) mod signature_graph;
@@ -2638,7 +2639,7 @@ fn compare_source_type_work(
                 }
             }
         }
-        Type::PhantomData(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
             compare_source_path_work(&source.original, budget, at + 1)?;
             if let Some(argument) = &source.argument {
                 compare_source_type_work(argument, budget, at + 1)?;
@@ -2840,12 +2841,13 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
     sr::depth(budget, at)?;
     sr::work(budget, 1)?;
     Ok(match ty {
-        Type::PhantomData(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
             sr::retain(
                 budget,
                 std::mem::size_of::<SourcePhantomData>() + std::mem::size_of::<Type>(),
             )?;
-            Type::PhantomData(Box::new(SourcePhantomData {
+            let copy = Box::new(SourceCatalogType {
+                kind: source.kind,
                 original: source.original.clone(),
                 occurrence: source.occurrence.clone(),
                 argument: source
@@ -2853,7 +2855,12 @@ fn copy_source_type(ty: &Type, budget: &ir::PlanBudget, at: usize) -> Result<Typ
                     .as_ref()
                     .map(|argument| copy_source_type(argument, budget, at + 1).map(Box::new))
                     .transpose()?,
-            }))
+            });
+            if matches!(ty, Type::ManuallyDrop(_)) {
+                Type::ManuallyDrop(copy)
+            } else {
+                Type::PhantomData(copy)
+            }
         }
         Type::Opaque(opaque) => Type::Opaque(Box::new(opaque.copy(budget, at + 1)?)),
         Type::Apply(path) => Type::Apply(copy_source_path(path, budget, at + 1)?),
@@ -2977,7 +2984,7 @@ fn retain_source_type(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resul
     sr::work(budget, 1)?;
     sr::retain(budget, 2 * std::mem::size_of::<Type>() + 32)?;
     match ty {
-        Type::PhantomData(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
             sr::retain(budget, 2 * std::mem::size_of::<SourcePhantomData>())?;
             if let Some(argument) = &source.argument {
                 retain_source_type(argument, budget, depth + 1)?;
@@ -3046,7 +3053,7 @@ fn source_type_mentions_self(
             }
             found
         }
-        Type::PhantomData(source) => match &source.argument {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => match &source.argument {
             Some(argument) => source_type_mentions_self(argument, budget, depth + 1)?,
             None => false,
         },
@@ -4419,6 +4426,14 @@ impl SourceInventory {
                     budget,
                 )?;
             }
+            Expr::ManuallyDrop(call) => self.expr(
+                &call.value,
+                &node.child(45, 0, budget)?,
+                None,
+                None,
+                budget,
+                depth + 1,
+            )?,
             Expr::PhantomData(_)
             | Expr::TypeAlignment(_)
             | Expr::Integer(_)
@@ -5307,6 +5322,7 @@ pub(super) fn replay_nominal_source_id(
                 }
             }
             ir::Ty::PhantomData(marker) => admit(marker.argument(), budget, depth + 1)?,
+            ir::Ty::ManuallyDrop(wrapper) => admit(wrapper.argument(), budget, depth + 1)?,
             ir::Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     admit(ty, budget, depth + 1)?;
@@ -5550,6 +5566,9 @@ fn contains_source_ref(
             any
         }
         ir::Ty::Array { element, .. } => contains_source_ref(element, budget, depth + 1)?,
+        ir::Ty::ManuallyDrop(wrapper) => {
+            contains_source_ref(wrapper.argument(), budget, depth + 1)?
+        }
         ir::Ty::Struct(t) => {
             let mut any = false;
             for t in t.def().type_args.iter() {
@@ -7137,6 +7156,7 @@ pub(super) fn replay_source_body_with_scratch(
     scratch: &mut tr::TraitScratch,
 ) -> Result<Vec<sr::NarrowValidatedCall>, FactsError> {
     validate_original_context(original, facts, budget)?;
+    manually_drop::replay_operations(original, checked, budget)?;
     if checked.body_substitution.is_some() {
         return Err(FactsError::invalid(
             budget,
@@ -9241,17 +9261,40 @@ impl GenericPath {
         Ok((segment.name, &segment.args))
     }
 }
-/// Resolver-issued canonical marker use. The original path and all written
+/// Resolver-issued canonical catalog use. The original path and all written
 /// arguments stay immutable through specialization and public AST transport.
 #[derive(Clone, Debug)]
-pub struct SourcePhantomData {
+pub struct SourceCatalogType {
+    kind: SourceCatalogKind,
     original: Arc<GenericPath>,
     occurrence: AstPath,
     argument: Option<Box<Type>>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SourceCatalogKind {
+    PhantomData,
+    ManuallyDrop,
+}
+pub type SourcePhantomData = SourceCatalogType;
+pub type SourceManuallyDrop = SourceCatalogType;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ManuallyDropOperation {
+    New,
+    IntoInner,
+    Drop,
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceManuallyDropCall {
+    source: Box<SourceManuallyDrop>,
+    operation: ManuallyDropOperation,
+    value: Box<Expr>,
+}
 
 #[derive(Clone, Debug)]
 pub enum Type {
+    ManuallyDrop(Box<SourceManuallyDrop>),
     PhantomData(Box<SourcePhantomData>),
     Opaque(Box<SourceOpaqueType>),
     /// Safe, nonvariadic Rust ABI function pointer source signature.
@@ -9895,6 +9938,7 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    ManuallyDrop(Box<SourceManuallyDropCall>),
     PhantomData(Box<SourcePhantomData>),
     TypeAlignment(Type),
     /// Source callee-expression invocation, resolved to the canonical callable
@@ -20342,7 +20386,7 @@ fn walk_depth_inspecting<'source>(
                     push(DepthNode::Type(field))?;
                 }
             }
-            DepthNode::Type(Type::PhantomData(source)) => {
+            DepthNode::Type(Type::PhantomData(source) | Type::ManuallyDrop(source)) => {
                 if let Some(argument) = &source.argument {
                     push(DepthNode::Type(argument))?;
                 }
@@ -20539,6 +20583,17 @@ fn walk_depth_inspecting<'source>(
                         push(DepthNode::Type(argument))?;
                     }
                     for segment in &source.original.segments {
+                        for argument in &segment.args {
+                            push(DepthNode::Type(argument))?;
+                        }
+                    }
+                }
+                Expr::ManuallyDrop(call) => {
+                    push(DepthNode::Expr(&call.value))?;
+                    if let Some(argument) = &call.source.argument {
+                        push(DepthNode::Type(argument))?;
+                    }
+                    for segment in &call.source.original.segments {
                         for argument in &segment.args {
                             push(DepthNode::Type(argument))?;
                         }
@@ -20856,7 +20911,8 @@ fn exact_source_type(
                 pointee: b,
             },
         ) => exact_source_type(names, a, b, budget, depth + 1)? && ak == bk,
-        (Type::PhantomData(a), Type::PhantomData(b)) => {
+        (Type::PhantomData(a), Type::PhantomData(b))
+        | (Type::ManuallyDrop(a), Type::ManuallyDrop(b)) => {
             let original =
                 exact_source_generic_path(names, &a.original, &b.original, budget, depth + 1)?;
             let argument = match (&a.argument, &b.argument) {
@@ -20864,7 +20920,10 @@ fn exact_source_type(
                 (None, None) => true,
                 _ => false,
             };
-            original && argument
+            original
+                && argument
+                && a.kind == b.kind
+                && exact_source_path(names, &a.occurrence, &b.occurrence, budget)?
         }
         (Type::Opaque(a), Type::Opaque(b)) => a.exact(b, names, budget, depth + 1)?,
         (Type::Dyn(a), Type::Dyn(b)) => match (a.as_ref(), b.as_ref()) {
@@ -21048,6 +21107,7 @@ pub struct DeclInfo {
 #[derive(Debug)]
 pub struct DeclRegistry {
     phantom_data_factory: ir::PhantomDataFactory,
+    manually_drop_factory: ir::ManuallyDropFactory,
     program: Arc<Program>,
     names: Arc<NameStore>,
     modules: Arc<ModuleArena>,
@@ -21698,6 +21758,7 @@ impl DeclRegistry {
             modules: self.modules.clone(),
             symbols: self.symbols.clone(),
             phantom_data_factory: self.phantom_data_factory,
+            manually_drop_factory: self.manually_drop_factory,
             declarations: Vec::new(),
             slots: HashMap::new(),
             functions: HashMap::new(),
@@ -21958,7 +22019,7 @@ fn source_type_storage(ty: &Type, budget: &ir::PlanBudget, depth: usize) -> Resu
                 SourceProjection::SelfItem { .. } => {}
             }
         }
-        Type::PhantomData(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
             add(std::mem::size_of::<SourcePhantomData>())?;
             if let Some(argument) = &source.argument {
                 add(source_type_storage(argument, budget, depth + 1)?)?;
@@ -22461,6 +22522,7 @@ impl PlanCtx {
             modules: program.modules.clone(),
             symbols: program.symbols.clone(),
             phantom_data_factory: ir::PhantomDataFactory::from_builder(&catalog_builder, budget)?,
+            manually_drop_factory: ir::ManuallyDropFactory::from_builder(&catalog_builder, budget)?,
             declarations: Vec::new(),
             slots: HashMap::new(),
             functions: HashMap::new(),
@@ -27168,7 +27230,7 @@ fn collect_source_params(
                 }
             }
         }
-        Type::PhantomData(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
             if let Some(argument) = &source.argument {
                 collect_source_params(names, argument, used, budget, depth + 1)?;
             }

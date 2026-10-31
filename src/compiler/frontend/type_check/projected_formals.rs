@@ -124,6 +124,14 @@ impl Inference<'_, '_> {
                 };
                 InferKind::PhantomData(*declaration, argument)
             }
+            InferKind::ManuallyDrop(declaration, argument) => {
+                let Some(argument) =
+                    self.normalize_schema_projections(argument, depth + 1, defaults)?
+                else {
+                    return Ok(None);
+                };
+                InferKind::ManuallyDrop(*declaration, argument)
+            }
             InferKind::FnPointer(inputs, output) => {
                 let budget = &self.checker.signatures.plan()?.budget;
                 let mut mapped = ir::FnPointerTy::storage(inputs.len(), budget)?;
@@ -215,7 +223,8 @@ impl Inference<'_, '_> {
                 };
                 return self.resolve(&normal, defaults, depth + 1);
             }
-            InferKind::PhantomData(declaration, argument) => {
+            InferKind::PhantomData(declaration, argument)
+            | InferKind::ManuallyDrop(declaration, argument) => {
                 let Some(argument) = map(argument)? else {
                     return Ok(None);
                 };
@@ -399,6 +408,9 @@ impl Inference<'_, '_> {
         self.checker.infer_work(depth)?;
         match (formal.as_ref(), actual.as_ref()) {
             (InferKind::PhantomData(a, left), InferKind::PhantomData(b, right)) if a == b => {
+                self.split_projected_constraint(left.clone(), right.clone(), output, depth + 1)?;
+            }
+            (InferKind::ManuallyDrop(a, left), InferKind::ManuallyDrop(b, right)) if a == b => {
                 self.split_projected_constraint(left.clone(), right.clone(), output, depth + 1)?;
             }
             (InferKind::FnPointer(left, lo), InferKind::FnPointer(right, ro))

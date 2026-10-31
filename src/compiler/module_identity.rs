@@ -31,6 +31,7 @@ pub enum CatalogModule {
     Marker,
     Clone,
     Ops,
+    Mem,
 }
 impl CatalogModule {
     fn index(self) -> usize {
@@ -39,6 +40,7 @@ impl CatalogModule {
             Self::Marker => 1,
             Self::Clone => 2,
             Self::Ops => 3,
+            Self::Mem => 4,
         }
     }
 }
@@ -156,7 +158,7 @@ pub struct ModuleArena {
     joined: bool,
     source_names: Option<SessionId>,
     source_root: Option<ModuleId>,
-    catalog: [ModuleId; 4],
+    catalog: [ModuleId; 5],
     nodes: BudgetVec<ModuleNode>,
     children: ChildIndex,
     child_count: usize,
@@ -209,7 +211,7 @@ impl ModuleArenaBuilder {
         let lease = budget.reserve(Storage::Retained, bytes as u64)?;
         let mut nodes = BudgetVec::new(&budget, Storage::Retained)?;
         let core = ModuleId { owner, index: 0 };
-        budget.charge(Counter::Work, 15)?;
+        budget.charge(Counter::Work, 18)?;
         nodes.push(ModuleNode {
             segment: ModuleSegment::Catalog(CatalogModule::Root),
             parent: None,
@@ -222,6 +224,7 @@ impl ModuleArenaBuilder {
             CatalogModule::Marker,
             CatalogModule::Clone,
             CatalogModule::Ops,
+            CatalogModule::Mem,
         ]
         .into_iter()
         .enumerate()
@@ -237,7 +240,7 @@ impl ModuleArenaBuilder {
             debug_assert_eq!(nodes.len(), index + 2);
         }
         let source_root = if source_names.is_some() {
-            let root = ModuleId { owner, index: 4 };
+            let root = ModuleId { owner, index: 5 };
             nodes.push(ModuleNode {
                 segment: ModuleSegment::SourceRoot,
                 parent: None,
@@ -264,6 +267,7 @@ impl ModuleArenaBuilder {
                     ModuleId { owner, index: 1 },
                     ModuleId { owner, index: 2 },
                     ModuleId { owner, index: 3 },
+                    ModuleId { owner, index: 4 },
                 ],
                 nodes,
                 children,

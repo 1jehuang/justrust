@@ -140,6 +140,9 @@ fn normalize(
         ir::Ty::Char | ir::Ty::FnPointer(_) | ir::Ty::PhantomData(_) | ir::Ty::Ref { .. } => {}
         ir::Ty::RawPtr { pointee, .. } if matches!(pointee.as_ref(), ir::Ty::Dyn(_)) => {}
         ir::Ty::Array { element, .. } => normalize(element, parameters, out, budget, depth + 1)?,
+        ir::Ty::ManuallyDrop(wrapper) => {
+            normalize(wrapper.argument(), parameters, out, budget, depth + 1)?
+        }
         ir::Ty::Tuple(fields) => {
             for field in fields.iter() {
                 normalize(field, parameters, out, budget, depth + 1)?;
@@ -269,15 +272,26 @@ impl SizeArgument {
     ) -> Result<Self, String> {
         let mut arrays = Vec::new();
         let mut leaf_ty = ty;
-        while let ir::Ty::Array { element, len } = leaf_ty {
-            budget.check_depth(arrays.len())?;
+        let mut depth = 0usize;
+        loop {
+            budget.check_depth(depth)?;
             budget.charge_work(1)?;
-            // Vec growth plus final immutable Arc storage coexist at capture.
-            budget.retain_bytes(4 * std::mem::size_of::<usize>())?;
-            arrays.push(*len);
-            leaf_ty = element;
+            match leaf_ty {
+                ir::Ty::Array { element, len } => {
+                    // Temporary vector and final immutable extent rows coexist.
+                    budget.retain_bytes(4 * std::mem::size_of::<usize>())?;
+                    arrays
+                        .try_reserve_exact(1)
+                        .map_err(|_| "infrastructure: semantic array extent allocation failed")?;
+                    arrays.push(*len);
+                    leaf_ty = element;
+                }
+                ir::Ty::ManuallyDrop(wrapper) => leaf_ty = wrapper.argument(),
+                _ => break,
+            }
+            depth = depth.checked_add(1).ok_or("semantic size depth overflow")?;
         }
-        budget.check_depth(arrays.len())?;
+        budget.check_depth(depth)?;
         budget.charge_work(1)?;
         let slot = |parameter: &ir::ParamId| {
             parameters
@@ -297,7 +311,9 @@ impl SizeArgument {
                     referent,
                     facts,
                     budget,
-                    arrays.len() + 1,
+                    depth
+                        .checked_add(1)
+                        .ok_or("semantic size pointer depth overflow")?,
                 ) {
                     Ok(Some(size)) => SizeLeaf::Bytes(size),
                     Ok(None) => SizeLeaf::Deferred,
@@ -619,6 +635,7 @@ fn may_own_drop(ty: &ir::Ty) -> bool {
             | ir::Ty::Bool
             | ir::Ty::Char
             | ir::Ty::Unit
+            | ir::Ty::ManuallyDrop(_)
             | ir::Ty::Never
             | ir::Ty::Ref { .. }
             | ir::Ty::RawPtr { .. }

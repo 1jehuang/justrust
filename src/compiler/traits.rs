@@ -1655,6 +1655,7 @@ fn same_closedness_input(left: &Ty, right: &Ty) -> bool {
     match (left, right) {
         (Ty::Opaque(a), Ty::Opaque(b)) => Arc::ptr_eq(a, b),
         (Ty::PhantomData(a), Ty::PhantomData(b)) => Arc::ptr_eq(a, b),
+        (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => Arc::ptr_eq(a, b),
         (Ty::FnPointer(a), Ty::FnPointer(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => Arc::ptr_eq(a, b),
         (Ty::AssociatedType(a), Ty::AssociatedType(b)) => Arc::ptr_eq(a, b),
@@ -2031,6 +2032,7 @@ fn same_type_allocation(a: &Ty, b: &Ty) -> bool {
         (Ty::Opaque(x), Ty::Opaque(y)) => Arc::ptr_eq(x, y),
         (Ty::Closure(x), Ty::Closure(y)) => Arc::ptr_eq(x, y),
         (Ty::PhantomData(x), Ty::PhantomData(y)) => Arc::ptr_eq(x, y),
+        (Ty::ManuallyDrop(x), Ty::ManuallyDrop(y)) => Arc::ptr_eq(x, y),
         (Ty::FnPointer(x), Ty::FnPointer(y)) => Arc::ptr_eq(x, y),
         (Ty::FnItem(x), Ty::FnItem(y)) => Arc::ptr_eq(x, y),
         (Ty::AssociatedType(x), Ty::AssociatedType(y)) => {
@@ -2671,6 +2673,7 @@ enum TypeNode {
     Closure(usize),
     FnPointer(usize),
     PhantomData(usize),
+    ManuallyDrop(usize),
 }
 #[derive(Default)]
 struct TypeWalk {
@@ -2707,6 +2710,9 @@ impl TypeWalk {
                 t.def() as *const ir::EnumDef as usize,
             )),
             Ty::PhantomData(marker) => Some(TypeNode::PhantomData(Arc::as_ptr(marker) as usize)),
+            Ty::ManuallyDrop(wrapper) => {
+                Some(TypeNode::ManuallyDrop(Arc::as_ptr(wrapper) as usize))
+            }
             Ty::FnPointer(pointer) => Some(TypeNode::FnPointer(Arc::as_ptr(pointer) as usize)),
             Ty::Closure(closure) => Some(TypeNode::Closure(Arc::as_ptr(closure) as usize)),
             Ty::Tuple(t) => Some(TypeNode::Tuple(t.as_ptr() as usize, t.len())),
@@ -3675,6 +3681,16 @@ impl ValidatedTraitWorld {
         let child = |ty: &Ty| self.validate_phantom_sized_argument(ty, None, depth + 1);
         let sized = match ty {
             Ty::Param(parameter) => {
+                if let Some(declared) = self.catalog.declared_sized_bound(*parameter)? {
+                    return if declared {
+                        Ok(())
+                    } else {
+                        Err(FactsError::unsupported(
+                            &self.budget,
+                            "unsupported: canonical parameter has no declared Sized bound",
+                        ))
+                    };
+                }
                 let owner = parameter.owner.declaration;
                 let info = self.info(owner)?;
                 match info.kind {
@@ -3738,7 +3754,10 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
-            Ty::PhantomData(_)
+            Ty::ManuallyDrop(_)
+            | Ty::Ref { .. }
+            | Ty::Closure(_)
+            | Ty::PhantomData(_)
             | Ty::FnPointer(_)
             | Ty::RawPtr { .. }
             | Ty::Int(_)
@@ -3910,6 +3929,13 @@ impl ValidatedTraitWorld {
                 for ty in closure.types() {
                     child(ty, TypeUse::Root)?;
                 }
+            }
+            Ty::ManuallyDrop(wrapper) => {
+                wrapper
+                    .validate(&self.catalog, &self.budget)
+                    .map_err(|error| FactsError::from_message(&self.budget, &error))?;
+                child(wrapper.argument(), TypeUse::Actual)?;
+                self.validate_phantom_sized_argument(wrapper.argument(), caller, depth + 1)?;
             }
             Ty::PhantomData(marker) => {
                 marker
@@ -4609,6 +4635,7 @@ impl ValidatedTraitWorld {
                         }
                     }
                 }
+                Ty::ManuallyDrop(wrapper) => enqueue(wrapper.argument())?,
                 Ty::FnPointer(_) | Ty::PhantomData(_) => {}
                 Ty::FnItem(item) => {
                     for actual in item.type_args.iter() {
@@ -4732,6 +4759,9 @@ impl ValidatedTraitWorld {
                 && self.eq_types(&a.trait_ref.args, &b.trait_ref.args, depth + 1)?),
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
             (Ty::PhantomData(a), Ty::PhantomData(b)) => {
+                a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1))
+            }
+            (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
                 a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1))
             }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| self.eq_ty(a, b, depth + 1)),
@@ -6398,6 +6428,9 @@ impl ValidatedTraitWorld {
                     mentions(&projection.trait_ref.self_ty, parameter, budget, depth + 1)?
                         || all(&projection.trait_ref.args)?
                 }
+                Ty::ManuallyDrop(wrapper) => {
+                    mentions(wrapper.argument(), parameter, budget, depth + 1)?
+                }
                 Ty::Tuple(parts) => all(parts)?,
                 Ty::Array { element, .. } | Ty::Slice { element } => {
                     mentions(element, parameter, budget, depth + 1)?
@@ -6585,6 +6618,17 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.check_depth(depth))?;
         charged(&self.budget, self.budget.charge_work(1))?;
         match (original, instantiated) {
+            (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    self.collect_nominal_mappings(a, b, output, depth + 1)?;
+                    Ok::<bool, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "ManuallyDrop declaration changed during transport",
+                    ));
+                }
+            }
             (Ty::PhantomData(a), Ty::PhantomData(b)) => {
                 if !a.try_eq(b, |a, b| {
                     self.collect_nominal_mappings(a, b, output, depth + 1)?;
@@ -6982,6 +7026,16 @@ impl ValidatedTraitWorld {
                     saw_deref = true;
                     all_mutable &= *kind == ir::BorrowKind::Mut;
                     referent.as_ref().clone()
+                }
+                (ir::CarrierStep::ManuallyDropPayload, Ty::ManuallyDrop(wrapper)) => {
+                    charged(&self.budget, wrapper.validate(&self.catalog, &self.budget))?;
+                    wrapper.argument().clone()
+                }
+                (ir::CarrierStep::Field(_), Ty::ManuallyDrop(_)) => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "ManuallyDrop carrier effect requires canonical payload step",
+                    ));
                 }
                 (ir::CarrierStep::Field(index), _) => {
                     charged(&self.budget, ty.field_ty(*index, &self.budget))?.ok_or_else(|| {
@@ -7709,6 +7763,20 @@ impl ValidatedTraitWorld {
         if let Ty::Param(p) = term.ty {
             return Ok(term.side == side && *p == parameter);
         }
+        if let Ty::ManuallyDrop(wrapper) = term.ty
+            && self.occurs(
+                side,
+                parameter,
+                Term {
+                    side: term.side,
+                    ty: wrapper.argument(),
+                },
+                bindings,
+                depth + 1,
+            )?
+        {
+            return Ok(true);
+        }
         if let Ty::PhantomData(marker) = term.ty
             && self.occurs(
                 side,
@@ -7808,6 +7876,22 @@ impl ValidatedTraitWorld {
             return self.unify(right, left, bindings, depth + 1);
         }
         match (left.ty, right.ty) {
+            (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
+                return a.try_eq(b, |a, b| {
+                    self.unify(
+                        Term {
+                            side: left.side,
+                            ty: a,
+                        },
+                        Term {
+                            side: right.side,
+                            ty: b,
+                        },
+                        bindings,
+                        depth + 1,
+                    )
+                });
+            }
             (Ty::PhantomData(a), Ty::PhantomData(b)) => {
                 return a.try_eq(b, |a, b| {
                     self.unify(
@@ -9524,6 +9608,10 @@ impl ValidatedTraitWorld {
                 }
                 true
             }
+            Ty::ManuallyDrop(wrapper) => {
+                push(&self.budget, &mut children, wrapper.argument().clone())?;
+                true
+            }
             Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => true,
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Struct(t) if item == CatalogItem::Sized => {
@@ -9913,6 +10001,9 @@ impl ValidatedTraitWorld {
             };
         }
         match (pattern, actual) {
+            (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
+                return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
+            }
             (Ty::PhantomData(a), Ty::PhantomData(b)) => {
                 return a.try_eq(b, |a, b| self.match_head(a, b, env, slots, depth + 1));
             }
@@ -10519,6 +10610,12 @@ impl TraitCx for ValidatedTraitWorld {
             }
             let mut args = Vec::new();
             let descriptor = match &call.trait_ref.self_ty {
+                Ty::ManuallyDrop(_) => {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: ManuallyDrop Clone executable provider is not implemented",
+                    ));
+                }
                 Ty::PhantomData(marker) => {
                     facts.validate_ty(&call.trait_ref.self_ty)?;
                     push(&self.budget, &mut args, marker.argument().clone())?;
@@ -11914,6 +12011,152 @@ mod tests {
         }
     }
 
+    #[test]
+    fn manually_drop_carrier_effect_lens_keeps_payload_and_shared_barriers() {
+        let c = case();
+        let world = c.build().unwrap();
+        let Ty::Param(parameter) = c.caller_parameter.clone() else {
+            panic!("parameter fixture")
+        };
+        let wrapper = Ty::ManuallyDrop(
+            ir::ManuallyDropTy::new(&world.catalog, c.caller_parameter.clone(), &c.budget).unwrap(),
+        );
+        let location = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::ManuallyDropPayload,
+            ])),
+            channel: ir::CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            },
+        };
+        let exclusive = Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(wrapper.clone()),
+        };
+        assert!(world.carrier_writable(&exclusive, &location).unwrap());
+        let shared = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(wrapper.clone()),
+        };
+        assert!(!world.carrier_writable(&shared, &location).unwrap());
+        let ordinary_field = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::Field(0),
+            ])),
+            channel: location.channel.clone(),
+        };
+        assert!(world.carrier_writable(&exclusive, &ordinary_field).is_err());
+        let not_wrapper = Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(Ty::Tuple(Arc::from([c.caller_parameter.clone()]))),
+        };
+        assert!(world.carrier_writable(&not_wrapper, &location).is_err());
+        let actual_locations = ir::carrier_locations(&exclusive, &c.budget).unwrap();
+        assert!(actual_locations.iter().any(|actual| actual == &location));
+    }
+    #[test]
+    fn manually_drop_metadata_authenticates_actual_and_copy_requires_payload_copy() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let make = |argument| {
+            Ty::ManuallyDrop(ir::ManuallyDropTy::new(&world.catalog, argument, &c.budget).unwrap())
+        };
+        let canonical_parameter = ParamId {
+            owner: ir::BinderId {
+                declaration: world.catalog.id(CatalogItem::ManuallyDrop),
+            },
+            index: 0,
+        };
+        world
+            .validate_phantom_sized_argument(&Ty::Param(canonical_parameter), None, 0)
+            .unwrap();
+        assert!(
+            world
+                .validate_phantom_sized_argument(
+                    &Ty::Param(ParamId {
+                        index: 1,
+                        ..canonical_parameter
+                    }),
+                    None,
+                    0
+                )
+                .is_err()
+        );
+        let reference = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: Arc::new(Ty::Bool),
+        };
+        world
+            .validate_phantom_sized_argument(&reference, None, 0)
+            .unwrap();
+        let stored_reference = make(reference.clone());
+        facts.validate_ty(&stored_reference).unwrap();
+        for rejected_marker_argument in [reference, stored_reference] {
+            assert!(
+                ir::PhantomDataTy::new(&world.catalog, rejected_marker_argument, &c.budget)
+                    .unwrap_err()
+                    .starts_with("unsupported:")
+            );
+        }
+        let generic = make(c.caller_parameter.clone());
+        facts.validate_ty(&generic).unwrap();
+        assert!(
+            world
+                .callable_facts(c.body)
+                .unwrap()
+                .validate_ty(&generic)
+                .is_err()
+        );
+        let scalar = make(Ty::Bool);
+        let noncopy = make(c.leaf.clone());
+        for ty in [&scalar, &noncopy] {
+            facts.validate_ty(ty).unwrap();
+            let goal = Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(CatalogItem::Sized),
+                self_ty: ty.clone(),
+                args: Arc::from([]),
+            });
+            assert!(matches!(
+                world.prove_goal(&goal, &facts).unwrap(),
+                ProofOutcome::Proved(_)
+            ));
+        }
+        let goal = |ty: Ty| {
+            Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(CatalogItem::Copy),
+                self_ty: ty,
+                args: Arc::from([]),
+            })
+        };
+        assert!(matches!(
+            world.prove_goal(&goal(scalar.clone()), &facts).unwrap(),
+            ProofOutcome::Proved(_)
+        ));
+        assert!(matches!(
+            world.prove_goal(&goal(noncopy.clone()), &facts).unwrap(),
+            ProofOutcome::NotProven
+        ));
+        assert!(
+            !world
+                .types_equal(
+                    std::slice::from_ref(&scalar),
+                    std::slice::from_ref(&noncopy)
+                )
+                .unwrap()
+        );
+        let unsized_argument = make(Ty::Str);
+        assert!(
+            facts
+                .validate_ty(&unsized_argument)
+                .unwrap_err()
+                .to_string()
+                .contains("unsupported")
+        );
+    }
     #[test]
     fn phantom_data_metadata_keeps_argument_authority_without_copy_component_bounds() {
         let c = case();

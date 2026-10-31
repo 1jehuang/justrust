@@ -129,6 +129,11 @@ pub(super) fn bind_owner(
             |error| error,
             |ty| bind_owner(ty, bindings, budget),
         )?),
+        ir::Ty::ManuallyDrop(marker) => ir::Ty::ManuallyDrop(marker.try_map(
+            budget,
+            |error| error,
+            |ty| bind_owner(ty, bindings, budget),
+        )?),
         ir::Ty::FnPointer(pointer) => ir::Ty::FnPointer(pointer.try_map(
             budget,
             |e| e,

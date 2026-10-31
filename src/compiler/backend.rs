@@ -200,6 +200,7 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
         return Ok(true);
     }
     match ty {
+        ir::Ty::ManuallyDrop(wrapper) => indirect(wrapper.argument(), budget),
         ir::Ty::FnPointer(_) => {
             Err("unsupported: function pointer native value ABI is not implemented".into())
         }
@@ -229,6 +230,10 @@ pub(super) fn indirect(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<bool, Str
 }
 
 pub(super) fn value_size(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
+    ir::reject_associated_types(ty, Some(budget))?;
+    if let ir::Ty::ManuallyDrop(wrapper) = ty {
+        return value_size(wrapper.argument(), budget);
+    }
     if matches!(ty, ir::Ty::FnPointer(_)) {
         return Err("unsupported: function pointer native value ABI is not implemented".into());
     }
@@ -353,6 +358,7 @@ fn element_extent(ty: &ir::Ty, budget: &ir::PlanBudget, depth: usize) -> Result<
                     "unsupported: array element extent exceeds native memory limit".into()
                 })
         }
+        ir::Ty::ManuallyDrop(wrapper) => element_extent(wrapper.argument(), budget, depth + 1),
         ir::Ty::Unit | ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
         ir::Ty::Int(_) | ir::Ty::Bool | ir::Ty::Char | ir::Ty::Float(_) => {
@@ -391,6 +397,7 @@ fn zero_array_element_extent(
 /// Owning snapshots reserve rounded storage, but transport only real elements.
 fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, String> {
     match ty {
+        ir::Ty::ManuallyDrop(wrapper) => copied_value_bytes(wrapper.argument(), budget),
         ir::Ty::FnItem(_) | ir::Ty::PhantomData(_) => Ok(0),
         ir::Ty::Closure(closure) if closure.captures().is_empty() => Ok(0),
         ir::Ty::Array { .. } => {
@@ -403,6 +410,7 @@ fn copied_value_bytes(ty: &ir::Ty, budget: &ir::PlanBudget) -> Result<i32, Strin
 
 fn scalar_memory_bytes(ty: &ir::Ty) -> u32 {
     match ty {
+        ir::Ty::ManuallyDrop(wrapper) => scalar_memory_bytes(wrapper.argument()),
         ir::Ty::Unit | ir::Ty::PhantomData(_) => 0,
         ir::Ty::Int(integer) => integer.bits() / 8,
         ir::Ty::Bool => 1,
@@ -588,7 +596,9 @@ impl<'a> NativeConcrete<'a> {
 fn owning_projection(function: &cfg::Function, place: &ir::Place) -> Result<bool, String> {
     for (index, projection) in place.projection.iter().enumerate() {
         match projection {
-            ir::Projection::Field(_) | ir::Projection::Downcast(_) => {}
+            ir::Projection::Field(_)
+            | ir::Projection::ManuallyDropPayload
+            | ir::Projection::Downcast(_) => {}
             ir::Projection::Deref => {
                 let base = ir::Place {
                     local: place.local,
@@ -846,6 +856,14 @@ impl<'a> Emitter<'a> {
                     offset = 0;
                     ty = referent;
                     continue;
+                }
+                ir::Projection::ManuallyDropPayload => {
+                    let ir::Ty::ManuallyDrop(wrapper) = &ty else {
+                        return Err(
+                            "ManuallyDrop payload projection requires canonical wrapper".into()
+                        );
+                    };
+                    (0, wrapper.argument().clone())
                 }
                 ir::Projection::Field(index) => {
                     field_offset(&ty, *index, self.concrete.facts().budget())?
@@ -3177,6 +3195,11 @@ impl Emitter<'_> {
                 // Preserve the exact kernel return word, including -errno.
                 // Allocation policy and error interpretation live in Rust.
             }
+            cfg::Rvalue::ManuallyDropTake { payload, .. } => {
+                self.load_place(payload)?;
+                self.set_path_flags(payload, false);
+            }
+            cfg::Rvalue::ManuallyDropIntoInner { value, .. } => self.operand(value)?,
             cfg::Rvalue::Use(operand) => self.operand(operand)?,
             cfg::Rvalue::CharToInt { value, to } => {
                 if self.function().operand_ty(value)? != ir::Ty::Char {
@@ -3359,6 +3382,12 @@ impl Emitter<'_> {
                 }
             }
             cfg::Rvalue::Aggregate { ty, fields } => {
+                if let ir::Ty::ManuallyDrop(_) = ty {
+                    let [payload] = fields.as_slice() else {
+                        return Err("ManuallyDrop constructor requires exact one payload".into());
+                    };
+                    return self.operand(payload);
+                }
                 // Evaluate the whole aggregate into scratch, so destination
                 // projections cannot overwrite a later Copy operand's source.
                 if matches!(ty, ir::Ty::Array { len: 0, .. })

@@ -871,7 +871,12 @@ impl<'a> Validator<'a> {
                 Type::Param(name) => self.push(Visit::Ident(*name, LookupClass::TypeParameter))?,
                 Type::Named(path) => self.push(Visit::Path(path))?,
                 Type::Apply(path) => self.push(Visit::GenericPath(path))?,
-                Type::PhantomData(source) => {
+                Type::PhantomData(source) | Type::ManuallyDrop(source) => {
+                    source.require_kind(if matches!(ty, Type::ManuallyDrop(_)) {
+                        SourceCatalogKind::ManuallyDrop
+                    } else {
+                        SourceCatalogKind::PhantomData
+                    })?;
                     self.push(Visit::Path(&source.occurrence))?;
                     self.push(Visit::GenericPath(&source.original))?;
                     if let Some(argument) = &source.argument {
@@ -1154,11 +1159,21 @@ impl<'a> Validator<'a> {
                     self.push(Visit::Type(target))?;
                 }
                 Expr::PhantomData(source) => {
+                    source.require_kind(SourceCatalogKind::PhantomData)?;
                     self.push(Visit::Path(&source.occurrence))?;
                     self.push(Visit::GenericPath(&source.original))?;
                     if let Some(argument) = &source.argument {
                         self.push(Visit::Type(argument))?;
                     }
+                }
+                Expr::ManuallyDrop(call) => {
+                    call.source.require_kind(SourceCatalogKind::ManuallyDrop)?;
+                    self.push(Visit::Path(&call.source.occurrence))?;
+                    self.push(Visit::GenericPath(&call.source.original))?;
+                    if let Some(argument) = &call.source.argument {
+                        self.push(Visit::Type(argument))?;
+                    }
+                    self.push(Visit::Expr(&call.value))?;
                 }
                 Expr::TypeAlignment(target) => self.push(Visit::Type(target))?,
                 Expr::Borrow { place, .. } => self.push(Visit::Place(place))?,

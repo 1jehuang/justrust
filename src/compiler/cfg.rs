@@ -358,6 +358,31 @@ fn same_rvalue_types(a: &Rvalue, b: &Rvalue, budget: &ir::PlanBudget) -> Result<
                 proof: bb,
             },
         ) => Ok(aa == bb && same_operand_types(a, b, budget)?),
+        (
+            Rvalue::ManuallyDropTake {
+                reference: a,
+                payload: ap,
+                proof: aa,
+            },
+            Rvalue::ManuallyDropTake {
+                reference: b,
+                payload: bp,
+                proof: bb,
+            },
+        ) => Ok(ManuallyDropTakeProof::same_place(a, b, budget)?
+            && ManuallyDropTakeProof::same_place(ap, bp, budget)?
+            && aa.same_original(bb, budget)?),
+        (
+            Rvalue::ManuallyDropIntoInner {
+                value: a,
+                proof: aa,
+            },
+            Rvalue::ManuallyDropIntoInner {
+                value: b,
+                proof: bb,
+            },
+        ) => Ok(ManuallyDropIntoInnerProof::same_value(a, b, budget)?
+            && aa.same_original(bb, budget)?),
         (Rvalue::Use(a), Rvalue::Use(b))
         | (Rvalue::ArrayToSlice { reference: a }, Rvalue::ArrayToSlice { reference: b })
         | (Rvalue::RefToDyn { reference: a, .. }, Rvalue::RefToDyn { reference: b, .. })
@@ -539,8 +564,457 @@ pub enum Operand {
     Move(Place),
 }
 
+/// Source-sealed exclusive payload extraction. No world or mutable authority is retained.
+#[derive(Clone, Debug)]
+pub struct ManuallyDropTakeProof {
+    publication: super::source_replay::OriginalBodyId,
+    site: ExprId,
+    argument: ExprId,
+    descriptor: std::sync::Arc<ir::ManuallyDropTy>,
+    source: std::sync::Arc<super::frontend::manually_drop::ManuallyDropSourceOperation>,
+    reference: Place,
+    payload: Place,
+}
+impl PartialEq for ManuallyDropTakeProof {
+    fn eq(&self, other: &Self) -> bool {
+        self.publication == other.publication
+            && self.site == other.site
+            && self.argument == other.argument
+            && std::sync::Arc::ptr_eq(&self.source, &other.source)
+            && std::sync::Arc::ptr_eq(&self.descriptor, &other.descriptor)
+            && self.reference == other.reference
+            && self.payload == other.payload
+    }
+}
+impl Eq for ManuallyDropTakeProof {}
+impl ManuallyDropTakeProof {
+    fn same_place(a: &Place, b: &Place, budget: &ir::PlanBudget) -> Result<bool, String> {
+        let work = a
+            .projection
+            .len()
+            .checked_add(b.projection.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or("resource: ManuallyDrop place comparison overflow")?;
+        budget.charge_work(work)?;
+        Ok(a.local == b.local
+            && a.projection.len() == b.projection.len()
+            && a.projection.iter().zip(&b.projection).all(|(x, y)| x == y))
+    }
+    fn same_original(&self, other: &Self, budget: &ir::PlanBudget) -> Result<bool, String> {
+        budget.charge_work(1)?;
+        Ok(self.publication == other.publication
+            && self.site == other.site
+            && self.argument == other.argument
+            && std::sync::Arc::ptr_eq(&self.source, &other.source)
+            && std::sync::Arc::ptr_eq(&self.descriptor, &other.descriptor)
+            && Self::same_place(&self.reference, &other.reference, budget)?
+            && Self::same_place(&self.payload, &other.payload, budget)?)
+    }
+    fn copy_place(place: &Place, extra: usize, budget: &ir::PlanBudget) -> Result<Place, String> {
+        budget.check_depth(place.projection.len())?;
+        let count = place
+            .projection
+            .len()
+            .checked_add(extra)
+            .ok_or("resource: ManuallyDrop place extent overflow")?;
+        let bytes = count
+            .checked_mul(std::mem::size_of::<Projection>())
+            .ok_or("resource: ManuallyDrop place byte extent overflow")?;
+        budget.retain_bytes(bytes)?;
+        let mut projection = Vec::new();
+        projection
+            .try_reserve_exact(count)
+            .map_err(|_| "infrastructure: ManuallyDrop place allocation failed")?;
+        if projection.capacity() > count {
+            budget.retain_bytes(
+                (projection.capacity() - count)
+                    .checked_mul(std::mem::size_of::<Projection>())
+                    .ok_or("resource: ManuallyDrop place capacity byte extent overflow")?,
+            )?;
+        }
+        projection.extend_from_slice(&place.projection);
+        Ok(Place {
+            local: place.local,
+            projection,
+        })
+    }
+    fn seal(
+        publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+        site: ExprId,
+        reference: &Place,
+        payload: &Place,
+        budget: &ir::PlanBudget,
+    ) -> Result<std::sync::Arc<Self>, String> {
+        let expression = publication
+            .source()
+            .exprs
+            .get(site.0)
+            .ok_or("ManuallyDrop take source occurrence is missing")?;
+        let ir::ExprKind::ManuallyDropDrop { ty, value, source } = &expression.kind else {
+            return Err("ManuallyDrop take is not an original drop operation".into());
+        };
+        source.validate_site(
+            publication.facts().declaration(),
+            publication
+                .facts()
+                .world()
+                .canonical_catalog()
+                .id(super::traits::CatalogItem::ManuallyDropDrop),
+            site,
+            *value,
+        )?;
+        budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
+        let proof = std::sync::Arc::new(Self {
+            publication: publication.identity().clone(),
+            site,
+            argument: *value,
+            descriptor: ty.clone(),
+            source: source.clone(),
+            reference: Self::copy_place(reference, 0, budget)?,
+            payload: Self::copy_place(payload, 0, budget)?,
+        });
+        proof.validate(publication, reference, payload, Some(site), budget)?;
+        Ok(proof)
+    }
+    fn validate(
+        &self,
+        publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+        reference: &Place,
+        payload: &Place,
+        current_origin: Option<ExprId>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        if current_origin != Some(self.site) {
+            return Err("ManuallyDrop take changed current original statement occurrence".into());
+        }
+        let work = reference
+            .projection
+            .len()
+            .checked_add(payload.projection.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or("resource: ManuallyDrop take place work overflow")?;
+        budget.charge_work(work)?;
+        let expected_len = reference
+            .projection
+            .len()
+            .checked_add(2)
+            .ok_or("resource: ManuallyDrop payload projection extent overflow")?;
+        if self.publication != *publication.identity()
+            || !Self::same_place(reference, &self.reference, budget)?
+            || !Self::same_place(payload, &self.payload, budget)?
+            || payload.local != reference.local
+            || payload.projection.len() != expected_len
+            || !payload.projection.starts_with(&reference.projection)
+            || payload.projection[reference.projection.len()..]
+                != [Projection::Deref, Projection::ManuallyDropPayload]
+        {
+            return Err(
+                "ManuallyDrop take changed publication or exact exclusive payload place".into(),
+            );
+        }
+        let expression = publication
+            .source()
+            .exprs
+            .get(self.site.0)
+            .ok_or("ManuallyDrop take original occurrence is missing")?;
+        let ir::ExprKind::ManuallyDropDrop { ty, value, source } = &expression.kind else {
+            return Err("ManuallyDrop take original operation changed".into());
+        };
+        if *value != self.argument
+            || !std::sync::Arc::ptr_eq(source, &self.source)
+            || !std::sync::Arc::ptr_eq(ty, &self.descriptor)
+        {
+            return Err(
+                "ManuallyDrop take changed original source operation, argument or descriptor"
+                    .into(),
+            );
+        }
+        source.validate_site(
+            publication.facts().declaration(),
+            publication
+                .facts()
+                .world()
+                .canonical_catalog()
+                .id(super::traits::CatalogItem::ManuallyDropDrop),
+            self.site,
+            self.argument,
+        )?;
+        publication
+            .validate_source(publication.source(), publication.facts(), budget)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+}
+
+/// Consumes an owned wrapper only at the original canonical into_inner call.
+#[derive(Clone, Debug)]
+pub struct ManuallyDropIntoInnerProof {
+    publication: super::source_replay::OriginalBodyId,
+    substitution: Option<super::source_replay::OriginalBodyId>,
+    original_descriptor: std::sync::Arc<ir::ManuallyDropTy>,
+    site: ExprId,
+    argument: ExprId,
+    descriptor: std::sync::Arc<ir::ManuallyDropTy>,
+    source: std::sync::Arc<super::frontend::manually_drop::ManuallyDropSourceOperation>,
+    value: Operand,
+}
+impl PartialEq for ManuallyDropIntoInnerProof {
+    fn eq(&self, other: &Self) -> bool {
+        self.substitution == other.substitution
+            && std::sync::Arc::ptr_eq(&self.original_descriptor, &other.original_descriptor)
+            && self.publication == other.publication
+            && self.site == other.site
+            && self.argument == other.argument
+            && std::sync::Arc::ptr_eq(&self.descriptor, &other.descriptor)
+            && std::sync::Arc::ptr_eq(&self.source, &other.source)
+            && match (&self.value, &other.value) {
+                (Operand::Copy(a), Operand::Copy(b)) | (Operand::Move(a), Operand::Move(b)) => {
+                    a == b
+                }
+                _ => false,
+            }
+    }
+}
+impl Eq for ManuallyDropIntoInnerProof {}
+impl ManuallyDropIntoInnerProof {
+    fn publication<'a>(
+        direct: Option<&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>>,
+        substitution: Option<&'a std::sync::Arc<ir::BodySubstitutionProof>>,
+    ) -> Result<&'a std::sync::Arc<super::source_replay::CanonicalSourcePublication>, String> {
+        direct
+            .or_else(|| {
+                substitution
+                    .and_then(|proof| proof.template().function().lowering_proof.as_ref())
+                    .and_then(|shape| shape.original_publication.as_ref())
+            })
+            .ok_or_else(|| {
+                "unsupported: ManuallyDrop into_inner requires original source publication".into()
+            })
+    }
+    fn same_value(a: &Operand, b: &Operand, budget: &ir::PlanBudget) -> Result<bool, String> {
+        match (a, b) {
+            (Operand::Copy(a), Operand::Copy(b)) | (Operand::Move(a), Operand::Move(b)) => {
+                ManuallyDropTakeProof::same_place(a, b, budget)
+            }
+            _ => Ok(false),
+        }
+    }
+    fn same_original(&self, other: &Self, budget: &ir::PlanBudget) -> Result<bool, String> {
+        budget.charge_work(1)?;
+        Ok(self.substitution == other.substitution
+            && std::sync::Arc::ptr_eq(&self.original_descriptor, &other.original_descriptor)
+            && self.publication == other.publication
+            && self.site == other.site
+            && self.argument == other.argument
+            && std::sync::Arc::ptr_eq(&self.descriptor, &other.descriptor)
+            && std::sync::Arc::ptr_eq(&self.source, &other.source)
+            && Self::same_value(&self.value, &other.value, budget)?)
+    }
+    fn seal(
+        publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+        checked: &ir::CheckedFunction,
+        facts: &super::traits::ValidatedFacts,
+        site: ExprId,
+        value: &Operand,
+        budget: &ir::PlanBudget,
+    ) -> Result<std::sync::Arc<Self>, String> {
+        let expression = publication
+            .source()
+            .exprs
+            .get(site.0)
+            .ok_or("ManuallyDrop into_inner original site is missing")?;
+        let ir::ExprKind::ManuallyDropIntoInner {
+            ty,
+            value: argument,
+            source,
+        } = &expression.kind
+        else {
+            return Err("ManuallyDrop unpack lacks original into_inner operation".into());
+        };
+        let current = checked
+            .exprs
+            .get(site.0)
+            .ok_or("ManuallyDrop into_inner generated occurrence is missing")?;
+        let ir::ExprKind::ManuallyDropIntoInner {
+            ty: current_descriptor,
+            value: current_argument,
+            source: current_source,
+        } = &current.kind
+        else {
+            return Err("ManuallyDrop into_inner generated operation changed".into());
+        };
+        if current_argument != argument || !std::sync::Arc::ptr_eq(current_source, source) {
+            return Err(
+                "ManuallyDrop into_inner substituted original argument or source receipt".into(),
+            );
+        }
+        let substitution = if let Some(body) = checked.body_substitution.as_ref() {
+            body.validate(checked, facts, budget)?;
+            let original = Self::publication(None, Some(body))?;
+            if !std::sync::Arc::ptr_eq(original, publication)
+                || !std::sync::Arc::ptr_eq(body.template().source(), publication.source())
+            {
+                return Err(
+                    "ManuallyDrop into_inner substitution changed original template publication"
+                        .into(),
+                );
+            }
+            Some(body.identity().clone())
+        } else {
+            if !std::ptr::eq(checked, publication.source().as_ref())
+                || !std::sync::Arc::ptr_eq(current_descriptor, ty)
+            {
+                return Err("ManuallyDrop into_inner changed exact original checked body".into());
+            }
+            None
+        };
+        let retained = match value {
+            Operand::Copy(place) => {
+                Operand::Copy(ManuallyDropTakeProof::copy_place(place, 0, budget)?)
+            }
+            Operand::Move(place) => {
+                Operand::Move(ManuallyDropTakeProof::copy_place(place, 0, budget)?)
+            }
+            _ => return Err("ManuallyDrop into_inner requires exact owned wrapper operand".into()),
+        };
+        budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
+        let proof = std::sync::Arc::new(Self {
+            publication: publication.identity().clone(),
+            site,
+            argument: *argument,
+            substitution,
+            original_descriptor: ty.clone(),
+            descriptor: current_descriptor.clone(),
+            source: source.clone(),
+            value: retained,
+        });
+        proof.validate(
+            publication,
+            checked.body_substitution.as_ref(),
+            facts,
+            value,
+            Some(site),
+            budget,
+        )?;
+        Ok(proof)
+    }
+    fn validate(
+        &self,
+        publication: &std::sync::Arc<super::source_replay::CanonicalSourcePublication>,
+        current_substitution: Option<&std::sync::Arc<ir::BodySubstitutionProof>>,
+        facts: &super::traits::ValidatedFacts,
+        value: &Operand,
+        current_origin: Option<ExprId>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        if !std::sync::Arc::ptr_eq(facts.world(), publication.facts().world())
+            || !facts.budget().same_authority(budget)
+        {
+            return Err("ManuallyDrop into_inner has foreign current facts authority".into());
+        }
+        if current_origin != Some(self.site)
+            || self.publication != *publication.identity()
+            || !Self::same_value(&self.value, value, budget)?
+        {
+            return Err(
+                "ManuallyDrop into_inner changed current source site, publication or owned operand"
+                    .into(),
+            );
+        }
+        let expression = publication
+            .source()
+            .exprs
+            .get(self.site.0)
+            .ok_or("ManuallyDrop into_inner original site is missing")?;
+        let ir::ExprKind::ManuallyDropIntoInner {
+            ty,
+            value: argument,
+            source,
+        } = &expression.kind
+        else {
+            return Err("ManuallyDrop into_inner original source operation changed".into());
+        };
+        if *argument != self.argument
+            || !std::sync::Arc::ptr_eq(ty, &self.original_descriptor)
+            || !std::sync::Arc::ptr_eq(source, &self.source)
+        {
+            return Err(
+                "ManuallyDrop into_inner changed exact source descriptor or argument".into(),
+            );
+        }
+        match (&self.substitution, current_substitution) {
+            (None, None) => {
+                if !std::sync::Arc::ptr_eq(&self.descriptor, &self.original_descriptor) {
+                    return Err("ManuallyDrop into_inner original descriptor changed".into());
+                }
+            }
+            (Some(identity), Some(body)) => {
+                if identity != body.identity()
+                    || Self::publication(None, Some(body))?.identity() != publication.identity()
+                    || body.target().declaration != publication.facts().declaration()
+                    || self.descriptor.declaration() != self.original_descriptor.declaration()
+                {
+                    return Err("ManuallyDrop into_inner changed exact body substitution identity or original owner".into());
+                }
+                let target = facts
+                    .target()
+                    .ok_or("ManuallyDrop substituted unpack lacks current closed target")?;
+                if target.declaration != body.target().declaration
+                    || !facts
+                        .world()
+                        .types_equal(&target.type_args, &body.target().type_args)
+                        .map_err(|error| error.into_legacy_diagnostic(budget))?
+                {
+                    return Err("ManuallyDrop into_inner changed ordered closed actuals".into());
+                }
+                let result = body.expression_type(self.site)?;
+                if !facts
+                    .world()
+                    .types_equal(
+                        std::slice::from_ref(result),
+                        std::slice::from_ref(self.descriptor.argument()),
+                    )
+                    .map_err(|error| error.into_legacy_diagnostic(budget))?
+                {
+                    return Err("ManuallyDrop into_inner descriptor does not match exact generated expression result".into());
+                }
+            }
+            _ => {
+                return Err(
+                    "ManuallyDrop into_inner omitted or transplanted body substitution authority"
+                        .into(),
+                );
+            }
+        }
+        source.validate_site(
+            publication.facts().declaration(),
+            publication
+                .facts()
+                .world()
+                .canonical_catalog()
+                .id(super::traits::CatalogItem::ManuallyDropIntoInner),
+            self.site,
+            self.argument,
+        )?;
+        publication
+            .validate_source(publication.source(), publication.facts(), budget)
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rvalue {
+    ManuallyDropIntoInner {
+        value: Operand,
+        proof: std::sync::Arc<ManuallyDropIntoInnerProof>,
+    },
+    ManuallyDropTake {
+        reference: Place,
+        payload: Place,
+        proof: std::sync::Arc<ManuallyDropTakeProof>,
+    },
     TypeAlignment(ir::TypeAlignmentQuery),
     /// Defining-body ownership transport, never an executable representation cast.
     OpaquePack {
@@ -720,7 +1194,9 @@ impl Rvalue {
         visit: &mut impl FnMut(&Operand) -> Result<(), String>,
     ) -> Result<(), String> {
         match self {
-            Self::OpaquePack { value, .. }
+            Self::ManuallyDropTake { .. } => {}
+            Self::ManuallyDropIntoInner { value, .. }
+            | Self::OpaquePack { value, .. }
             | Self::Use(value)
             | Self::CharToInt { value, .. }
             | Self::U8ToChar { value }
@@ -1249,6 +1725,12 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(&mut bytes, destination, budget)?;
                         match value {
+                            Rvalue::ManuallyDropTake {
+                                reference, payload, ..
+                            } => {
+                                path(&mut bytes, reference, budget)?;
+                                path(&mut bytes, payload, budget)?;
+                            }
                             Rvalue::TypeAlignment(_) => {}
                             Rvalue::NativeSyscall(fields)
                             | Rvalue::RawSlice { args: fields, .. }
@@ -1415,6 +1897,43 @@ impl Function {
         }
         for block in &self.blocks {
             for statement in &block.statements {
+                if let Statement::Assign {
+                    value: Rvalue::ManuallyDropIntoInner { value, proof },
+                    ..
+                } = &statement.value
+                {
+                    let publication = ManuallyDropIntoInnerProof::publication(
+                        self.lowering_proof
+                            .as_ref()
+                            .and_then(|shape| shape.original_publication.as_ref()),
+                        self.body_substitution.as_ref(),
+                    )?;
+                    proof.validate(
+                        publication,
+                        self.body_substitution.as_ref(),
+                        facts,
+                        value,
+                        statement.origin,
+                        budget,
+                    )?;
+                }
+                if let Statement::Assign {
+                    value:
+                        Rvalue::ManuallyDropTake {
+                            reference,
+                            payload,
+                            proof,
+                        },
+                    ..
+                } = &statement.value
+                {
+                    let publication = self
+                        .lowering_proof
+                        .as_ref()
+                        .and_then(|shape| shape.original_publication.as_ref())
+                        .ok_or("ManuallyDrop take lacks exact original source publication")?;
+                    proof.validate(publication, reference, payload, statement.origin, budget)?;
+                }
                 if let Statement::Assign {
                     value: Rvalue::OpaquePack { proof, .. },
                     ..
@@ -1679,6 +2198,12 @@ impl Function {
                                 Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                     check_place(array)?
                                 }
+                                Rvalue::ManuallyDropTake {
+                                    reference, payload, ..
+                                } => {
+                                    check_place(reference)?;
+                                    check_place(payload)?;
+                                }
                                 _ => {}
                             }
                         }
@@ -1891,7 +2416,14 @@ impl Function {
                     Statement::Assign { destination, value } => {
                         path(destination, budget)?;
                         match value {
-                            Rvalue::OpaquePack { value, .. }
+                            Rvalue::ManuallyDropTake {
+                                reference, payload, ..
+                            } => {
+                                path(reference, budget)?;
+                                path(payload, budget)?;
+                            }
+                            Rvalue::ManuallyDropIntoInner { value, .. }
+                            | Rvalue::OpaquePack { value, .. }
                             | Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
                             | Rvalue::U8ToChar { value }
@@ -2127,6 +2659,9 @@ impl Function {
                 if !raw && !facts.must_copy_scratch(&ty, scratch)? {
                     for (index, part) in place.projection.iter().enumerate() {
                         match part {
+                            Projection::ManuallyDropPayload => {
+                                return Err("E0507: cannot move a non-Copy value out of ManuallyDrop through dereference; use ManuallyDrop::into_inner".into());
+                            }
                             Projection::ConstantIndex(_) | Projection::DynamicIndex(_) => {
                                 borrowed_or_indexed = true;
                             }
@@ -2424,14 +2959,100 @@ impl Function {
     fn rvalue_ty(&self, value: &Rvalue) -> Result<Ty, String> {
         self.rvalue_ty_with_facts(value, ir::FactsCtx::Concrete, &mut TraitScratch::default())
     }
+    #[cfg(test)]
     fn rvalue_ty_with_facts(
         &self,
         value: &Rvalue,
         facts: ir::FactsCtx<'_>,
         scratch: &mut TraitScratch,
     ) -> Result<Ty, String> {
+        self.rvalue_ty_with_facts_at(value, facts, scratch, None)
+    }
+    fn rvalue_ty_with_facts_at(
+        &self,
+        value: &Rvalue,
+        facts: ir::FactsCtx<'_>,
+        scratch: &mut TraitScratch,
+        current_origin: Option<ExprId>,
+    ) -> Result<Ty, String> {
         let budget = self.query_budget(facts);
         match value {
+            Rvalue::ManuallyDropIntoInner { value, proof } => {
+                let authority = facts
+                    .validated()
+                    .ok_or("ManuallyDrop into_inner requires authoritative source facts")?;
+                let publication = ManuallyDropIntoInnerProof::publication(
+                    self.lowering_proof
+                        .as_ref()
+                        .and_then(|shape| shape.original_publication.as_ref()),
+                    self.body_substitution.as_ref(),
+                )?;
+                proof.validate(
+                    publication,
+                    self.body_substitution.as_ref(),
+                    authority,
+                    value,
+                    current_origin,
+                    authority.budget(),
+                )?;
+                let expected = Ty::ManuallyDrop(proof.descriptor.clone());
+                self.require_operand_with_facts(value, &expected, facts, scratch)?;
+                Ok(proof.descriptor.argument().clone())
+            }
+            Rvalue::ManuallyDropTake {
+                reference,
+                payload,
+                proof,
+            } => {
+                let authority = facts
+                    .validated()
+                    .ok_or("ManuallyDrop take requires original publication facts")?;
+                let publication = self
+                    .lowering_proof
+                    .as_ref()
+                    .and_then(|shape| shape.original_publication.as_ref())
+                    .ok_or("ManuallyDrop take requires original source publication")?;
+                proof.validate(
+                    publication,
+                    reference,
+                    payload,
+                    current_origin,
+                    authority.budget(),
+                )?;
+                if proof.source.declaration()
+                    != authority
+                        .world()
+                        .canonical_catalog()
+                        .id(super::traits::CatalogItem::ManuallyDropDrop)
+                {
+                    return Err("ManuallyDrop take changed canonical drop declaration".into());
+                }
+                let reference_ty = self.place_ty_with_budget(reference, budget)?;
+                facts.validate_ty_with_budget_scratch(
+                    &reference_ty,
+                    authority.budget(),
+                    scratch,
+                )?;
+                let Ty::Ref {
+                    kind: ir::BorrowKind::Mut,
+                    referent,
+                } = reference_ty
+                else {
+                    return Err("ManuallyDrop take requires an exclusive wrapper reference".into());
+                };
+                let expected = Ty::ManuallyDrop(proof.descriptor.clone());
+                if !authority
+                    .world()
+                    .types_equal(
+                        std::slice::from_ref(referent.as_ref()),
+                        std::slice::from_ref(&expected),
+                    )
+                    .map_err(|error| error.to_string())?
+                {
+                    return Err("ManuallyDrop take changed exact payload type".into());
+                }
+                Ok(proof.descriptor.argument().clone())
+            }
             Rvalue::Intrinsic { intrinsic, args } => {
                 let signature = intrinsic
                     .signature()
@@ -3044,7 +3665,8 @@ impl Function {
                                 return Err("CFG loan site used more than once".into());
                             }
                         }
-                        let got = self.rvalue_ty_with_facts(value, facts, scratch)?;
+                        let got =
+                            self.rvalue_ty_with_facts_at(value, facts, scratch, statement.origin)?;
                         facts.validate_ty_scratch(&got, scratch)?;
                         let want = self.place_ty_with_budget(destination, budget)?;
                         if !coerces(&got, &want) {
@@ -4184,7 +4806,18 @@ impl Lowerer<'_> {
                     if projection.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
                         return Err("dereference projection depth exceeds limit 128".into());
                     }
-                    projection.push(PendingProjection::Static(Projection::Deref));
+                    let pointee = self
+                        .source
+                        .exprs
+                        .get(value.0)
+                        .ok_or("invalid dereference source")?;
+                    projection.push(PendingProjection::Static(
+                        if matches!(pointee.ty, Ty::ManuallyDrop(_)) {
+                            Projection::ManuallyDropPayload
+                        } else {
+                            Projection::Deref
+                        },
+                    ));
                     root = *value;
                 }
                 // A runtime row inside a place path, e.g. the `m[i]` of
@@ -5092,6 +5725,97 @@ impl Lowerer<'_> {
                     .map(|id| self.expression(*id))
                     .collect::<Result<Vec<_>, _>>()?;
                 self.assign(destination.clone(), Rvalue::NativeSyscall(operands), origin);
+            }
+            ir::ExprKind::ManuallyDropDrop {
+                ty,
+                value,
+                source: _,
+            } => {
+                let publication = self.publication.ok_or(
+                    "unsupported: ManuallyDrop explicit drop requires original source publication",
+                )?;
+                let budget = self
+                    .budget
+                    .ok_or("ManuallyDrop drop lowering requires a node budget")?;
+                let reference = self.materialize_expression(*value)?;
+                let mut payload = ManuallyDropTakeProof::copy_place(&reference, 2, budget)?;
+                payload
+                    .projection
+                    .extend([Projection::Deref, Projection::ManuallyDropPayload]);
+                let proof =
+                    ManuallyDropTakeProof::seal(publication, id, &reference, &payload, budget)?;
+                let temporary = self.temporary(ty.argument().clone(), origin);
+                self.check_resource()?;
+                self.assign(
+                    temporary.clone(),
+                    Rvalue::ManuallyDropTake {
+                        reference,
+                        payload,
+                        proof,
+                    },
+                    origin,
+                );
+                self.drop_value(temporary.local, origin);
+                self.check_resource()?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Use(Operand::Constant(Constant::Unit)),
+                    origin,
+                );
+            }
+            ir::ExprKind::ManuallyDrop {
+                ty,
+                value,
+                source: _,
+            } => {
+                let value = self.expression(*value)?;
+                if !self.allocate(0, std::mem::size_of::<Operand>()) {
+                    return Err(self.resource_error.clone().unwrap());
+                }
+                let mut fields = Vec::new();
+                fields
+                    .try_reserve_exact(1)
+                    .map_err(|_| "infrastructure: ManuallyDrop payload buffer allocation failed")?;
+                fields.push(value);
+                self.assign(
+                    destination.clone(),
+                    Rvalue::Aggregate {
+                        ty: Ty::ManuallyDrop(ty.clone()),
+                        fields,
+                    },
+                    origin,
+                );
+            }
+            ir::ExprKind::ManuallyDropIntoInner {
+                ty: _,
+                value,
+                source: _,
+            } => {
+                let value = self.expression(*value)?;
+                let publication = ManuallyDropIntoInnerProof::publication(
+                    self.publication,
+                    self.source.body_substitution.as_ref(),
+                )?;
+                let budget = self
+                    .budget
+                    .ok_or("ManuallyDrop into_inner requires node budget")?;
+                let facts = self
+                    .facts
+                    .validated()
+                    .ok_or("ManuallyDrop into_inner requires validated current body facts")?;
+                let proof = ManuallyDropIntoInnerProof::seal(
+                    publication,
+                    self.source,
+                    facts,
+                    id,
+                    &value,
+                    budget,
+                )?;
+                self.assign(
+                    destination.clone(),
+                    Rvalue::ManuallyDropIntoInner { value, proof },
+                    origin,
+                );
             }
             ir::ExprKind::PhantomData(marker) => self.assign(
                 destination.clone(),
@@ -6385,6 +7109,470 @@ mod original_replay_transport_tests {
             panic!("canonical source publication required")
         };
         publication
+    }
+
+    #[test]
+    fn manually_drop_into_inner_transports_exact_generated_body_authority() {
+        let budget = ir::PlanBudget::default();
+        let prepared=crate::compiler::source::prepare_text_with_prelude("manual-generic-cfg.rs","use core::mem::ManuallyDrop;fn through<T>(x:T)->T{ManuallyDrop::into_inner(ManuallyDrop::new(x))}fn other<T>(x:T)->T{ManuallyDrop::into_inner(ManuallyDrop::new(x))}fn main(){}",&crate::compiler::source::SourceOptions::default()).unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 0, &budget);
+        let other_publication = published(&plan, 1, &budget);
+        let template =
+            ownership::verify_template(lower_source_template(&publication, &budget).unwrap())
+                .unwrap();
+        let target = ir::CallTarget {
+            declaration: plan.function_decl(0).unwrap(),
+            type_args: Arc::from([Ty::Int(IntTy::I32)]),
+        };
+        let facts = plan.instance_facts(&target).unwrap();
+        let instance = ir::instantiate_checked(
+            &template,
+            &target.type_args,
+            &facts,
+            &mut plan.clone(),
+            &budget,
+        )
+        .unwrap();
+        let repeated = ir::instantiate_checked(
+            &template,
+            &target.type_args,
+            &facts,
+            &mut plan.clone(),
+            &budget,
+        )
+        .unwrap();
+        let bool_target = ir::CallTarget {
+            declaration: target.declaration,
+            type_args: Arc::from([Ty::Bool]),
+        };
+        let bool_facts = plan.instance_facts(&bool_target).unwrap();
+        let bool_instance = ir::instantiate_checked(
+            &template,
+            &bool_target.type_args,
+            &bool_facts,
+            &mut plan.clone(),
+            &budget,
+        )
+        .unwrap();
+        let body = instance.body_substitution.as_ref().unwrap();
+        let repeated_body = repeated.body_substitution.as_ref().unwrap();
+        let bool_body = bool_instance.body_substitution.as_ref().unwrap();
+        assert_ne!(body.identity(), repeated_body.identity());
+        assert_ne!(body.identity(), bool_body.identity());
+        let function = lower_with_facts(&instance, &facts, &budget).unwrap();
+        function
+            .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+            .unwrap();
+        function.validate_provenance(&facts, &budget).unwrap();
+        let (value, proof) = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::ManuallyDropIntoInner { value, proof },
+                    ..
+                } => Some((value, proof)),
+                _ => None,
+            })
+            .unwrap();
+        proof
+            .validate(
+                &publication,
+                Some(body),
+                &facts,
+                value,
+                Some(proof.site),
+                &budget,
+            )
+            .unwrap();
+        assert!(
+            proof
+                .validate(&publication, None, &facts, value, Some(proof.site), &budget)
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate(
+                    &publication,
+                    Some(repeated_body),
+                    &facts,
+                    value,
+                    Some(proof.site),
+                    &budget
+                )
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate(
+                    &publication,
+                    Some(bool_body),
+                    &bool_facts,
+                    value,
+                    Some(proof.site),
+                    &budget
+                )
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate(
+                    &other_publication,
+                    Some(body),
+                    &facts,
+                    value,
+                    Some(proof.site),
+                    &budget
+                )
+                .is_err()
+        );
+        let mut changed = proof.as_ref().clone();
+        changed.descriptor =
+            ir::ManuallyDropTy::new(facts.world().canonical_catalog(), Ty::Bool, &budget).unwrap();
+        assert!(
+            changed
+                .validate(
+                    &publication,
+                    Some(body),
+                    &facts,
+                    value,
+                    Some(proof.site),
+                    &budget
+                )
+                .is_err()
+        );
+        let mut detached = function.clone();
+        detached.body_substitution = None;
+        assert!(
+            detached
+                .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                .is_err()
+        );
+        assert!(detached.validate_provenance(&facts, &budget).is_err());
+        let mut transplanted = function.clone();
+        transplanted.body_substitution = Some(repeated_body.clone());
+        assert!(
+            transplanted
+                .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                .is_err()
+        );
+        assert!(transplanted.validate_provenance(&facts, &budget).is_err());
+    }
+
+    #[test]
+    fn manually_drop_into_inner_requires_original_whole_wrapper_operation() {
+        let budget = ir::PlanBudget::default();
+        let prepared=crate::compiler::source::prepare_text_with_prelude("manual-unpack-cfg.rs","use core::mem::ManuallyDrop;struct Token;fn f()->Token{let a=ManuallyDrop::new(Token);let b=ManuallyDrop::new(Token);let first=ManuallyDrop::into_inner(a);ManuallyDrop::into_inner(b)}fn g()->Token{ManuallyDrop::into_inner(ManuallyDrop::new(Token))}fn main(){}",&crate::compiler::source::SourceOptions::default()).unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 0, &budget);
+        let other = published(&plan, 1, &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        function
+            .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+            .unwrap();
+        function
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        let unpacks: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value: Rvalue::ManuallyDropIntoInner { value, proof },
+                    ..
+                } => Some((value, proof)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(unpacks.len(), 2);
+        let (value, proof) = unpacks[0];
+        proof
+            .validate(
+                &publication,
+                None,
+                publication.facts(),
+                value,
+                Some(proof.site),
+                &budget,
+            )
+            .unwrap();
+        assert!(
+            proof
+                .validate(
+                    &other,
+                    None,
+                    other.facts(),
+                    value,
+                    Some(proof.site),
+                    &budget
+                )
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate(
+                    &publication,
+                    None,
+                    publication.facts(),
+                    value,
+                    Some(unpacks[1].1.site),
+                    &budget
+                )
+                .is_err()
+        );
+        assert!(
+            proof
+                .validate(
+                    &publication,
+                    None,
+                    publication.facts(),
+                    unpacks[1].0,
+                    Some(proof.site),
+                    &budget
+                )
+                .is_err()
+        );
+        let Operand::Move(wrapper) = value else {
+            panic!("noncopy wrapper must be moved as a whole")
+        };
+        let mut payload = wrapper.clone();
+        payload.projection.push(Projection::ManuallyDropPayload);
+        let error = function
+            .operand_ty_with_facts(
+                &Operand::Move(payload.clone()),
+                ir::FactsCtx::from_validated(publication.facts()),
+                &mut TraitScratch::default(),
+            )
+            .unwrap_err();
+        assert!(error.contains("E0507"), "{error}");
+        for change in 0..4 {
+            let mut forged = function.clone();
+            let statement = forged
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find(|statement| {
+                    matches!(
+                        &statement.value,
+                        Statement::Assign {
+                            value: Rvalue::ManuallyDropIntoInner { .. },
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            if change == 0 {
+                statement.origin = Some(unpacks[1].1.site);
+            } else {
+                let Statement::Assign { value, .. } = &mut statement.value else {
+                    unreachable!()
+                };
+                if change == 1 {
+                    *value = Rvalue::Use(Operand::Move(payload.clone()));
+                } else {
+                    let Rvalue::ManuallyDropIntoInner { value, proof } = value else {
+                        unreachable!()
+                    };
+                    if change == 2 {
+                        *proof = unpacks[1].1.clone();
+                    } else {
+                        *value = unpacks[1].0.clone();
+                    }
+                }
+            }
+            assert!(
+                forged
+                    .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+                    .is_err()
+            );
+            assert!(
+                forged
+                    .validate_source_publication(&publication, &budget)
+                    .is_err()
+            );
+        }
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(proof.same_original(proof, &denied).is_err());
+        assert!(denied.first_resource_failure().is_some());
+    }
+
+    #[test]
+    fn manually_drop_take_retains_original_owner_site_argument_and_effect() {
+        let budget = ir::PlanBudget::default();
+        let prepared = crate::compiler::source::prepare_text_with_prelude("manual-cfg.rs", "use core::mem::ManuallyDrop;fn f(){let mut a=ManuallyDrop::new(1i32);let mut b=ManuallyDrop::new(2i32);unsafe{ManuallyDrop::drop(&mut a);ManuallyDrop::drop(&mut b);}}fn g(){let mut a=ManuallyDrop::new(3i32);unsafe{ManuallyDrop::drop(&mut a);}}fn main(){}", &crate::compiler::source::SourceOptions::default()).unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let publication = published(&plan, 0, &budget);
+        let other = published(&plan, 1, &budget);
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        let takes: Vec<_> = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value:
+                        Rvalue::ManuallyDropTake {
+                            reference,
+                            payload,
+                            proof,
+                        },
+                    ..
+                } => Some((reference, payload, proof)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(takes.len(), 2);
+        for (reference, payload, proof) in &takes {
+            proof
+                .validate(&publication, reference, payload, Some(proof.site), &budget)
+                .unwrap();
+            assert!(
+                proof
+                    .validate(&other, reference, payload, Some(proof.site), &budget)
+                    .is_err()
+            );
+        }
+        assert_ne!(takes[0].2.site, takes[1].2.site);
+        assert_ne!(takes[0].2.argument, takes[1].2.argument);
+        assert!(
+            takes[0]
+                .2
+                .validate(&publication, takes[0].0, takes[0].1, None, &budget)
+                .is_err()
+        );
+        assert!(
+            takes[0]
+                .2
+                .validate(
+                    &publication,
+                    takes[0].0,
+                    takes[0].1,
+                    Some(takes[1].2.site),
+                    &budget
+                )
+                .is_err()
+        );
+        let mut wrong_site = function.clone();
+        let statement = wrong_site
+            .blocks
+            .iter_mut()
+            .flat_map(|block| &mut block.statements)
+            .find(|statement| {
+                matches!(
+                    &statement.value,
+                    Statement::Assign {
+                        value: Rvalue::ManuallyDropTake { .. },
+                        ..
+                    }
+                )
+            })
+            .unwrap();
+        statement.origin = Some(takes[1].2.site);
+        assert!(
+            wrong_site
+                .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+                .is_err()
+        );
+        assert!(
+            wrong_site
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        assert!(
+            takes[0]
+                .2
+                .validate(
+                    &publication,
+                    takes[1].0,
+                    takes[1].1,
+                    Some(takes[1].2.site),
+                    &budget
+                )
+                .is_err()
+        );
+        function
+            .validate_with_facts(ir::FactsCtx::from_validated(publication.facts()))
+            .unwrap();
+        function
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        for change in 0..6 {
+            let mut forged = function.clone();
+            let statement = forged
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find(|statement| {
+                    matches!(
+                        &statement.value,
+                        Statement::Assign {
+                            value: Rvalue::ManuallyDropTake { .. },
+                            ..
+                        }
+                    )
+                })
+                .unwrap();
+            let Statement::Assign { value, .. } = &mut statement.value else {
+                unreachable!()
+            };
+            let Rvalue::ManuallyDropTake {
+                reference,
+                payload,
+                proof,
+            } = value
+            else {
+                unreachable!()
+            };
+            match change {
+                0 => *proof = takes[1].2.clone(),
+                1 => payload.projection.pop().map(|_| ()).unwrap(),
+                2 => reference.local = LocalId(usize::MAX),
+                3 => Arc::make_mut(proof).argument = takes[1].2.argument,
+                4 => {
+                    Arc::make_mut(proof).descriptor = ir::ManuallyDropTy::new(
+                        publication.facts().world().canonical_catalog(),
+                        Ty::Bool,
+                        &budget,
+                    )
+                    .unwrap()
+                }
+                _ => *value = Rvalue::Use(Operand::Constant(Constant::Int(IntValue::i32(1)))),
+            }
+            assert!(
+                forged
+                    .validate_source_publication(&publication, &budget)
+                    .is_err()
+            );
+        }
+        let denied = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            takes[0]
+                .2
+                .validate(
+                    &publication,
+                    takes[0].0,
+                    takes[0].1,
+                    Some(takes[0].2.site),
+                    &denied
+                )
+                .is_err()
+        );
+        assert!(denied.first_resource_failure().is_some());
     }
 
     #[test]
@@ -12640,6 +13828,18 @@ mod tests {
                     Statement::Assign { destination, value } => {
                         assert!(live[destination.local.0], "destination local is not live");
                         match value {
+                            Rvalue::ManuallyDropTake {
+                                reference, payload, ..
+                            } => {
+                                assert!(
+                                    live[reference.local.0],
+                                    "ManuallyDrop take reads dead exclusive handle storage"
+                                );
+                                assert!(
+                                    live[payload.local.0],
+                                    "ManuallyDrop take reads dead payload storage"
+                                );
+                            }
                             Rvalue::Borrow(loan) => {
                                 assert!(
                                     live[function.loan_sites[loan.0].place.local.0],
@@ -12650,7 +13850,8 @@ mod tests {
                                 live_operand(index, &live);
                                 assert!(live[array.local.0], "dynamic index reads dead array");
                             }
-                            Rvalue::OpaquePack { value, .. }
+                            Rvalue::ManuallyDropIntoInner { value, .. }
+                            | Rvalue::OpaquePack { value, .. }
                             | Rvalue::Use(value)
                             | Rvalue::CharToInt { value, .. }
                             | Rvalue::U8ToChar { value }

@@ -186,6 +186,11 @@ impl ValidatedTraitWorld {
                     world.validate_universal_projection(projection, env)?;
                     Ok(ty.clone())
                 }
+                Ty::ManuallyDrop(wrapper) => Ok(Ty::ManuallyDrop(wrapper.try_map(
+                    &world.budget,
+                    |e| FactsError::from_message(&world.budget, &e),
+                    |child| normalize(world, child, env, depth + 1),
+                )?)),
                 Ty::FnPointer(pointer) => Ok(Ty::FnPointer(pointer.try_map(
                     &world.budget,
                     |e| FactsError::from_message(&world.budget, &e),
@@ -271,6 +276,9 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         self.validate_ty_metadata_in(ty, env, depth)?;
         match ty {
+            Ty::ManuallyDrop(wrapper) => {
+                self.validate_universal_projection_type(wrapper.argument(), env, depth + 1)?
+            }
             Ty::FnPointer(closure) => {
                 for child in closure.types() {
                     self.validate_universal_projection_type(child, env, depth + 1)?;

@@ -23,6 +23,40 @@ fn opaque_marker_hidden_types_preserve_generic_source_metadata_without_component
 }
 
 #[test]
+fn opaque_manually_drop_retains_owned_payload_without_implicit_cleanup() {
+    native_matches_stock_with_dispatch(
+        r#"
+        use std::mem::ManuallyDrop;
+        struct Owned { value: i32 }
+        impl Drop for Owned { fn drop(&mut self) { println!("unexpected payload cleanup"); } }
+        fn make<T>(value: T) -> impl Sized { ManuallyDrop::new(value) }
+        fn unused<T>(value: T) -> impl Sized { ManuallyDrop::new(value) }
+        fn main() {
+            let wrapped = make(Owned { value: 7 });
+            let _moved = wrapped;
+            println!("owned payload retained");
+        }
+        "#,
+        false,
+    );
+    native_matches_stock_with_dispatch(
+        r#"
+        use core::mem::ManuallyDrop;
+        struct Owned { value: i32 }
+        impl Drop for Owned { fn drop(&mut self) { println!("unexpected captured cleanup"); } }
+        fn make<T>(value: T) -> impl Sized { ManuallyDrop::new(value) }
+        fn main() {
+            let captured = Owned { value: 9 };
+            let wrapped = make(move || { let _held = captured; });
+            let _moved = wrapped;
+            println!("closure payload retained");
+        }
+        "#,
+        false,
+    );
+}
+
+#[test]
 fn closed_opaque_public_projection_metadata_matches_stock() {
     native_matches_stock_with_dispatch(
         r#"

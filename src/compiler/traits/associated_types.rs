@@ -394,6 +394,13 @@ impl ValidatedTraitWorld {
                     child(ty, replays)?;
                 }
             }
+            Ty::ManuallyDrop(marker) => {
+                marker
+                    .validate(&self.catalog, &self.budget)
+                    .map_err(|e| FactsError::from_message(&self.budget, &e))?;
+                child(marker.argument(), replays)?;
+                self.validate_phantom_sized_argument(marker.argument(), None, depth + 1)?;
+            }
             Ty::PhantomData(marker) => {
                 marker
                     .validate(&self.catalog, &self.budget)
@@ -957,6 +964,11 @@ impl ValidatedTraitWorld {
         charged(&self.budget, self.budget.charge_work(1))?;
         match ty {
             Ty::Param(_) => return Ok(false),
+            Ty::ManuallyDrop(marker) => {
+                if !self.raw_associated_ty_is_closed(marker.argument(), depth + 1)? {
+                    return Ok(false);
+                }
+            }
             Ty::PhantomData(marker) => {
                 if !self.raw_associated_ty_is_closed(marker.argument(), depth + 1)? {
                     return Ok(false);
@@ -1341,6 +1353,11 @@ impl ValidatedTraitWorld {
                 push(&self.budget, dependencies, evidence)?;
                 Ok(normal)
             }
+            Ty::ManuallyDrop(marker) => Ok(Ty::ManuallyDrop(marker.try_map(
+                &self.budget,
+                |e| FactsError::from_message(&self.budget, &e),
+                |t| self.normalize_type_in(t, context, stack, dependencies, depth + 1),
+            )?)),
             Ty::PhantomData(marker) => Ok(Ty::PhantomData(marker.try_map(
                 &self.budget,
                 |e| FactsError::from_message(&self.budget, &e),
@@ -1902,6 +1919,18 @@ impl ValidatedTraitWorld {
             self.validate_rhs_substitution(left, right, env, arguments, depth + 1)
         };
         match (raw, actual) {
+            (Ty::ManuallyDrop(left), Ty::ManuallyDrop(right)) => {
+                if !left.try_eq(right, |left, right| {
+                    child(left, right)?;
+                    Ok::<_, FactsError>(true)
+                })? {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "ManuallyDrop RHS substitution changed canonical declaration",
+                    ));
+                }
+                return Ok(());
+            }
             (Ty::PhantomData(left), Ty::PhantomData(right)) => {
                 if !left.try_eq(right, |left, right| {
                     child(left, right)?;

@@ -99,6 +99,7 @@ impl Ty {
         match self {
             Ty::Param(_) | Ty::AssociatedType(_) | Ty::Opaque(_) => false,
             Ty::PhantomData(marker) => marker.argument().is_closed_shallow(),
+            Ty::ManuallyDrop(wrapper) => wrapper.argument().is_closed_shallow(),
             Ty::FnPointer(p) => p.types().all(Ty::is_closed_shallow),
             Ty::Closure(c) => c.types().all(Ty::is_closed_shallow),
             Ty::Struct(n) => {
@@ -653,6 +654,7 @@ impl CarrierChannel {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum CarrierStep {
+    ManuallyDropPayload,
     Field(usize),
     ConstantIndex(usize),
     /// All elements of a shared slice, as one conservative read-only carrier.
@@ -701,6 +703,7 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
         };
         match ty {
             Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
+            Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -873,6 +876,9 @@ pub fn carrier_locations(ty: &Ty, budget: &PlanBudget) -> Result<Arc<[CarrierLoc
                         );
                     }
                     Ty::FnItem(_) | Ty::FnPointer(_) | Ty::PhantomData(_) => {}
+                    Ty::ManuallyDrop(wrapper) => {
+                        child(CarrierStep::ManuallyDropPayload, wrapper.argument())?
+                    }
                     Ty::Closure(closure) => {
                         for (index, ty) in closure.captures().iter().enumerate() {
                             child(CarrierStep::Field(index), ty)?;
@@ -959,6 +965,12 @@ pub fn carrier_at(
     for step in location.path.0.iter() {
         budget.charge_work(1)?;
         ty = match (step, &ty) {
+            (CarrierStep::ManuallyDropPayload, Ty::ManuallyDrop(wrapper)) => {
+                wrapper.argument().clone()
+            }
+            (CarrierStep::Field(_), Ty::ManuallyDrop(_)) => {
+                return Err("ManuallyDrop payload requires canonical carrier step".into());
+            }
             (CarrierStep::Referent, Ty::Ref { referent, .. }) => referent.as_ref().clone(),
             (CarrierStep::Field(index), _) => ty
                 .field_ty(*index, budget)?
@@ -1592,6 +1604,9 @@ pub(super) fn identical_type(a: &Ty, b: &Ty, budget: &PlanBudget) -> Result<bool
         (Ty::PhantomData(a), Ty::PhantomData(b)) => {
             a.try_eq(b, |a, b| identical_type(a, b, budget))?
         }
+        (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
+            a.try_eq(b, |a, b| identical_type(a, b, budget))?
+        }
         (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, |a, b| identical_type(a, b, budget))?,
         (Ty::Closure(a), Ty::Closure(b)) => Arc::ptr_eq(a, b),
         (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -1918,6 +1933,7 @@ impl GeneratedBodyShape {
 /// Provenance of the one exhaustive instantiator, never an interner cache grant.
 #[derive(Clone, Debug)]
 pub struct BodySubstitutionProof {
+    identity: super::source_replay::OriginalBodyId,
     template: super::ownership::VerifiedTemplateCfg,
     target: CallTarget,
     nominals: Arc<[NominalCarrierMapping]>,
@@ -1929,6 +1945,14 @@ pub struct BodySubstitutionProof {
     engine: Option<crate::engine::EngineAuthority>,
 }
 impl BodySubstitutionProof {
+    pub(in crate::compiler) fn identity(&self) -> &super::source_replay::OriginalBodyId {
+        &self.identity
+    }
+    pub(in crate::compiler) fn expression_type(&self, expression: ExprId) -> Result<&Ty, String> {
+        self.expression_types
+            .get(expression.0)
+            .ok_or_else(|| "body substitution expression type occurrence is missing".into())
+    }
     pub(in crate::compiler) fn validate_current_engine(
         &self,
         engine: crate::engine::EngineAuthority,
@@ -3422,6 +3446,11 @@ fn substitute_ty_walk(
                 Ty::Closure(Arc::new(mapped))
             }
         }
+        Ty::ManuallyDrop(wrapper) => Ty::ManuallyDrop(wrapper.try_map(
+            budget,
+            |e| e,
+            |ty| substitute_ty_walk(ty, env, args, caller, cx, budget, depth + 1),
+        )?),
         Ty::PhantomData(marker) => Ty::PhantomData(marker.try_map(
             budget,
             |e| e,
@@ -3792,6 +3821,14 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         budget.charge_work(1)?;
         expression.ty = visitor.ty(&expression.ty)?;
         match &mut expression.kind {
+            ExprKind::ManuallyDrop { ty, .. }
+            | ExprKind::ManuallyDropIntoInner { ty, .. }
+            | ExprKind::ManuallyDropDrop { ty, .. } => {
+                let Ty::ManuallyDrop(mapped) = visitor.ty(&Ty::ManuallyDrop(ty.clone()))? else {
+                    return Err("ManuallyDrop substitution changed canonical type kind".into());
+                };
+                *ty = mapped;
+            }
             ExprKind::PhantomData(marker) => {
                 let Ty::PhantomData(mapped) = visitor.ty(&Ty::PhantomData(marker.clone()))? else {
                     return Err("PhantomData substitution changed canonical type kind".into());
@@ -3943,6 +3980,8 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
         std::mem::size_of::<BodySubstitutionProof>() + 4 * std::mem::size_of::<usize>(),
     )?;
     output.body_substitution = Some(Arc::new(BodySubstitutionProof {
+        identity: super::source_replay::OriginalBodyId::new(budget)
+            .map_err(|error| error.into_legacy_diagnostic(budget))?,
         template: template.clone(),
         target: target.clone(),
         engine: recording.inner.current_engine(),
@@ -4571,6 +4610,7 @@ pub(super) fn reject_references(root: &Ty, budget: &PlanBudget) -> Result<(), St
                 }
             }
             Ty::PhantomData(marker) => walk(marker.argument(), budget, depth + 1, seen)?,
+            Ty::ManuallyDrop(wrapper) => walk(wrapper.argument(), budget, depth + 1, seen)?,
             Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     walk(ty, budget, depth + 1, seen)?;
@@ -4667,6 +4707,7 @@ impl<C: SubstitutionCx> Instantiate<'_, C> {
             }
         }
         match ty {
+            Ty::ManuallyDrop(wrapper) => self.note_owners(wrapper.argument(), depth + 1)?,
             Ty::Enum(value) if !value.is_back_edge() => {
                 let def = value.def();
                 if !self.owners.contains_key(&def.id) {
@@ -5467,6 +5508,7 @@ pub struct VariantId {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Projection {
+    ManuallyDropPayload,
     Field(usize),
     Downcast(VariantId),
     ConstantIndex(usize),
@@ -5519,6 +5561,11 @@ pub(super) fn raw_deref_index_optional(
                 }
                 _ => return Ok(None),
             },
+            Projection::ManuallyDropPayload => match &ty {
+                Ty::ManuallyDrop(wrapper) => wrapper.argument().clone(),
+                _ => return Ok(None),
+            },
+            Projection::Field(_) if matches!(ty, Ty::ManuallyDrop(_)) => return Ok(None),
             Projection::Field(field) => match ty.field_ty_optional(*field, budget)? {
                 Some(ty) => ty,
                 None => return Ok(None),
@@ -5653,6 +5700,15 @@ fn projected_ty_inner(
                 }
                 _ => return Err("runtime place index requires array or slice type".into()),
             },
+            Projection::ManuallyDropPayload => match &ty {
+                Ty::ManuallyDrop(wrapper) => wrapper.argument().clone(),
+                _ => {
+                    return Err("ManuallyDrop payload projection requires canonical wrapper".into());
+                }
+            },
+            Projection::Field(_) if matches!(ty, Ty::ManuallyDrop(_)) => {
+                return Err("ManuallyDrop payload requires canonical projection".into());
+            }
             Projection::Field(index) => ty
                 .field_ty_optional(index, budget)?
                 .ok_or("invalid field projection")?,
@@ -5962,6 +6018,7 @@ pub enum Ty {
     /// Safe, nonvariadic Rust ABI function pointer, distinct from an item.
     FnPointer(Arc<FnPointerTy>),
     PhantomData(Arc<PhantomDataTy>),
+    ManuallyDrop(Arc<ManuallyDropTy>),
     AssociatedType(Arc<AssociatedTypeProjection>),
     Param(ParamId),
     Int(IntTy),
@@ -6137,6 +6194,7 @@ impl PhantomDataTy {
                 return Err("unsupported: PhantomData borrow, lifetime, unsized, projection or opaque argument contract".into());
             }
             Ty::PhantomData(marker) => child(marker.argument())?,
+            Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::FnPointer(pointer) => {
                 pointer.validate(budget)?;
                 for component in pointer.types() {
@@ -6205,6 +6263,139 @@ impl PhantomDataTy {
     }
 }
 
+/// Declaration-only source construction authority issued by the canonical catalog.
+#[derive(Clone, Copy, Debug)]
+pub struct ManuallyDropFactory {
+    declaration: DeclId,
+}
+impl ManuallyDropFactory {
+    pub fn from_builder(
+        builder: &super::traits::CoreCatalogBuilder,
+        budget: &PlanBudget,
+    ) -> Result<Self, String> {
+        budget.charge_work(builder.base_declarations().len())?;
+        let entry = builder
+            .base_declarations()
+            .iter()
+            .find(|entry| {
+                matches!(
+                    entry.origin,
+                    super::traits::DeclOrigin::CoreCatalog {
+                        item: super::traits::CatalogItem::ManuallyDrop,
+                        ..
+                    }
+                )
+            })
+            .ok_or("missing canonical ManuallyDrop builder declaration")?;
+        Ok(Self {
+            declaration: entry.declaration,
+        })
+    }
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn with_argument(
+        &self,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<ManuallyDropTy>, String> {
+        ManuallyDropTy::allocate(self.declaration, argument, budget)
+    }
+}
+/// Canonical owning wrapper. Its initialized T is stored but not implicitly dropped.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ManuallyDropTy {
+    declaration: DeclId,
+    argument: Ty,
+}
+impl ManuallyDropTy {
+    pub fn declaration(&self) -> DeclId {
+        self.declaration
+    }
+    pub fn argument(&self) -> &Ty {
+        &self.argument
+    }
+    fn allocate(
+        declaration: DeclId,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let bytes = std::mem::size_of::<Self>()
+            .checked_add(2 * std::mem::size_of::<usize>())
+            .ok_or("resource limit: ManuallyDrop backing size overflow")?;
+        budget.retain_bytes(bytes)?;
+        Ok(Arc::new(Self {
+            declaration,
+            argument,
+        }))
+    }
+    pub fn from_builder(
+        builder: &super::traits::CoreCatalogBuilder,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        ManuallyDropFactory::from_builder(builder, budget)?.with_argument(argument, budget)
+    }
+    pub fn new(
+        catalog: &super::traits::CoreCatalog,
+        argument: Ty,
+        budget: &PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        let value = Self::allocate(
+            catalog.id(super::traits::CatalogItem::ManuallyDrop),
+            argument,
+            budget,
+        )?;
+        value.validate(catalog, budget)?;
+        Ok(value)
+    }
+    /// Authenticates structural owner only. Actual environment and Sized are world facts.
+    pub fn validate(
+        &self,
+        catalog: &super::traits::CoreCatalog,
+        budget: &PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        let canonical = catalog.id(super::traits::CatalogItem::ManuallyDrop);
+        if self.declaration != canonical {
+            return Err("invalid canonical ManuallyDrop declaration authority".into());
+        }
+        let entry = catalog
+            .declaration(canonical)
+            .ok_or("missing canonical ManuallyDrop declaration")?;
+        if entry.info.kind != DeclKind::Struct
+            || entry.info.owner.is_some()
+            || entry.info.own_env.arity() != 1
+            || entry.origin
+                != (super::traits::DeclOrigin::CoreCatalog {
+                    version: catalog.version(),
+                    item: super::traits::CatalogItem::ManuallyDrop,
+                })
+        {
+            return Err("invalid canonical ManuallyDrop catalog schema".into());
+        }
+        Ok(())
+    }
+    pub fn try_map<E>(
+        &self,
+        budget: &PlanBudget,
+        error: impl FnOnce(String) -> E,
+        map: impl FnOnce(&Ty) -> Result<Ty, E>,
+    ) -> Result<Arc<Self>, E> {
+        let argument = map(&self.argument)?;
+        Self::allocate(self.declaration, argument, budget).map_err(error)
+    }
+    pub fn try_eq<'a, 'b, E>(
+        &'a self,
+        other: &'b Self,
+        equal: impl FnOnce(&'a Ty, &'b Ty) -> Result<bool, E>,
+    ) -> Result<bool, E> {
+        if self.declaration != other.declaration {
+            return Ok(false);
+        }
+        equal(&self.argument, &other.argument)
+    }
+}
 /// Canonical safe Rust ABI function pointer metadata. Unsupported ABI, safety,
 /// binders and variadics are not representable and cannot be forged as flags.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -6267,6 +6458,7 @@ impl FnPointerTy {
                 Ty::RawPtr { pointee, .. } | Ty::Array { element: pointee, .. } | Ty::Slice { element: pointee } => component(pointee, budget, depth + 1)?,
                 Ty::Tuple(fields) => { for t in fields.iter() { component(t, budget, depth + 1)?; } }
                 Ty::PhantomData(marker) => component(marker.argument(), budget, depth + 1)?,
+                Ty::ManuallyDrop(wrapper) => component(wrapper.argument(), budget, depth + 1)?,
                 Ty::FnPointer(pointer) => { for t in pointer.types() { component(t, budget, depth + 1)?; } }
                 Ty::Struct(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
                 Ty::Enum(n) => { for t in n.def().type_args.iter() { component(t, budget, depth + 1)?; } }
@@ -6547,6 +6739,7 @@ fn type_metadata_walk(
         let key = match ty {
             Ty::Opaque(opaque) => (9, Arc::as_ptr(opaque) as usize),
             Ty::PhantomData(marker) => (12, Arc::as_ptr(marker) as usize),
+            Ty::ManuallyDrop(wrapper) => (13, Arc::as_ptr(wrapper) as usize),
             Ty::FnPointer(pointer) => (11, Arc::as_ptr(pointer) as usize),
             Ty::Closure(closure) => (8, Arc::as_ptr(closure) as usize),
             Ty::FnItem(item) => (10, Arc::as_ptr(item) as usize),
@@ -6640,6 +6833,7 @@ fn type_metadata_walk(
                 }
             }
             Ty::PhantomData(marker) => child(marker.argument())?,
+            Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {
                     child(ty)?;
@@ -7102,6 +7296,7 @@ impl Ty {
                         }
                     }
                 }
+                Self::ManuallyDrop(wrapper) => push(&mut pending, wrapper.argument())?,
                 Self::PhantomData(_)
                 | Self::FnPointer(_)
                 | Self::FnItem(_)
@@ -7121,6 +7316,7 @@ impl Ty {
 
     pub fn field_count(&self) -> Option<usize> {
         match self {
+            Self::ManuallyDrop(_) => Some(1),
             Self::Closure(closure) => Some(closure.captures().len()),
             Self::FnItem(_) => Some(0),
             Self::Tuple(fields) => Some(fields.len()),
@@ -7141,6 +7337,7 @@ impl Ty {
             budget.charge_work(1)?;
         }
         Ok(match self {
+            Self::ManuallyDrop(wrapper) if index == 0 => Some(wrapper.argument().clone()),
             Self::Closure(closure) => closure.captures().get(index).cloned(),
             Self::Tuple(fields) => fields.get(index).cloned(),
             Self::Struct(ty) => ty
@@ -7174,7 +7371,7 @@ impl Ty {
             | Self::Str
             | Self::Dyn(_)
             | Self::Slice { .. } => false,
-            Self::Closure(_) | Self::Tuple(_) | Self::Array { .. } => {
+            Self::ManuallyDrop(_) | Self::Closure(_) | Self::Tuple(_) | Self::Array { .. } => {
                 let mut pending = vec![self];
                 let mut seen = std::collections::HashSet::new();
                 let mut arrays = std::collections::HashSet::new();
@@ -7193,6 +7390,7 @@ impl Ty {
                         | Self::Slice { .. } => {
                             return false;
                         }
+                        Self::ManuallyDrop(wrapper) => pending.push(wrapper.argument()),
                         Self::Closure(closure)
                             if seen.insert(Arc::as_ptr(closure).cast::<Ty>()) =>
                         {
@@ -8448,6 +8646,7 @@ pub(in crate::compiler) fn reference_type_summary(
         };
         match ty {
             Ty::Opaque(_) | Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => {}
+            Ty::ManuallyDrop(wrapper) => child(wrapper.argument())?,
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
                     child(ty)?;
@@ -8577,6 +8776,7 @@ fn ref_types_equal(
         let equal = match (left, right) {
             (Ty::Opaque(a), Ty::Opaque(b)) => a.try_eq(b, &mut child)?,
             (Ty::PhantomData(a), Ty::PhantomData(b)) => a.try_eq(b, &mut child)?,
+            (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnPointer(a), Ty::FnPointer(b)) => a.try_eq(b, &mut child)?,
             (Ty::Closure(a), Ty::Closure(b)) => a.try_eq(b, &mut child)?,
             (Ty::FnItem(a), Ty::FnItem(b)) => {
@@ -9166,6 +9366,14 @@ fn pattern_types_equal_with_facts(
                     return Ok(false);
                 }
             }
+            (Ty::ManuallyDrop(a), Ty::ManuallyDrop(b)) => {
+                if !a.try_eq(b, |a, b| {
+                    pending.push((a, b, depth + 1));
+                    Ok::<bool, String>(true)
+                })? {
+                    return Ok(false);
+                }
+            }
             (Ty::FnPointer(a), Ty::FnPointer(b)) => {
                 if !a.try_eq(b, |a, b| {
                     pending.push((a, b, depth + 1));
@@ -9715,6 +9923,24 @@ pub struct LiteralOutput {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExprKind {
+    /// Canonical stored payload with suppressed implicit cleanup.
+    ManuallyDrop {
+        ty: Arc<ManuallyDropTy>,
+        value: ExprId,
+        source: Arc<super::frontend::manually_drop::ManuallyDropSourceOperation>,
+    },
+    /// Consumes the canonical wrapper and restores its initialized payload.
+    ManuallyDropIntoInner {
+        ty: Arc<ManuallyDropTy>,
+        value: ExprId,
+        source: Arc<super::frontend::manually_drop::ManuallyDropSourceOperation>,
+    },
+    /// Explicit unsafe cleanup authenticated against the original source occurrence.
+    ManuallyDropDrop {
+        ty: Arc<ManuallyDropTy>,
+        value: ExprId,
+        source: Arc<super::frontend::manually_drop::ManuallyDropSourceOperation>,
+    },
     /// Canonical non-owning marker constructor, retaining its exact type argument.
     PhantomData(Arc<PhantomDataTy>),
     /// Universally typed member use, replaced only by graph-sealed closed CTFE.
@@ -10547,6 +10773,19 @@ impl CheckedFunction {
         for expression in &self.exprs {
             facts.validate_value_ty_with_budget_scratch(&expression.ty, budget, scratch)?;
             match &expression.kind {
+                ExprKind::ManuallyDrop { ty, source, .. }
+                | ExprKind::ManuallyDropIntoInner { ty, source, .. }
+                | ExprKind::ManuallyDropDrop { ty, source, .. } => {
+                    let authority = facts
+                        .validated()
+                        .ok_or("unsupported: ManuallyDrop requires canonical callable facts")?;
+                    source.validate(authority.world().canonical_catalog(), budget)?;
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::ManuallyDrop(ty.clone()),
+                        budget,
+                        scratch,
+                    )?;
+                }
                 ExprKind::PhantomData(marker) => {
                     facts.validate_ty_with_budget_scratch(
                         &Ty::PhantomData(marker.clone()),
@@ -10908,6 +11147,12 @@ impl CheckedFunction {
             match step {
                 Projection::DynamicIndex(_) => {
                     return Err("runtime index is not a source pattern projection".into());
+                }
+                Projection::ManuallyDropPayload => {
+                    return Err(
+                        "unsupported: ManuallyDrop payload is not a source pattern projection"
+                            .into(),
+                    );
                 }
                 Projection::Field(_) | Projection::ConstantIndex(_) | Projection::Deref => {}
                 Projection::Downcast(variant) => {
@@ -11299,6 +11544,116 @@ impl CheckedFunction {
             .map_or(&fallback_budget, |authority| authority.budget());
         for (borrow_index, value) in self.exprs.iter().enumerate() {
             match &value.kind {
+                ExprKind::ManuallyDrop {
+                    ty,
+                    value: argument,
+                    source,
+                }
+                | ExprKind::ManuallyDropIntoInner {
+                    ty,
+                    value: argument,
+                    source,
+                }
+                | ExprKind::ManuallyDropDrop {
+                    ty,
+                    value: argument,
+                    source,
+                } => {
+                    expr(*argument)?;
+                    let authority = facts
+                        .validated()
+                        .ok_or("unsupported: ManuallyDrop requires canonical callable facts")?;
+                    let catalog = authority.world().canonical_catalog();
+                    source.validate(catalog, conditional_budget)?;
+                    let operation = match &value.kind {
+                        ExprKind::ManuallyDrop { .. } => {
+                            super::traits::CatalogItem::ManuallyDropNew
+                        }
+                        ExprKind::ManuallyDropIntoInner { .. } => {
+                            super::traits::CatalogItem::ManuallyDropIntoInner
+                        }
+                        ExprKind::ManuallyDropDrop { .. } => {
+                            super::traits::CatalogItem::ManuallyDropDrop
+                        }
+                        _ => unreachable!(),
+                    };
+                    source.validate_site(
+                        authority.declaration(),
+                        catalog.id(operation),
+                        ExprId(borrow_index),
+                        *argument,
+                    )?;
+                    facts.validate_ty_with_budget_scratch(
+                        &Ty::ManuallyDrop(ty.clone()),
+                        conditional_budget,
+                        scratch,
+                    )?;
+                    let operand = &self.exprs[argument.0];
+                    facts.validate_ty_with_budget_scratch(
+                        &operand.ty,
+                        conditional_budget,
+                        scratch,
+                    )?;
+                    facts.validate_ty_with_budget_scratch(
+                        &value.ty,
+                        conditional_budget,
+                        scratch,
+                    )?;
+                    let wrapper = Ty::ManuallyDrop(ty.clone());
+                    let (input, output) = match operation {
+                        super::traits::CatalogItem::ManuallyDropNew => (ty.argument(), &wrapper),
+                        super::traits::CatalogItem::ManuallyDropIntoInner => {
+                            (&wrapper, ty.argument())
+                        }
+                        super::traits::CatalogItem::ManuallyDropDrop => {
+                            let Ty::Ref {
+                                kind: BorrowKind::Mut,
+                                referent,
+                            } = &operand.ty
+                            else {
+                                return Err(
+                                    "ManuallyDrop drop requires canonical exclusive wrapper borrow"
+                                        .into(),
+                                );
+                            };
+                            if !authority
+                                .world()
+                                .types_equal(
+                                    std::slice::from_ref(referent.as_ref()),
+                                    std::slice::from_ref(&wrapper),
+                                )
+                                .map_err(|error| error.into_legacy_diagnostic(conditional_budget))?
+                            {
+                                return Err(
+                                    "ManuallyDrop drop changed exact payload descriptor".into()
+                                );
+                            }
+                            (&operand.ty, &Ty::Unit)
+                        }
+                        _ => unreachable!(),
+                    };
+                    if !authority
+                        .world()
+                        .types_equal(
+                            std::slice::from_ref(&operand.ty),
+                            std::slice::from_ref(input),
+                        )
+                        .map_err(|error| error.into_legacy_diagnostic(conditional_budget))?
+                        || !authority
+                            .world()
+                            .types_equal(
+                                std::slice::from_ref(&value.ty),
+                                std::slice::from_ref(output),
+                            )
+                            .map_err(|error| error.into_legacy_diagnostic(conditional_budget))?
+                        || value.completion != operand.completion
+                    {
+                        return Err(
+                            "ManuallyDrop operation changed canonical signature or completion"
+                                .into(),
+                        );
+                    }
+                }
                 ExprKind::PhantomData(marker) => {
                     facts.validate_ty_with_budget_scratch(
                         &Ty::PhantomData(marker.clone()),
@@ -11610,6 +11965,14 @@ impl CheckedFunction {
                     expr(*source)?;
                     let source_ty = &self.exprs[source.0].ty;
                     let referent = match source_ty {
+                        Ty::ManuallyDrop(wrapper) => {
+                            facts.validate_ty_with_budget_scratch(
+                                source_ty,
+                                conditional_budget,
+                                scratch,
+                            )?;
+                            wrapper.argument()
+                        }
                         Ty::Ref { referent, .. }
                         | Ty::RawPtr {
                             pointee: referent, ..
@@ -13251,6 +13614,71 @@ mod original_replay_transport_tests {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn manually_drop_factory_authenticates_owner_actual_and_payload_carrier() {
+        use super::*;
+        use crate::compiler::traits as tr;
+        let budget = PlanBudget::default();
+        let builder = tr::CoreCatalogBuilder::new(
+            SnapshotId::standalone().unwrap(),
+            fixture_modules(),
+            &budget,
+        )
+        .unwrap();
+        let factory = ManuallyDropFactory::from_builder(&builder, &budget).unwrap();
+        let start = builder.source_start();
+        let catalog = builder
+            .finish(start, tr::RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        let before = budget.usage_for_tests(|usage| usage.bytes);
+        let wrapper = factory.with_argument(Ty::Bool, &budget).unwrap();
+        assert_eq!(
+            budget.usage_for_tests(|usage| usage.bytes) - before,
+            std::mem::size_of::<ManuallyDropTy>() + 2 * std::mem::size_of::<usize>()
+        );
+        wrapper.validate(&catalog, &budget).unwrap();
+        let same = ManuallyDropTy::new(&catalog, Ty::Bool, &budget).unwrap();
+        assert!(
+            wrapper
+                .try_eq(&same, |a, b| Ok::<_, String>(a == b))
+                .unwrap()
+        );
+        let changed = wrapper
+            .try_map(&budget, |e| e, |_| Ok::<_, String>(Ty::Unit))
+            .unwrap();
+        assert!(
+            !wrapper
+                .try_eq(&changed, |a, b| Ok::<_, String>(a == b))
+                .unwrap()
+        );
+        let mut forged = wrapper.as_ref().clone();
+        forged.declaration = catalog.id(tr::CatalogItem::PhantomData);
+        assert!(forged.validate(&catalog, &budget).is_err());
+        forged.declaration = DeclId {
+            snapshot: SnapshotId::standalone().unwrap(),
+            index: wrapper.declaration().index,
+        };
+        assert!(forged.validate(&catalog, &budget).is_err());
+        let denied = PlanBudget::new(PlanLimits {
+            bytes: 0,
+            ..PlanLimits::default()
+        });
+        assert!(
+            factory
+                .with_argument(Ty::Bool, &denied)
+                .unwrap_err()
+                .contains("resource")
+        );
+        let ty = Ty::ManuallyDrop(wrapper);
+        assert!(ty.is_copy());
+        assert_eq!(ty.field_count(), Some(1));
+        assert_eq!(ty.field_ty(0, &budget).unwrap(), Some(Ty::Bool));
+        assert_eq!(
+            projected_ty(&ty, &[Projection::ManuallyDropPayload], &budget).unwrap(),
+            Ty::Bool
+        );
+        assert!(projected_ty(&ty, &[Projection::Field(0)], &budget).is_err());
+    }
     #[test]
     fn phantom_data_factory_and_metadata_reject_forged_owner_and_preserve_backing_admission() {
         use super::*;

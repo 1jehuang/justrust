@@ -167,6 +167,11 @@ fn ty(
             types(words, value.owner_args(), budget, depth + 1)?;
             17
         }
+        ir::Ty::ManuallyDrop(value) => {
+            declaration(words, value.declaration());
+            ty(words, value.argument(), budget, depth + 1)?;
+            21
+        }
         ir::Ty::PhantomData(value) => {
             declaration(words, value.declaration());
             ty(words, value.argument(), budget, depth + 1)?;
@@ -551,6 +556,17 @@ impl Reader<'_> {
                     type_args: type_args.into(),
                 }))
             }
+            21 => {
+                let declaration = self.declaration()?;
+                let argument = self.ty(facts, depth + 1)?;
+                let world = self.context.trait_world()?;
+                let marker =
+                    ir::ManuallyDropTy::new(world.canonical_catalog(), argument, self.budget)?;
+                if marker.declaration() != declaration {
+                    return Err("instance graph marker changed canonical catalog authority".into());
+                }
+                ir::Ty::ManuallyDrop(marker)
+            }
             20 => {
                 let declaration = self.declaration()?;
                 let argument = self.ty(facts, depth + 1)?;
@@ -795,6 +811,35 @@ mod tests {
             })
             .is_err()
         );
+    }
+
+    #[test]
+    fn manually_drop_graph_keys_replay_catalog_owner_and_exact_ordered_argument() {
+        let (context, budget, declaration) = fixture();
+        let world = context.trait_world().unwrap();
+        let marker = |argument| {
+            ir::Ty::ManuallyDrop(
+                ir::ManuallyDropTy::new(world.canonical_catalog(), argument, &budget).unwrap(),
+            )
+        };
+        let target = |argument| ir::CallTarget {
+            declaration,
+            type_args: Arc::from([marker(argument)]),
+        };
+        let original = target(ir::Ty::Tuple(Arc::from([ir::Ty::Bool, ir::Ty::Unit])));
+        let words = encode(&original, &budget).unwrap();
+        assert_eq!(decode(&words, &context, &budget).unwrap(), original);
+        let changed = target(ir::Ty::Tuple(Arc::from([ir::Ty::Unit, ir::Ty::Bool])));
+        assert_ne!(encode(&changed, &budget).unwrap(), words);
+        let mut wrong_owner = words.clone();
+        wrong_owner[7] = world
+            .canonical_catalog()
+            .id(traits::CatalogItem::Copy)
+            .index;
+        assert!(decode(&wrong_owner, &context, &budget).is_err());
+        let mut foreign = words;
+        foreign[6] = ir::SnapshotId::standalone().unwrap().graph_word();
+        assert!(decode(&foreign, &context, &budget).is_err());
     }
 
     #[test]

@@ -5,9 +5,9 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 9;
+pub const CATALOG_VERSION: u32 = 10;
 
-const BASE_COUNT: u32 = 9;
+const BASE_COUNT: u32 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
@@ -71,12 +71,20 @@ pub enum CatalogItem {
     Drop,
     DropItem,
     PhantomData,
+    ManuallyDrop,
+    ManuallyDropNew,
+    ManuallyDropIntoInner,
+    ManuallyDropDrop,
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
     pub fn module(self) -> CatalogModule {
         match self {
             Self::Sized | Self::Copy | Self::PhantomData => CatalogModule::Marker,
+            Self::ManuallyDrop
+            | Self::ManuallyDropNew
+            | Self::ManuallyDropIntoInner
+            | Self::ManuallyDropDrop => CatalogModule::Mem,
             Self::Clone
             | Self::CloneItem
             | Self::CloneFromItem
@@ -92,6 +100,10 @@ impl CatalogItem {
             Self::Copy => Some(BuiltinAtom::Copy),
             Self::Drop => Some(BuiltinAtom::Drop),
             Self::PhantomData => Some(BuiltinAtom::PhantomData),
+            Self::ManuallyDrop => Some(BuiltinAtom::ManuallyDrop),
+            Self::ManuallyDropNew => Some(BuiltinAtom::ManuallyDropNew),
+            Self::ManuallyDropIntoInner => Some(BuiltinAtom::ManuallyDropIntoInner),
+            Self::ManuallyDropDrop => Some(BuiltinAtom::ManuallyDropDrop),
             _ => None,
         }
     }
@@ -106,6 +118,10 @@ impl CatalogItem {
             Self::Drop => 6,
             Self::DropItem => 7,
             Self::PhantomData => 8,
+            Self::ManuallyDrop => 9,
+            Self::ManuallyDropNew => 10,
+            Self::ManuallyDropIntoInner => 11,
+            Self::ManuallyDropDrop => 12,
             Self::Recipe(_) => return None,
         })
     }
@@ -160,6 +176,8 @@ pub struct CoreCatalogBuilder {
     modules: Arc<ModuleArena>,
     budget: PlanBudget,
     declarations: Vec<CatalogDecl>,
+    /// Explicit bounded catalog declaration predicates, never inferred from spelling.
+    declared_bounds: Arc<[Predicate]>,
     headers: HeaderSet,
 }
 pub struct CoreCatalog {
@@ -168,6 +186,8 @@ pub struct CoreCatalog {
     budget: PlanBudget,
     source_end: u32,
     declarations: Vec<CatalogDecl>,
+    /// Explicit bounded catalog declaration predicates, never inferred from spelling.
+    declared_bounds: Arc<[Predicate]>,
     headers: HeaderSet,
     inventory: RecipeShapeInventory,
 }
@@ -310,6 +330,7 @@ impl CoreCatalogBuilder {
             CatalogItem::Drop,
             CatalogItem::DropItem,
             CatalogItem::PhantomData,
+            CatalogItem::ManuallyDrop,
         ] {
             let declaration = id(snapshot, item);
             let is_trait = matches!(
@@ -325,7 +346,10 @@ impl CoreCatalogBuilder {
             };
             let own = scope(
                 declaration,
-                usize::from(is_trait || item == CatalogItem::PhantomData),
+                usize::from(
+                    is_trait
+                        || matches!(item, CatalogItem::PhantomData | CatalogItem::ManuallyDrop),
+                ),
                 budget,
             )?;
             let mut scopes = Vec::new();
@@ -345,7 +369,7 @@ impl CoreCatalogBuilder {
                 },
                 _ => ReceiverMode::None,
             };
-            let kind = if item == CatalogItem::PhantomData {
+            let kind = if matches!(item, CatalogItem::PhantomData | CatalogItem::ManuallyDrop) {
                 DeclKind::Struct
             } else if is_trait {
                 DeclKind::Trait
@@ -364,6 +388,10 @@ impl CoreCatalogBuilder {
                 CatalogItem::Drop => "Drop",
                 CatalogItem::DropItem => "drop",
                 CatalogItem::PhantomData => "PhantomData",
+                CatalogItem::ManuallyDrop => "ManuallyDrop",
+                CatalogItem::ManuallyDropNew
+                | CatalogItem::ManuallyDropIntoInner
+                | CatalogItem::ManuallyDropDrop => unreachable!(),
                 CatalogItem::Recipe(_) => unreachable!(),
             };
             let info = SchemaDecl {
@@ -427,7 +455,7 @@ impl CoreCatalogBuilder {
                         supertraits: supers.into(),
                     },
                 )?;
-            } else if item != CatalogItem::PhantomData {
+            } else if !matches!(item, CatalogItem::PhantomData | CatalogItem::ManuallyDrop) {
                 let owner = owner
                     .ok_or_else(|| FactsError::invalid(budget, "catalog item owner missing"))?;
                 let self_ty = Ty::Param(ParamId {
@@ -512,11 +540,29 @@ impl CoreCatalogBuilder {
                 },
             )?;
         }
-        Ok(Self {
+        let mut declared_bounds = Vec::new();
+        retain::<Ty>(budget, 0)?;
+        push(
+            budget,
+            &mut declared_bounds,
+            Predicate::Implements(TraitRef {
+                declaration: id(snapshot, CatalogItem::Sized),
+                self_ty: Ty::Param(ParamId {
+                    owner: BinderId {
+                        declaration: id(snapshot, CatalogItem::ManuallyDrop),
+                    },
+                    index: 0,
+                }),
+                args: Arc::from([]),
+            }),
+        )?;
+        retain::<Predicate>(budget, declared_bounds.len())?;
+        let mut builder = Self {
             snapshot,
             modules,
             budget: budget.clone(),
             declarations,
+            declared_bounds: declared_bounds.into(),
             headers: HeaderSet {
                 constants: Arc::from([]),
                 associated_types: Arc::from([]),
@@ -525,7 +571,106 @@ impl CoreCatalogBuilder {
                 impls: Arc::from([]),
                 callables: callables.into(),
             },
-        })
+        };
+        builder.add_manually_drop_operations(budget)?;
+        Ok(builder)
+    }
+    fn add_manually_drop_operations(&mut self, budget: &PlanBudget) -> Result<()> {
+        let factory = charged(budget, ir::ManuallyDropFactory::from_builder(self, budget))?;
+        let owner = factory.declaration();
+        let mut callables = Vec::new();
+        for header in self.headers.callables.iter() {
+            push(
+                budget,
+                &mut callables,
+                CallableHeader {
+                    declaration: header.declaration,
+                    schema: clone_schema(&header.schema, budget)?,
+                },
+            )?;
+        }
+        for (item, name) in [
+            (CatalogItem::ManuallyDropNew, "new"),
+            (CatalogItem::ManuallyDropIntoInner, "into_inner"),
+            (CatalogItem::ManuallyDropDrop, "drop"),
+        ] {
+            let declaration = id(self.snapshot, item);
+            let own = scope(declaration, 0, budget)?;
+            let mut scopes = Vec::new();
+            push(budget, &mut scopes, scope(owner, 1, budget)?)?;
+            push(budget, &mut scopes, own.clone())?;
+            let env = environment(&scopes, budget)?;
+            let argument = Ty::Param(ParamId {
+                owner: BinderId { declaration: owner },
+                index: 0,
+            });
+            let wrapper = Ty::ManuallyDrop(charged(
+                budget,
+                factory.with_argument(argument.clone(), budget),
+            )?);
+            let mut params = Vec::new();
+            let (input, result) = match item {
+                CatalogItem::ManuallyDropNew => (argument.clone(), wrapper),
+                CatalogItem::ManuallyDropIntoInner => (wrapper, argument.clone()),
+                CatalogItem::ManuallyDropDrop => {
+                    (reference(wrapper, BorrowKind::Mut, budget)?, Ty::Unit)
+                }
+                _ => unreachable!(),
+            };
+            push(budget, &mut params, input)?;
+            let mut predicates = Vec::new();
+            retain::<Ty>(budget, 0)?;
+            push(
+                budget,
+                &mut predicates,
+                Predicate::Implements(TraitRef {
+                    declaration: id(self.snapshot, CatalogItem::Sized),
+                    self_ty: argument,
+                    args: Arc::from([]),
+                }),
+            )?;
+            retain::<Predicate>(budget, predicates.len())?;
+            retain::<ir::InputRegion>(budget, usize::from(item == CatalogItem::ManuallyDropDrop))?;
+            retain::<ir::ResultReference>(budget, 0)?;
+            retain::<(ir::RegionParamId, ir::RegionParamId)>(budget, 0)?;
+            let signature = schema(env.clone(), params, result, predicates, budget)?;
+            push(
+                budget,
+                &mut callables,
+                CallableHeader {
+                    declaration,
+                    schema: clone_schema(&signature, budget)?,
+                },
+            )?;
+            push(
+                budget,
+                &mut self.declarations,
+                CatalogDecl {
+                    declaration,
+                    name,
+                    info: SchemaDecl {
+                        declaration,
+                        kind: DeclKind::AssociatedFunction,
+                        own_env: own,
+                        env,
+                        owner: Some(owner),
+                        module: self.modules.catalog_module(CatalogModule::Mem),
+                        visibility: ir::Visibility::Public,
+                        receiver: ReceiverMode::None,
+                        region_contract_mode: RegionContractMode::Positioned,
+                    },
+                    schema: Some(signature),
+                    origin: DeclOrigin::CoreCatalog {
+                        version: CATALOG_VERSION,
+                        item,
+                    },
+                    callable_provider: None,
+                },
+            )?;
+        }
+        retain::<CallableHeader>(budget, callables.len())?;
+        self.headers.callables = callables.into();
+        Ok(())
     }
     pub fn base_declarations(&self) -> &[CatalogDecl] {
         &self.declarations
@@ -666,6 +811,7 @@ impl CoreCatalogBuilder {
             budget: self.budget,
             source_end,
             declarations: self.declarations,
+            declared_bounds: self.declared_bounds,
             headers: self.headers,
             inventory,
         }))
@@ -832,6 +978,46 @@ impl CoreCatalog {
             self.declarations.get(i).filter(|d| d.declaration == id)
         }
     }
+    /// Raw header construction may read only explicit compiler-owned bounds.
+    /// A source binder or a foreign snapshot never inherits catalog authority.
+    pub(super) fn declared_sized_bound(&self, parameter: ParamId) -> Result<Option<bool>> {
+        charged(&self.budget, self.budget.charge_work(1))?;
+        let Some(owner) = self.declaration(parameter.owner.declaration) else {
+            return Ok(None);
+        };
+        if owner.origin
+            != (DeclOrigin::CoreCatalog {
+                version: CATALOG_VERSION,
+                item: CatalogItem::ManuallyDrop,
+            })
+        {
+            return Ok(None);
+        }
+        if owner.declaration != self.id(CatalogItem::ManuallyDrop)
+            || owner.info.kind != DeclKind::Struct
+            || owner.info.owner.is_some()
+            || owner.info.own_env.binder().declaration != owner.declaration
+            || owner.info.own_env.arity() != 1
+            || owner.info.env.total_arity() != 1
+            || !owner.info.own_env.contains(parameter)
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "catalog declared bound changed canonical owner or parameter binder",
+            ));
+        }
+        for predicate in self.declared_bounds.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if let Predicate::Implements(goal) = predicate
+                && goal.declaration == self.id(CatalogItem::Sized)
+                && goal.args.is_empty()
+                && matches!(&goal.self_ty, Ty::Param(actual) if *actual == parameter)
+            {
+                return Ok(Some(true));
+            }
+        }
+        Ok(Some(false))
+    }
     pub fn recipe(&self, descriptor: RecipeDescriptor) -> Result<&CatalogDecl> {
         if descriptor == RecipeDescriptor::CloneNever {
             return Err(FactsError::unsupported(
@@ -903,6 +1089,151 @@ pub(super) fn fixture_source_decl(
 mod wide_tests {
     use super::*;
 
+    #[test]
+    fn catalog_declared_sized_bound_rejects_foreign_owner_wrong_binder_and_forged_rows() {
+        let budget = PlanBudget::default();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
+            crate::compiler::expansion_budget::ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
+        let builder = CoreCatalogBuilder::new(snapshot, modules, &budget).unwrap();
+        let start = builder.source_start();
+        let mut catalog = builder
+            .finish(start, RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        let parameter = ParamId {
+            owner: BinderId {
+                declaration: catalog.id(CatalogItem::ManuallyDrop),
+            },
+            index: 0,
+        };
+        assert_eq!(catalog.declared_sized_bound(parameter).unwrap(), Some(true));
+        assert!(
+            catalog
+                .declared_sized_bound(ParamId {
+                    index: 1,
+                    ..parameter
+                })
+                .is_err()
+        );
+        let foreign = ParamId {
+            owner: BinderId {
+                declaration: DeclId {
+                    snapshot: SnapshotId::standalone().unwrap(),
+                    index: parameter.owner.declaration.index,
+                },
+            },
+            ..parameter
+        };
+        assert_eq!(catalog.declared_sized_bound(foreign).unwrap(), None);
+        for item in [
+            CatalogItem::PhantomData,
+            CatalogItem::Copy,
+            CatalogItem::ManuallyDropNew,
+        ] {
+            assert_eq!(
+                catalog
+                    .declared_sized_bound(ParamId {
+                        owner: BinderId {
+                            declaration: catalog.id(item)
+                        },
+                        index: 0
+                    })
+                    .unwrap(),
+                None
+            );
+        }
+        let wrong_trait = catalog.id(CatalogItem::Copy);
+        Arc::get_mut(&mut catalog).unwrap().declared_bounds =
+            Arc::from([Predicate::Implements(TraitRef {
+                declaration: wrong_trait,
+                self_ty: Ty::Param(parameter),
+                args: Arc::from([]),
+            })]);
+        assert_eq!(
+            catalog.declared_sized_bound(parameter).unwrap(),
+            Some(false)
+        );
+        let sized = catalog.id(CatalogItem::Sized);
+        Arc::get_mut(&mut catalog).unwrap().declared_bounds =
+            Arc::from([Predicate::Implements(TraitRef {
+                declaration: sized,
+                self_ty: Ty::Param(foreign),
+                args: Arc::from([]),
+            })]);
+        assert_eq!(
+            catalog.declared_sized_bound(parameter).unwrap(),
+            Some(false)
+        );
+        Arc::get_mut(&mut catalog).unwrap().declared_bounds = Arc::from([]);
+        assert_eq!(
+            catalog.declared_sized_bound(parameter).unwrap(),
+            Some(false)
+        );
+    }
+    #[test]
+    fn manually_drop_operations_keep_owning_catalog_binder_and_exclusive_drop_signature() {
+        let budget = PlanBudget::default();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
+            crate::compiler::expansion_budget::ExpansionBudget::default(),
+            crate::compiler::owner_path::standalone_issued(
+                &crate::compiler::expansion_budget::ExpansionBudget::default(),
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
+        let builder = CoreCatalogBuilder::new(snapshot, modules, &budget).unwrap();
+        for item in [
+            CatalogItem::ManuallyDropNew,
+            CatalogItem::ManuallyDropIntoInner,
+            CatalogItem::ManuallyDropDrop,
+        ] {
+            let entry = builder
+                .base_declarations()
+                .iter()
+                .find(|entry| entry.declaration == id(snapshot, item))
+                .unwrap();
+            assert_eq!(entry.info.kind, DeclKind::AssociatedFunction);
+            assert_eq!(
+                entry.info.owner,
+                Some(id(snapshot, CatalogItem::ManuallyDrop))
+            );
+            assert_eq!(entry.info.own_env.arity(), 0);
+            assert_eq!(entry.info.env.total_arity(), 1);
+            let schema = entry.schema.as_ref().unwrap();
+            assert_eq!(schema.signature.params.len(), 1);
+            assert!(
+                matches!(&schema.predicates[0],Predicate::Implements(bound) if bound.declaration == id(snapshot,CatalogItem::Sized) && bound.args.is_empty())
+            );
+            match item {
+                CatalogItem::ManuallyDropNew => assert!(
+                    matches!(&schema.signature.result, Ty::ManuallyDrop(wrapper) if matches!(wrapper.argument(),Ty::Param(p) if p.owner.declaration == id(snapshot,CatalogItem::ManuallyDrop)))
+                ),
+                CatalogItem::ManuallyDropIntoInner => {
+                    assert!(matches!(&schema.signature.params[0], Ty::ManuallyDrop(_)))
+                }
+                CatalogItem::ManuallyDropDrop => {
+                    assert!(
+                        matches!(&schema.signature.params[0],Ty::Ref {kind: BorrowKind::Mut,referent} if matches!(referent.as_ref(),Ty::ManuallyDrop(_)))
+                    );
+                    assert_eq!(schema.signature.result, Ty::Unit);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
     #[test]
     fn catalog_retains_same_checked_module_arena_and_typed_paths() {
         let budget = PlanBudget::default();

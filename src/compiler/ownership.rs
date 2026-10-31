@@ -1508,6 +1508,12 @@ fn preflight_with_plan(
         let mut projection = place.projection.iter();
         while let Some(step) = projection.next() {
             ty = match step {
+                Projection::ManuallyDropPayload => {
+                    let Ty::ManuallyDrop(wrapper) = &ty else {
+                        return Ok(());
+                    };
+                    wrapper.argument().clone()
+                }
                 Projection::Field(index) => match ty
                     .field_ty_optional(*index, budget.plan_budget())
                     .map_err(|_| Exhausted)?
@@ -1663,6 +1669,12 @@ fn preflight_with_plan(
             if let Statement::Assign { destination, value } = &item.value {
                 place_type(f, destination, &mut budget)?;
                 match value {
+                    Rvalue::ManuallyDropTake {
+                        reference, payload, ..
+                    } => {
+                        place_type(f, reference, &mut budget)?;
+                        place_type(f, payload, &mut budget)?;
+                    }
                     Rvalue::Borrow(_) => budget.spend(1)?,
                     Rvalue::Discriminant(place) => place_type(f, place, &mut budget)?,
                     Rvalue::IndexCopy { array, index } => {
@@ -1685,7 +1697,8 @@ fn preflight_with_plan(
                         preflight_ty(&to.ty(), 0, &mut budget)?;
                         operand(value, &mut budget)?;
                     }
-                    Rvalue::OpaquePack { value: op, .. }
+                    Rvalue::ManuallyDropIntoInner { value: op, .. }
+                    | Rvalue::OpaquePack { value: op, .. }
                     | Rvalue::Use(op)
                     | Rvalue::LeadingZeros { value: op }
                     | Rvalue::Unary { value: op, .. }
@@ -1979,6 +1992,7 @@ impl<'a> MoveShape<'a> {
                 fields: closure.captures().len(),
             },
             Ty::FnItem(_) => Self::Product { ty, fields: 0 },
+            Ty::ManuallyDrop(_) => Self::Product { ty, fields: 1 },
             Ty::Tuple(fields) => Self::Product {
                 ty,
                 fields: fields.len(),
@@ -2400,6 +2414,7 @@ impl Paths {
                 // footprint. Never select or initialize one guessed child.
                 Projection::DynamicIndex(_) => return node,
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
+                Projection::ManuallyDropPayload => 0,
                 Projection::Downcast(variant) => {
                     let Some(Projection::Field(index)) = projection.next() else {
                         unreachable!("validated downcast has a field")
@@ -2999,6 +3014,7 @@ impl Transfer<'_> {
                 // footprint. Never select or initialize one guessed child.
                 Projection::DynamicIndex(_) => return Ok(true),
                 Projection::Field(index) | Projection::ConstantIndex(index) => *index,
+                Projection::ManuallyDropPayload => 0,
                 Projection::Downcast(variant) => {
                     if let Some(report) = &mut self.report {
                         report.stats.variant_proof_checks += 1;
@@ -3309,6 +3325,36 @@ impl Transfer<'_> {
     }
     fn rvalue(&mut self, state: &mut State, value: &Rvalue) -> Result<(), Exhausted> {
         match value {
+            Rvalue::ManuallyDropTake { payload, .. } => {
+                // Structural CFG validation authenticated the original unsafe operation.
+                // This is still a real exclusive move of the tracked initialized child.
+                self.budget.reserve_bytes(
+                    payload
+                        .projection
+                        .len()
+                        .checked_mul(std::mem::size_of::<Projection>())
+                        .ok_or(Exhausted)?,
+                )?;
+                let mut projection = Vec::new();
+                projection
+                    .try_reserve_exact(payload.projection.len())
+                    .map_err(|_| Exhausted)?;
+                if projection.capacity() > payload.projection.len() {
+                    self.budget.reserve_bytes(
+                        (projection.capacity() - payload.projection.len())
+                            .checked_mul(std::mem::size_of::<Projection>())
+                            .ok_or(Exhausted)?,
+                    )?;
+                }
+                projection.extend_from_slice(&payload.projection);
+                self.operand(
+                    state,
+                    &Operand::Move(Place {
+                        local: payload.local,
+                        projection,
+                    }),
+                )?;
+            }
             Rvalue::Borrow(id) => {
                 let site = &self.f.loan_sites[id.0];
                 let source = site.place.clone();
@@ -3369,7 +3415,8 @@ impl Transfer<'_> {
                 self.operand(state, index)?;
                 self.read(state, array)?;
             }
-            Rvalue::OpaquePack { value: op, .. }
+            Rvalue::ManuallyDropIntoInner { value: op, .. }
+            | Rvalue::OpaquePack { value: op, .. }
             | Rvalue::Use(op)
             | Rvalue::LeadingZeros { value: op }
             | Rvalue::Unary { value: op, .. }
@@ -3465,6 +3512,7 @@ impl Transfer<'_> {
                 | Ty::Char
                 | Ty::Unit
                 | Ty::PhantomData(_)
+                | Ty::ManuallyDrop(_)
                 | Ty::Never
                 | Ty::Ref { .. }
                 | Ty::RawPtr { .. }

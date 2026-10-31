@@ -1,6 +1,8 @@
 //! Encountered opaque source objects. All physical authority is borrowed within
 //! this producer and only immutable machine-object bytes leave it.
 use super::*;
+#[path = "ownership/normal_exit.rs"]
+mod normal_exit;
 
 pub(super) async fn produce(
     provider: &CompilerProvider,
@@ -192,34 +194,37 @@ pub(super) async fn produce(
             &provider.0.budget,
         )
         .map_err(Error::new)?;
-    // Only unchanged source owning types may reuse their original cleanup.
-    // A hidden representation or generic substitution that introduces Drop
-    // still requires a separate exact cleanup-elaboration protocol.
+    // Unchanged owning types retain their original cleanup. A changed owner
+    // can avoid new destructor dependencies only when the exact physical CFG
+    // proves it is completely consumed before every cleanup-requiring event.
     if closed.has_normal_drop_impls() {
         for (index, local) in physical.function().locals.iter().enumerate() {
             provider.0.budget.charge_work(1).map_err(Error::new)?;
-            match closed
+            let requires_realized_cleanup = match closed
                 .normal_drop_plan(&local.ty)
                 .map_err(|error| source_fact_error(error, &provider.0.budget))?
             {
-                traits::NormalDropPlan::Trivial => {}
+                traits::NormalDropPlan::Trivial => false,
                 traits::NormalDropPlan::Destructor(_) => {
                     let source = original.function().locals.get(index).ok_or_else(|| {
                         Error::new("physical opaque cleanup has no original owning local")
                     })?;
-                    if !ir::identical_type(&source.ty, &local.ty, &provider.0.budget)
+                    !ir::identical_type(&source.ty, &local.ty, &provider.0.budget)
                         .map_err(Error::new)?
-                    {
-                        return Err(Error::new(
-                            "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
-                        ));
-                    }
                 }
-                _ => {
-                    return Err(Error::new(
-                        "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
-                    ));
-                }
+                _ => true,
+            };
+            if requires_realized_cleanup
+                && !normal_exit::fully_consumed(
+                    physical.function(),
+                    ir::LocalId(index),
+                    &provider.0.budget,
+                )
+                .map_err(Error::new)?
+            {
+                return Err(Error::new(
+                    "unsupported: physical opaque cleanup requires exact realized destructor dependencies",
+                ));
             }
         }
     }

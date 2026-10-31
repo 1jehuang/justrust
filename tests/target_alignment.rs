@@ -62,6 +62,24 @@ println!("{} {}",std::mem::size_of::<&Unknown>(),std::mem::size_of::<[&str;3]>()
 }
 
 #[test]
+fn semantic_manually_drop_metadata_matches_stored_payload() {
+    let source = r#"use core::mem::ManuallyDrop;
+fn size<T>()->usize{std::mem::size_of::<ManuallyDrop<T>>()}fn alignment<T>()->usize{std::mem::align_of::<ManuallyDrop<T>>()}
+fn main(){assert_eq!(size::<u8>(),1usize);assert_eq!(alignment::<u8>(),1usize);assert_eq!(size::<u128>(),16usize);assert_eq!(alignment::<u128>(),16usize);assert_eq!(size::<[u16;3]>(),6usize);assert_eq!(std::mem::size_of::<[ManuallyDrop<u16>;3]>(),6usize);assert_eq!(size::<()>(),0usize);println!("stored payload layout");}"#;
+    physical_matches_stock(source, "semantic_manually_drop_metadata");
+    for workers in [1, 8] {
+        let checked = compiler::compile(source.into(), workers, true).unwrap();
+        assert!(checked.executable.is_none());
+        for kind in [102, 103, 108, 137, 140, 142] {
+            assert!(
+                !checked.report.published_kind(kind),
+                "ManuallyDrop metadata CHECK demanded backend kind {kind}"
+            );
+        }
+    }
+}
+
+#[test]
 fn semantic_function_pointer_metadata_matches_stock_without_callable_values() {
     let source = r#"
 struct NotCopy{value:i32}

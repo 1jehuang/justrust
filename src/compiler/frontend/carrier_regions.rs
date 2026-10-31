@@ -304,6 +304,16 @@ impl Collector<'_> {
                 let saved = path.len();
                 path.extend((0..prefix).map(|_| ir::CarrierStep::Referent));
                 match (source, semantic) {
+                    (Type::ManuallyDrop(source), ir::Ty::ManuallyDrop(wrapper)) => {
+                        source.require_kind(SourceCatalogKind::ManuallyDrop)?;
+                        let argument = source
+                            .argument
+                            .as_ref()
+                            .ok_or("missing ManuallyDrop carrier argument")?;
+                        path.push(ir::CarrierStep::ManuallyDropPayload);
+                        self.walk(argument, wrapper.argument(), parameter, path, 0, depth + 1)?;
+                        path.pop();
+                    }
                     (Type::Tuple(fields), ir::Ty::Tuple(actual)) => {
                         for (index, (field, actual)) in fields.iter().zip(actual.iter()).enumerate()
                         {
@@ -555,7 +565,7 @@ fn substitute(
             region(registry, lifetime, regions)?;
             **referent = substitute(registry, referent, types, regions, budget, depth + 1)?;
         }
-        Type::PhantomData(source) => {
+        Type::PhantomData(source) | Type::ManuallyDrop(source) => {
             if let Some(argument) = &mut source.argument {
                 **argument = substitute(registry, argument, types, regions, budget, depth + 1)?;
             }

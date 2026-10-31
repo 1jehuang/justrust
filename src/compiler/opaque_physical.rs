@@ -384,6 +384,11 @@ fn specialize_marker_constants(
     ) -> Result<(), Error> {
         use cfg::Rvalue::*;
         match value {
+            ManuallyDropTake { .. } | ManuallyDropIntoInner { .. } => {
+                return Err(Error::new(
+                    "unsupported: physical ManuallyDrop payload effect requires authenticated closed replay",
+                ));
+            }
             OpaquePack { value, .. }
             | Use(value)
             | CharToInt { value, .. }

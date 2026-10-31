@@ -219,6 +219,12 @@ impl type_check::Checker<'_> {
     /// or `None` when no impl is selected. Grants no type authority; the
     /// checked `*x` reselects and discharges the same trait call.
     pub(super) fn deref_target_hint(&self, owner: &ir::Ty) -> Result<Option<ir::Ty>, String> {
+        if let ir::Ty::ManuallyDrop(wrapper) = owner {
+            let plan = self.signatures.plan()?;
+            self.facts()
+                .validate_ty_metadata_with_budget(owner, &plan.budget)?;
+            return Ok(Some(wrapper.argument().clone()));
+        }
         if !overloadable(owner) || matches!(owner, ir::Ty::Tuple(_)) {
             return Ok(None);
         }

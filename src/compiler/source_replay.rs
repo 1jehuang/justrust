@@ -17,6 +17,7 @@ pub(super) enum InferKind {
     Tuple(Arc<[InferTerm]>),
     FnPointer(Arc<[InferTerm]>, InferTerm),
     PhantomData(ir::DeclId, InferTerm),
+    ManuallyDrop(ir::DeclId, InferTerm),
     Array(InferTerm, usize),
     Slice(InferTerm),
     Ref(ir::BorrowKind, InferTerm),
@@ -65,6 +66,33 @@ impl CallInferenceState {
         self.work(depth)?;
         Ok(match term.as_ref() {
             InferKind::Rigid(ty) => Some(ty.clone()),
+            InferKind::ManuallyDrop(declaration, argument) => {
+                let Some(argument) = self.resolve(argument, fallback, depth + 1, materialize)?
+                else {
+                    return Ok(None);
+                };
+                let ty = materialize(*declaration, std::slice::from_ref(&argument))?;
+                let ir::Ty::ManuallyDrop(manual_wrapper) = &ty else {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "manual_wrapper inference materialized a non-manual_wrapper type",
+                    ));
+                };
+                if manual_wrapper.declaration() != *declaration
+                    || !replay_types_equal_at(
+                        manual_wrapper.argument(),
+                        &argument,
+                        &self.budget,
+                        depth + 1,
+                    )?
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "manual_wrapper inference changed original owner or actual",
+                    ));
+                }
+                Some(ty)
+            }
             InferKind::PhantomData(declaration, argument) => {
                 let Some(argument) = self.resolve(argument, fallback, depth + 1, materialize)?
                 else {
@@ -287,6 +315,9 @@ impl CallInferenceState {
     ) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match schema.as_ref() {
+            InferKind::ManuallyDrop(owner, argument) => {
+                InferKind::ManuallyDrop(*owner, self.bind_schema(argument, slots, depth + 1)?)
+            }
             InferKind::PhantomData(owner, argument) => {
                 InferKind::PhantomData(*owner, self.bind_schema(argument, slots, depth + 1)?)
             }
@@ -476,6 +507,9 @@ impl CallInferenceState {
     fn taint(&self, term: &InferTerm, depth: usize) -> Result<InferTerm, FactsError> {
         self.work(depth)?;
         let kind = match term.as_ref() {
+            InferKind::ManuallyDrop(owner, argument) => {
+                InferKind::ManuallyDrop(*owner, self.taint(argument, depth + 1)?)
+            }
             InferKind::PhantomData(owner, argument) => {
                 InferKind::PhantomData(*owner, self.taint(argument, depth + 1)?)
             }
@@ -583,6 +617,9 @@ impl CallInferenceState {
                 if frontend::replay_type_equal(x, y, &self.budget)? =>
             {
                 Ok(a.clone())
+            }
+            (InferKind::ManuallyDrop(a, x), InferKind::ManuallyDrop(b, y)) if a == b => {
+                self.node(InferKind::ManuallyDrop(*a, self.merge(x, y, depth + 1)?))
             }
             (InferKind::PhantomData(a, x), InferKind::PhantomData(b, y)) if a == b => {
                 self.node(InferKind::PhantomData(*a, self.merge(x, y, depth + 1)?))
@@ -692,7 +729,8 @@ impl CallInferenceState {
                     self.occurs(slot, f, depth + 1)?;
                 }
             }
-            InferKind::PhantomData(_, element)
+            InferKind::ManuallyDrop(_, element)
+            | InferKind::PhantomData(_, element)
             | InferKind::Array(element, _)
             | InferKind::Slice(element)
             | InferKind::Ref(_, element)
@@ -727,6 +765,16 @@ impl CallInferenceState {
                 self.slots[*slot] = Some(value);
                 Ok(())
             }
+            InferKind::ManuallyDrop(owner, argument) => match evidence.as_ref() {
+                InferKind::ManuallyDrop(actual_owner, actual) if owner == actual_owner => {
+                    self.constrain(argument, actual, depth + 1)
+                }
+                InferKind::Unknown(_) => self.constrain(argument, evidence, depth + 1),
+                _ => Err(FactsError::invalid(
+                    &self.budget,
+                    "generic manual_wrapper inference owner or shape mismatch",
+                )),
+            },
             InferKind::PhantomData(owner, argument) => match evidence.as_ref() {
                 InferKind::PhantomData(actual_owner, actual) if owner == actual_owner => {
                     self.constrain(argument, actual, depth + 1)
@@ -928,6 +976,10 @@ impl CallInferenceState {
                 }
                 InferKind::Slot(param.index as usize)
             }
+            ir::Ty::ManuallyDrop(wrapper) => InferKind::ManuallyDrop(
+                wrapper.declaration(),
+                self.type_term(wrapper.argument(), schema, depth + 1)?,
+            ),
             ir::Ty::PhantomData(marker) => InferKind::PhantomData(
                 marker.declaration(),
                 self.type_term(marker.argument(), schema, depth + 1)?,
@@ -1244,6 +1296,9 @@ fn replay_types_equal_at(
         (ir::Ty::Slice { element: a }, ir::Ty::Slice { element: b }) => {
             replay_types_equal_at(a, b, budget, at + 1)
         }
+        (ir::Ty::ManuallyDrop(a), ir::Ty::ManuallyDrop(b)) => Ok(a.declaration()
+            == b.declaration()
+            && replay_types_equal_at(a.argument(), b.argument(), budget, at + 1)?),
         (ir::Ty::PhantomData(a), ir::Ty::PhantomData(b)) => Ok(a.declaration() == b.declaration()
             && replay_types_equal_at(a.argument(), b.argument(), budget, at + 1)?),
         (ir::Ty::FnPointer(a), ir::Ty::FnPointer(b)) => {
@@ -1967,6 +2022,9 @@ fn terms_equal(
                 }
             }
             true
+        }
+        (InferKind::ManuallyDrop(a, x), InferKind::ManuallyDrop(b, y)) => {
+            a == b && terms_equal(x, y, budget, at + 1)?
         }
         (InferKind::PhantomData(a, x), InferKind::PhantomData(b, y)) => {
             a == b && terms_equal(x, y, budget, at + 1)?

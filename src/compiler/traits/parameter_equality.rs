@@ -1183,13 +1183,9 @@ mod tests {
         let budget = PlanBudget::default();
         let plan = PlanCtx::from_program(&source, &budget).unwrap();
         let world = plan.trait_world().unwrap();
-        let declaration = world
-            .headers
-            .callables
-            .iter()
-            .find(|header| header.schema.signature.params.len() == 1)
-            .unwrap()
-            .declaration;
+        // Replay the original `plain` source function, not whichever catalog
+        // declaration happens to have one input in the combined inventory.
+        let declaration = plan.function_decl(0).unwrap();
         let facts = world.callable_facts(declaration).unwrap();
         let callee = Callee::Direct(CallTarget {
             declaration,

@@ -193,6 +193,7 @@ impl Encoder<'_> {
                         super::module_identity::CatalogModule::Marker => 1,
                         super::module_identity::CatalogModule::Clone => 2,
                         super::module_identity::CatalogModule::Ops => 3,
+                        super::module_identity::CatalogModule::Mem => 4,
                     }])?;
                 }
             }
@@ -212,6 +213,10 @@ impl Encoder<'_> {
             traits::CatalogItem::Drop => 6,
             traits::CatalogItem::DropItem => 7,
             traits::CatalogItem::PhantomData => 9,
+            traits::CatalogItem::ManuallyDrop => 10,
+            traits::CatalogItem::ManuallyDropNew => 11,
+            traits::CatalogItem::ManuallyDropIntoInner => 12,
+            traits::CatalogItem::ManuallyDropDrop => 13,
             traits::CatalogItem::Recipe(descriptor) => {
                 self.append(&[8])?;
                 return self.recipe(descriptor);
@@ -277,6 +282,11 @@ impl Encoder<'_> {
                     self.pattern(ty, env, depth + 1)?;
                 }
                 Ok(())
+            }
+            ir::Ty::ManuallyDrop(wrapper) => {
+                self.append(b"W")?;
+                self.declaration(wrapper.declaration())?;
+                self.pattern(wrapper.argument(), env, depth + 1)
             }
             ir::Ty::PhantomData(marker) => {
                 self.append(b"M")?;
@@ -417,6 +427,11 @@ impl Encoder<'_> {
                     self.ty(ty, depth + 1)?;
                 }
                 Ok(())
+            }
+            ir::Ty::ManuallyDrop(wrapper) => {
+                self.append(b"W")?;
+                self.declaration(wrapper.declaration())?;
+                self.ty(wrapper.argument(), depth + 1)
             }
             ir::Ty::PhantomData(marker) => {
                 self.append(b"M")?;
@@ -618,6 +633,7 @@ fn charge_target_lookup(target: &ir::CallTarget, budget: &ir::PlanBudget) -> Res
                     walk(ty, depth + 1, budget)?;
                 }
             }
+            ir::Ty::ManuallyDrop(wrapper) => walk(wrapper.argument(), depth + 1, budget)?,
             ir::Ty::PhantomData(marker) => walk(marker.argument(), depth + 1, budget)?,
             ir::Ty::FnPointer(pointer) => {
                 for ty in pointer.types() {

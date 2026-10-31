@@ -339,6 +339,7 @@ fn value_projection(location: &CarrierLocation) -> Vec<Projection> {
         match step {
             CarrierStep::Referent => path.push(Projection::Deref),
             CarrierStep::Field(index) => path.push(Projection::Field(*index)),
+            CarrierStep::ManuallyDropPayload => path.push(Projection::ManuallyDropPayload),
             CarrierStep::ConstantIndex(index) => path.push(Projection::ConstantIndex(*index)),
             CarrierStep::SliceElement => path.push(Projection::DynamicIndex(LocalId(usize::MAX))),
             CarrierStep::VariantField { variant, field } => {
@@ -567,6 +568,11 @@ fn read_cell_cover(
                     result
                 };
                 match ty {
+                    Ty::ManuallyDrop(wrapper) => {
+                        if !child(&[Projection::ManuallyDropPayload], wrapper.argument())? {
+                            return Ok(false);
+                        }
+                    }
                     Ty::Tuple(fields) => {
                         for (index, field) in fields.iter().enumerate() {
                             if !child(&[Projection::Field(index)], field)? {
@@ -3879,6 +3885,40 @@ impl CarrierBuilder<'_, '_> {
                 }
                 Ok(vec![(proof.captured_destination(), merged)])
             }
+            Rvalue::ManuallyDropIntoInner { value, .. } => {
+                let mut carriers = self.operand_value(state, value)?;
+                for (location, _) in &mut carriers {
+                    if location.path.0.first() != Some(&CarrierStep::ManuallyDropPayload) {
+                        self.problem(
+                            block,
+                            Some(statement),
+                            Problem::Invalid(
+                                "ManuallyDrop into_inner carrier lacks exact stored payload prefix"
+                                    .into(),
+                            ),
+                        )?;
+                        return Ok(Vec::new());
+                    }
+                    let tail = &location.path.0[1..];
+                    let bytes = mul(tail.len(), size_of::<CarrierStep>())?;
+                    self.retain(add(mul(bytes, 2)?, 2 * size_of::<usize>())?, tail.len())?;
+                    let mut path = Vec::new();
+                    path.try_reserve_exact(tail.len()).map_err(|_| Exhausted)?;
+                    if path.capacity() > tail.len() {
+                        self.retain(
+                            mul(path.capacity() - tail.len(), size_of::<CarrierStep>())?,
+                            0,
+                        )?;
+                    }
+                    path.extend_from_slice(tail);
+                    location.path = CarrierPath(path.into());
+                }
+                Ok(carriers)
+            }
+            Rvalue::ManuallyDropTake { payload, .. } => {
+                let ty = self.place_ty(self.f, payload)?.clone();
+                self.read_value(state, payload, &ty)
+            }
             Rvalue::Use(operand) => {
                 if let Some(value) = self.read_native_exchange(state, block, statement)? {
                     Ok(value)
@@ -4010,6 +4050,10 @@ impl CarrierBuilder<'_, '_> {
                                 },
                                 field: index,
                             },
+                            Rvalue::Aggregate {
+                                ty: Ty::ManuallyDrop(_),
+                                ..
+                            } => CarrierStep::ManuallyDropPayload,
                             _ => CarrierStep::Field(index),
                         };
                         self.retain(
@@ -6186,6 +6230,12 @@ fn dynamic_target_covered(
     for step in target {
         budget.spend(1)?;
         ty = match step {
+            Projection::ManuallyDropPayload => {
+                let Ty::ManuallyDrop(wrapper) = &ty else {
+                    return Ok(false);
+                };
+                wrapper.argument().clone()
+            }
             Projection::Field(index) => match ty
                 .field_ty_optional(*index, budget.plan_budget())
                 .map_err(|_| Exhausted)?
@@ -6549,7 +6599,10 @@ fn identity_effect_rows(
             || row.destination.location.path.0.iter().any(|step| {
                 !matches!(
                     step,
-                    CarrierStep::Referent | CarrierStep::Field(_) | CarrierStep::ConstantIndex(_)
+                    CarrierStep::Referent
+                        | CarrierStep::Field(_)
+                        | CarrierStep::ManuallyDropPayload
+                        | CarrierStep::ConstantIndex(_)
                 )
             })
         {
@@ -6635,8 +6688,10 @@ fn visit_operand(op: &Operand, mut visit: impl FnMut(&Place, bool)) {
 }
 fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place, bool)) {
     match value {
+        Rvalue::ManuallyDropTake { payload, .. } => visit(payload, true),
         Rvalue::Borrow(id) => visit(&f.loan_sites[id.0].place, false),
-        Rvalue::OpaquePack { value: op, .. }
+        Rvalue::ManuallyDropIntoInner { value: op, .. }
+        | Rvalue::OpaquePack { value: op, .. }
         | Rvalue::Use(op)
         | Rvalue::LeadingZeros { value: op }
         | Rvalue::Unary { value: op, .. }

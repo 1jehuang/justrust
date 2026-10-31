@@ -8,7 +8,7 @@ use super::*;
 #[derive(Debug)]
 pub struct ProgramSymbols {
     owner: SessionId,
-    keys: [NameKey; 14],
+    keys: [NameKey; 19],
     budget: ExpansionBudget,
     _lease: ByteLease,
 }
@@ -38,6 +38,11 @@ impl ProgramSymbols {
             names.catalog_member_key(CloneFromMethod)?,
             names.catalog_member_key(DropMethod)?,
             names.catalog_key(PhantomData, Namespace::Type)?,
+            names.catalog_key(Mem, Namespace::Type)?,
+            names.catalog_key(ManuallyDrop, Namespace::Type)?,
+            names.catalog_member_key(ManuallyDropNew)?,
+            names.catalog_member_key(ManuallyDropIntoInner)?,
+            names.catalog_member_key(ManuallyDropDrop)?,
         ];
         budget.check()?;
         Ok(Arc::new(Self {
@@ -76,6 +81,11 @@ impl ProgramSymbols {
             BuiltinAtom::CloneFromMethod => 11,
             BuiltinAtom::DropMethod => 12,
             BuiltinAtom::PhantomData => 13,
+            BuiltinAtom::Mem => 14,
+            BuiltinAtom::ManuallyDrop => 15,
+            BuiltinAtom::ManuallyDropNew => 16,
+            BuiltinAtom::ManuallyDropIntoInner => 17,
+            BuiltinAtom::ManuallyDropDrop => 18,
         };
         Ok(self.keys[index])
     }
@@ -99,14 +109,18 @@ mod tests {
 
     #[test]
     fn closed_member_keys_match_real_owned_occurrences_only_in_member_class() {
-        let program = parse("fn clone(){}fn clone_from(){}fn drop(){}fn main(){}").unwrap();
+        let program =
+            parse("fn clone(){}fn clone_from(){}fn drop(){}fn new(){}fn into_inner(){}fn main(){}")
+                .unwrap();
         for (index, atom) in [
-            BuiltinAtom::CloneMethod,
-            BuiltinAtom::CloneFromMethod,
-            BuiltinAtom::DropMethod,
+            (0, BuiltinAtom::CloneMethod),
+            (1, BuiltinAtom::CloneFromMethod),
+            (2, BuiltinAtom::DropMethod),
+            (3, BuiltinAtom::ManuallyDropNew),
+            (4, BuiltinAtom::ManuallyDropIntoInner),
+            (2, BuiltinAtom::ManuallyDropDrop),
         ]
         .into_iter()
-        .enumerate()
         {
             let ident = program.functions[index].name.segments()[0];
             let member = program.symbols.key(program.names.as_ref(), atom).unwrap();

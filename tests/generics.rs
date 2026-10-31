@@ -14,6 +14,110 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[path = "support/stock_rustc.rs"]
 mod defaults_stock;
 
+const MANUALLY_DROP_VALID: &[(&str, &str)] = &[
+    (
+        "canonical_core_std",
+        r#"fn take(x:core::mem::ManuallyDrop<i32>)->i32{std::mem::ManuallyDrop::into_inner(x)}fn main(){println!("{}",take(core::mem::ManuallyDrop::new(7)));}"#,
+    ),
+    (
+        "imported_alias_context",
+        r#"use std::mem::ManuallyDrop as M;fn main(){let x:M<i32>=M::new(7);println!("{}",M::into_inner(x));}"#,
+    ),
+    (
+        "universal_owned_argument",
+        r#"use core::mem::ManuallyDrop;fn through<T>(x:T)->T{ManuallyDrop::into_inner(ManuallyDrop::new(x))}fn main(){println!("{}",through(7));}"#,
+    ),
+    (
+        "noncopy_owned_payload",
+        r#"use core::mem::ManuallyDrop;struct Token{n:i32}fn main(){let x=ManuallyDrop::new(Token{n:7});let y=ManuallyDrop::into_inner(x);println!("{}",y.n);}"#,
+    ),
+    (
+        "conditional_copy",
+        r#"use core::mem::ManuallyDrop;fn twice<T:Copy>(x:ManuallyDrop<T>)->(ManuallyDrop<T>,ManuallyDrop<T>){(x,x)}fn main(){let pair=twice(ManuallyDrop::new(7));println!("{}",ManuallyDrop::into_inner(pair.0));}"#,
+    ),
+    (
+        "shared_payload_projection",
+        r#"use core::mem::ManuallyDrop;fn read(x:&ManuallyDrop<i32>)->i32{**x}fn main(){let x=ManuallyDrop::new(7);println!("{}",read(&x));}"#,
+    ),
+    (
+        "mutable_payload_projection",
+        r#"use core::mem::ManuallyDrop;fn main(){let mut x=ManuallyDrop::new(1);*x=7;println!("{}",*x);}"#,
+    ),
+    (
+        "nested_payload_field",
+        r#"use core::mem::ManuallyDrop;struct Guard{value:ManuallyDrop<i32>}fn main(){let mut x=ManuallyDrop::new(Guard{value:ManuallyDrop::new(1)});*x.value=7;println!("{}",ManuallyDrop::into_inner(x.value));}"#,
+    ),
+    (
+        "suppresses_implicit_payload_drop",
+        r#"use core::mem::ManuallyDrop;struct Token;impl Drop for Token{fn drop(&mut self){println!("bad");}}fn main(){let x=ManuallyDrop::new(Token);println!("7");}"#,
+    ),
+    (
+        "explicit_unsafe_payload_drop",
+        r#"use core::mem::ManuallyDrop;struct Token;impl Drop for Token{fn drop(&mut self){println!("7");}}fn main(){let mut x=ManuallyDrop::new(Token);unsafe{ManuallyDrop::drop(&mut x);}}"#,
+    ),
+    (
+        "into_inner_restores_payload_cleanup",
+        r#"use core::mem::ManuallyDrop;struct Token;impl Drop for Token{fn drop(&mut self){println!("7");}}fn main(){let x=ManuallyDrop::new(Token);let y=ManuallyDrop::into_inner(x);}"#,
+    ),
+    (
+        "source_name_shadow",
+        r#"struct ManuallyDrop{n:i32}fn main(){let x=ManuallyDrop{n:7};println!("{}",x.n);}"#,
+    ),
+];
+const MANUALLY_DROP_INVALID: &[(&str, &str)] = &[
+    (
+        "unsafe_drop_unused_safe_body",
+        "use core::mem::ManuallyDrop;fn bad(x:&mut ManuallyDrop<i32>){ManuallyDrop::drop(x);}fn main(){}",
+    ),
+    (
+        "wrong_borrow_kind",
+        "use core::mem::ManuallyDrop;fn bad(x:&ManuallyDrop<i32>){unsafe{ManuallyDrop::drop(x);}}fn main(){}",
+    ),
+    (
+        "noncopy_repeated_into_inner",
+        "use core::mem::ManuallyDrop;struct Token;fn main(){let x=ManuallyDrop::new(Token);let a=ManuallyDrop::into_inner(x);let b=ManuallyDrop::into_inner(x);}",
+    ),
+    (
+        "noncopy_payload_deref_move",
+        "use core::mem::ManuallyDrop;struct Token;fn main(){let x=ManuallyDrop::new(Token);let a=*x;}",
+    ),
+    (
+        "copy_requires_payload_copy",
+        "use core::mem::ManuallyDrop;struct Token;fn bad(x:ManuallyDrop<Token>){let a=x;let b=x;}fn main(){}",
+    ),
+    ("not_prelude", "fn bad(x:ManuallyDrop<i32>){}fn main(){}"),
+    (
+        "missing_type_actual",
+        "fn bad(x:core::mem::ManuallyDrop){}fn main(){}",
+    ),
+    (
+        "wrong_context_actual",
+        "use core::mem::ManuallyDrop;fn bad(){let x:ManuallyDrop<bool>=ManuallyDrop::new(7);}fn main(){}",
+    ),
+    (
+        "private_storage_constructor",
+        "fn main(){let x=core::mem::ManuallyDrop(7);}",
+    ),
+    (
+        "wrong_value_arity",
+        "fn bad(){let x=core::mem::ManuallyDrop::new(1,2);}fn main(){}",
+    ),
+];
+const MANUALLY_DROP_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "unsized_payload",
+        r#"fn bad(x:&core::mem::ManuallyDrop<str>){}fn main(){println!("7");}"#,
+    ),
+    (
+        "first_class_new",
+        r#"fn main(){let f=core::mem::ManuallyDrop::<i32>::new;let x=f(7);println!("{}",core::mem::ManuallyDrop::into_inner(x));}"#,
+    ),
+    (
+        "executable_clone",
+        r#"fn main(){let x=core::mem::ManuallyDrop::new(7);let y=x.clone();println!("{}",*y);}"#,
+    ),
+];
+
 const PHANTOM_DATA_VALID: &[(&str, &str)] = &[
     (
         "clone_from_nonclone_argument",
@@ -100,6 +204,85 @@ const PHANTOM_DATA_UNSUPPORTED: &[(&str, &str)] = &[
         r#"fn bad(x:core::marker::PhantomData<&'static i32>){}fn main(){println!("7");}"#,
     ),
 ];
+
+#[test]
+fn manually_drop_exact_stock_baseline() {
+    let rustc = defaults_stock::stock_rustc();
+    for (label, source) in MANUALLY_DROP_VALID.iter().chain(MANUALLY_DROP_UNSUPPORTED) {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "stock.rmeta"
+            } else {
+                "stock-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=manually_drop"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(result.status.success(), "{label} check{check}: {result:?}");
+            if !check {
+                let result = capture(&mut Command::new(&output), &scratch, 5);
+                assert!(result.status.success(), "{label}: {result:?}");
+                assert_eq!(result.stdout, b"7\n", "{label}");
+            }
+        }
+    }
+    for (label, source) in MANUALLY_DROP_INVALID {
+        let scratch = Scratch::new();
+        let input = scratch.source(source);
+        for check in [true, false] {
+            let output = scratch.path(if check {
+                "invalid.rmeta"
+            } else {
+                "invalid-program"
+            });
+            let mut command = Command::new(&rustc);
+            command
+                .arg(&input)
+                .args(["--edition=2024", "--crate-name=manually_drop"]);
+            if check {
+                command.arg("--emit=metadata");
+            }
+            let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+            assert!(
+                !result.status.success(),
+                "{label}: stock accepted check{check}"
+            );
+            assert!(!output.exists(), "{label}: invalid stock output");
+        }
+    }
+}
+
+#[test]
+fn manually_drop_native_check_build_run_workers_1_8() {
+    for (label, source) in MANUALLY_DROP_VALID {
+        eprintln!("ManuallyDrop valid: {label}");
+        runs(source, "7\n");
+    }
+    for (label, source) in MANUALLY_DROP_INVALID {
+        rejects(label, source);
+    }
+    for (label, source) in MANUALLY_DROP_UNSUPPORTED {
+        rejects(label, source);
+        for workers in [1, 8] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path("unsupported-output");
+            for check in [true, false] {
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(diagnostic.contains("unsupported:"), "{label}: {diagnostic}");
+                assert!(!output.exists(), "{label}: unsupported output");
+            }
+        }
+    }
+}
 
 #[test]
 fn phantom_data_exact_stock_baseline() {

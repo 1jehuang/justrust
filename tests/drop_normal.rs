@@ -82,6 +82,58 @@ let real=D{id:9};drop(real);}"#,
     );
 }
 
+#[test]
+fn manually_drop_preserves_payload_moves_borrows_and_explicit_cleanup() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check_with_compiler(
+        "manually-drop-payload",
+        &[
+            Case {
+                name: "stored_payload_suppresses_only_implicit_cleanup",
+                source: r#"use core::mem::ManuallyDrop;
+struct D{id:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.id);}}
+fn wrap<T>(value:T)->ManuallyDrop<T>{ManuallyDrop::new(value)}
+fn main(){{let _hidden=wrap(D{id:1});}println!("hidden");
+let owned=ManuallyDrop::into_inner(wrap(D{id:2}));println!("unpacked");drop(owned);
+let mut explicit=ManuallyDrop::new(D{id:3});unsafe{ManuallyDrop::drop(&mut explicit);}println!("explicit");
+let mut number=ManuallyDrop::new(4i32);let read=&*number;println!("{}",*read);let write=&mut *number;*write=7;println!("{}",ManuallyDrop::into_inner(number));}"#,
+                expect: Expect::Run("hidden\nunpacked\ndrop 2\ndrop 3\nexplicit\n4\n7\n"),
+            },
+            Case {
+                name: "noncopy_payload_deref_cannot_move",
+                source: "use core::mem::ManuallyDrop;struct Token;fn main(){let x=ManuallyDrop::new(Token);let a=*x;}",
+                expect: Expect::Invalid("E0507"),
+            },
+            Case {
+                name: "noncopy_payload_borrows_and_copy_fields_still_work",
+                source: r#"use core::mem::ManuallyDrop;struct Token{value:i32}fn unwrap<T>(x:ManuallyDrop<T>)->T{ManuallyDrop::into_inner(x)}fn main(){let mut x=ManuallyDrop::new(Token{value:4});let field=(*x).value;let r=&*x;println!("{} {}",field,r.value);let r=&mut *x;r.value=7;let token=unwrap(x);println!("{}",token.value);let n=8i32;let wrapped=ManuallyDrop::new(&n);let returned=ManuallyDrop::into_inner(wrapped);println!("{}",*returned);let copy=ManuallyDrop::new(9i32);println!("{} {}",*copy,ManuallyDrop::into_inner(copy));}"#,
+                expect: Expect::Run("4 4\n7\n8\n9 9\n"),
+            },
+            Case {
+                name: "into_inner_moves_noncopy_wrapper",
+                source: "use core::mem::ManuallyDrop;struct D;fn main(){let value=ManuallyDrop::new(D);let first=ManuallyDrop::into_inner(value);let second=ManuallyDrop::into_inner(value);}",
+                expect: Expect::Invalid("E0382"),
+            },
+            Case {
+                name: "payload_borrow_blocks_mutation",
+                source: "use core::mem::ManuallyDrop;fn main(){let mut value=ManuallyDrop::new(1i32);let shared=&*value;let exclusive=&mut *value;*exclusive=2;println!(\"{}\",*shared);}",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
+                name: "payload_type_cannot_change",
+                source: "use core::mem::ManuallyDrop;fn take(value:ManuallyDrop<i32>){}fn main(){take(ManuallyDrop::new(true));}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "explicit_drop_requires_original_unsafe_authority",
+                source: "use core::mem::ManuallyDrop;fn main(){let mut value=ManuallyDrop::new(1i32);ManuallyDrop::drop(&mut value);}",
+                expect: Expect::Invalid("E0133"),
+            },
+        ],
+        Path::new(&stock_rustc()),
+    );
+}
+
 const INDEX: &str = include_str!("fixtures/drop_normal/receipts-v9/fixture-index.tsv");
 const MANIFEST_HASH: &str = "afc7b27b95496aa84316d9e21485fb7c4f2c18d57701251bcffc152593aee7fe";
 const INDEX_HASH: &str = "213e1c312094ffb078cd49c04e508721188e4b0308b1c990b939ce3af5b585e7";

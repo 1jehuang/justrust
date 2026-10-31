@@ -47,6 +47,7 @@ enum Domain {
     Tuple(Vec<Term>),
     FnPointer(Vec<Term>, Term),
     PhantomData(ir::DeclId, Term),
+    ManuallyDrop(ir::DeclId, Term),
     Ref(ir::BorrowKind, Term),
     RawPtr(ir::BorrowKind, Term),
     Array(Term, usize),
@@ -412,6 +413,10 @@ impl<'s> Solver<'_, '_, 's> {
                 marker.declaration(),
                 self.schema(marker.argument(), params, depth + 1)?,
             ),
+            ir::Ty::ManuallyDrop(marker) => Domain::ManuallyDrop(
+                marker.declaration(),
+                self.schema(marker.argument(), params, depth + 1)?,
+            ),
             ir::Ty::FnPointer(pointer) => {
                 let mut inputs = ir::FnPointerTy::storage(
                     pointer.inputs.len(),
@@ -435,7 +440,7 @@ impl<'s> Solver<'_, '_, 's> {
     fn source_has_inference(&self, ty: &Type, depth: usize) -> Result<bool, String> {
         self.checker.infer_work(depth)?;
         Ok(match ty {
-            Type::PhantomData(source) => match &source.argument {
+            Type::PhantomData(source) | Type::ManuallyDrop(source) => match &source.argument {
                 Some(argument) => self.source_has_inference(argument, depth + 1)?,
                 None => true,
             },
@@ -510,6 +515,21 @@ impl<'s> Solver<'_, '_, 's> {
                         .plan()?
                         .catalog
                         .id(tr::CatalogItem::PhantomData),
+                    argument,
+                ))
+            }
+            Type::ManuallyDrop(source) => {
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or("missing ManuallyDrop type argument")?;
+                let argument = self.source_ty(argument)?;
+                self.node(Domain::ManuallyDrop(
+                    self.checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::ManuallyDrop),
                     argument,
                 ))
             }
@@ -610,7 +630,9 @@ impl<'s> Solver<'_, '_, 's> {
             return Ok(true);
         }
         match &self.variables[term].domain {
-            Domain::PhantomData(_, argument) => self.occurs(needle, *argument, depth + 1),
+            Domain::PhantomData(_, argument) | Domain::ManuallyDrop(_, argument) => {
+                self.occurs(needle, *argument, depth + 1)
+            }
             Domain::FnPointer(inputs, output) => {
                 for t in inputs.iter().chain(std::iter::once(output)) {
                     if self.occurs(needle, *t, depth + 1)? {
@@ -731,6 +753,10 @@ impl<'s> Solver<'_, '_, 's> {
                 self.unify_at(*x, *y, depth + 1)?;
                 Domain::PhantomData(*a, *x)
             }
+            (Domain::ManuallyDrop(a, x), Domain::ManuallyDrop(b, y)) if a == b => {
+                self.unify_at(*x, *y, depth + 1)?;
+                Domain::ManuallyDrop(*a, *x)
+            }
             (Domain::FnPointer(x, xo), Domain::FnPointer(y, yo)) if x.len() == y.len() => {
                 for (x, y) in x.iter().zip(y) {
                     self.unify_at(*x, *y, depth + 1)?;
@@ -790,7 +816,9 @@ impl<'s> Solver<'_, '_, 's> {
         self.checker.infer_work(depth)?;
         Ok(match self.domain(term) {
             Domain::Callable(_) => true,
-            Domain::PhantomData(_, argument) => self.contains_callable(argument, depth + 1)?,
+            Domain::PhantomData(_, argument) | Domain::ManuallyDrop(_, argument) => {
+                self.contains_callable(argument, depth + 1)?
+            }
             Domain::FnPointer(inputs, output) => {
                 let mut found = self.contains_callable(output, depth + 1)?;
                 for t in inputs {
@@ -836,6 +864,24 @@ impl<'s> Solver<'_, '_, 's> {
                     return Ok(None);
                 };
                 let ty = ir::Ty::PhantomData(ir::PhantomDataTy::new(
+                    &plan.catalog,
+                    argument,
+                    &plan.budget,
+                )?);
+                self.checker
+                    .facts()
+                    .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+                ty
+            }
+            Domain::ManuallyDrop(declaration, argument) => {
+                let plan = self.checker.signatures.plan()?;
+                if declaration != plan.catalog.id(tr::CatalogItem::ManuallyDrop) {
+                    return Err("contract: foreign ManuallyDrop inference owner".into());
+                }
+                let Some(argument) = self.resolve(argument, depth + 1)? else {
+                    return Ok(None);
+                };
+                let ty = ir::Ty::ManuallyDrop(ir::ManuallyDropTy::new(
                     &plan.catalog,
                     argument,
                     &plan.budget,
@@ -1280,7 +1326,7 @@ impl<'s> Solver<'_, '_, 's> {
             // reveal a Deref or array carrier for a lazy coercion.
             Domain::Integer | Domain::Float => true,
             Domain::Callable(_) => false,
-            Domain::PhantomData(_, argument) => {
+            Domain::PhantomData(_, argument) | Domain::ManuallyDrop(_, argument) => {
                 self.lazy_input_frontier(argument, targets, depth + 1)?
             }
             Domain::FnPointer(inputs, output) => {
@@ -1945,10 +1991,32 @@ impl<'s> Solver<'_, '_, 's> {
         } else {
             self.peel_refs(base)
         };
-        match (self.domain(base), field) {
-            (Domain::Ref(_, element) | Domain::RawPtr(_, element), FieldSelector::Deref) => {
-                Ok(Some(element))
+        let mut base = base;
+        if !matches!(field, FieldSelector::Deref) {
+            let mut depth = 0;
+            while let Domain::ManuallyDrop(owner, argument) = self.domain(base) {
+                self.checker.infer_work(depth)?;
+                if owner
+                    != self
+                        .checker
+                        .signatures
+                        .plan()?
+                        .catalog
+                        .id(tr::CatalogItem::ManuallyDrop)
+                {
+                    return Err("contract: foreign owned wrapper projection".into());
+                }
+                depth += 1;
+                base = self.peel_refs(argument);
             }
+        }
+        match (self.domain(base), field) {
+            (
+                Domain::ManuallyDrop(_, element)
+                | Domain::Ref(_, element)
+                | Domain::RawPtr(_, element),
+                FieldSelector::Deref,
+            ) => Ok(Some(element)),
             (Domain::Tuple(fields), FieldSelector::Tuple(i)) => Ok(fields.get(*i).copied()),
             (
                 Domain::Array(element, _) | Domain::Slice(element),
@@ -2021,7 +2089,10 @@ impl<'s> Solver<'_, '_, 's> {
                 let index = self.node(Domain::Integer)?;
                 self.operator_index(term, index, false)?
             } else if matches!(field, FieldSelector::Deref)
-                && !matches!(self.domain(term), Domain::Ref(..) | Domain::RawPtr(..))
+                && !matches!(
+                    self.domain(term),
+                    Domain::ManuallyDrop(..) | Domain::Ref(..) | Domain::RawPtr(..)
+                )
             {
                 // Builtin once the carrier is known, otherwise overloaded Deref.
                 self.operator_deref(term)?
@@ -2603,6 +2674,35 @@ impl<'s> Solver<'_, '_, 's> {
                 let ty = self.checker.associated_fn_item(value)?;
                 self.fixed(ty)
             }
+            Expr::ManuallyDrop(call) => {
+                let argument = match &call.source.argument {
+                    Some(ty) => self.source_ty(ty)?,
+                    None => self.fresh()?,
+                };
+                let owner = self
+                    .checker
+                    .signatures
+                    .plan()?
+                    .catalog
+                    .id(tr::CatalogItem::ManuallyDrop);
+                let wrapper = self.node(Domain::ManuallyDrop(owner, argument))?;
+                let actual = self.expr(&call.value, depth + 1)?;
+                match call.operation {
+                    ManuallyDropOperation::New => {
+                        self.unify_at(argument, actual, depth + 1)?;
+                        Ok(wrapper)
+                    }
+                    ManuallyDropOperation::IntoInner => {
+                        self.unify_at(wrapper, actual, depth + 1)?;
+                        Ok(argument)
+                    }
+                    ManuallyDropOperation::Drop => {
+                        let borrowed = self.node(Domain::Ref(ir::BorrowKind::Mut, wrapper))?;
+                        self.unify_at(borrowed, actual, depth + 1)?;
+                        self.fixed(ir::Ty::Unit)
+                    }
+                }
+            }
             Expr::PhantomData(source) => {
                 let argument = match &source.argument {
                     Some(argument) => self.source_ty(argument)?,
@@ -2948,7 +3048,7 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Deref { value } => {
                 let base = self.expr(value, depth + 1)?;
                 match self.domain(base) {
-                    Domain::Ref(_, t) | Domain::RawPtr(_, t) => Ok(t),
+                    Domain::ManuallyDrop(_, t) | Domain::Ref(_, t) | Domain::RawPtr(_, t) => Ok(t),
                     _ => self.operator_deref(base),
                 }
             }
@@ -3212,6 +3312,10 @@ fn diagnostic_ty(ty: &ir::Ty, plan: &PlanCtx) -> String {
         ),
         ir::Ty::PhantomData(marker) => format!(
             "core::marker::PhantomData<{}>",
+            diagnostic_ty(marker.argument(), plan)
+        ),
+        ir::Ty::ManuallyDrop(marker) => format!(
+            "core::mem::ManuallyDrop<{}>",
             diagnostic_ty(marker.argument(), plan)
         ),
         ir::Ty::FnPointer(pointer) => format!(

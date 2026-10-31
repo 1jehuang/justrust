@@ -1,6 +1,67 @@
 use super::*;
 
 #[test]
+fn manually_drop_aliases_preserve_source_owner_and_owned_argument() {
+    let source = parse("use core::mem::ManuallyDrop as M;fn a(x:core::mem::ManuallyDrop<i32>){}fn b(x:std::mem::ManuallyDrop<i32>){}fn c(x:M<i32>){}fn main(){let x:M<i32>=M::new(7);}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&source, &budget).unwrap();
+    let mut actual = None;
+    for index in 0..3 {
+        let schema = plan
+            .function_schema(plan.function_decl(index).unwrap())
+            .unwrap();
+        let ir::Ty::ManuallyDrop(wrapper) = &schema.signature.params[0] else {
+            panic!("wrapper became source nominal or marker");
+        };
+        assert_eq!(
+            wrapper.declaration(),
+            plan.catalog.id(tr::CatalogItem::ManuallyDrop)
+        );
+        assert_eq!(wrapper.argument(), &ir::Ty::Int(ir::IntTy::I32));
+        if let Some(expected) = &actual {
+            assert_eq!(&schema.signature.params[0], expected);
+        }
+        actual = Some(schema.signature.params[0].clone());
+    }
+    let Type::ManuallyDrop(alias) = &source.functions[2].params[0].1 else {
+        panic!("lost original wrapper type use");
+    };
+    let written = alias.original.checked_path(source.names.as_ref()).unwrap();
+    assert_eq!(
+        source.names.spelling(written.single().unwrap()).unwrap(),
+        "M"
+    );
+    assert!(
+        !alias
+            .occurrence
+            .source_occurrences(source.names.as_ref())
+            .unwrap()
+            .is_empty()
+    );
+    let Stmt::Let {
+        value: Expr::ManuallyDrop(call),
+        ..
+    } = &source.functions[3].body.statements[0]
+    else {
+        panic!("canonical constructor lost original operation");
+    };
+    assert_eq!(call.operation, ManuallyDropOperation::New);
+    assert!(call.source.argument.is_none());
+    let foreign = parse("fn a(x:core::mem::ManuallyDrop<i32>){}fn main(){}").unwrap();
+    let mut transplanted = source.clone();
+    transplanted.functions[0].params[0].1 = foreign.functions[0].params[0].1.clone();
+    assert!(name_validation::validate_program_names(&transplanted).is_err());
+    assert!(PlanCtx::from_program(&transplanted, &budget).is_err());
+    let local = parse("struct ManuallyDrop{n:i32}fn f(x:ManuallyDrop){}fn main(){}").unwrap();
+    assert!(matches!(local.functions[0].params[0].1, Type::Named(_)));
+    assert!(parse("fn f(x:ManuallyDrop<i32>){}fn main(){}").is_err());
+    assert!(
+        plan.nominal_schema(plan.catalog.id(tr::CatalogItem::ManuallyDrop), &budget)
+            .is_err()
+    );
+}
+
+#[test]
 fn marker_probe_defers_source_associated_constant_owners() {
     let text = "struct Number;impl Number{const GOOD:i32=7;const OTHER:i32=Self::GOOD;}fn read()->i32{Number::GOOD}fn main(){let _:i32=crate::Number::GOOD;}";
     let source = parse(text).unwrap();

@@ -944,6 +944,22 @@ impl<'c, 's> Inference<'c, 's> {
         actuals: &[ir::Ty],
     ) -> Result<ir::Ty, FactsError> {
         let plan = self.checker.signatures.plan.as_ref().unwrap();
+        if declaration == plan.catalog.id(tr::CatalogItem::ManuallyDrop) {
+            let [argument] = actuals else {
+                return Err(source_error(
+                    &plan.budget,
+                    "ManuallyDrop requires exactly one argument",
+                ));
+            };
+            let wrapper = ir::ManuallyDropTy::new(&plan.catalog, argument.clone(), &plan.budget)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            let ty = ir::Ty::ManuallyDrop(wrapper);
+            self.checker
+                .facts()
+                .validate_ty_metadata_with_budget(&ty, &plan.budget)
+                .map_err(|e| source_error(&plan.budget, &e))?;
+            return Ok(ty);
+        }
         if declaration == plan.catalog.id(tr::CatalogItem::PhantomData) {
             let [argument] = actuals else {
                 return Err(source_error(
@@ -1135,6 +1151,32 @@ impl<'s> Checker<'s> {
                     argument,
                 ))?
             }
+            Expr::ManuallyDrop(call) => match call.operation {
+                ManuallyDropOperation::New => {
+                    let argument = match &call.source.argument {
+                        Some(ty) => {
+                            self.infer_type_term(&self.source_type_actual(ty)?, None, depth + 1)?
+                        }
+                        None => self.inference_evidence(&call.value, depth + 1)?,
+                    };
+                    self.infer_node(InferKind::ManuallyDrop(
+                        plan.catalog.id(tr::CatalogItem::ManuallyDrop),
+                        argument,
+                    ))?
+                }
+                ManuallyDropOperation::IntoInner => {
+                    let child = self.inference_evidence(&call.value, depth + 1)?;
+                    match child.as_ref() {
+                        InferKind::ManuallyDrop(owner, argument)
+                            if *owner == plan.catalog.id(tr::CatalogItem::ManuallyDrop) =>
+                        {
+                            argument.clone()
+                        }
+                        _ => self.infer_node(InferKind::Unknown(false))?,
+                    }
+                }
+                ManuallyDropOperation::Drop => self.infer_node(InferKind::Rigid(ir::Ty::Unit))?,
+            },
             Expr::NativeSyscall(_) | Expr::TypeAlignment(_) => {
                 self.infer_node(InferKind::Rigid(ir::Ty::Int(ir::IntTy::Usize)))?
             }
@@ -1446,8 +1488,12 @@ impl<'s> Checker<'s> {
                 let dummy = Inference::empty(self)?;
                 if let Some(ty) = dummy.resolve(&base, false, depth + 1)? {
                     let mut receiver = &ty;
-                    while let ir::Ty::Ref { referent, .. } = receiver {
-                        receiver = referent.as_ref();
+                    loop {
+                        receiver = match receiver {
+                            ir::Ty::Ref { referent, .. } => referent.as_ref(),
+                            ir::Ty::ManuallyDrop(wrapper) => wrapper.argument(),
+                            _ => break,
+                        };
                     }
                     let receiver = if let ir::Ty::Struct(nominal) = receiver
                         && !self.has_member(nominal.def().source_decl, field)?
@@ -1918,6 +1964,7 @@ impl<'s> Checker<'s> {
                 }
             }
             InferKind::PhantomData(_, inner)
+            | InferKind::ManuallyDrop(_, inner)
             | InferKind::Array(inner, _)
             | InferKind::Slice(inner)
             | InferKind::Ref(_, inner)
@@ -2776,6 +2823,7 @@ pub(super) fn checked_ty_at(ty: &Type, env: &TypeEnv, allow_ref: bool) -> Result
         return plan.source_ty(ty, &env.params, caller, &plan.budget);
     }
     match ty {
+        Type::ManuallyDrop(_) => Err("unsupported: ManuallyDrop requires authoritative catalog planning".into()),
         Type::PhantomData(_) => Err("unsupported: PhantomData requires authoritative catalog planning".into()),
         Type::FnPointer { .. } => Err("unsupported: function pointer signatures require authoritative planning".into()),
         Type::SelfType => env
@@ -4828,6 +4876,15 @@ impl<'a> Checker<'a> {
                         projection.push(ir::Projection::Deref);
                         continue;
                     }
+                    if let ir::Ty::ManuallyDrop(wrapper) = &ty {
+                        let plan = self.signatures.plan()?;
+                        self.facts()
+                            .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+                        let argument = wrapper.argument().clone();
+                        ty = argument;
+                        projection.push(ir::Projection::ManuallyDropPayload);
+                        continue;
+                    }
                     if let ir::Ty::RawPtr { kind, pointee } = &ty {
                         if self.unsafe_depth == 0 {
                             return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
@@ -4851,6 +4908,22 @@ impl<'a> Checker<'a> {
                 _ => {
                     let mut layer = 0;
                     loop {
+                        if let ir::Ty::ManuallyDrop(wrapper) = &ty {
+                            if derefs >= 128 || projection.len() >= 128 {
+                                return Err(
+                                    "resource: ManuallyDrop payload projection depth exceeded"
+                                        .into(),
+                                );
+                            }
+                            let plan = self.signatures.plan()?;
+                            self.facts()
+                                .validate_ty_metadata_with_budget(&ty, &plan.budget)?;
+                            let argument = wrapper.argument().clone();
+                            ty = argument;
+                            derefs += 1;
+                            projection.push(ir::Projection::ManuallyDropPayload);
+                            continue;
+                        }
                         let borrowed = match &ty {
                             ir::Ty::Ref { kind, referent } => {
                                 Some((*kind, referent.as_ref().clone()))
@@ -5164,8 +5237,12 @@ impl<'a> Checker<'a> {
             Expr::Field { base, field } => {
                 if let Some(ty) = self.scalar_hint(base)? {
                     let mut receiver = &ty;
-                    while let ir::Ty::Ref { referent, .. } = receiver {
-                        receiver = referent.as_ref();
+                    loop {
+                        receiver = match receiver {
+                            ir::Ty::Ref { referent, .. } => referent.as_ref(),
+                            ir::Ty::ManuallyDrop(wrapper) => wrapper.argument(),
+                            _ => break,
+                        };
                     }
                     if let ir::Ty::Struct(nominal) = receiver
                         && !self.has_member(nominal.def().source_decl, field)?
@@ -11892,17 +11969,22 @@ impl<'a> Checker<'a> {
                         self.checked_place(&source)?;
                     }
                     let flow = self.flow(value);
-                    let referent = match &flow.ty {
-                        ir::Ty::Ref { referent, .. } => referent,
+                    let ty = match &flow.ty {
+                        ir::Ty::ManuallyDrop(wrapper) => {
+                            let plan = self.signatures.plan()?;
+                            self.facts()
+                                .validate_ty_metadata_with_budget(&flow.ty, &plan.budget)?;
+                            wrapper.argument().clone()
+                        }
+                        ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
                         ir::Ty::RawPtr { pointee, .. } => {
                             if self.unsafe_depth == 0 {
                                 return Err("E0133: dereference of raw pointer is unsafe and requires unsafe block".into());
                             }
-                            pointee
+                            pointee.as_ref().clone()
                         }
                         _ => return Err("dereference requires a reference".into()),
                     };
-                    let ty = referent.as_ref().clone();
                     self.accessible(&ty)?;
                     (
                         ir::ExprKind::Deref { value },
@@ -12492,13 +12574,19 @@ impl<'a> Checker<'a> {
                         base = deref;
                         flow.ty = ty;
                     }
-                    // Further reference layers (`i.q` with `i: &&T`) are read
-                    // through the already dereferenced carrier.
+                    // References and canonical owned-wrapper payloads preserve
+                    // their distinct projection identities in typed lowering.
                     for _ in 0..ir::MAX_PATTERN_PROJECTION_DEPTH {
-                        let ir::Ty::Ref { referent, .. } = &flow.ty else {
-                            break;
+                        let ty = match &flow.ty {
+                            ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                            ir::Ty::ManuallyDrop(wrapper) => {
+                                let plan = self.signatures.plan()?;
+                                self.facts()
+                                    .validate_ty_metadata_with_budget(&flow.ty, &plan.budget)?;
+                                wrapper.argument().clone()
+                            }
+                            _ => break,
                         };
-                        let ty = referent.as_ref().clone();
                         self.accessible(&ty)?;
                         let deref = ir::ExprId(self.exprs.len());
                         self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
@@ -12647,6 +12735,7 @@ impl<'a> Checker<'a> {
                     Flow::value(ir::Ty::Unit),
                 )
             }
+            Expr::ManuallyDrop(call) => self.manually_drop_operation(call, expectation.hard())?,
             Expr::RawSlice { kind, arguments } => self.raw_slice(*kind, arguments)?,
             Expr::SliceDataPointer(slice) => self.slice_data_pointer(slice)?,
             Expr::PhantomData(source) => {

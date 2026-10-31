@@ -114,8 +114,8 @@ impl Encoder<'_, '_> {
                 self.n(11)?;
                 self.ty(element, depth + 1)
             }
-            PhantomData(_) | Opaque(_) | Closure(_) | FnPointer(_) | FnItem(_)
-            | AssociatedType(_) | Param(_) | Struct(_) | Enum(_) | Dyn(_) => {
+            PhantomData(_) | ManuallyDrop(_) | Opaque(_) | Closure(_) | FnPointer(_)
+            | FnItem(_) | AssociatedType(_) | Param(_) | Struct(_) | Enum(_) | Dyn(_) => {
                 Err(Failure::Unsupported)
             }
         }
@@ -138,7 +138,9 @@ impl Encoder<'_, '_> {
                     self.n(i.0)?;
                 }
                 ir::Projection::Deref => self.n(3)?,
-                ir::Projection::Downcast(_) => return Err(Failure::Unsupported),
+                ir::Projection::Downcast(_) | ir::Projection::ManuallyDropPayload => {
+                    return Err(Failure::Unsupported);
+                }
             }
         }
         Ok(())
@@ -226,6 +228,8 @@ impl Encoder<'_, '_> {
         use cfg::Rvalue::*;
         match v {
             TypeAlignment(_)
+            | ManuallyDropTake { .. }
+            | ManuallyDropIntoInner { .. }
             | OpaquePack { .. }
             | Intrinsic { .. }
             | EnumVariant { .. }

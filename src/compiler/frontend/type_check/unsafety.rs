@@ -4,10 +4,20 @@ use super::*;
 
 impl<'a> Checker<'a> {
     pub(super) fn require_safe_callable(&self, declaration: ir::DeclId) -> Result<(), String> {
+        let plan = self.signatures.plan()?;
+        for operation in [
+            tr::CatalogItem::ManuallyDropNew,
+            tr::CatalogItem::ManuallyDropIntoInner,
+            tr::CatalogItem::ManuallyDropDrop,
+        ] {
+            plan.budget.charge_work(1)?;
+            if declaration == plan.catalog.id(operation) {
+                return Err("unsupported: canonical ManuallyDrop operations require original dedicated source evidence".into());
+            }
+        }
         if self.unsafe_depth > 0 {
             return Ok(());
         }
-        let plan = self.signatures.plan()?;
         if plan
             .registry
             .source_callable(declaration)

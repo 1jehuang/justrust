@@ -58,6 +58,11 @@ pub enum BuiltinAtom {
     Std,
     Marker,
     PhantomData,
+    Mem,
+    ManuallyDrop,
+    ManuallyDropNew,
+    ManuallyDropIntoInner,
+    ManuallyDropDrop,
     CloneModule,
     Ops,
     Sized,
@@ -76,6 +81,11 @@ impl BuiltinAtom {
             Self::Std => "std",
             Self::Marker => "marker",
             Self::PhantomData => "PhantomData",
+            Self::Mem => "mem",
+            Self::ManuallyDrop => "ManuallyDrop",
+            Self::ManuallyDropNew => "new",
+            Self::ManuallyDropIntoInner => "into_inner",
+            Self::ManuallyDropDrop => "drop",
             Self::CloneModule => "clone",
             Self::Ops => "ops",
             Self::Sized => "Sized",
@@ -364,7 +374,12 @@ impl NameStoreBuilder {
     pub fn catalog_member_key(&mut self, atom: BuiltinAtom) -> Result<NameKey, NameError> {
         if !matches!(
             atom,
-            BuiltinAtom::CloneMethod | BuiltinAtom::CloneFromMethod | BuiltinAtom::DropMethod
+            BuiltinAtom::CloneMethod
+                | BuiltinAtom::CloneFromMethod
+                | BuiltinAtom::DropMethod
+                | BuiltinAtom::ManuallyDropNew
+                | BuiltinAtom::ManuallyDropIntoInner
+                | BuiltinAtom::ManuallyDropDrop
         ) {
             return Err(
                 TokenError::InvalidInput("expected a closed catalog member descriptor").into(),

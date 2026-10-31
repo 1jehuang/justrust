@@ -80,7 +80,7 @@ fn pointer_metadata_size_authorized(
     budget.check_depth(depth)?;
     budget.charge_work(1)?;
     match referent {
-        ir::Ty::FnPointer(_) | ir::Ty::PhantomData(_) => Ok(Some(8)),
+        ir::Ty::FnPointer(_) | ir::Ty::PhantomData(_) | ir::Ty::ManuallyDrop(_) => Ok(Some(8)),
         ir::Ty::Param(_) => Ok(None),
         ir::Ty::Str | ir::Ty::Slice { .. } | ir::Ty::Dyn(_) => Ok(Some(16)),
         ir::Ty::Unit
@@ -148,6 +148,9 @@ fn walk_size_authorized(
         // size observation grants no native callable ABI or invocation support.
         ir::Ty::FnPointer(_) => Ok(Some(8)),
         ir::Ty::PhantomData(_) => Ok(Some(0)),
+        ir::Ty::ManuallyDrop(wrapper) => {
+            walk_size_authorized(wrapper.argument(), facts, budget, depth + 1)
+        }
         ir::Ty::Param(_) => Ok(None),
         ir::Ty::Char => Ok(Some(4)),
         ir::Ty::Array { element, len } => {
@@ -210,6 +213,9 @@ fn walk_alignment(
         ),
         ir::Ty::Param(_) => Ok(None),
         ir::Ty::PhantomData(_) => Ok(Some(1)),
+        ir::Ty::ManuallyDrop(wrapper) => {
+            walk_alignment(wrapper.argument(), budget, depth + 1, private)
+        }
         ir::Ty::Char => Ok(Some(4)),
         ir::Ty::Unit | ir::Ty::Bool | ir::Ty::Int(_) | ir::Ty::Float(_) => {
             Err("target scalar alignment authority is missing".into())

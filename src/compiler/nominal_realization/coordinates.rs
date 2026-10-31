@@ -30,6 +30,7 @@ pub(super) enum Term {
     RawPtr(ir::BorrowKind, Box<Term>),
     Tuple(Vec<Term>),
     FnPointer(Vec<Term>, Box<Term>),
+    ManuallyDrop(ir::DeclId, Box<Term>),
     PhantomData(ir::DeclId, Box<Term>),
     Array(Box<Term>, usize),
     Slice(Box<Term>),
@@ -44,6 +45,7 @@ impl Term {
             Self::Ref(_, t) | Self::RawPtr(_, t) | Self::Array(t, _) | Self::Slice(t) => {
                 t.contains_nominal()
             }
+            Self::ManuallyDrop(_, argument) => argument.contains_nominal(),
             Self::PhantomData(_, argument) => argument.contains_nominal(),
             Self::FnPointer(inputs, output) => {
                 inputs.iter().any(Self::contains_nominal) || output.contains_nominal()
@@ -75,6 +77,14 @@ impl Term {
             }
             ir::Ty::Array { element, len } => {
                 Self::Array(Box::new(Self::from_ty(element, b, depth + 1)?), *len)
+            }
+            ir::Ty::ManuallyDrop(marker) => {
+                b.retain_bytes(std::mem::size_of::<Self>())
+                    .map_err(Error::new)?;
+                Self::ManuallyDrop(
+                    marker.declaration(),
+                    Box::new(Self::from_ty(marker.argument(), b, depth + 1)?),
+                )
             }
             ir::Ty::PhantomData(marker) => {
                 b.retain_bytes(std::mem::size_of::<Self>())
@@ -192,6 +202,10 @@ impl Term {
                     if *k == ir::BorrowKind::Shared { 0 } else { 1 },
                 ]);
                 t.write(out, b, d + 1)?;
+            }
+            Self::ManuallyDrop(declaration, argument) => {
+                out.extend([17, declaration.snapshot.graph_word(), declaration.index]);
+                argument.write(out, b, d + 1)?;
             }
             Self::PhantomData(declaration, argument) => {
                 out.extend([16, declaration.snapshot.graph_word(), declaration.index]);
@@ -360,6 +374,16 @@ impl Reader<'_> {
                     ));
                 }
                 Term::Dyn(ir::DeclId { snapshot, index }, args, assigned)
+            }
+            17 => {
+                let declaration = ir::DeclId {
+                    snapshot: ir::SnapshotId::from_graph_word(self.word()?),
+                    index: self.word()?,
+                };
+                self.b
+                    .retain_bytes(std::mem::size_of::<Term>())
+                    .map_err(Error::new)?;
+                Term::ManuallyDrop(declaration, Box::new(self.term(d + 1)?))
             }
             16 => {
                 let declaration = ir::DeclId {

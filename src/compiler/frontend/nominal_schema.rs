@@ -508,6 +508,33 @@ impl PlanState {
         budget.charge_work(1)?;
         budget.charge_nodes(1)?;
         Ok(match ty {
+            Type::ManuallyDrop(source) => {
+                source.require_kind(SourceCatalogKind::ManuallyDrop)?;
+                source
+                    .original
+                    .checked_path(registry.names.as_ref())
+                    .map_err(native_adapter::name_diagnostic)?;
+                let argument = source
+                    .argument
+                    .as_ref()
+                    .ok_or("missing ManuallyDrop type argument")?;
+                let argument = self.source_ty_with_transport(
+                    registry,
+                    argument,
+                    bindings,
+                    caller,
+                    budget,
+                    depth + 1,
+                    allow_ref,
+                    transport,
+                )?;
+                let wrapper = registry
+                    .manually_drop_factory
+                    .with_argument(argument, budget)?;
+                let ty = ir::Ty::ManuallyDrop(wrapper);
+                caller.validate_ty_metadata_with_budget(&ty, budget)?;
+                ty
+            }
             Type::PhantomData(source) => {
                 source
                     .original
