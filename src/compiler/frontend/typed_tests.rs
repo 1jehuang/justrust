@@ -266,6 +266,72 @@ fn unsafe_trait_impl_safety_replays_original_pair_and_source_flags() {
     );
 }
 
+#[test]
+fn canonical_sync_safety_uses_original_impl_pair_not_local_spelling_or_flags() {
+    let source = parse(
+        "trait Sync{}struct S;unsafe impl core::marker::Sync for S{}impl Sync for S{}fn main(){}",
+    )
+    .unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&source, &budget).unwrap();
+    let mut adapter = SchemaAdapter {
+        program: plan.program.clone(),
+        catalog: plan.catalog.clone(),
+        registry: plan.registry.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
+        contexts: plan.contexts.clone(),
+        source_schemas: plan.source_schemas.clone(),
+        budget: budget.clone(),
+    };
+    let builtin = *plan
+        .registry
+        .traits
+        .get(&TraitLookupKey::Builtin(BuiltinTrait::Sync))
+        .unwrap();
+    let local = plan.registry.trait_ids[0];
+    let original = plan.registry.impl_ids[0];
+    let shadow = plan.registry.impl_ids[1];
+    assert_ne!(builtin, local);
+    assert_eq!(
+        tr::SchemaCx::impl_trait_safety(&adapter, original, builtin).unwrap(),
+        (true, true)
+    );
+    assert_eq!(
+        tr::SchemaCx::impl_trait_safety(&adapter, shadow, local).unwrap(),
+        (false, false)
+    );
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, original, local).is_err());
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, shadow, builtin).is_err());
+    let copy = *plan
+        .registry
+        .traits
+        .get(&TraitLookupKey::Builtin(BuiltinTrait::Copy))
+        .unwrap();
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, original, copy).is_err());
+    let foreign_source = parse("struct Foreign;unsafe impl Sync for Foreign{}fn main(){}").unwrap();
+    let foreign = PlanCtx::from_program(&foreign_source, &ir::PlanBudget::default()).unwrap();
+    let foreign_sync = *foreign
+        .registry
+        .traits
+        .get(&TraitLookupKey::Builtin(BuiltinTrait::Sync))
+        .unwrap();
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, original, foreign_sync).is_err());
+    let mut erased = plan.program.as_ref().clone();
+    erased.impls[0].unsafety = false;
+    adapter.program = Arc::new(erased);
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, original, builtin).is_err());
+    let foreign =
+        parse_unresolved("struct S;unsafe impl std::marker::Sync for S{}fn main(){}").unwrap();
+    let mut transplanted =
+        parse_unresolved("struct S;unsafe impl core::marker::Sync for S{}fn main(){}").unwrap();
+    transplanted.program.impls[0].trait_path = foreign.program.impls[0].trait_path.clone();
+    // Catalog resolution must not let a foreign spelling occurrence enter
+    // the program even when it would name the same canonical declaration.
+    assert!(name_validation::validate_program_names(&transplanted.program).is_err());
+    assert!(resolve(&transplanted).is_err());
+}
+
 // Text selects an authored fixture witness only. Lookup authority is the
 // checked path retained by that same parsed Program, never a rebuilt name.
 fn fixture_function_key(program: &Program, expected: &str) -> PathKey {

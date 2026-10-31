@@ -5,9 +5,9 @@ use crate::compiler::ir::{BinderId, BorrowKind, IntTy};
 use crate::compiler::module_identity::CatalogModule;
 use crate::compiler::semantic_name::BuiltinAtom;
 
-pub const CATALOG_VERSION: u32 = 12;
+pub const CATALOG_VERSION: u32 = 13;
 
-const BASE_COUNT: u32 = 18;
+const BASE_COUNT: u32 = 19;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RecipeDescriptor {
@@ -82,6 +82,7 @@ pub enum CatalogItem {
     CellGet,
     CellSet,
     ThreadPanicking,
+    Sync,
     Recipe(RecipeDescriptor),
 }
 impl CatalogItem {
@@ -91,7 +92,7 @@ impl CatalogItem {
             Self::ThreadPanicking | Self::Recipe(RecipeDescriptor::ThreadPanicking) => {
                 CatalogModule::Thread
             }
-            Self::Sized | Self::Copy | Self::PhantomData => CatalogModule::Marker,
+            Self::Sized | Self::Copy | Self::Sync | Self::PhantomData => CatalogModule::Marker,
             Self::ManuallyDrop
             | Self::ManuallyDropNew
             | Self::ManuallyDropIntoInner
@@ -106,6 +107,7 @@ impl CatalogItem {
     }
     pub fn binding_atom(self) -> Option<BuiltinAtom> {
         match self {
+            Self::Sync => Some(BuiltinAtom::Sync),
             Self::Sized => Some(BuiltinAtom::Sized),
             Self::Clone => Some(BuiltinAtom::Clone),
             Self::Copy => Some(BuiltinAtom::Copy),
@@ -143,6 +145,7 @@ impl CatalogItem {
             Self::CellGet => 15,
             Self::CellSet => 16,
             Self::ThreadPanicking => 17,
+            Self::Sync => 18,
             Self::Recipe(_) => return None,
         })
     }
@@ -352,11 +355,16 @@ impl CoreCatalogBuilder {
             CatalogItem::DropItem,
             CatalogItem::PhantomData,
             CatalogItem::ManuallyDrop,
+            CatalogItem::Sync,
         ] {
             let declaration = id(snapshot, item);
             let is_trait = matches!(
                 item,
-                CatalogItem::Sized | CatalogItem::Clone | CatalogItem::Copy | CatalogItem::Drop
+                CatalogItem::Sized
+                    | CatalogItem::Clone
+                    | CatalogItem::Copy
+                    | CatalogItem::Drop
+                    | CatalogItem::Sync
             );
             let owner = match item {
                 CatalogItem::CloneItem
@@ -400,6 +408,7 @@ impl CoreCatalogBuilder {
                 DeclKind::TraitItem
             };
             let name = match item {
+                CatalogItem::Sync => "Sync",
                 CatalogItem::Sized => "Sized",
                 CatalogItem::Clone => "Clone",
                 CatalogItem::CloneItem => "clone",
@@ -615,6 +624,18 @@ impl CoreCatalogBuilder {
         builder.add_manually_drop_operations(budget)?;
         builder.add_cell_operations(budget)?;
         builder.add_thread_panicking(budget)?;
+        charged(
+            budget,
+            budget.charge_work(
+                builder
+                    .declarations
+                    .len()
+                    .saturating_mul(builder.declarations.len()),
+            ),
+        )?;
+        builder
+            .declarations
+            .sort_unstable_by_key(|entry| entry.declaration.index);
         Ok(builder)
     }
     fn add_thread_panicking(&mut self, budget: &PlanBudget) -> Result<()> {
@@ -1351,6 +1372,97 @@ impl CoreCatalog {
             "Clone recipe shape was not inventoried",
         ))
     }
+    /// Canonical safety is authenticated from retained catalog identity, not
+    /// source spelling or a source callback's classification of a foreign trait.
+    pub fn trait_requires_unsafe_impl(&self, declaration: DeclId) -> Result<bool> {
+        charged(&self.budget, self.budget.charge_work(1))?;
+        if declaration.snapshot != self.snapshot {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "foreign trait safety query",
+            ));
+        }
+        let Some(entry) = self.declaration(declaration) else {
+            return if declaration.is_source() {
+                Ok(false)
+            } else {
+                Err(FactsError::invalid(
+                    &self.budget,
+                    "missing canonical trait safety record",
+                ))
+            };
+        };
+        if entry.info.kind != DeclKind::Trait {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "catalog safety query requires a trait",
+            ));
+        }
+        let item = match entry.origin {
+            DeclOrigin::CoreCatalog {
+                version: CATALOG_VERSION,
+                item,
+            } => item,
+            _ => {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "catalog safety origin is not authentic",
+                ));
+            }
+        };
+        if item.base_index().map(u64::from) != Some(declaration.index)
+            || entry.info.declaration != declaration
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "catalog safety identity mismatch",
+            ));
+        }
+        if item != CatalogItem::Sync {
+            return Ok(false);
+        }
+        charged(
+            &self.budget,
+            self.budget.charge_work(self.headers.traits.len()),
+        )?;
+        let header = self
+            .headers
+            .traits
+            .iter()
+            .find(|header| header.declaration == declaration)
+            .ok_or_else(|| FactsError::invalid(&self.budget, "Sync catalog header missing"))?;
+        let expected = ParamId {
+            owner: BinderId { declaration },
+            index: 0,
+        };
+        let mut parameters = header.env.ordered_params();
+        let mut declared_parameters = entry.info.env.ordered_params();
+        if header.self_param != expected
+            || entry.info.owner.is_some()
+            || entry.info.receiver != ReceiverMode::None
+            || entry.info.module != self.modules.catalog_module(CatalogModule::Marker)
+            || parameters.next() != Some(expected)
+            || parameters.next().is_some()
+            || declared_parameters.next() != Some(expected)
+            || declared_parameters.next().is_some()
+            || entry.info.own_env.binder() != expected.owner
+            || entry.info.own_env.arity() != 1
+            || entry.info.env.scopes().len() != 1
+            || header.env.scopes().len() != 1
+            || entry.info.own_env.relaxed_sized(expected)
+            || entry.callable_provider.is_some()
+            || !header.items.is_empty()
+            || !header.associated_types.is_empty()
+            || !header.supertraits.is_empty()
+            || entry.schema.is_some()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "Sync catalog Self schema is not authentic",
+            ));
+        }
+        Ok(true)
+    }
     pub fn origin(&self, declaration: DeclId) -> Result<DeclOrigin> {
         if declaration.snapshot != self.snapshot {
             return Err(FactsError::invalid(
@@ -1407,21 +1519,21 @@ mod wide_tests {
         .unwrap();
         let snapshot = SnapshotId::standalone().unwrap();
         let builder = CoreCatalogBuilder::new(snapshot, modules.clone(), &budget).unwrap();
-        assert_eq!(builder.source_start(), 18);
+        assert_eq!(builder.source_start(), 19);
         let catalog = builder
-            .finish(18, RecipeShapeInventory::new(), &budget)
+            .finish(19, RecipeShapeInventory::new(), &budget)
             .unwrap();
-        assert_eq!(catalog.version(), 12);
+        assert_eq!(catalog.version(), 13);
         assert_eq!(catalog.id(CatalogItem::CellSet).index, 16);
         let declaration = catalog.id(CatalogItem::ThreadPanicking);
         assert_eq!(declaration.index, 17);
-        assert_eq!(catalog.declarations().len(), 18);
+        assert_eq!(catalog.declarations().len(), 19);
         let row = catalog.recipe(RecipeDescriptor::ThreadPanicking).unwrap();
         assert_eq!(row.declaration, declaration);
         assert_eq!(
             row.origin,
             DeclOrigin::CoreCatalog {
-                version: 12,
+                version: 13,
                 item: CatalogItem::ThreadPanicking,
             }
         );
@@ -1452,6 +1564,118 @@ mod wide_tests {
             RecipeDescriptor::CloneFromPhantomData.order()
                 < RecipeDescriptor::ThreadPanicking.order()
         );
+    }
+
+    #[test]
+    fn sync_safety_authenticates_exact_catalog_owner_origin_self_and_meter() {
+        let budget = PlanBudget::default();
+        let module_budget = crate::compiler::expansion_budget::ExpansionBudget::default();
+        let modules = crate::compiler::module_identity::ModuleArenaBuilder::for_catalog(
+            module_budget.clone(),
+            crate::compiler::owner_path::standalone_issued(
+                &module_budget,
+                crate::compiler::owner_path::OwnerDomain::ModuleArena,
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .freeze()
+        .unwrap();
+        let snapshot = SnapshotId::standalone().unwrap();
+        let builder = CoreCatalogBuilder::new(snapshot, modules, &budget).unwrap();
+        let start = builder.source_start();
+        let mut catalog = builder
+            .finish(start, RecipeShapeInventory::new(), &budget)
+            .unwrap();
+        let sync = catalog.id(CatalogItem::Sync);
+        assert_eq!(sync.index, 18);
+        assert_eq!(CatalogItem::Sync.binding_atom(), Some(BuiltinAtom::Sync));
+        assert!(catalog.trait_requires_unsafe_impl(sync).unwrap());
+        assert!(
+            !catalog
+                .trait_requires_unsafe_impl(catalog.id(CatalogItem::Copy))
+                .unwrap()
+        );
+        assert!(
+            catalog
+                .trait_requires_unsafe_impl(catalog.id(CatalogItem::Cell))
+                .is_err()
+        );
+        assert!(
+            catalog
+                .trait_requires_unsafe_impl(DeclId {
+                    snapshot: SnapshotId::standalone().unwrap(),
+                    index: sync.index,
+                })
+                .is_err()
+        );
+        let original = catalog.declaration(sync).unwrap().clone();
+        let headers = catalog.headers.traits.clone();
+        for control in 0..9 {
+            let raw = Arc::get_mut(&mut catalog).unwrap();
+            match control {
+                0 => {
+                    raw.declarations[18].origin = DeclOrigin::CoreCatalog {
+                        version: 12,
+                        item: CatalogItem::Sync,
+                    }
+                }
+                1 => {
+                    raw.declarations[18].origin = DeclOrigin::CoreCatalog {
+                        version: CATALOG_VERSION,
+                        item: CatalogItem::Copy,
+                    }
+                }
+                2 => raw.declarations[18].info.owner = Some(sync),
+                3 => raw.declarations[18].info.declaration = raw.id(CatalogItem::Copy),
+                4 => {
+                    let header = Arc::make_mut(&mut raw.headers.traits)
+                        .iter_mut()
+                        .find(|h| h.declaration == sync)
+                        .unwrap();
+                    header.self_param.owner.declaration = original.declaration;
+                    header.self_param.index = 1;
+                }
+                5 => {
+                    let header = Arc::make_mut(&mut raw.headers.traits)
+                        .iter_mut()
+                        .find(|h| h.declaration == sync)
+                        .unwrap();
+                    header.items = Arc::from([sync]);
+                }
+                6 => {
+                    raw.declarations[18].info.module =
+                        raw.modules.catalog_module(CatalogModule::Clone)
+                }
+                7 => {
+                    raw.declarations[18].origin = DeclOrigin::CoreCatalog {
+                        version: CATALOG_VERSION,
+                        item: CatalogItem::Recipe(RecipeDescriptor::CloneBool),
+                    }
+                }
+                8 => raw.declarations[18].declaration = raw.id(CatalogItem::Copy),
+                _ => unreachable!(),
+            }
+            assert_eq!(
+                catalog.trait_requires_unsafe_impl(sync).unwrap_err().kind(),
+                FactsErrorKind::InvalidMetadata
+            );
+            let raw = Arc::get_mut(&mut catalog).unwrap();
+            raw.declarations[18] = original.clone();
+            raw.headers.traits = headers.clone();
+        }
+        let remaining = budget.limits().work - budget.usage_snapshot().work;
+        budget.charge_work(remaining).unwrap();
+        assert_eq!(budget.usage_snapshot().work, budget.limits().work);
+        assert_eq!(
+            catalog.trait_requires_unsafe_impl(sync).unwrap_err().kind(),
+            FactsErrorKind::Resource
+        );
+        let failure = budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(failure.used, failure.limit);
+        assert!(budget.charge_work(1).is_err());
+        assert_eq!(budget.first_resource_failure(), Some(failure));
     }
 
     #[test]

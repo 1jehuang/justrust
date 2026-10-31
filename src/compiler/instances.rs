@@ -220,6 +220,7 @@ impl Encoder<'_> {
             traits::CatalogItem::CellGet => 16,
             traits::CatalogItem::CellSet => 17,
             traits::CatalogItem::ThreadPanicking => 18,
+            traits::CatalogItem::Sync => 19,
             traits::CatalogItem::ManuallyDrop => 10,
             traits::CatalogItem::ManuallyDropNew => 11,
             traits::CatalogItem::ManuallyDropIntoInner => 12,
@@ -1351,6 +1352,7 @@ mod tests {
         };
         assert_eq!(encode(traits::CatalogItem::CellSet), vec![17]);
         assert_eq!(encode(traits::CatalogItem::ThreadPanicking), vec![18]);
+        assert_eq!(encode(traits::CatalogItem::Sync), vec![19]);
         assert_eq!(
             encode(traits::CatalogItem::Recipe(
                 traits::RecipeDescriptor::CloneChar

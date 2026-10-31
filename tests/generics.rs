@@ -14,6 +14,181 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 #[path = "support/stock_rustc.rs"]
 mod defaults_stock;
 
+const SYNC_VALID: &[(&str, &str)] = &[
+    (
+        "projection_auto_sync",
+        r#"trait Family{type Item;}struct W<T:Family>{x:T::Item}fn need<T:Sync>(){}fn forward<T:Family>() where T::Item:Sync{need::<W<T>>();}fn main(){println!("7");}"#,
+    ),
+    (
+        "scopeguard_original_impl_shape_universal",
+        r#"trait Strategy{}struct ScopeGuard<T,F:FnOnce(T),S:Strategy>{value:T,dropfn:F,strategy:core::marker::PhantomData<S>}unsafe impl<T,F,S> Sync for ScopeGuard<T,F,S> where T:Sync,F:FnOnce(T),S:Strategy{}fn need<T:Sync>(){}fn forward<T:Sync,F:FnOnce(T),S:Strategy>(){need::<ScopeGuard<T,F,S>>();}fn main(){println!("7");}"#,
+    ),
+    (
+        "explicit_conditional_marked",
+        r#"trait Mark{}struct Marked;impl Mark for Marked{}struct W<T>{x:T}unsafe impl<T:Mark> Sync for W<T>{}fn need<T:Sync>(){}fn main(){need::<W<Marked>>();println!("7");}"#,
+    ),
+    (
+        "universal_bound",
+        r#"fn need<T:Sync>(){}fn forward<T:Sync>(){need::<T>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+    (
+        "conditional_nominal",
+        r#"struct W<T>{x:T}fn need<T:Sync>(){}fn forward<T:Sync>(){need::<W<T>>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+    (
+        "explicit_impl_does_not_require_f_sync",
+        r#"struct Guard<T,F>{value:T,action:F}unsafe impl<T:Sync,F> Sync for Guard<T,F>{}fn need<T:Sync>(){}fn forward<T:Sync,F>(){need::<Guard<T,F>>();}fn main(){forward::<i32,core::cell::Cell<i32>>();println!("7");}"#,
+    ),
+    (
+        "shared_reference_exact_t",
+        r#"fn need<T:Sync>(){}fn forward<T:Sync>(x:&T){need::<&T>();}fn main(){let x=7;forward(&x);println!("7");}"#,
+    ),
+    (
+        "manually_drop_exact_t",
+        r#"fn need<T:Sync>(){}fn forward<T:Sync>(){need::<core::mem::ManuallyDrop<T>>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+    (
+        "phantom_data_exact_t",
+        r#"fn need<T:Sync>(){}fn forward<T:Sync>(){need::<core::marker::PhantomData<T>>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+    (
+        "tuple_array_nested",
+        r#"fn need<T:Sync>(){}fn forward<T:Sync>(){need::<(T,[T;2])>();}fn main(){forward::<i32>();println!("7");}"#,
+    ),
+];
+const SYNC_INVALID: &[(&str, &str)] = &[
+    (
+        "explicit_conditional_suppresses_auto",
+        "trait Mark{}struct W<T>{x:T}unsafe impl<T:Mark> Sync for W<T>{}fn need<T:Sync>(){}fn main(){need::<W<i32>>();}",
+    ),
+    (
+        "missing_universal_bound",
+        "fn need<T:Sync>(){}fn bad<T>(){need::<T>();}fn main(){}",
+    ),
+    (
+        "explicit_impl_still_requires_t_sync",
+        "struct Guard<T,F>{value:T,action:F}unsafe impl<T:Sync,F> Sync for Guard<T,F>{}fn need<T:Sync>(){}fn main(){need::<Guard<core::cell::Cell<i32>,i32>>();}",
+    ),
+    (
+        "nominal_cell_field",
+        "struct W<T>{x:T}fn need<T:Sync>(){}fn main(){need::<W<core::cell::Cell<i32>>>();}",
+    ),
+    (
+        "shared_reference_cell",
+        "fn need<T:Sync>(){}fn main(){need::<&core::cell::Cell<i32>>();}",
+    ),
+    (
+        "manually_drop_cell",
+        "fn need<T:Sync>(){}fn main(){need::<core::mem::ManuallyDrop<core::cell::Cell<i32>>>();}",
+    ),
+    (
+        "phantom_data_cell",
+        "fn need<T:Sync>(){}fn main(){need::<core::marker::PhantomData<core::cell::Cell<i32>>>();}",
+    ),
+    (
+        "phantom_data_raw_pointer",
+        "fn need<T:Sync>(){}fn main(){need::<core::marker::PhantomData<*const i32>>();}",
+    ),
+    (
+        "mutable_raw_pointer",
+        "fn need<T:Sync>(){}fn main(){need::<*mut i32>();}",
+    ),
+    (
+        "missing_phantom_universal_bound",
+        "fn need<T:Sync>(){}fn bad<T>(){need::<core::marker::PhantomData<T>>();}fn main(){}",
+    ),
+];
+
+const SYNC_UNSUPPORTED: &[(&str, &str)] = &[
+    (
+        "scopeguard_original_impl_shape",
+        r#"trait Strategy{}struct Always;impl Strategy for Always{}struct ScopeGuard<T,F:FnOnce(T),S:Strategy>{value:T,dropfn:F,strategy:core::marker::PhantomData<S>}unsafe impl<T,F,S> Sync for ScopeGuard<T,F,S> where T:Sync,F:FnOnce(T),S:Strategy{}fn drop_value(x:i32){}fn need<T:Sync>(){}fn main(){need::<ScopeGuard<i32,fn(i32),Always>>();println!("7");}"#,
+    ),
+    (
+        "recursive_auto_sync",
+        r#"struct R<'a>{next:&'a R<'a>}fn need<T:Sync>(){}fn forward<'a>(){need::<R<'a>>();}fn main(){println!("7");}"#,
+    ),
+    (
+        "dyn_auto_sync",
+        r#"trait V{}fn need<T:Sync+?Sized>(){}fn main(){need::<dyn V+Sync>();println!("7");}"#,
+    ),
+];
+
+#[test]
+fn sync_exact_stock_check_build_run() {
+    let rustc = defaults_stock::stock_rustc();
+    for (valid, cases) in [
+        (true, SYNC_VALID),
+        (false, SYNC_INVALID),
+        (true, SYNC_UNSUPPORTED),
+    ] {
+        for (label, source) in cases {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            for check in [true, false] {
+                let output = scratch.path(if check {
+                    "stock.rmeta"
+                } else {
+                    "stock-program"
+                });
+                let mut command = Command::new(&rustc);
+                command
+                    .arg(&input)
+                    .args(["--edition=2024", "--crate-name=sync_oracle"]);
+                if check {
+                    command.arg("--emit=metadata");
+                }
+                let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+                assert_eq!(
+                    result.status.success(),
+                    valid,
+                    "{label} check={check}: {result:?}"
+                );
+                if valid && !check {
+                    let result = capture(&mut Command::new(&output), &scratch, 5);
+                    assert!(result.status.success(), "{label}: {result:?}");
+                    assert_eq!(result.stdout, b"7\n", "{label}");
+                }
+                if !valid {
+                    assert!(!output.exists(), "{label}: invalid stock output");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn sync_native_check_build_run_workers_1_8() {
+    for (label, source) in SYNC_VALID {
+        eprintln!("Sync valid: {label}");
+        runs(source, "7\n");
+    }
+    for (label, source) in SYNC_INVALID {
+        rejects(label, source);
+    }
+    for (label, source) in SYNC_UNSUPPORTED {
+        for workers in [1, 8] {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            let output = scratch.path("unsupported-output");
+            for check in [true, false] {
+                let result = capture(&mut compiler(&input, &output, workers, check), &scratch, 20);
+                assert_eq!(result.status.code(), Some(1), "{label}: {result:?}");
+                let diagnostic = String::from_utf8_lossy(&result.stderr);
+                assert!(diagnostic.contains("unsupported"), "{label}: {diagnostic}");
+                if *label == "scopeguard_original_impl_shape" {
+                    assert!(
+                        diagnostic.contains("function pointer callable traits require a native indirect Rust ABI implementation"),
+                        "{label}: {diagnostic}"
+                    );
+                }
+                assert!(!diagnostic.contains("panicked at"), "{label}: {diagnostic}");
+                assert!(!output.exists(), "{label}: unsupported output");
+            }
+        }
+    }
+}
+
 const MANUALLY_DROP_VALID: &[(&str, &str)] = &[
     (
         "canonical_core_std",

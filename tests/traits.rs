@@ -41,12 +41,61 @@ const UNSAFE_TRAIT_VALID: &[(&str, &str)] = &[
         r#"unsafe trait Sync{}struct S{x:i32}unsafe impl Sync for S{}fn get<T:Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
     ),
 ];
-// Valid stock builtin auto-trait source. This is not native marker support.
-const UNSAFE_TRAIT_BUILTIN_FRONTIER: &[(&str, &str)] = &[(
-    "builtin_sync_frontier",
-    r#"struct S{x:i32}unsafe impl Sync for S{}fn main(){println!("7");}"#,
-)];
+const UNSAFE_TRAIT_BUILTIN_SYNC: &[(&str, &str)] = &[
+    (
+        "builtin_sync",
+        r#"struct S{x:i32}unsafe impl Sync for S{}fn get<T:Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "canonical_core_std_sync",
+        r#"struct S{x:i32}unsafe impl core::marker::Sync for S{}fn get<T:std::marker::Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "imported_sync_alias",
+        r#"use std::marker::Sync as Shared;struct S{x:i32}unsafe impl Shared for S{}fn get<T:Shared>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "local_safe_sync_shadows_prelude",
+        r#"trait Sync{}struct S{x:i32}impl Sync for S{}fn get<T:Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "local_sync_does_not_hide_canonical_sync",
+        r#"trait Sync{}struct S{x:i32}unsafe impl core::marker::Sync for S{}fn get<T:std::marker::Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "automatic_sync_nominal",
+        r#"struct S{x:i32}fn get<T:Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+];
 const UNSAFE_TRAIT_INVALID: &[(&str, &str)] = &[
+    (
+        "unused_builtin_sync_missing_unsafe",
+        r#"struct S{x:i32}impl Sync for S{}fn main(){}"#,
+    ),
+    (
+        "unused_qualified_sync_missing_unsafe",
+        r#"struct S<T>{x:T}impl<T> core::marker::Sync for S<T>{}fn main(){}"#,
+    ),
+    (
+        "local_safe_sync_not_unsafe",
+        r#"trait Sync{}struct S;unsafe impl Sync for S{}fn main(){}"#,
+    ),
+    (
+        "local_unsafe_sync_still_requires_unsafe",
+        r#"unsafe trait Sync{}struct S;impl Sync for S{}fn main(){}"#,
+    ),
+    (
+        "local_sync_is_not_canonical_sync",
+        r#"trait Sync{}impl<T> Sync for T{}fn need<T:core::marker::Sync>(){}fn main(){need::<core::cell::Cell<i32>>();}"#,
+    ),
+    (
+        "automatic_sync_cell_negative",
+        r#"fn need<T:Sync>(){}fn main(){need::<core::cell::Cell<i32>>();}"#,
+    ),
+    (
+        "automatic_sync_raw_pointer_negative",
+        r#"fn need<T:Sync>(){}fn main(){need::<*const i32>();}"#,
+    ),
     (
         "unused_missing_unsafe",
         r#"unsafe trait Marker{}struct S{x:i32}impl Marker for S{}fn main(){}"#,
@@ -82,7 +131,7 @@ fn unsafe_trait_declarations_exact_stock_baseline() {
     for (valid, cases) in [
         (true, UNSAFE_TRAIT_VALID),
         (false, UNSAFE_TRAIT_INVALID),
-        (true, UNSAFE_TRAIT_BUILTIN_FRONTIER),
+        (true, UNSAFE_TRAIT_BUILTIN_SYNC),
     ] {
         for (label, source) in cases {
             let scratch = Scratch::new();
@@ -124,8 +173,8 @@ fn unsafe_trait_declarations_preserve_native_safety_and_membership() {
     for (label, source) in UNSAFE_TRAIT_INVALID {
         rejects(label, source);
     }
-    for (label, source) in UNSAFE_TRAIT_BUILTIN_FRONTIER {
-        rejects(label, source);
+    for (_, source) in UNSAFE_TRAIT_BUILTIN_SYNC {
+        runs(source, "7\n");
     }
 }
 

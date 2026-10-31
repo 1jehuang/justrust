@@ -1,5 +1,50 @@
 use justrust_engine::compiler;
 
+#[test]
+fn canonical_sync_check_never_demands_physical_instances() {
+    for source in [
+        "struct W<T>{x:T}fn need<T:Sync>(){}fn forward<T:Sync>(){need::<W<T>>();}fn main(){forward::<i32>();}",
+        "struct W<T,F>{x:T,f:F}unsafe impl<T:Sync,F> Sync for W<T,F>{}fn need<T:Sync>(){}fn main(){need::<W<i32,core::cell::Cell<i32>>>();}",
+    ] {
+        for workers in [1, 8] {
+            let compiled = compiler::compile(source.to_owned(), workers, true).unwrap();
+            assert!(compiled.report.capture_complete);
+            assert!(compiled.executable.is_none());
+            for kind in [102, 103, 105, 108, 109] {
+                assert!(
+                    !compiled
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .any(|(key, _)| key.kind == kind),
+                    "CHECK demanded physical node {kind}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unused_safe_sync_impl_is_e0200_before_native_publication() {
+    for source in [
+        "struct S;impl Sync for S{}fn main(){}",
+        "struct S<T>{x:T}impl<T> core::marker::Sync for S<T>{}fn main(){}",
+    ] {
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = compiler::compile_observed(source.to_owned(), workers, check)
+                    .err()
+                    .unwrap();
+                assert!(format!("{failure:?}").contains("E0200"));
+                if let Some(report) = failure.report {
+                    assert!(report.capture_complete);
+                    assert!(!report.published_kind(105));
+                }
+            }
+        }
+    }
+}
+
 const CONDITIONAL: &str = r#"struct S{x:i32}struct W<T>{x:T}trait Value{fn value(self)->i32;}impl Value for S{fn value(self)->i32{self.x}}impl<T:Value> Value for W<T>{fn value(self)->i32{self.x.value()}}fn consume<T:Value>(x:T)->i32{<T as Value>::value(x)}fn run()->i32{consume::<W<W<S>>>(W::<W<S>>{x:W::<S>{x:S{x:7}}})}
 fn main(){if run()==7{println!("traits oracle ok");}}
 "#;

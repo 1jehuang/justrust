@@ -1178,6 +1178,7 @@ impl Resolver<'_> {
             (BuiltinAtom::Copy, BuiltinTrait::Copy),
             (BuiltinAtom::Clone, BuiltinTrait::Clone),
             (BuiltinAtom::Drop, BuiltinTrait::Drop),
+            (BuiltinAtom::Sync, BuiltinTrait::Sync),
         ] {
             if self.atom_is(ident, atom, Namespace::Type)? {
                 return Ok(Some(id));
@@ -1269,7 +1270,7 @@ impl Resolver<'_> {
             (module, trait_id),
             (
                 CatalogModule::Marker,
-                BuiltinTrait::Sized | BuiltinTrait::Copy
+                BuiltinTrait::Sized | BuiltinTrait::Copy | BuiltinTrait::Sync
             ) | (CatalogModule::Clone, BuiltinTrait::Clone)
                 | (CatalogModule::Ops, BuiltinTrait::Drop)
         );

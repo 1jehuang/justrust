@@ -958,7 +958,8 @@ impl<'a> Validator<'a> {
                     BuiltinTrait::Sized
                     | BuiltinTrait::Copy
                     | BuiltinTrait::Clone
-                    | BuiltinTrait::Drop,
+                    | BuiltinTrait::Drop
+                    | BuiltinTrait::Sync,
                 ) => (),
             },
             Visit::Block(block) => {

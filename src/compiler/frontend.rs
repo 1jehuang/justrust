@@ -9098,6 +9098,7 @@ pub enum BuiltinTrait {
     Copy,
     Clone,
     Drop,
+    Sync,
 }
 #[derive(Clone, Debug)]
 pub enum TraitPath {
@@ -22659,7 +22660,7 @@ impl PlanCtx {
             program
                 .traits
                 .len()
-                .checked_add(4)
+                .checked_add(5)
                 .ok_or("registry inventory overflow")?,
             budget,
         )?;
@@ -22705,6 +22706,10 @@ impl PlanCtx {
                         item: tr::CatalogItem::Drop,
                         ..
                     } => BuiltinTrait::Drop,
+                    tr::DeclOrigin::CoreCatalog {
+                        item: tr::CatalogItem::Sync,
+                        ..
+                    } => BuiltinTrait::Sync,
                     _ => return Err("catalog trait origin mismatch".into()),
                 };
                 registry
@@ -25545,7 +25550,7 @@ impl tr::SchemaCx for SchemaAdapter {
                 .error("trait safety changed the original implementation trait identity".into()));
         }
         let trait_unsafe = if self.catalog.declaration(trait_decl).is_some() {
-            false
+            self.catalog.trait_requires_unsafe_impl(trait_decl)?
         } else {
             self.registry
                 .source_trait(trait_decl)

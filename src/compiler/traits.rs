@@ -3706,6 +3706,33 @@ impl ValidatedTraitWorld {
                         let schema = self.schema.declaration_schema(owner)?;
                         self.predicates_prove_sized(*parameter, &schema.predicates)?
                     }
+                    DeclKind::TraitImpl => {
+                        let position = self
+                            .impl_header_index
+                            .get(&self.budget, owner)?
+                            .ok_or_else(|| {
+                                FactsError::invalid(
+                                    &self.budget,
+                                    "implementation Sized parameter has no retained header",
+                                )
+                            })?;
+                        let header = &self.headers.impls[position];
+                        if header.declaration != owner
+                            || info.own_env.binder() != parameter.owner
+                            || !info.own_env.contains(*parameter)
+                            || !header.schema_env.contains(*parameter)
+                            || !self.same_env(&info.env, &header.schema_env)?
+                        {
+                            return Err(FactsError::invalid(
+                                &self.budget,
+                                "implementation Sized parameter has foreign header or binder authority",
+                            ));
+                        }
+                        // Source header construction retains its exact implicit
+                        // Sized predicates before world validation starts. Read
+                        // those declarations, never infer a default from flags.
+                        self.predicates_prove_sized(*parameter, &header.predicates)?
+                    }
                     DeclKind::Trait => {
                         let header = self.trait_header(owner)?;
                         let mut sized = false;
@@ -5456,10 +5483,45 @@ impl ValidatedTraitWorld {
         self.validate_ref_in(&h.trait_ref, &h.schema_env, None)?;
         self.validate_predicates(&h.predicates, &h.schema_env, None)?;
         self.validate_impl_parameter_constraints(h)?;
+        if h.trait_ref.declaration == self.catalog.id(CatalogItem::Sync) {
+            let arguments = match &h.trait_ref.self_ty {
+                Ty::Struct(owner) => &owner.def().type_args,
+                Ty::Enum(owner) => &owner.def().type_args,
+                _ => {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "canonical Sync implementation requires local nominal Self",
+                    ));
+                }
+            };
+            if h.schema_env.total_arity() != arguments.len() {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "E0366: canonical Sync implementations cannot specialize nominal arguments",
+                ));
+            }
+            for (index, argument) in arguments.iter().enumerate() {
+                charged(&self.budget, self.budget.charge_work(index + 1))?;
+                if !matches!(argument, Ty::Param(parameter) if h.schema_env.contains(*parameter))
+                    || arguments[..index].contains(argument)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "E0366: canonical Sync implementations require distinct nominal parameters",
+                    ));
+                }
+            }
+        }
         let trait_header = self.trait_header(h.trait_ref.declaration)?;
-        let (implementation_unsafe, trait_unsafe) = self
+        let (implementation_unsafe, source_trait_unsafe) = self
             .schema
             .impl_trait_safety(h.declaration, h.trait_ref.declaration)?;
+        let trait_unsafe = if self.catalog.declaration(h.trait_ref.declaration).is_some() {
+            self.catalog
+                .trait_requires_unsafe_impl(h.trait_ref.declaration)?
+        } else {
+            source_trait_unsafe
+        };
         if trait_unsafe && !implementation_unsafe {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -9242,6 +9304,13 @@ impl ValidatedTraitWorld {
         for old in active.active.iter() {
             if self.same_key(old, &key)? {
                 active.cycles += 1;
+                if matches!(predicate, Predicate::Implements(goal) if goal.declaration == self.catalog.id(CatalogItem::Sync))
+                {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: recursive Sync proof requires a coinductive protocol",
+                    ));
+                }
                 return Err(FactsError::cycle(
                     &self.budget,
                     "ordinary trait obligation cycle is not self-justifying evidence",
@@ -9382,8 +9451,42 @@ impl ValidatedTraitWorld {
                 return self.evidence(predicate, facts, ProofOrigin::Assumption);
             }
         }
+        if let Predicate::Implements(goal) = predicate
+            && goal.declaration == self.catalog.id(CatalogItem::Sync)
+            && let Ty::AssociatedType(projection) = &goal.self_ty
+            && !self.goal_is_closed(&projection.trait_ref, facts.env())?
+            && self
+                .opaque_associated_binding(projection, facts.env())?
+                .is_none()
+        {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: open associated Sync proof requires an authentic exported bound",
+            ));
+        }
         if let Some(outcome) = self.prove_projected_subject(predicate, facts, active)? {
             return Ok(outcome);
+        }
+        if let Predicate::Implements(goal) = predicate
+            && goal.declaration == self.catalog.id(CatalogItem::Sync)
+        {
+            self.catalog.trait_requires_unsafe_impl(goal.declaration)?;
+            if let Ty::Dyn(object) = &goal.self_ty {
+                for application in self.object_applications(object, &goal.self_ty, facts.env())? {
+                    if self.eq_predicate(&Predicate::Implements(application), predicate)? {
+                        return self.evidence(predicate, facts, ProofOrigin::TraitObject);
+                    }
+                }
+            }
+            // Explicit unsafe implementations carry exactly their declared
+            // predicates. In particular their fields need not themselves Sync.
+            let explicit = self.prove_implementation_in(predicate, facts, active)?;
+            if matches!(explicit, ProofOutcome::Proved(_)) {
+                return Ok(explicit);
+            }
+            if self.sync_has_explicit_head(goal)? {
+                return Ok(ProofOutcome::NotProven);
+            }
         }
         if let Some(outcome) = self.prove_builtin(predicate, facts, active)? {
             return Ok(outcome);
@@ -9627,6 +9730,34 @@ impl ValidatedTraitWorld {
             Ok(ProofOutcome::NotProven)
         }
     }
+    /// A conditional explicit impl suppresses automatic derivation even when
+    /// its predicates are not proved. Use the same canonical head unifier as
+    /// selection, never a display name or an all-program scan.
+    fn sync_has_explicit_head(&self, goal: &TraitRef) -> Result<bool> {
+        let candidates = self
+            .trait_impl_index
+            .get(&goal.declaration)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        for &index in candidates {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            let implementation = &self.headers.impls[index];
+            let mut slots = Vec::new();
+            for _ in implementation.schema_env.ordered_params() {
+                push(&self.budget, &mut slots, None)?;
+            }
+            if self.match_head(
+                &implementation.trait_ref.self_ty,
+                &goal.self_ty,
+                &implementation.schema_env,
+                &mut slots,
+                0,
+            )? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
     fn prove_builtin(
         &self,
         predicate: &Predicate,
@@ -9654,6 +9785,8 @@ impl ValidatedTraitWorld {
             CatalogItem::Sized
         } else if goal.declaration == self.catalog.id(CatalogItem::Clone) {
             CatalogItem::Clone
+        } else if goal.declaration == self.catalog.id(CatalogItem::Sync) {
+            CatalogItem::Sync
         } else if goal.declaration == self.catalog.id(CatalogItem::Copy) {
             CatalogItem::Copy
         } else {
@@ -9661,6 +9794,12 @@ impl ValidatedTraitWorld {
         };
         let mut children: Vec<Ty> = Vec::new();
         let known = match &goal.self_ty {
+            Ty::Opaque(_) if item == CatalogItem::Sync => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: opaque Sync proof requires an authentic exported bound",
+                ));
+            }
             Ty::Opaque(_) => return Ok(Some(ProofOutcome::NotProven)),
             Ty::Closure(closure) => {
                 for ty in closure.captures() {
@@ -9669,6 +9808,9 @@ impl ValidatedTraitWorld {
                 true
             }
             Ty::Cell(_) => {
+                if item == CatalogItem::Sync {
+                    return Ok(Some(ProofOutcome::NotProven));
+                }
                 if item == CatalogItem::Copy {
                     return Ok(Some(ProofOutcome::NotProven));
                 }
@@ -9684,16 +9826,21 @@ impl ValidatedTraitWorld {
                 push(&self.budget, &mut children, wrapper.argument().clone())?;
                 true
             }
+            Ty::PhantomData(marker) if item == CatalogItem::Sync => {
+                push(&self.budget, &mut children, marker.argument().clone())?;
+                true
+            }
             Ty::PhantomData(_) | Ty::FnPointer(_) | Ty::FnItem(_) => true,
             Ty::Param(_) => return Ok(Some(ProofOutcome::NotProven)),
-            Ty::Struct(t) if item == CatalogItem::Sized => {
+            Ty::Struct(t) if matches!(item, CatalogItem::Sized | CatalogItem::Sync) => {
                 for f in nominal_fields(&t.def().fields, &self.budget)?.iter() {
                     push(&self.budget, &mut children, f.ty.clone())?;
                 }
                 true
             }
-            Ty::Enum(t) if item == CatalogItem::Sized => {
+            Ty::Enum(t) if matches!(item, CatalogItem::Sized | CatalogItem::Sync) => {
                 for v in t.def().variants.iter() {
+                    charged(&self.budget, self.budget.charge_work(1))?;
                     for f in nominal_fields(&v.fields, &self.budget)?.iter() {
                         push(&self.budget, &mut children, f.ty.clone())?;
                     }
@@ -9711,10 +9858,25 @@ impl ValidatedTraitWorld {
                 push(&self.budget, &mut children, element.as_ref().clone())?;
                 true
             }
+            Ty::Ref { referent, .. } if item == CatalogItem::Sync => {
+                push(&self.budget, &mut children, referent.as_ref().clone())?;
+                true
+            }
             Ty::Ref { kind, .. } => item == CatalogItem::Sized || *kind == ir::BorrowKind::Shared,
             // `[T]`, `str` and `dyn Trait` are neither Sized nor Copy/Clone.
+            Ty::Dyn(_) | Ty::AssociatedType(_) if item == CatalogItem::Sync => {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: Sync for dynamic or associated types requires an authentic exported bound",
+                ));
+            }
+            Ty::Str if item == CatalogItem::Sync => true,
+            Ty::Slice { element } if item == CatalogItem::Sync => {
+                push(&self.budget, &mut children, element.as_ref().clone())?;
+                true
+            }
             Ty::Slice { .. } | Ty::Str | Ty::Dyn(_) => false,
-            Ty::RawPtr { .. } => true,
+            Ty::RawPtr { .. } => item != CatalogItem::Sync,
             Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Bool | Ty::Unit | Ty::Never => true,
             Ty::AssociatedType(projection) => {
                 self.validate_universal_projection(projection, context.env())?;
@@ -12154,6 +12316,138 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn impl_owned_phantom_sized_uses_original_parameter_evidence_not_default_assumptions() {
+        let program = crate::compiler::frontend::parse(
+            "trait Strategy{}struct G<S:Strategy>{marker:core::marker::PhantomData<S>}unsafe impl<S:Strategy> Sync for G<S>{}fn main(){}",
+        ).unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let implementation = world
+            .impl_headers()
+            .iter()
+            .find(|header| header.trait_ref.declaration == world.catalog.id(CatalogItem::Sync))
+            .unwrap();
+        let parameter = implementation.schema_env.ordered_params().next().unwrap();
+        assert!(
+            world
+                .predicates_prove_sized(parameter, &implementation.predicates)
+                .unwrap()
+        );
+        world
+            .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+            .unwrap();
+        let invalid_index = ParamId {
+            index: 1,
+            ..parameter
+        };
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(invalid_index), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let foreign = ParamId {
+            owner: BinderId {
+                declaration: DeclId {
+                    snapshot: SnapshotId::standalone().unwrap(),
+                    index: parameter.owner.declaration.index,
+                },
+            },
+            ..parameter
+        };
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(foreign), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+
+        // The synthetic fixture has an authenticated generic environment but
+        // no declared Sized predicate for its implementation parameter.
+        // A default-looking environment alone must not grant permission.
+        let c = case();
+        let mut fixture = c.build().unwrap();
+        let parameter = fixture.impl_headers()[0]
+            .schema_env
+            .ordered_params()
+            .next()
+            .unwrap();
+        assert!(
+            !fixture
+                .predicates_prove_sized(parameter, &fixture.impl_headers()[0].predicates)
+                .unwrap()
+        );
+        assert_eq!(
+            fixture
+                .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Unsupported
+        );
+        let sized = fixture.catalog.id(CatalogItem::Sized);
+        Arc::make_mut(&mut Arc::get_mut(&mut fixture).unwrap().headers.impls)[0].predicates =
+            Arc::from([Predicate::Implements(TraitRef {
+                declaration: sized,
+                self_ty: c.caller_parameter.clone(),
+                args: Arc::from([]),
+            })]);
+        assert_eq!(
+            fixture
+                .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Unsupported
+        );
+        Arc::make_mut(&mut Arc::get_mut(&mut fixture).unwrap().headers.impls)[0].schema_env = c
+            .headers
+            .callables
+            .iter()
+            .find(|header| header.declaration == c.caller)
+            .unwrap()
+            .schema
+            .env
+            .clone();
+        assert_eq!(
+            fixture
+                .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+    }
+
+    #[test]
+    fn impl_owned_relaxed_parameter_does_not_gain_phantom_sized_permission() {
+        let program = crate::compiler::frontend::parse(
+            "trait Tr{}struct G<T:?Sized>{p:*const T}impl<T:?Sized> Tr for G<T>{}fn main(){}",
+        )
+        .unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let parameter = world.impl_headers()[0]
+            .schema_env
+            .ordered_params()
+            .next()
+            .unwrap();
+        assert!(
+            !world
+                .predicates_prove_sized(parameter, &world.impl_headers()[0].predicates)
+                .unwrap()
+        );
+        assert_eq!(
+            world
+                .validate_phantom_sized_argument(&Ty::Param(parameter), None, 0)
+                .unwrap_err()
+                .kind(),
+            FactsErrorKind::Unsupported
+        );
+    }
+
     #[test]
     fn manually_drop_carrier_effect_lens_keeps_payload_and_shared_barriers() {
         let c = case();
@@ -16153,6 +16447,223 @@ mod tests {
                 .unwrap_err()
                 .is_resource()
         );
+    }
+
+    #[test]
+    fn canonical_sync_structural_proof_preserves_real_payloads_and_negative_cases() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let cell = Ty::Cell(ir::CellTy::new(&world.catalog, Ty::Bool, &c.budget).unwrap());
+        let pointer = Ty::RawPtr {
+            kind: BorrowKind::Shared,
+            pointee: Arc::new(Ty::Bool),
+        };
+        let wrap =
+            |ty| Ty::ManuallyDrop(ir::ManuallyDropTy::new(&world.catalog, ty, &c.budget).unwrap());
+        let marker =
+            |ty| Ty::PhantomData(ir::PhantomDataTy::new(&world.catalog, ty, &c.budget).unwrap());
+        let prove = |ty| {
+            world
+                .prove_goal(
+                    &Predicate::Implements(TraitRef {
+                        declaration: world.catalog.id(CatalogItem::Sync),
+                        self_ty: ty,
+                        args: Arc::from([]),
+                    }),
+                    &facts,
+                )
+                .unwrap()
+        };
+        for ty in [
+            Ty::Bool,
+            Ty::Char,
+            Ty::Int(IntTy::I128),
+            Ty::Float(ir::FloatTy::F64),
+            Ty::Unit,
+            Ty::Never,
+            c.leaf.clone(),
+            Ty::Tuple(Arc::from([Ty::Bool, Ty::Char])),
+            Ty::Array {
+                element: Arc::new(Ty::Bool),
+                len: 2,
+            },
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(Ty::Bool),
+            },
+            Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Bool),
+            },
+            wrap(Ty::Bool),
+            marker(Ty::Bool),
+            Ty::FnPointer(ir::FnPointerTy::new(vec![Ty::Bool], Ty::Bool, &c.budget).unwrap()),
+        ] {
+            assert!(matches!(prove(ty), ProofOutcome::Proved(_)));
+        }
+        for ty in [
+            cell.clone(),
+            pointer.clone(),
+            Ty::Tuple(Arc::from([Ty::Bool, cell.clone()])),
+            Ty::Array {
+                element: Arc::new(cell.clone()),
+                len: 0,
+            },
+            Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: Arc::new(cell.clone()),
+            },
+            Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(cell.clone()),
+            },
+            wrap(cell.clone()),
+            marker(cell),
+            marker(pointer),
+            c.caller_parameter.clone(),
+        ] {
+            assert!(matches!(prove(ty), ProofOutcome::NotProven));
+        }
+        let remaining = c.budget.limits().work - c.budget.usage_snapshot().work;
+        c.budget.charge_work(remaining).unwrap();
+        assert_eq!(c.budget.usage_snapshot().work, c.budget.limits().work);
+        let exhausted = world
+            .prove_goal(
+                &Predicate::Implements(TraitRef {
+                    declaration: world.catalog.id(CatalogItem::Sync),
+                    self_ty: Ty::Bool,
+                    args: Arc::from([]),
+                }),
+                &facts,
+            )
+            .unwrap_err();
+        assert_eq!(exhausted.kind(), FactsErrorKind::Resource);
+        let failure = c.budget.first_resource_failure().unwrap();
+        assert_eq!(failure.kind, ir::ResourceBudgetKind::Work);
+        assert_eq!(failure.used, failure.limit);
+        assert!(c.budget.charge_work(1).is_err());
+        assert_eq!(c.budget.first_resource_failure(), Some(failure));
+    }
+
+    #[test]
+    fn canonical_sync_exact_assumptions_reject_foreign_owner_predicate_and_cycle() {
+        let c = case();
+        let original = c.build().unwrap();
+        let mut header = c
+            .headers
+            .callables
+            .iter()
+            .find(|h| h.declaration == c.caller)
+            .unwrap()
+            .clone();
+        header.schema.predicates = Arc::from([Predicate::Implements(TraitRef {
+            declaration: original.catalog.id(CatalogItem::Sync),
+            self_ty: c.caller_parameter.clone(),
+            args: Arc::from([]),
+        })]);
+        let world = test_support::world(c.modules.clone(), &[header], &c.budget).unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let goal = Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Sync),
+            self_ty: c.caller_parameter.clone(),
+            args: Arc::from([]),
+        });
+        assert!(matches!(
+            world.prove_goal(&goal, &facts).unwrap(),
+            ProofOutcome::Proved(_)
+        ));
+        let mut erased = (*facts).clone();
+        erased.predicates = world.empty.clone();
+        assert_eq!(
+            world.prove_goal(&goal, &erased).unwrap_err().kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let mut foreign = goal.clone();
+        let Predicate::Implements(application) = &mut foreign else {
+            unreachable!()
+        };
+        let Ty::Param(parameter) = &mut application.self_ty else {
+            unreachable!()
+        };
+        parameter.owner.declaration.snapshot = SnapshotId::standalone().unwrap();
+        assert_eq!(
+            world.prove_goal(&foreign, &facts).unwrap_err().kind(),
+            FactsErrorKind::InvalidMetadata
+        );
+        let mut changed_trait = goal.clone();
+        let Predicate::Implements(application) = &mut changed_trait else {
+            unreachable!()
+        };
+        application.declaration = world.catalog.id(CatalogItem::Copy);
+        assert!(matches!(
+            world.prove_goal(&changed_trait, &facts).unwrap(),
+            ProofOutcome::NotProven
+        ));
+        let mut cyclic = ProofScratch::default();
+        cyclic
+            .with_caller_arena(world.id, Some(&facts), |arena| {
+                arena.active.push(GoalKey {
+                    environment: facts.predicates.index,
+                    phase: facts.phase(),
+                    finalized: world.owner_normalization_finalized,
+                    goal: goal.clone(),
+                });
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            world.prove(&goal, &facts, &mut cyclic).unwrap_err().kind(),
+            FactsErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn canonical_sync_explicit_unsafe_impl_precedes_fields_and_suppresses_default() {
+        for (source, proven) in [
+            (
+                "struct S<T>{v:T} unsafe impl<T> Sync for S<T>{} fn probe(x:S<*const i32>){} fn main(){}",
+                true,
+            ),
+            (
+                "trait Mark{} struct S<T>{v:T} unsafe impl<T:Mark> Sync for S<T>{} fn probe(x:S<i32>){} fn main(){}",
+                false,
+            ),
+        ] {
+            let program = crate::compiler::frontend::parse(source).unwrap();
+            let budget = PlanBudget::default();
+            let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(0).unwrap();
+            let world = plan.trait_world().unwrap();
+            let facts = world.callable_facts(declaration).unwrap();
+            let schema = world.normalized_callable_schema(declaration).unwrap();
+            let goal = Predicate::Implements(TraitRef {
+                declaration: world.catalog.id(CatalogItem::Sync),
+                self_ty: schema.signature.params[0].clone(),
+                args: Arc::from([]),
+            });
+            assert_eq!(
+                matches!(
+                    world.prove_goal(&goal, &facts).unwrap(),
+                    ProofOutcome::Proved(_)
+                ),
+                proven
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_sync_unused_specialized_unsafe_impl_is_invalid() {
+        for source in [
+            "struct S<T>{v:T} unsafe impl Sync for S<i32>{} fn main(){}",
+            "struct S<T,U>{v:T,w:U} unsafe impl<T> Sync for S<T,T>{} fn main(){}",
+        ] {
+            let program = crate::compiler::frontend::parse(source).unwrap();
+            let budget = PlanBudget::default();
+            let error =
+                crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap_err();
+            assert!(error.contains("E0366"), "{error}");
+        }
     }
 
     #[test]

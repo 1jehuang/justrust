@@ -8,7 +8,7 @@ use super::*;
 #[derive(Debug)]
 pub struct ProgramSymbols {
     owner: SessionId,
-    keys: [NameKey; 26],
+    keys: [NameKey; 27],
     budget: ExpansionBudget,
     _lease: ByteLease,
 }
@@ -50,6 +50,7 @@ impl ProgramSymbols {
             names.catalog_member_key(CellSet)?,
             names.catalog_key(Thread, Namespace::Type)?,
             names.catalog_key(ThreadPanicking, Namespace::Value)?,
+            names.catalog_key(Sync, Namespace::Type)?,
         ];
         budget.check()?;
         Ok(Arc::new(Self {
@@ -100,6 +101,7 @@ impl ProgramSymbols {
             BuiltinAtom::CellSet => 23,
             BuiltinAtom::Thread => 24,
             BuiltinAtom::ThreadPanicking => 25,
+            BuiltinAtom::Sync => 26,
         };
         Ok(self.keys[index])
     }
