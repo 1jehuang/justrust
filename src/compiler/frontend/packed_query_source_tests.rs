@@ -225,6 +225,13 @@ fn packed_query_authority_raw_copy_spoof_and_generic_env_reject() {
 /// replay override. Its inherited default must deny even a genuine capability.
 struct DenyPacked<'a>(&'a SchemaAdapter);
 impl tr::SchemaCx for DenyPacked<'_> {
+    fn impl_trait_safety(
+        &self,
+        implementation: ir::DeclId,
+        trait_decl: ir::DeclId,
+    ) -> std::result::Result<(bool, bool), tr::FactsError> {
+        tr::SchemaCx::impl_trait_safety(self.0, implementation, trait_decl)
+    }
     fn budget(&self) -> &ir::PlanBudget {
         &self.0.budget
     }

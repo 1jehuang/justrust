@@ -2632,6 +2632,13 @@ mod tests {
         schemas: Vec<(DeclId, GenericSchema)>,
     }
     impl SchemaCx for RhsAdapter {
+        fn impl_trait_safety(
+            &self,
+            implementation: DeclId,
+            trait_decl: DeclId,
+        ) -> Result<(bool, bool)> {
+            self.inner.impl_trait_safety(implementation, trait_decl)
+        }
         fn budget(&self) -> &PlanBudget {
             self.inner.budget()
         }

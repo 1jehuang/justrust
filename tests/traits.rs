@@ -8,6 +8,127 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+#[path = "support/stock_rustc.rs"]
+mod unsafe_stock;
+
+const UNSAFE_TRAIT_VALID: &[(&str, &str)] = &[
+    (
+        "marker",
+        r#"struct S{x:i32}unsafe trait Marker{}unsafe impl Marker for S{}fn get<T:Marker>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "method",
+        r#"struct S{x:i32}unsafe trait Read{fn value(&self)->i32;}unsafe impl Read for S{fn value(&self)->i32{self.x}}fn main(){let x=S{x:7};println!("{}",x.value());}"#,
+    ),
+    (
+        "unused",
+        r#"struct S{x:i32}unsafe trait Marker{}unsafe impl Marker for S{}fn main(){println!("7");}"#,
+    ),
+    (
+        "module_alias",
+        r#"mod origin{pub unsafe trait Marker{}}use origin::Marker as Alias;struct S{x:i32}unsafe impl Alias for S{}fn get<T:Alias>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "generic_impl",
+        r#"unsafe trait Marker{}struct S<T>{x:T}unsafe impl<T> Marker for S<T>{}fn get<T:Marker>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "unsafe_supertrait",
+        r#"unsafe trait Parent{}trait Child:Parent{}struct S{x:i32}unsafe impl Parent for S{}impl Child for S{}fn get<T:Child>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+    (
+        "local_sync_identity",
+        r#"unsafe trait Sync{}struct S{x:i32}unsafe impl Sync for S{}fn get<T:Sync>(x:T)->T{x}fn main(){let x=get(S{x:7});println!("{}",x.x);}"#,
+    ),
+];
+// Valid stock builtin auto-trait source. This is not native marker support.
+const UNSAFE_TRAIT_BUILTIN_FRONTIER: &[(&str, &str)] = &[(
+    "builtin_sync_frontier",
+    r#"struct S{x:i32}unsafe impl Sync for S{}fn main(){println!("7");}"#,
+)];
+const UNSAFE_TRAIT_INVALID: &[(&str, &str)] = &[
+    (
+        "unused_missing_unsafe",
+        r#"unsafe trait Marker{}struct S{x:i32}impl Marker for S{}fn main(){}"#,
+    ),
+    (
+        "unused_unnecessary_unsafe",
+        r#"trait Marker{}struct S{x:i32}unsafe impl Marker for S{}fn main(){}"#,
+    ),
+    (
+        "unsafe_inherent",
+        r#"struct S{x:i32}unsafe impl S{}fn main(){}"#,
+    ),
+    (
+        "generic_missing_unsafe",
+        r#"unsafe trait Marker{}struct S<T>{x:T}impl<T> Marker for S<T>{}fn main(){}"#,
+    ),
+    (
+        "generic_unnecessary_unsafe",
+        r#"trait Marker{}struct S<T>{x:T}unsafe impl<T> Marker for S<T>{}fn main(){}"#,
+    ),
+    (
+        "builtin_copy_not_unsafe",
+        r#"struct S{x:i32}unsafe impl core::marker::Copy for S{}fn main(){}"#,
+    ),
+    (
+        "pub_unsafe_impl",
+        r#"unsafe trait Marker{}struct S{x:i32}pub unsafe impl Marker for S{}fn main(){}"#,
+    ),
+];
+
+#[test]
+fn unsafe_trait_declarations_exact_stock_baseline() {
+    for (valid, cases) in [
+        (true, UNSAFE_TRAIT_VALID),
+        (false, UNSAFE_TRAIT_INVALID),
+        (true, UNSAFE_TRAIT_BUILTIN_FRONTIER),
+    ] {
+        for (label, source) in cases {
+            let scratch = Scratch::new();
+            let input = scratch.source(source);
+            for check in [true, false] {
+                let output = scratch.path(if check {
+                    "stock.rmeta"
+                } else {
+                    "stock-program"
+                });
+                let mut command = Command::new(unsafe_stock::stock_rustc());
+                command
+                    .arg(&input)
+                    .args(["--edition=2024", "--crate-name", "unsafe_trait_oracle"]);
+                if check {
+                    command.arg("--emit=metadata");
+                }
+                let result = capture(command.arg("-o").arg(&output), &scratch, 20);
+                assert_eq!(
+                    result.status.success(),
+                    valid,
+                    "{label} stock check={check}: {result:?}"
+                );
+                if valid && !check {
+                    let result = capture(&mut Command::new(&output), &scratch, 5);
+                    assert!(result.status.success(), "{label}: {result:?}");
+                    assert_eq!(result.stdout, b"7\n", "{label}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn unsafe_trait_declarations_preserve_native_safety_and_membership() {
+    for (_, source) in UNSAFE_TRAIT_VALID {
+        runs(source, "7\n");
+    }
+    for (label, source) in UNSAFE_TRAIT_INVALID {
+        rejects(label, source);
+    }
+    for (label, source) in UNSAFE_TRAIT_BUILTIN_FRONTIER {
+        rejects(label, source);
+    }
+}
+
 static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 struct Scratch(PathBuf);
 impl Scratch {

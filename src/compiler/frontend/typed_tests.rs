@@ -1,5 +1,114 @@
 use super::*;
 
+#[test]
+fn unsafe_trait_impl_safety_replays_original_pair_and_source_flags() {
+    let source =
+        parse("unsafe trait A{}trait B{}struct S;unsafe impl A for S{}impl B for S{}fn main(){}")
+            .unwrap();
+    assert!(source.traits[0].unsafety);
+    assert!(!source.traits[1].unsafety);
+    assert!(source.impls[0].unsafety);
+    assert!(!source.impls[1].unsafety);
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&source, &budget).unwrap();
+    let mut adapter = SchemaAdapter {
+        program: plan.program.clone(),
+        catalog: plan.catalog.clone(),
+        registry: plan.registry.clone(),
+        nominal_schemas: plan.nominal_schemas.clone(),
+        nominals: plan.nominals.clone(),
+        contexts: plan.contexts.clone(),
+        source_schemas: plan.source_schemas.clone(),
+        budget: budget.clone(),
+    };
+    struct OmittedSafety<'a>(&'a SchemaAdapter);
+    impl tr::SchemaCx for OmittedSafety<'_> {
+        fn budget(&self) -> &ir::PlanBudget {
+            &self.0.budget
+        }
+        fn registry_snapshot(&self) -> ir::SnapshotId {
+            tr::SchemaCx::registry_snapshot(self.0)
+        }
+        fn core_catalog(&self) -> &Arc<tr::CoreCatalog> {
+            &self.0.catalog
+        }
+        fn declaration_info(&self, id: ir::DeclId) -> Result<tr::SchemaDecl, tr::FactsError> {
+            tr::SchemaCx::declaration_info(self.0, id)
+        }
+        fn declaration_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, tr::FactsError> {
+            tr::SchemaCx::declaration_schema(self.0, id)
+        }
+        fn source_region_env(
+            &self,
+            id: ir::DeclId,
+        ) -> Result<Arc<ir::SourceRegionEnv>, tr::FactsError> {
+            tr::SchemaCx::source_region_env(self.0, id)
+        }
+        fn instantiate_schema(
+            &self,
+            schema: &tr::GenericSchema,
+            args: &[ir::Ty],
+            caller: &ir::GenericEnv,
+            budget: &ir::PlanBudget,
+        ) -> Result<tr::InstantiatedSchema, tr::FactsError> {
+            tr::SchemaCx::instantiate_schema(self.0, schema, args, caller, budget)
+        }
+        fn validate_nominal(
+            &self,
+            ty: &ir::Ty,
+            env: &ir::GenericEnv,
+            budget: &ir::PlanBudget,
+        ) -> Result<(), tr::FactsError> {
+            tr::SchemaCx::validate_nominal(self.0, ty, env, budget)
+        }
+    }
+    let first = plan.registry.impl_ids[0];
+    let second = plan.registry.impl_ids[1];
+    let a = plan.registry.trait_ids[0];
+    let b = plan.registry.trait_ids[1];
+    assert_eq!(
+        tr::SchemaCx::impl_trait_safety(&adapter, first, a).unwrap(),
+        (true, true)
+    );
+    let omitted = tr::SchemaCx::impl_trait_safety(&OmittedSafety(&adapter), first, a).unwrap_err();
+    assert!(format!("{omitted:?}").contains("unsupported"));
+    assert_eq!(
+        tr::SchemaCx::impl_trait_safety(&adapter, second, b).unwrap(),
+        (false, false)
+    );
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, first, b).is_err());
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, second, a).is_err());
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, a, a).is_err());
+    let mut erased = plan.program.as_ref().clone();
+    erased.traits[0].unsafety = false;
+    erased.impls[0].unsafety = false;
+    adapter.program = Arc::new(erased);
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, first, a).is_err());
+    adapter.program = Arc::new(
+        parse("trait A{}trait B{}struct S;impl A for S{}impl B for S{}fn main(){}").unwrap(),
+    );
+    assert!(tr::SchemaCx::impl_trait_safety(&adapter, first, a).is_err());
+    for (text, diagnostic) in [
+        (
+            "unsafe trait A{}struct S;impl A for S{}fn main(){}",
+            "E0200",
+        ),
+        (
+            "trait A{}struct S;unsafe impl A for S{}fn main(){}",
+            "E0199",
+        ),
+    ] {
+        let source = parse(text).unwrap();
+        let error = PlanCtx::from_program(&source, &ir::PlanBudget::default()).unwrap_err();
+        assert!(error.contains(diagnostic), "{error}");
+    }
+    assert!(
+        parse("struct S;unsafe impl S{}fn main(){}")
+            .unwrap_err()
+            .contains("E0197")
+    );
+}
+
 // Text selects an authored fixture witness only. Lookup authority is the
 // checked path retained by that same parsed Program, never a rebuilt name.
 fn fixture_function_key(program: &Program, expected: &str) -> PathKey {

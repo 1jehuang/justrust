@@ -8983,6 +8983,7 @@ pub enum ReceiverKind {
 }
 #[derive(Clone, Debug)]
 pub struct ImplDecl {
+    pub unsafety: bool,
     pub regions: RegionDecls,
     pub(super) original_source: Option<super::token_session::OriginalSpan>,
     primitive_source: Option<Arc<primitive_constants::SourceImpl>>,
@@ -9022,6 +9023,7 @@ pub struct TypeBound {
 }
 #[derive(Clone, Debug)]
 pub struct TraitDecl {
+    pub unsafety: bool,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
     pub bounds: Vec<TypeBound>,
@@ -14498,6 +14500,15 @@ impl<'input, 'names> Parser<'input, 'names> {
         if self.is("extern") && self.cursor.peek(1).is_some_and(|t| t.matches("crate")) {
             return self.extern_crate_item(module, module_path, parsed, visibility);
         }
+        let unsafe_source_start = primitive_constants::original_token(self);
+        let declaration_unsafety = self.is("unsafe")
+            && self
+                .cursor
+                .peek(1)
+                .is_some_and(|token| token.matches("trait") || token.matches("impl"));
+        if declaration_unsafety {
+            self.expect("unsafe")?;
+        }
         if (!self.token().string
             && matches!(
                 self.token().text,
@@ -14708,6 +14719,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect("}")?;
             let declaration = parsed.program.traits.len();
             parsed.program.traits.push(TraitDecl {
+                unsafety: declaration_unsafety,
                 module,
                 type_params,
                 bounds,
@@ -14941,7 +14953,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             });
             (name, ItemKind::Struct(declaration))
         } else if self.is("impl") {
-            let original_start = primitive_constants::original_token(self);
+            let original_start = if declaration_unsafety {
+                unsafe_source_start
+            } else {
+                primitive_constants::original_token(self)
+            };
             self.expect("impl")?;
             if explicit_visibility {
                 return Err(self.error("pub impl is invalid"));
@@ -14962,6 +14978,9 @@ impl<'input, 'names> Parser<'input, 'names> {
             } else {
                 (None, first_ty)
             };
+            if declaration_unsafety && trait_path.is_none() {
+                return Err(self.error("E0197: inherent impls cannot be unsafe"));
+            }
             if self.eat("where") {
                 loop {
                     if self.token().is_lifetime() {
@@ -15037,6 +15056,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             let original_source = primitive_constants::original_impl_range(self, original_start);
             self.expect("}")?;
             let mut block = ImplDecl {
+                unsafety: declaration_unsafety,
                 regions: self.impl_regions.clone(),
                 original_source,
                 primitive_source: None,
@@ -25116,6 +25136,51 @@ impl tr::SchemaCx for SchemaAdapter {
             receiver,
             region_contract_mode: tr::RegionContractMode::Positioned,
         })
+    }
+    fn impl_trait_safety(
+        &self,
+        implementation: ir::DeclId,
+        trait_decl: ir::DeclId,
+    ) -> Result<(bool, bool), tr::FactsError> {
+        self.budget.charge_work(2).map_err(|e| self.error(e))?;
+        if !Arc::ptr_eq(&self.program, &self.registry.program) {
+            return Err(self.error("trait safety changed the original source program".into()));
+        }
+        let info = self
+            .registry
+            .declaration(implementation)
+            .map_err(|e| self.error(e))?;
+        if info.kind != ir::DeclKind::TraitImpl {
+            return Err(self.error("trait safety requires an original trait implementation".into()));
+        }
+        let block = self
+            .registry
+            .program
+            .impls
+            .get(info.source_index)
+            .ok_or_else(|| {
+                self.error("missing original implementation safety declaration".into())
+            })?;
+        let path = block.trait_path.as_ref().ok_or_else(|| {
+            self.error("trait safety cannot use an inherent implementation".into())
+        })?;
+        let original_trait = self
+            .registry
+            .resolve_trait_path(path)
+            .map_err(|e| self.error(e))?;
+        if original_trait != trait_decl {
+            return Err(self
+                .error("trait safety changed the original implementation trait identity".into()));
+        }
+        let trait_unsafe = if self.catalog.declaration(trait_decl).is_some() {
+            false
+        } else {
+            self.registry
+                .source_trait(trait_decl)
+                .map_err(|e| self.error(e))?
+                .unsafety
+        };
+        Ok((block.unsafety, trait_unsafe))
     }
     fn declaration_schema(&self, id: ir::DeclId) -> Result<tr::GenericSchema, tr::FactsError> {
         self.registry.declaration(id).map_err(|e| self.error(e))?;

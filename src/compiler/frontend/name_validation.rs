@@ -1710,6 +1710,7 @@ mod tests {
         );
         let parent = trait_application(&mut input, "crate::Parent", vec![Type::Param(parameter)]);
         input.traits.push(TraitDecl {
+            unsafety: false,
             module,
             type_params: vec![parameter],
             bounds: vec![TypeBound {

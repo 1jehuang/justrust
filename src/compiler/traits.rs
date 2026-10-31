@@ -688,6 +688,20 @@ pub trait SchemaCx {
     fn core_catalog(&self) -> &Arc<CoreCatalog>;
     fn declaration_info(&self, id: DeclId) -> Result<SchemaDecl>;
     fn declaration_schema(&self, id: DeclId) -> Result<GenericSchema>;
+    /// Original declaration safety, never a caller-supplied header flag. A
+    /// source adapter authenticates the exact implementation/declared-trait
+    /// pair. An omitted service cannot erase an unsafe source obligation.
+    fn impl_trait_safety(
+        &self,
+        implementation: DeclId,
+        trait_decl: DeclId,
+    ) -> Result<(bool, bool)> {
+        let _ = (implementation, trait_decl);
+        Err(FactsError::unsupported(
+            self.budget(),
+            "unsupported: original trait implementation safety authority unavailable",
+        ))
+    }
     /// Default deny: a catalog or alternate schema adapter cannot authenticate
     /// original loader/parser function occurrences using declaration IDs alone.
     fn replay_packed_reserve_authority(
@@ -5265,6 +5279,21 @@ impl ValidatedTraitWorld {
         self.validate_predicates(&h.predicates, &h.schema_env, None)?;
         self.validate_impl_parameter_constraints(h)?;
         let trait_header = self.trait_header(h.trait_ref.declaration)?;
+        let (implementation_unsafe, trait_unsafe) = self
+            .schema
+            .impl_trait_safety(h.declaration, h.trait_ref.declaration)?;
+        if trait_unsafe && !implementation_unsafe {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "E0200: the trait requires an unsafe impl declaration",
+            ));
+        }
+        if implementation_unsafe && !trait_unsafe {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "E0199: implementing this trait is not unsafe",
+            ));
+        }
         for id in trait_header.items.iter() {
             let item = self.item_header(*id)?;
             if item.default.is_none() && !h.items.iter().any(|(mapped, _)| mapped == id) {
@@ -10852,6 +10881,22 @@ pub(crate) mod test_support {
         Ok(Arc::new(schema))
     }
     impl SchemaCx for FixtureSchema {
+        fn impl_trait_safety(
+            &self,
+            implementation: DeclId,
+            trait_decl: DeclId,
+        ) -> Result<(bool, bool)> {
+            let implementation = self.declaration_info(implementation)?;
+            let declaration = self.declaration_info(trait_decl)?;
+            if implementation.kind != DeclKind::TraitImpl || declaration.kind != DeclKind::Trait {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "fixture safety changed declaration kind",
+                ));
+            }
+            // This fixed synthetic fixture language contains safe traits only.
+            Ok((false, false))
+        }
         fn budget(&self) -> &PlanBudget {
             &self.budget
         }
@@ -13944,6 +13989,13 @@ mod tests {
             declaration: DeclId,
         }
         impl SchemaCx for ErasedScope {
+            fn impl_trait_safety(
+                &self,
+                implementation: DeclId,
+                trait_decl: DeclId,
+            ) -> Result<(bool, bool)> {
+                self.raw.impl_trait_safety(implementation, trait_decl)
+            }
             fn source_region_env(&self, id: DeclId) -> Result<Arc<ir::SourceRegionEnv>> {
                 self.raw.source_region_env(id)
             }
@@ -16017,6 +16069,13 @@ mod tests {
             foreign: bool,
         }
         impl SchemaCx for Regions {
+            fn impl_trait_safety(
+                &self,
+                implementation: DeclId,
+                trait_decl: DeclId,
+            ) -> Result<(bool, bool)> {
+                self.raw.impl_trait_safety(implementation, trait_decl)
+            }
             fn budget(&self) -> &PlanBudget {
                 self.raw.budget()
             }
