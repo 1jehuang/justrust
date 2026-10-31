@@ -10074,21 +10074,23 @@ fn run_holding(
                                 start.elapsed()
                             );
                             let mut started = Ok(());
+                            let mut native_reloaded = false;
                             for program in &mut programs {
                                 let parts = checkouts.parts(&program.args.project)?;
                                 let linked = target
                                     .as_ref()
                                     .filter(|it| it.is(&program.args))
                                     .filter(|it| !it.symbol_files.is_empty());
-                                let same = parts.members == program.args.members
-                                    && parts.debug == program.args.debug;
-                                if same && (linked.is_none() || new.is_empty()) {
-                                    program.known.touch(&db, Some(&new));
-                                    program.unbuilt.stale |= !new.is_empty();
-                                    continue;
+                                if program.is_native_whole() {
+                                    // A cfg-only change can change tests without a root edit.
+                                    harnessed.remove(&program.args.out);
+                                    native_reloaded = true;
                                 }
-                                let again = program.start_over(&db, parts, linked, &new, &files);
+                                let again = program.reloaded(&db, parts, linked, &new, &files);
                                 started = started.and(again);
+                            }
+                            if native_reloaded {
+                                outlines = outline::Outlines::default();
                             }
                             listed.touch(&db, Some(&new));
                             lock(&as_built).clear();
@@ -11302,6 +11304,79 @@ impl Program {
         self.unbuilt.edited.dedup();
     }
 
+    /// An executable linked wholly from native source, not a patch of rustc's artifacts.
+    fn is_native_whole(&self) -> bool {
+        self.args.exe.is_some() && self.args.symbol_files.is_empty() && self.table.is_empty()
+    }
+
+    /// Keep the existing fast path for rustc-backed programs. Native programs must also
+    /// refresh linker/lint parts when membership and debug information compare equal.
+    fn reloaded(
+        &mut self,
+        db: &RootDatabase,
+        parts: Parts,
+        linked: Option<&Target>,
+        new: &[ide_db::base_db::Crate],
+        files: &[WatchedFile],
+    ) -> anyhow::Result<()> {
+        let same = parts.members == self.args.members && parts.debug == self.args.debug;
+        if !self.is_native_whole() && same && (linked.is_none() || new.is_empty()) {
+            self.known.touch(db, Some(new));
+            self.unbuilt.stale |= !new.is_empty();
+            return Ok(());
+        }
+        self.start_over(db, parts, linked, new, files)
+    }
+
+    /// Retire generation-dependent native state after builds have been settled. A
+    /// manifest can change cfg, scripts, native libraries and unreachable diagnostics
+    /// without a Rust text edit. Executable-path equality is not plan equivalence.
+    fn invalidate_native_reload(&mut self, db: &RootDatabase, files: &[WatchedFile]) {
+        if !self.is_native_whole() {
+            return;
+        }
+        let executables: FxHashSet<PathBuf> = self
+            .own_lines
+            .keys()
+            .chain(self.args.exe.iter())
+            .chain(self.args.splice.iter())
+            .cloned()
+            .collect();
+        for exe in executables {
+            splicer::forget(&exe);
+            let _ = splicer::claim(&exe, true);
+            lock(&LINKED).remove(&exe);
+        }
+        self.own_lines.clear();
+        // The initial native build stores a line here before own_lines exists.
+        self.args.link_cmd = None;
+        self.args.widened.clear();
+        let patching = self.known.patching;
+        self.known = Rejections::default();
+        self.known.patching = patching;
+        (self.wrote, self.whole) = (None, None);
+        (self.tests, self.tests_now) = (None, None);
+        self.interrupted = 0;
+        self.moved = true;
+        self.unbuilt.stale = true;
+        self.unbuilt.named_anew = true;
+        self.unbuilt.unlinked = false;
+        let sources: FxHashSet<vfs::FileId> = files
+            .iter()
+            .filter_map(|it| match it.file {
+                Watched::Source(id) if db.has_file_text(id) && self.args.owns(db, id, &it.path) => {
+                    Some(id)
+                }
+                _ => None,
+            })
+            .collect();
+        // CLEAN's text skeleton and file/crate IDs do not cover semantic reload inputs.
+        lock(&CLEAN).retain(|(file, _, _), _| !sources.contains(file));
+        self.unbuilt.edited.extend(sources);
+        self.unbuilt.edited.sort_unstable();
+        self.unbuilt.edited.dedup();
+    }
+
     /// Has the program be one of its checkout as it was loaded again: of the crates and the
     /// debug information of `parts`, and never built. It is linked as `linked` says, when
     /// that names what rustc built of the checkout since, and else with what it was linked
@@ -11343,6 +11418,7 @@ impl Program {
                 self.known.distrust(db, new);
             }
         }
+        self.invalidate_native_reload(db, files);
         Ok(())
     }
 
@@ -11853,6 +11929,203 @@ fn report_stats(stats: &hir_ty_codegen::BuildStats) {
 mod tests {
     use super::*;
 
+    // These tests own process-global CLEAN entries with fixture-local FileId/crate IDs.
+    // Their save/restore guards do not by themselves serialize overlapping sequences.
+    static DIAGNOSTIC_CACHE_FIXTURE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn native_reload_fixture_program(db: &RootDatabase, file: vfs::FileId) -> Program {
+        let mut args = Args::parse(
+            [
+                "/resident-v56",
+                "--crate",
+                "main",
+                "--out",
+                "/resident-v56/main.o",
+                "--exe",
+                "/resident-v56/main",
+            ]
+            .into_iter()
+            .map(str::to_owned),
+        )
+        .unwrap();
+        args.checkout = PathBuf::from("/resident-v56");
+        args.members =
+            Arc::new(ide_db::base_db::relevant_crates(db, file).iter().copied().collect());
+        args.link_cmd = Some("old native link command".to_owned());
+        args.splice = args.exe.clone();
+        args.widened = vec!["old-dependency".to_owned()];
+        let own_lines = FxHashMap::from_iter([
+            (args.exe.clone().unwrap(), "old native link command".to_owned()),
+            (PathBuf::from("/resident-v56/overlay/main"), "old overlay link command".to_owned()),
+        ]);
+        let mut known = Rejections::default();
+        known.patching = true;
+        Program {
+            wrote: Some(args.out.clone()),
+            whole: Some(args.out.clone()),
+            args,
+            table: Arc::new(SymbolTable::default()),
+            known,
+            unbuilt: Unbuilt::default(),
+            interrupted: 3,
+            moved: false,
+            tests: Some(Tests(vec![("old_test".to_owned(), String::new())])),
+            tests_now: Some((Vec::new(), Tests(vec![("old_test".to_owned(), String::new())]))),
+            own_lines,
+        }
+    }
+
+    fn native_reload_fixture_parts(program: &Program) -> Parts {
+        Parts {
+            root: program.args.checkout.clone(),
+            base: program.args.base.clone(),
+            members: program.args.members.clone(),
+            debug: program.args.debug,
+            lints_capped: true,
+            link_args: vec!["-Wl,--as-needed".to_owned()],
+        }
+    }
+
+    /// Real database cfg revisions with identical Rust bytes. The oracle is a separately
+    /// loaded fixture, not the selective path's cached state. Root still owns actual
+    /// Cargo manifest transitions, native compilation, PID and lifecycle acceptance.
+    #[test]
+    fn native_reload_cfg_only_rechecks_unreachable_errors_and_recovers() {
+        use ide_db::base_db::salsa::Setter as _;
+        use test_fixture::WithFixture;
+
+        let _fixture = lock(&DIAGNOSTIC_CACHE_FIXTURE);
+        const SOURCE: &str = r#"
+//- /resident-v56/main.rs crate:main
+#[cfg(not(feature = "bad"))] type Chosen = u8;
+#[cfg(feature = "bad")] type Chosen = bool;
+fn main() {}
+fn unchanged_body() { let _: Chosen = 1u8; }
+#[cfg(feature = "bad")] fn unused_error() { let _: u8 = true; }
+"#;
+        let (mut db, file) = RootDatabase::with_single_file(SOURCE);
+        let file = file.file_id(&db);
+        // Restore unrelated test state even on panic. Native invalidation itself evicts
+        // every diagnostic-rules/crate-selection key for the affected source file.
+        struct SavedClean(vfs::FileId, Vec<(CleanKey, Clean)>);
+        impl Drop for SavedClean {
+            fn drop(&mut self) {
+                let mut clean = lock(&CLEAN);
+                clean.retain(|(file, _, _), _| *file != self.0);
+                clean.extend(self.1.drain(..));
+            }
+        }
+        let previous = {
+            let mut clean = lock(&CLEAN);
+            let keys: Vec<_> = clean.keys().filter(|(id, _, _)| *id == file).copied().collect();
+            keys.into_iter().filter_map(|key| clean.remove(&key).map(|it| (key, it))).collect()
+        };
+        let _restore = SavedClean(file, previous);
+        let config = ide_diagnostics::DiagnosticsConfig::test_sample();
+        let original_text = db.file_text(file).text(&db).clone();
+        let krate = ide_db::base_db::relevant_crates(&db, file)[0];
+        let base_cfg = krate.cfg_options(&db).clone();
+        let mut program = native_reload_fixture_program(&db, file);
+        let files = [WatchedFile {
+            file: Watched::Source(file),
+            path: PathBuf::from("/resident-v56/main.rs"),
+            mtime: SystemTime::UNIX_EPOCH,
+        }];
+        let initial = hir::attach_db(&db, || errors_of(&db, &config, file, None, (false, false)));
+        assert!(initial.is_empty());
+        assert!(lock(&CLEAN).keys().any(|(id, _, _)| *id == file));
+
+        for bad in [true, false, true, false] {
+            let before = CratesAsLoaded::of(&db);
+            let mut cfg = base_cfg.clone();
+            if bad {
+                cfg.insert_key_value(
+                    intern::Symbol::intern("feature"),
+                    intern::Symbol::intern("bad"),
+                );
+            }
+            krate.set_cfg_options(&mut db).to(cfg);
+            let changed = before.changed(&db);
+            assert!(changed.contains(&krate));
+            let parts = native_reload_fixture_parts(&program);
+            // These are exactly the original fast-path inputs: no rustc-linked target,
+            // unchanged membership/debug, but refreshed native/lint parts and cfg.
+            assert_eq!(parts.members, program.args.members);
+            assert_eq!(parts.debug, program.args.debug);
+            program.reloaded(&db, parts, None, &changed, &files).unwrap();
+            assert!(program.args.lints_capped);
+            assert_eq!(program.args.link_args, ["-Wl,--as-needed"]);
+            assert!(program.args.link_cmd.is_none());
+            assert!(program.args.widened.is_empty());
+            assert!(program.own_lines.is_empty());
+            assert!(program.wrote.is_none() && program.whole.is_none());
+            assert!(program.tests.is_none() && program.tests_now.is_none());
+            assert_eq!(program.interrupted, 0);
+            assert!(program.moved && program.unbuilt.stale && program.unbuilt.named_anew);
+            assert!(program.known.patching);
+            assert_eq!(program.unbuilt.edited, [file]);
+            assert!(!lock(&CLEAN).keys().any(|(id, _, _)| *id == file));
+            assert_eq!(db.file_text(file).text(&db), &original_text);
+            let actual = hir::attach_db(&db, || {
+                errors_of(&db, &config, program.unbuilt.edited[0], None, (false, false))
+            });
+            lock(&CLEAN).retain(|(id, _, _), _| *id != file);
+            let fixture = if bad {
+                // Fixture metadata interns cfg values verbatim, unlike Rust's cfg
+                // syntax. Quotes here would select a different feature named `"bad"`.
+                SOURCE.replace("crate:main", "crate:main cfg:feature=bad")
+            } else {
+                SOURCE.to_owned()
+            };
+            let (fresh_db, fresh_file) = RootDatabase::with_single_file(&fixture);
+            let fresh_file = fresh_file.file_id(&fresh_db);
+            let fresh_crates = ide_db::base_db::relevant_crates(&fresh_db, fresh_file);
+            assert_eq!(fresh_crates.len(), 1, "fresh oracle must load the same crate");
+            assert_eq!(
+                fresh_crates[0].cfg_options(&fresh_db),
+                krate.cfg_options(&db),
+                "fresh oracle must load the same cfg, not a quoted feature value"
+            );
+            assert_eq!(
+                fresh_db.file_text(fresh_file).text(&fresh_db),
+                &original_text,
+                "fresh oracle must parse exactly the unchanged Rust bytes"
+            );
+            let fresh = hir::attach_db(&fresh_db, || {
+                errors_of(&fresh_db, &config, fresh_file, None, (false, false))
+            });
+            assert_eq!(actual, fresh);
+            assert_eq!(!actual.is_empty(), bad);
+            if bad {
+                assert!(actual.iter().filter(|(_, code, _)| *code == "E0308").count() >= 2);
+            }
+        }
+    }
+
+    /// The original nonwhole same-members fast path must keep its state. This unit
+    /// contract does not stand in for a real rustc-linked/native acceptance workflow.
+    #[test]
+    fn native_reload_leaves_original_nonwhole_fast_path_unchanged() {
+        use test_fixture::WithFixture;
+        let (db, file) = RootDatabase::with_single_file("fn main() {}");
+        let file = file.file_id(&db);
+        let mut program = native_reload_fixture_program(&db, file);
+        program.args.exe = None;
+        let parts = native_reload_fixture_parts(&program);
+        let previous_lines = program.own_lines.clone();
+        let previous_link = program.args.link_cmd.clone();
+        let previous_whole = program.whole.clone();
+        program.reloaded(&db, parts, None, &[], &[]).unwrap();
+        assert_eq!(program.own_lines, previous_lines);
+        assert_eq!(program.args.link_cmd, previous_link);
+        assert_eq!(program.whole, previous_whole);
+        assert!(program.tests.is_some() && program.tests_now.is_some());
+        assert!(!program.args.lints_capped);
+        assert!(program.args.link_args.is_empty());
+        assert!(!program.unbuilt.stale);
+        assert!(program.unbuilt.edited.is_empty());
+    }
+
     #[test]
     fn a_fetched_crate_is_named_the_same_wherever_cargo_keeps_it() {
         let fetched = "registry/src/index.crates.io-1949cf8c6b5b557f/memchr-2.7.4/src/lib.rs";
@@ -12069,6 +12342,7 @@ extern "C" fn exported() {}
         use ide_db::base_db::salsa::Durability;
         use test_fixture::WithFixture;
 
+        let _fixture = lock(&DIAGNOSTIC_CACHE_FIXTURE);
         struct SavedClean {
             key: CleanKey,
             previous: Option<Clean>,

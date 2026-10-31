@@ -54,8 +54,6 @@ impl Watched {
 
 /// The build scripts of one workspace and what they said.
 struct Scripts {
-    workspace: ProjectWorkspace,
-    config: CargoConfig,
     /// The scripts of the workspace's own packages, with what cargo runs each again for a
     /// change of.
     scripts: Vec<Script>,
@@ -259,47 +257,32 @@ impl Scripts {
         if scripts.is_empty() && variables.is_empty() {
             return None;
         }
-        Some(Scripts { workspace: workspace.clone(), config: config.clone(), scripts, variables })
+        Some(Scripts { scripts, variables })
     }
 
-    /// Runs the scripts again where cargo would for a process with `env`, or with `None`
-    /// for one with the variables they last ran with: whether what they say is no longer
-    /// what was loaded.
+    /// Whether the loaded script inputs need a real workspace reload. An environment
+    /// transition is not consumed until that reload succeeds and `Inputs::watch` installs
+    /// its new witness. In particular, WorkspaceBuildScripts equality does not cover
+    /// native linker directives or the bytes of generated archives.
     fn changed(&mut self, env: Option<&Env>) -> anyhow::Result<bool> {
-        let changed: Vec<usize> =
-            (0..self.scripts.len()).filter(|&at| self.scripts[at].changed()).collect();
         let variables =
             env.is_some_and(|env| self.variables.iter().any(|(name, was)| env.get(name) != *was));
-        if changed.is_empty() && !variables {
+        if variables {
+            return Ok(true);
+        }
+        let changed: Vec<usize> =
+            (0..self.scripts.len()).filter(|&at| self.scripts[at].changed()).collect();
+        if changed.is_empty() {
             return Ok(false);
         }
-        // Cargo would run only the scripts whose files changed: each is run again here as
-        // cargo ran it, which costs the script and not a cargo that resolves the workspace.
-        if !variables && changed.iter().all(|&at| self.scripts[at].reruns_the_same()) {
+        // Keep the existing proof over raw stdout AND generated-file digests, not a
+        // projection containing only cfg/env/OUT_DIR/proc-macro paths. If it cannot prove
+        // equality, the real reload reruns scripts and preserves their precise errors.
+        if changed.iter().all(|&at| self.scripts[at].reruns_the_same()) {
             changed.into_iter().for_each(|at| self.scripts[at].stamp_again());
             return Ok(false);
         }
-        let ProjectWorkspaceKind::Cargo { build_scripts: loaded, .. } = &self.workspace.kind else {
-            return Ok(false);
-        };
-        let mut config = self.config.clone();
-        for (name, was) in &self.variables {
-            let value = env.map_or_else(|| was.clone(), |env| env.get(name));
-            config.extra_env.insert(name.clone(), value);
-        }
-        let said = self.workspace.run_build_scripts(&config, &|_| {})?;
-        if let Some(error) = said.error() {
-            anyhow::bail!("a build script failed: {}", error.trim().replace('\n', " "));
-        }
-        if said != *loaded {
-            return Ok(true);
-        }
-        self.scripts.iter_mut().for_each(Script::stamp_again);
-        for (name, was) in &mut self.variables {
-            *was = config.extra_env.get(name).cloned().flatten();
-        }
-        self.config = config;
-        Ok(false)
+        Ok(true)
     }
 }
 
@@ -394,5 +377,148 @@ fn stamp_into(path: &Path, package: bool, hasher: &mut FxHasher) {
         }
         entry.hash(hasher);
         stamp_into(&entry, package, hasher);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn script_snapshot(value: Option<&str>) -> Scripts {
+        Scripts {
+            scripts: Vec::new(),
+            variables: vec![("JR_NATIVE_CHOICE".to_owned(), value.map(str::to_owned))],
+        }
+    }
+
+    fn request_env(value: Option<&str>) -> Env {
+        let mut env = Env::default();
+        if let Some(value) = value {
+            env.set("JR_NATIVE_CHOICE", value);
+        }
+        env
+    }
+
+    /// Real Inputs/Scripts state, not a mocked stale answer. Replacement snapshots
+    /// stand for successful watch installation only: the root's native Cargo A/B/A
+    /// probe remains the independent acceptance test for actual reload and relinking.
+    #[test]
+    fn native_script_env_a_b_a_requires_reload_without_consuming_witness() {
+        let root = PathBuf::from("/resident-script-env-v58");
+        let mut inputs = Inputs {
+            checkouts: vec![Checkout {
+                root: root.clone(),
+                files: Vec::new(),
+                flags: Vec::new(),
+                scripts: Some(script_snapshot(Some("a"))),
+            }],
+        };
+        let a = request_env(Some("a"));
+        let b = request_env(Some("b"));
+        assert!(!inputs.stale(&root, Some(&a)).unwrap());
+        let before = inputs.checkouts[0].scripts.as_ref().unwrap().variables.clone();
+        assert!(inputs.stale(&root, Some(&b)).unwrap());
+        assert!(inputs.stale(&root, Some(&b)).unwrap(), "failed/uncommitted load must retry");
+        assert_eq!(inputs.checkouts[0].scripts.as_ref().unwrap().variables, before);
+        assert_eq!(
+            inputs.variables(&root, &b).get("JR_NATIVE_CHOICE"),
+            Some(&Some("b".to_owned()))
+        );
+
+        // No real reload happened above, so returning to the still-loaded A needs none.
+        assert!(!inputs.stale(&root, Some(&a)).unwrap());
+        inputs.checkouts[0].scripts = Some(script_snapshot(Some("b")));
+        assert!(!inputs.stale(&root, Some(&b)).unwrap());
+        let before = inputs.checkouts[0].scripts.as_ref().unwrap().variables.clone();
+        assert!(inputs.stale(&root, Some(&a)).unwrap());
+        assert!(inputs.stale(&root, Some(&a)).unwrap(), "B-to-A must remain stale until committed");
+        assert_eq!(inputs.checkouts[0].scripts.as_ref().unwrap().variables, before);
+        assert_eq!(
+            inputs.variables(&root, &a).get("JR_NATIVE_CHOICE"),
+            Some(&Some("a".to_owned()))
+        );
+        inputs.checkouts[0].scripts = Some(script_snapshot(Some("a")));
+        assert!(!inputs.stale(&root, Some(&a)).unwrap());
+
+        let unset = request_env(None);
+        assert!(inputs.stale(&root, Some(&unset)).unwrap());
+        assert!(inputs.stale(&root, Some(&unset)).unwrap());
+        assert_eq!(
+            inputs.checkouts[0].scripts.as_ref().unwrap().variables[0].1.as_deref(),
+            Some("a")
+        );
+        inputs.checkouts[0].scripts = Some(script_snapshot(None));
+        assert!(!inputs.stale(&root, Some(&unset)).unwrap());
+        assert!(inputs.stale(&root, Some(&a)).unwrap());
+        assert_eq!(inputs.checkouts[0].scripts.as_ref().unwrap().variables[0].1, None);
+    }
+
+    /// Compile a real native archive twice at the same path while Rust source and raw
+    /// link directives stay identical. Missing raw-output proof must not consume the
+    /// changed input witness, regardless of cfg/env/OUT_DIR projection equality.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_script_file_only_archive_change_requires_reload_until_new_snapshot() {
+        use std::process::Command;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let native = root.join("native.c");
+        let rust = root.join("main.rs");
+        let out_dir = root.join("build/native/out");
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let stdout = root.join("build/native/output");
+        let directives = format!(
+            "cargo:rerun-if-changed=native.c\ncargo:rustc-link-search=native={}\ncargo:rustc-link-lib=static=choice\n",
+            out_dir.display()
+        );
+        std::fs::write(&stdout, &directives).unwrap();
+        std::fs::write(&rust, "fn main() {}\n").unwrap();
+        std::fs::write(&native, "unsigned int native_value(void) { return 11; }\n").unwrap();
+        let object = out_dir.join("native.o");
+        let archive = out_dir.join("libchoice.a");
+        let compile = || {
+            let cc =
+                Command::new("cc").arg("-c").arg(&native).arg("-o").arg(&object).output().unwrap();
+            assert!(
+                cc.status.success(),
+                "native cc failed: {}",
+                String::from_utf8_lossy(&cc.stderr)
+            );
+            let ar = Command::new("ar").arg("crs").arg(&archive).arg(&object).output().unwrap();
+            assert!(
+                ar.status.success(),
+                "native ar failed: {}",
+                String::from_utf8_lossy(&ar.stderr)
+            );
+        };
+        compile();
+        let before_archive = std::fs::read(&archive).unwrap();
+        let before_rust = std::fs::read(&rust).unwrap();
+        let script = Script {
+            out_dir: out_dir.clone(),
+            builds: Vec::new(),
+            package: "native".to_owned(),
+            root: root.to_owned(),
+            workspace: root.to_owned(),
+            files: vec![Watched::new(native.clone(), false)],
+        };
+        let mut scripts = Scripts { scripts: vec![script], variables: Vec::new() };
+        assert!(!scripts.changed(None).unwrap());
+        let witness = scripts.scripts[0].files[0].stamp;
+        // A different length makes the observed change independent of mtime precision.
+        std::fs::write(&native, "unsigned int native_value(void) { return 22; } /* changed */\n")
+            .unwrap();
+        compile();
+        assert_ne!(std::fs::read(&archive).unwrap(), before_archive);
+        assert_eq!(std::fs::read(&rust).unwrap(), before_rust);
+        assert_eq!(std::fs::read_to_string(&stdout).unwrap(), directives);
+        assert!(scripts.scripts[0].changed());
+        assert!(!scripts.scripts[0].reruns_the_same(), "no recorded run can prove equivalence");
+        assert!(scripts.changed(None).unwrap());
+        assert!(scripts.changed(None).unwrap(), "uncommitted file changes must retry");
+        assert_eq!(scripts.scripts[0].files[0].stamp, witness);
+        scripts.scripts[0].files = vec![Watched::new(native, false)];
+        assert!(!scripts.changed(None).unwrap(), "new successful-load snapshot is current");
     }
 }
