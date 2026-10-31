@@ -1,0 +1,16 @@
+#!/bin/sh
+# rustc wrapper: use Cranelift for local (non-CARGO_HOME), unoptimized crates,
+# then chain to Desktop's parallel-frontend wrapper.
+rustc="$1"; shift
+next=${CLIF_SCRATCH:-$HOME/.jcode/scratch/cranelift}/ws/jcode-desktop/scripts/rustc-parallel-frontend
+[ -n "${CARGO_CRATE_NAME:-}" ] && [ -n "${CARGO_MANIFEST_DIR:-}" ] || exec "$next" "$rustc" "$@"
+case "$CARGO_MANIFEST_DIR/" in
+  "${CARGO_HOME:-$HOME/.cargo}"/*) exec "$next" "$rustc" "$@" ;;
+esac
+for a in "$@"; do
+  case "$a" in
+    opt-level=0) ;;
+    opt-level=*) exec "$next" "$rustc" "$@" ;;
+  esac
+done
+exec "$next" "$rustc" "$@" -Zcodegen-backend=cranelift

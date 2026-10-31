@@ -1,0 +1,3 @@
+REJECTED / NO PRODUCTION CHANGE
+Source uncompiled. No tests, probes, installs, locks, commits, or timing.
+Root owns correctness and timing gates. No speed claim.

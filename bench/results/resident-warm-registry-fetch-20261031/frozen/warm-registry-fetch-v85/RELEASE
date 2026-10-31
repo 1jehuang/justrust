@@ -1,0 +1,6 @@
+v85 READ-ONLY SOURCE CANDIDATE, DEFAULT OFF
+Source uncompiled. Five test functions written, not executed.
+Static source preservation checks passed. Immutable v84 SHA manifest verified.
+Only assigned-file rustfmt and static Python/source inspection performed.
+No native build/test/probe/install, package lock acquisition, commit, or timing.
+Coordinator owns all correctness, activation, and >10% timing gates. No speed claim.

@@ -1,0 +1,62 @@
+#!/usr/bin/env python3
+"""Private v85 factor adapter derived from immutable v81, never a live harness edit.
+Only factor identity, flag, activation marker and descriptive labels change.
+All input recipes, original oracles, sampling, PID, nonce, raw replay and cleanup
+logic remain the frozen implementation. --mock-tests runs mocked Python only.
+"""
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import runpy
+import sys
+import types
+import unittest
+
+BENCH=Path('<PRIVATE_HOME>/justrust/bench')
+ROOT=Path('<EXPERIMENT>')
+FROZEN=ROOT/'parallel-manifest-harness-v81/candidates/bench/resident_suite.py'
+TEST=ROOT/'parallel-manifest-harness-v81/candidates/bench/test_resident_parallel_manifest.py'
+REPLACEMENTS=(
+ ('RA_JIT_PARALLEL_MANIFEST_PARSE','RA_JIT_WARM_REGISTRY_FETCH'),
+ ('native_resident_parallel_manifest_retouch/v1','native_resident_warm_registry_retouch/v1'),
+ ('parallel-manifest-retouch','warm-registry-retouch'),
+ ('ra-jit: parallel-manifest-parse-v81 batch','ra-jit: warm-registry-fetch-v85 batch'),
+ ('ra-jit: parallel-manifest-parse-','ra-jit: warm-registry-fetch-'),
+ ('actual_batch_stderr_marker','actual_conversion_stderr_marker'),
+ # Preserve the original wrong-version negative after renaming v81 to v85.
+ ("line.replace('v81', 'v80')","line.replace('v85', 'v80')"),
+ ('noop/clientplanning parser factor','noop/clientplanning warm registry fetch factor'),
+ ('Parser flag explicitly','Warm registry fetch flag explicitly'),
+)
+
+def transformed(path):
+ raw=path.read_bytes()
+ text=raw.decode()
+ for old,new in REPLACEMENTS:
+  text=text.replace(old,new)
+ return raw,text
+
+sys.path.insert(0,str(BENCH))
+raw,source=transformed(FROZEN)
+module=types.ModuleType('resident_suite')
+module.__file__=str(FROZEN)
+sys.modules['resident_suite']=module
+exec(compile(source,str(FROZEN),'exec'),module.__dict__)
+# Frozen pinned_hashes derives only git authority from this path.
+module.__file__=str(BENCH/'resident_suite.py')
+
+if '--mock-tests' in sys.argv:
+ test_raw,test_source=transformed(TEST)
+ tests=types.ModuleType('warm_registry_factor_tests')
+ tests.__file__=str(TEST)
+ exec(compile(test_source,str(TEST),'exec'),tests.__dict__)
+ suite=unittest.defaultTestLoader.loadTestsFromModule(tests)
+ result=unittest.TextTestRunner(verbosity=2).run(suite)
+ print(json.dumps({'frozen_sha256':hashlib.sha256(raw).hexdigest(),
+                   'executed_factor_sha256':hashlib.sha256(source.encode()).hexdigest(),
+                   'frozen_test_sha256':hashlib.sha256(test_raw).hexdigest(),
+                   'tests':result.testsRun,'passed':result.wasSuccessful(),
+                   'native_jobs_executed':0},sort_keys=True))
+ raise SystemExit(0 if result.wasSuccessful() else 1)
+runpy.run_path(str(BENCH/'suite.py'),run_name='__main__')

@@ -1,0 +1,9 @@
+--- initial/test_offline.py
++++ final/test_offline.py
+@@ -106,4 +106,4 @@
+-    def test_coherent_raw_nonce_inputs(self):
++    def test_coherent_raw_nonce_reseal(self):
+         row=self.data['strict']['on']['rows'][1];old=row['nonce'];row['nonce']='0'*32
+         raw_stdout(row,row['stdout'].replace(old,row['nonce']))
+-        self.reject('independently derived strict input recipe')
++        self.reject('trusted historical observation commitment')

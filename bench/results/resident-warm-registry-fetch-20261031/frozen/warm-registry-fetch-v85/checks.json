@@ -1,0 +1,15 @@
+{
+  "original_off_scheduler_body_bytewise": true,
+  "public_fetch_one_bytewise": true,
+  "full_original_reconstructed_bytewise": true,
+  "independent_frozen_oracle_bodies_tokenwise": true,
+  "probe_readonly_source_check": true,
+  "exact_flag_and_once_marker_source_check": true,
+  "immutable_v84_sha_manifest_verified": true,
+  "test_functions_written": 5,
+  "rust_compiled": false,
+  "rust_tests_executed": false,
+  "filesystem_fixtures_executed": false,
+  "native_activation_verified": false,
+  "timing_executed": false
+}

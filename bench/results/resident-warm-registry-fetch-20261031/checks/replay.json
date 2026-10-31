@@ -1,0 +1,30 @@
+{
+  "correctness": {
+    "profile": 8,
+    "strict": 28
+  },
+  "decision": "rejected-below-10-percent-floor",
+  "native": [
+    41,
+    22,
+    0,
+    53,
+    373
+  ],
+  "noise": "unknown",
+  "source_restored": true,
+  "timing": {
+    "calls": 54,
+    "delta_percent": -1.900824939836343,
+    "first_touch_seconds": {
+      "segment-0": 0.057644409011118114,
+      "segment-1": 0.05781228901469149,
+      "segment-2": 0.06439229499665089,
+      "segment-3": 0.05099606901057996
+    },
+    "measured": 20,
+    "off_median_seconds": 0.05607778349076398,
+    "on_median_seconds": 0.05501184299646411,
+    "runtime_nonces": 24
+  }
+}

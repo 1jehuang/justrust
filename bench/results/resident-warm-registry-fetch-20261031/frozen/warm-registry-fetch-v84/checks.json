@@ -1,0 +1,12 @@
+{
+  "source_bytewise_unchanged": true,
+  "original_public_fetch_one_unchanged": true,
+  "original_off_body_unchanged": true,
+  "production_change": false,
+  "static_checks_only": true,
+  "compiled": false,
+  "rust_tests_run": false,
+  "filesystem_differential_tests_run": false,
+  "timing_run": false,
+  "decision": "safe-no-change rejection: destructive predicate retry is not proven equivalent"
+}

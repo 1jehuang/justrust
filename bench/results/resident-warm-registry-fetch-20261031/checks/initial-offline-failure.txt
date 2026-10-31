@@ -1,0 +1,44 @@
+registry.json 41 41
+manifest.json 22 22
+metadata.json 0 0
+codegen.json 53 53
+full.json 373 373
+test_audit_denials_external_read_write_native_network_dlopen (__main__.EvidenceTests.test_audit_denials_external_read_write_native_network_dlopen) ... ok
+test_coherent_raw_nonce_inputs (__main__.EvidenceTests.test_coherent_raw_nonce_inputs) ... FAIL
+test_coherent_raw_parsed_wrong_name (__main__.EvidenceTests.test_coherent_raw_parsed_wrong_name) ... ok
+test_coherent_raw_pid_same_segment_reseal (__main__.EvidenceTests.test_coherent_raw_pid_same_segment_reseal) ... ok
+test_first_touch_cannot_be_omitted (__main__.EvidenceTests.test_first_touch_cannot_be_omitted) ... ok
+test_full_candidate_source_resealed (__main__.EvidenceTests.test_full_candidate_source_resealed) ... ok
+test_marker_cannot_be_replaced_by_eligibility (__main__.EvidenceTests.test_marker_cannot_be_replaced_by_eligibility) ... ok
+test_named_native_result_and_its_duplicate_resealed (__main__.EvidenceTests.test_named_native_result_and_its_duplicate_resealed) ... ok
+test_original_tuple_oracle_not_json_weakened (__main__.EvidenceTests.test_original_tuple_oracle_not_json_weakened) ... ok
+test_promotion_rejected_even_resealed (__main__.EvidenceTests.test_promotion_rejected_even_resealed) ... ok
+test_raw_timing_both_arm_summaries_resealed (__main__.EvidenceTests.test_raw_timing_both_arm_summaries_resealed) ... ok
+test_real_all_native_strict_profile_timing (__main__.EvidenceTests.test_real_all_native_strict_profile_timing) ... ok
+test_relocated_empty_home_path_audited_replay (__main__.EvidenceTests.test_relocated_empty_home_path_audited_replay) ... ok
+
+======================================================================
+FAIL: test_coherent_raw_nonce_inputs (__main__.EvidenceTests.test_coherent_raw_nonce_inputs)
+----------------------------------------------------------------------
+ValueError: trusted historical observation commitment
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/jeremy/justrust/bench/results/resident-warm-registry-fetch-20261031/test_offline.py", line 109, in test_coherent_raw_nonce_inputs
+    self.reject('independently derived strict input recipe')
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/jeremy/justrust/bench/results/resident-warm-registry-fetch-20261031/test_offline.py", line 87, in reject
+    with self.assertRaisesRegex(ValueError,pattern):validator.validate_package(self.root,True)
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^
+AssertionError: "independently derived strict input recipe" does not match "trusted historical observation commitment"
+
+----------------------------------------------------------------------
+Ran 13 tests in 2.879s
+
+FAILED (failures=1)
+
+--- Command finished with exit code: 1 ---
+
+
+Exit code: 1

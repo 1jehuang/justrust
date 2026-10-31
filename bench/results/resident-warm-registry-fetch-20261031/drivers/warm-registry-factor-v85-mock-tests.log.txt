@@ -1,0 +1,24 @@
+test_actual_batch_raw_stderr_not_summary_boolean (warm_registry_factor_tests.ParallelManifestTests.test_actual_batch_raw_stderr_not_summary_boolean) ... ok
+test_bad_rows_and_touches (warm_registry_factor_tests.ParallelManifestTests.test_bad_rows_and_touches) ... ok
+test_compare (warm_registry_factor_tests.ParallelManifestTests.test_compare) ... ok
+test_exact_three_flags_and_only_parser_changes (warm_registry_factor_tests.ParallelManifestTests.test_exact_three_flags_and_only_parser_changes) ... ok
+test_failure_cleanup (warm_registry_factor_tests.ParallelManifestTests.test_failure_cleanup) ... ok
+test_frozen_policy_and_old_flag_semantics (warm_registry_factor_tests.ParallelManifestTests.test_frozen_policy_and_old_flag_semantics) ... ok
+test_full_abba (warm_registry_factor_tests.ParallelManifestTests.test_full_abba) ... ok
+test_identity_and_restoration (warm_registry_factor_tests.ParallelManifestTests.test_identity_and_restoration) ... ok
+test_marker_contract_versions_off_and_no_dynamic_fields (warm_registry_factor_tests.ParallelManifestTests.test_marker_contract_versions_off_and_no_dynamic_fields) ... ok
+test_missing_actual_batch_fails_runner_and_stops_private_states (warm_registry_factor_tests.ParallelManifestTests.test_missing_actual_batch_fails_runner_and_stops_private_states) ... ok
+test_original_semantic_gates (warm_registry_factor_tests.ParallelManifestTests.test_original_semantic_gates) ... ok
+test_parser_dispatch_and_cross_mode_compare (warm_registry_factor_tests.ParallelManifestTests.test_parser_dispatch_and_cross_mode_compare) ... ok
+test_proc_reader (warm_registry_factor_tests.ParallelManifestTests.test_proc_reader) ... ok
+test_raw_nonce (warm_registry_factor_tests.ParallelManifestTests.test_raw_nonce) ... ok
+test_runtime_fixture (warm_registry_factor_tests.ParallelManifestTests.test_runtime_fixture) ... ok
+test_same_pid_ticks_exe_and_socket_both_candidate_arms (warm_registry_factor_tests.ParallelManifestTests.test_same_pid_ticks_exe_and_socket_both_candidate_arms) ... ok
+test_socket_budget (warm_registry_factor_tests.ParallelManifestTests.test_socket_budget) ... ok
+test_wrong_flags_schema_run_rules_and_first_touch_omission (warm_registry_factor_tests.ParallelManifestTests.test_wrong_flags_schema_run_rules_and_first_touch_omission) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 12.958s
+
+OK
+{"executed_factor_sha256": "47ff1190875963e2cf6b6db324ea5f963c3a979fe3db9618e562418b924918ae", "frozen_sha256": "548d9dc3fd6c9d7075f576b920c833e36715bcba22f9656bfbd2a5270e5cec66", "frozen_test_sha256": "0b5826f576525d72a6b69268787f7e64a20df163205e12c0344e2e0f448f2b31", "native_jobs_executed": 0, "passed": true, "tests": 18}
