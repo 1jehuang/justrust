@@ -81,7 +81,63 @@ uncontrolled, with no significance, faster verdict, or speedup claim. Use the
 comprehensive synthetic gate and other relevant correctness checks separately
 before considering a default promotion.
 
-## Mock regression tests
+## Combined same-byte manifest and lock retouch
+
+The explicit `--mode manifest-retouch` mode measures a different workload from
+the default unique-edit mode above. It runs the **same candidate executable** in
+OFF/ON/ON/OFF order, with five measured calls per segment and a fresh private
+state for each segment. It injects the exact
+`RA_JIT_MANIFEST_CONTENT_GENERATION=0` or `=1` setting itself. Exporting that
+variable around the default mode is not an equivalent experiment: the inherited
+native environment is deliberately filtered.
+
+```sh
+python3 bench/suite.py resident --mode manifest-retouch \
+  --reference-engine /absolute/source-built-reference \
+  --engine /absolute/candidate-jr-engine \
+  --toolchain /absolute/nightly-2026-10-27-x86_64-unknown-linux-gnu \
+  --source /absolute/source63 --output /short/mr74
+
+python3 bench/suite.py compare /short/mr74/off.json /short/mr74/on.json
+```
+
+This mode requires a fresh absolute output path of **at most 30 bytes**, rather
+than the legacy mode's 70-byte limit, because its isolated segment homes add
+native socket path components. Source and output must be disjoint. Keep the
+complete output private until path and environment fields have been reviewed.
+
+Before measurements, the reference and every candidate segment must pass the
+original version, preparation, type-error/recovery and assertion-error/recovery
+gates. A fixed, recorded overlay adds a runtime environment read and a nonce
+print to the existing reachable `shares_overlapping_time` test. The Rust bytes
+then remain unchanged throughout that segment's warmup and measured calls.
+Each call receives a fresh nonce and must execute the exact original four-test
+contract plus that nonce. The pristine 63-file pin is required before and after
+the complete experiment, and the overlay has its own exact hash contract.
+
+Each measured call rewrites both original root `Cargo.toml` and `Cargo.lock`
+bytes before timing. Replay checks unchanged SHA-256 and size, increased mtime,
+raw runtime output, selected executable identities and private state isolation.
+Native status output is joined to kernel PID start ticks, executable hash and
+worker socket arguments. ON must retain that worker identity through retouches,
+while OFF must replace it. The opt-in entry marker alone proves neither reuse
+nor successful content hashing. All five private states are stopped without
+deleting their stores, including on failed measurements where possible.
+
+Results use the distinct `native_resident_manifest_retouch/v1` schema.
+`off.json` and `on.json` contain ten measurements per arm from the same complete
+ABBA evidence. Comparison rejects mixed schemas, different runs and reversed
+arms. It replays raw observations rather than trusting cached verdicts or
+medians. Output is descriptive with **unknown noise**. Preserve and inspect all
+samples, including first-retouch costs, rather than reporting only the median.
+This combined workload does not independently attribute manifest versus lock
+behavior, establish general agent latency, or authorize default promotion.
+
+The new mode's Python-only controls are in
+`bench/test_resident_manifest_retouch.py`. Mock tests do not substitute for the
+actual native workflow above.
+
+## Existing mode regression tests
 
 ```sh
 PYTHONPATH=bench python3 -m unittest \

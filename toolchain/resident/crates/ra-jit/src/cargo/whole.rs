@@ -582,7 +582,7 @@ fn checkout(
     let lock = root.join("Cargo.lock");
     // A worker that loaded other manifests loads them again; one with the same is asked to
     // build again what was edited since.
-    let generation = manifests.clone().chain([lock]).filter_map(|it| written_at(&it)).max();
+    let generation = checkout_generation(root, manifests.clone(), lock);
     let sources = members.iter().flat_map(|it| sources_in(&super::state::package_dir(it)));
     let key = match (asked.subcommand, unit_tests) {
         (Subcommand::Test, false) => "whole-test",
@@ -591,7 +591,7 @@ fn checkout(
     };
     Checkout {
         key: format!("{}-{key}", asked.key(cwd)),
-        generation: generation.unwrap_or(0),
+        generation,
         kept: false,
         built_at: 0,
         config,
@@ -603,10 +603,245 @@ fn checkout(
     }
 }
 
+/// Keep the original timestamp path exactly when disabled. Content identity only replaces
+/// the generation discriminator, never the worker configuration or program input reload.
+fn checkout_generation(
+    root: &Path,
+    manifests: impl Iterator<Item = PathBuf>,
+    lock: PathBuf,
+) -> u128 {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let enabled = *ENABLED.get_or_init(|| {
+        std::env::var_os("RA_JIT_MANIFEST_CONTENT_GENERATION").is_some_and(|it| it == "1")
+    });
+    if !enabled {
+        return manifests.chain([lock]).filter_map(|it| written_at(&it)).max().unwrap_or(0);
+    }
+    static ENTERED: std::sync::Once = std::sync::Once::new();
+    ENTERED.call_once(|| {
+        use std::io::Write as _;
+        // Entry, not proof of successful hashing, retained workers, or reuse.
+        _ = writeln!(std::io::stderr().lock(), "ra-jit: manifest-content-generation-v1 entered");
+    });
+    let manifests: Vec<_> = manifests.collect();
+    manifest_content_generation(root, &manifests, &lock).unwrap_or_else(|_| {
+        // Unknown never receives a content tag. Preserve the original fallback, including
+        // its timestamp limitations, rather than treating failed reads as missing bytes.
+        manifests.into_iter().chain([lock]).filter_map(|it| written_at(&it)).max().unwrap_or(0)
+    })
+}
+
+/// Hash only the original member manifests and workspace lock. Read bytes every time:
+/// size/mtime caches miss same-size, same-timestamp writes. Paths use the host's native
+/// lossless encoding, framed independently of file contents and explicit missing state.
+fn manifest_content_generation(
+    root: &Path,
+    manifests: &[PathBuf],
+    lock: &Path,
+) -> std::io::Result<u128> {
+    use sha2::{Digest, Sha256};
+    fn frame(hash: &mut Sha256, bytes: &[u8]) {
+        hash.update((bytes.len() as u128).to_le_bytes());
+        hash.update(bytes);
+    }
+    let root = root.canonicalize()?;
+    let mut hash = Sha256::new();
+    frame(&mut hash, b"ra-jit/whole/manifest-content-generation/v1");
+    frame(&mut hash, std::env::consts::OS.as_bytes());
+    frame(&mut hash, std::env::consts::ARCH.as_bytes());
+    frame(&mut hash, root.as_os_str().as_encoded_bytes());
+    // Retain the original path labels as well as canonical targets: aliasing paths must
+    // not erase a change to the watched path set. Duplicate identical labels add no input.
+    let mut files: Vec<_> = manifests.iter().map(|it| (it.as_path(), false)).collect();
+    files.push((lock, true));
+    files.sort_unstable_by(|(a, a_lock), (b, b_lock)| {
+        (a.as_os_str().as_encoded_bytes(), a_lock).cmp(&(b.as_os_str().as_encoded_bytes(), b_lock))
+    });
+    files.dedup_by(|(a, a_lock), (b, b_lock)| {
+        a.as_os_str().as_encoded_bytes() == b.as_os_str().as_encoded_bytes() && a_lock == b_lock
+    });
+    frame(&mut hash, &(files.len() as u128).to_le_bytes());
+    for (file, is_lock) in files {
+        frame(&mut hash, file.as_os_str().as_encoded_bytes());
+        frame(&mut hash, &[u8::from(is_lock)]);
+        match std::fs::symlink_metadata(file) {
+            Err(why) if is_lock && why.kind() == std::io::ErrorKind::NotFound => {
+                // The canonical root exists, so only an absent root Cargo.lock qualifies.
+                // A dangling symlink is not absence and fails canonicalize below.
+                if file != root.join("Cargo.lock") {
+                    return Err(std::io::Error::other("lock is not at canonical checkout root"));
+                }
+                frame(&mut hash, b"missing-lock");
+            }
+            Err(why) => return Err(why),
+            Ok(_) => {
+                let canonical = file.canonicalize()?;
+                if !std::fs::metadata(&canonical)?.is_file() {
+                    return Err(std::io::Error::other("manifest input is not a regular file"));
+                }
+                let bytes = std::fs::read(file)?;
+                // Reject observed races, without pretending this is an atomic filesystem
+                // snapshot. Concurrent edit consistency is still the original contract.
+                if canonical != file.canonicalize()? || bytes != std::fs::read(file)? {
+                    return Err(std::io::Error::other("manifest input changed while reading"));
+                }
+                frame(&mut hash, b"present");
+                frame(&mut hash, canonical.as_os_str().as_encoded_bytes());
+                frame(&mut hash, &bytes);
+            }
+        }
+    }
+    let digest = hash.finalize();
+    let mut tag = [0; 16];
+    tag.copy_from_slice(&digest[..16]);
+    // Original stamps are Duration::as_nanos(): u64 seconds plus subsecond nanos,
+    // strictly below 2^94. Bit 127 therefore separates content from ALL original tags,
+    // not just today's timestamps. The remaining 127 bits are a truncated SHA-256.
+    Ok(u128::from_le_bytes(tag) | (1 << 127))
+}
+
 /// When `file` was last written, as a stamp.
 fn written_at(file: &Path) -> Option<u128> {
     let written = std::fs::metadata(file).and_then(|it| it.modified()).ok()?;
     Some(written.duration_since(std::time::UNIX_EPOCH).ok()?.as_nanos())
+}
+
+#[cfg(test)]
+mod manifest_generation_tests {
+    use super::manifest_content_generation;
+    use std::{
+        fs,
+        path::PathBuf,
+        time::{Duration, UNIX_EPOCH},
+    };
+
+    struct Fixture {
+        _temp: tempfile::TempDir,
+        root: PathBuf,
+        manifest: PathBuf,
+        lock: PathBuf,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let root = temp.path().canonicalize().unwrap();
+            let manifest = root.join("Cargo.toml");
+            let lock = root.join("Cargo.lock");
+            fs::write(&manifest, b"[package]\nname='a'\nversion='0.1.0'\n").unwrap();
+            fs::write(&lock, b"version = 4\n").unwrap();
+            Self { _temp: temp, root, manifest, lock }
+        }
+
+        fn tag(&self) -> u128 {
+            manifest_content_generation(&self.root, &[self.manifest.clone()], &self.lock).unwrap()
+        }
+    }
+
+    #[test]
+    fn same_bytes_touch_and_rewrite_keep_content_tag() {
+        let f = Fixture::new();
+        let tag = f.tag();
+        for file in [&f.manifest, &f.lock] {
+            let bytes = fs::read(file).unwrap();
+            fs::write(file, &bytes).unwrap();
+            let touched = UNIX_EPOCH + Duration::from_secs(1_234_567);
+            fs::File::options().write(true).open(file).unwrap().set_modified(touched).unwrap();
+            assert_eq!(fs::metadata(file).unwrap().modified().unwrap(), touched);
+            assert_eq!(f.tag(), tag);
+        }
+        assert_ne!(tag & (1 << 127), 0);
+        assert_eq!(super::written_at(&f.manifest).unwrap() & (1 << 127), 0);
+    }
+
+    #[test]
+    fn changed_then_restored_and_same_metadata_mutation() {
+        let f = Fixture::new();
+        let original = f.tag();
+        for file in [&f.manifest, &f.lock] {
+            let bytes = fs::read(file).unwrap();
+            let metadata = fs::metadata(file).unwrap();
+            let times = fs::FileTimes::new()
+                .set_accessed(metadata.accessed().unwrap())
+                .set_modified(metadata.modified().unwrap());
+            let mut changed = bytes.clone();
+            changed[0] ^= 1;
+            fs::write(file, &changed).unwrap();
+            fs::File::options().write(true).open(file).unwrap().set_times(times).unwrap();
+            let after = fs::metadata(file).unwrap();
+            assert_eq!(metadata.len(), after.len());
+            assert_eq!(metadata.modified().unwrap(), after.modified().unwrap());
+            assert_ne!(f.tag(), original);
+            fs::write(file, bytes).unwrap();
+            assert_eq!(f.tag(), original);
+        }
+    }
+
+    #[test]
+    fn sorted_sets_are_framed_and_checkout_specific() {
+        let f = Fixture::new();
+        let second = f.root.join("member/Cargo.toml");
+        fs::create_dir(second.parent().unwrap()).unwrap();
+        fs::copy(&f.manifest, &second).unwrap();
+        let tag = |paths: &[PathBuf]| manifest_content_generation(&f.root, paths, &f.lock).unwrap();
+        assert_eq!(
+            tag(&[f.manifest.clone(), second.clone()]),
+            tag(&[second.clone(), f.manifest.clone(), second.clone()])
+        );
+        assert_ne!(tag(&[f.manifest.clone(), second.clone()]), f.tag());
+        assert_ne!(tag(&[second]), f.tag());
+        let dotted = f.root.join("./Cargo.toml");
+        assert_ne!(tag(&[dotted.clone()]), f.tag());
+        assert_eq!(tag(&[dotted.clone(), f.manifest.clone()]), tag(&[f.manifest.clone(), dotted]));
+        let other = Fixture::new();
+        assert_ne!(other.tag(), f.tag());
+        // A byte delimiter in a file is not a path/frame delimiter.
+        fs::write(&f.manifest, b"present\0Cargo.lock\0missing-lock").unwrap();
+        let framed = f.tag();
+        fs::write(&f.manifest, b"present\0Cargo.lock").unwrap();
+        fs::write(&f.lock, b"\0missing-lock").unwrap();
+        assert_ne!(f.tag(), framed);
+    }
+
+    #[test]
+    fn missing_lock_is_not_empty_or_unknown() {
+        let f = Fixture::new();
+        let present = f.tag();
+        fs::remove_file(&f.lock).unwrap();
+        let missing = f.tag();
+        assert_ne!(present, missing);
+        fs::write(&f.lock, b"").unwrap();
+        assert_ne!(f.tag(), missing);
+        fs::remove_file(&f.manifest).unwrap();
+        assert!(manifest_content_generation(&f.root, &[f.manifest.clone()], &f.lock).is_err());
+        fs::create_dir(&f.manifest).unwrap();
+        assert!(manifest_content_generation(&f.root, &[f.manifest.clone()], &f.lock).is_err());
+        assert!(manifest_content_generation(&f.root.join("absent"), &[], &f.lock).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_paths_and_symlink_aliases_are_not_lossily_equated() {
+        use std::{
+            ffi::OsString,
+            os::unix::{ffi::OsStringExt, fs::symlink},
+        };
+        let f = Fixture::new();
+        let alias = f.root.join("alias.toml");
+        symlink(&f.manifest, &alias).unwrap();
+        let tag = |path: PathBuf| manifest_content_generation(&f.root, &[path], &f.lock).unwrap();
+        assert_ne!(tag(alias.clone()), f.tag());
+        let raw = f.root.join(OsString::from_vec(b"manifest-\xff.toml".to_vec()));
+        let replacement = f.root.join("manifest-\u{fffd}.toml");
+        fs::copy(&f.manifest, &raw).unwrap();
+        fs::copy(&f.manifest, &replacement).unwrap();
+        assert_ne!(tag(raw), tag(replacement));
+        fs::remove_file(&f.manifest).unwrap();
+        assert!(manifest_content_generation(&f.root, &[alias], &f.lock).is_err());
+        fs::remove_file(&f.lock).unwrap();
+        symlink(f.root.join("absent"), &f.lock).unwrap();
+        assert!(manifest_content_generation(&f.root, &[], &f.lock).is_err());
+    }
 }
 
 /// The Rust files of the package in `dir`, but not those of a target directory or of a
