@@ -1335,6 +1335,245 @@ impl Replay<'_> {
         Ok(declared.result.clone())
     }
 
+    /// Only an authored result context can resolve this zero-input producer.
+    /// The original call receipt authenticates the declaration, not its actuals.
+    /// Reference-bearing instantiations remain outside this bounded route.
+    #[allow(clippy::too_many_arguments)]
+    fn generic_empty_static_result(
+        &self,
+        owner: &Type,
+        name: &AstIdent,
+        id: ir::ExprId,
+        direct: &ir::CallTarget,
+        signature: &ir::Signature,
+        arguments: &[ir::ExprId],
+        view: &tr::OriginalCallableView,
+        info: &DeclInfo,
+        source_index: usize,
+        position: usize,
+        depth: usize,
+    ) -> Result<ir::Ty, FactsError> {
+        sr::depth(self.budget, depth)?;
+        let associated = info.path.associated.as_ref().ok_or_else(|| {
+            FactsError::invalid(self.budget, "generic static source owner missing")
+        })?;
+        if info.param_env.arity() != 0 {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static producer requires an empty own binder",
+            ));
+        }
+        if !arguments.is_empty()
+            || !view.signature().params.is_empty()
+            || !signature.params.is_empty()
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static producer changed original zero-input arity",
+            ));
+        }
+        let Type::Apply(path) = owner else {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static producer requires original omitted owner actuals",
+            ));
+        };
+        let (_, written) = path
+            .application()
+            .map_err(|e| source_error(self.budget, &e))?;
+        sr::work(self.budget, written.len())?;
+        if written.is_empty() || written.iter().any(|ty| !matches!(ty, Type::Infer)) {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static producer requires exclusively omitted owner actuals",
+            ));
+        }
+        let context = self
+            .original
+            .plan
+            .callable_context(self.original.declaration)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let checker = Checker::new(self.signatures, ir::Ty::Unit, context.module);
+        let owner_path = path
+            .path(checker.names().map_err(|e| source_error(self.budget, &e))?)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let owner_key = checker
+            .path_key(&owner_path, Namespace::Type)
+            .map_err(|e| source_error(self.budget, &e))?;
+        if self.original.plan.registry.nominals.get(&owner_key) != Some(&associated.nominal)
+            || !self
+                .original
+                .plan
+                .registry
+                .source_member_equal(info.path.item, *name)
+                .map_err(|e| source_error(self.budget, &e))?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static producer changed original owner or member",
+            ));
+        }
+        let mut env = None;
+        for scope in view.generic_env().scopes() {
+            sr::work(self.budget, 1)?;
+            if scope.arity() == 0 {
+                continue;
+            }
+            if scope.binder().declaration != associated.impl_decl
+                || env.replace(scope.clone()).is_some()
+            {
+                return Err(FactsError::unsupported(
+                    self.budget,
+                    "generic static producer requires exactly the original owner binder",
+                ));
+            }
+        }
+        let env = env.ok_or_else(|| {
+            FactsError::invalid(self.budget, "generic static producer owner binder missing")
+        })?;
+        if env.arity() != written.len() || env.arity() != direct.type_args.len() {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static producer owner arity changed",
+            ));
+        }
+        let site = self.inventory.calls.get(source_index).ok_or_else(|| {
+            FactsError::invalid(
+                self.budget,
+                "generic static producer source occurrence missing",
+            )
+        })?;
+        let expected = source_result_context(
+            self.original,
+            site,
+            id,
+            self.checked,
+            self.signatures,
+            self.budget,
+        )?
+        .ok_or_else(|| {
+            FactsError::unsupported(
+                self.budget,
+                "generic static producer requires an authored result context",
+            )
+        })?;
+        let mut state = sr::CallInferenceState::new(Some(env.clone()), self.budget)?;
+        let result_schema =
+            state.type_term(&view.signature().result, Some(env.binder()), depth + 1)?;
+        let expected_term = state.type_term(&expected, None, depth + 1)?;
+        state.constrain(&result_schema, &expected_term, depth + 1)?;
+        let mut materialize = |decl, args: &[ir::Ty]| {
+            self.original
+                .plan
+                .intern_nominal(
+                    decl,
+                    args,
+                    ir::FactsCtx::Validated(&self.original.facts),
+                    self.budget,
+                )
+                .map_err(|e| source_error(self.budget, &e))
+        };
+        let actuals = state.finish(false, &mut materialize)?.ok_or_else(|| {
+            FactsError::unsupported(
+                self.budget,
+                "generic static source actuals remain unresolved",
+            )
+        })?;
+        for (authored, checked) in actuals.iter().zip(direct.type_args.iter()) {
+            if !self.equal(authored, checked)? {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "generic static producer changed independently inferred actuals",
+                ));
+            }
+            if !ir::carrier_locations(authored, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+                .is_empty()
+            {
+                return Err(FactsError::unsupported(
+                    self.budget,
+                    "generic static source actual contains reference carriers",
+                ));
+            }
+        }
+        // finish resolves actuals, not schema Slot markers. Re-instantiate
+        // the authenticated original declaration with independently inferred
+        // actuals through the existing validated signature/carrier boundary.
+        sr::retain(
+            self.budget,
+            actuals.len().saturating_mul(std::mem::size_of::<ir::Ty>()) + 32,
+        )?;
+        let inferred_target = ir::CallTarget {
+            declaration: direct.declaration,
+            type_args: actuals.into(),
+        };
+        let result = self
+            .original
+            .plan
+            .instantiate_signature(
+                &inferred_target,
+                ir::FactsCtx::Validated(&self.original.facts),
+                self.budget,
+            )
+            .map_err(|e| source_error(self.budget, &e))?
+            .result;
+        if contains_source_ref(&result, self.budget, depth + 1)?
+            || !ir::carrier_locations(&result, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?
+                .is_empty()
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static source result contains reference carriers",
+            ));
+        }
+        let target = ir::Callee::Direct(direct.clone());
+        let canonical = nominal_call_receipts::original_call_signature(
+            self.original,
+            position,
+            id,
+            &target,
+            signature,
+            &self.original.facts,
+            self.budget,
+            &mut tr::TraitScratch::default(),
+        )?;
+        if !canonical.params.is_empty()
+            || !self.equal(&result, &canonical.result)?
+            || view.signature().ref_contract != canonical.ref_contract
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static producer changed original result contract",
+            ));
+        }
+        sr::work(self.budget, self.checked.call_evidence.len())?;
+        let evidence = self
+            .checked
+            .call_evidence
+            .iter()
+            .find(|row| row.call == id)
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    self.budget,
+                    "generic static producer argument trace missing",
+                )
+            })?;
+        if !evidence.arguments.is_empty() || !evidence.type_actual_regions.is_empty() {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static producer changed empty argument or carrier evidence",
+            ));
+        }
+        ir::validate_callee(
+            &target,
+            signature,
+            ir::FactsCtx::Validated(&self.original.facts),
+        )
+        .map_err(|e| source_error(self.budget, &e))?;
+        Ok(result)
+    }
+
     /// Closed static inherent calls are producers, not inference binders. Their
     /// authored owner/member, declaration header and original call receipt must
     /// all agree before their recursively authenticated arguments are consumed.
@@ -1367,7 +1606,7 @@ impl Replay<'_> {
                 "static input producer requires direct source declaration",
             ));
         };
-        if !type_args.is_empty() || !direct.type_args.is_empty() {
+        if !type_args.is_empty() {
             return Err(FactsError::unsupported(
                 self.budget,
                 "static input producer requires a closed source header",
@@ -1417,8 +1656,35 @@ impl Replay<'_> {
         if info.kind != ir::DeclKind::AssociatedFunction
             || !matches!(info.receiver, ReceiverKind::None)
             || associated.trait_decl.is_some()
-            || view.generic_env().total_arity() != 0
             || !self.original.facts.is_source_callable(direct.declaration)?
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "static input producer requires a closed inherent value result",
+            ));
+        }
+        if view.generic_env().total_arity() != 0 {
+            if !args.is_empty() {
+                return Err(FactsError::unsupported(
+                    self.budget,
+                    "generic static producer requires zero inputs",
+                ));
+            }
+            return self.generic_empty_static_result(
+                owner,
+                name,
+                id,
+                direct,
+                signature,
+                arguments,
+                &view,
+                info,
+                source_index,
+                position,
+                depth + 1,
+            );
+        }
+        if !direct.type_args.is_empty()
             || contains_source_ref(&view.signature().result, self.budget, depth + 1)?
         {
             return Err(FactsError::unsupported(
@@ -2635,6 +2901,92 @@ mod literal_context_tests {
                 .expect_err("missing original method receipt must fail");
             assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
         }
+    }
+
+    #[test]
+    fn generic_empty_static_producer_rejects_forged_authority() {
+        // Result contexts are invariant, not call-input coercion sites.
+        let invariant_budget = ir::PlanBudget::default();
+        let mut state = sr::CallInferenceState::new(None, &invariant_budget).unwrap();
+        let raw = state
+            .type_term(
+                &ir::Ty::RawPtr {
+                    kind: ir::BorrowKind::Shared,
+                    pointee: Arc::new(ir::Ty::Int(ir::IntTy::U32)),
+                },
+                None,
+                0,
+            )
+            .unwrap();
+        let reference = state
+            .type_term(
+                &ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(ir::Ty::Int(ir::IntTy::U32)),
+                },
+                None,
+                0,
+            )
+            .unwrap();
+        assert!(state.constrain(&raw, &reference, 0).is_err());
+        let program = parse(
+            "enum Slot<T>{Empty,Value(T)}impl<T> Slot<T>{fn empty()->Slot<T>{Slot::Empty}}fn take<T>(s:&Slot<T>){}fn main(){let slot:Slot<u32>=Slot::empty();take(&slot);}",
+        ).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected original generic static producer source");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        let producer = checked
+            .exprs
+            .iter()
+            .enumerate()
+            .find_map(|(index, expression)| {
+                let ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    args,
+                    ..
+                } = &expression.kind
+                else {
+                    return None;
+                };
+                (args.is_empty() && target.type_args.len() == 1).then_some(ir::ExprId(index))
+            })
+            .expect("generic static producer call");
+        for mutation in 0..3 {
+            let mut forged = checked.as_ref().clone();
+            let ir::ExprKind::Call {
+                target: ir::Callee::Direct(target),
+                signature,
+                args,
+                ..
+            } = &mut forged.exprs[producer.0].kind
+            else {
+                unreachable!();
+            };
+            match mutation {
+                0 => target.type_args = vec![ir::Ty::Bool].into(),
+                1 => signature.result = ir::Ty::Bool,
+                _ => args.push(producer),
+            }
+            let error =
+                replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                    .expect_err("forged generic static producer must fail");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+        let mut forged = original.clone();
+        forged
+            .call_mapping
+            .retain(|(_, expression, _)| *expression != producer);
+        let error = replay_source_body(&forged, checked, publication.facts(), &budget)
+            .expect_err("missing generic static source receipt must fail");
+        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
     }
 
     #[test]
