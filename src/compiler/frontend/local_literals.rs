@@ -129,6 +129,9 @@ struct Solver<'a: 's, 'b: 's, 's> {
     /// expectation (e.g. `let v: Vec<&dyn P> = vec![&a]`) fix the target first;
     /// at quiescence the remaining ones fall back to equality.
     lazy_coercions: Vec<(Term, Term)>,
+    /// Exact bare-parameter field equations from authenticated constructor
+    /// recipes. These are node-local inference origins, not type/proof facts.
+    constructor_coercions: Vec<(Term, Term)>,
     /// `&x -> &str` / `&x -> &[T]` where `x`'s type is not known yet: stock
     /// may deref-coerce (`&String -> &str`), so the referents are only equated
     /// once `x` is known, or at quiescence.
@@ -253,6 +256,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         trait_application_pending: false,
         coercions: Vec::new(),
         lazy_coercions: Vec::new(),
+        constructor_coercions: Vec::new(),
         pending_referents: Vec::new(),
         iterator_items: Vec::new(),
         tries: Vec::new(),
@@ -1429,7 +1433,11 @@ impl<'s> Solver<'_, '_, 's> {
         })
     }
 
-    fn local_lazy_inputs_ready(&self, methods: &[Method]) -> Result<bool, String> {
+    fn local_lazy_inputs_ready(
+        &self,
+        methods: &[Method],
+        projections: &[Projection],
+    ) -> Result<bool, String> {
         if self.lazy_coercions.is_empty()
             || self.trait_application_pending
             || self.missing_source_schemas.get()
@@ -1450,8 +1458,32 @@ impl<'s> Solver<'_, '_, 's> {
         let mut targets = Vec::new();
         for (actual, expected) in &self.lazy_coercions {
             self.checker.infer_work(0)?;
+            let mut constructor_parameter = false;
+            if self.unknown_closure_parameter(*expected)? {
+                let mut delayed = false;
+                for result in &self.delayed_results {
+                    self.checker.infer_work(0)?;
+                    delayed |= self.root(*result) == self.root(*expected);
+                }
+                if !delayed {
+                    for (source, target) in &self.constructor_coercions {
+                        self.checker.infer_work(0)?;
+                        if self.root(*source) == self.root(*actual)
+                            && self.root(*target) == self.root(*expected)
+                        {
+                            constructor_parameter = true;
+                            break;
+                        }
+                    }
+                }
+            }
             if !matches!(self.domain(*expected), Domain::Unknown)
-                || self.deferred_coercion(*expected)?
+                || (self.deferred_coercion(*expected)? && !constructor_parameter)
+                // A closure's source-directed constructor input must already
+                // have its exact canonical type, not a numeric-default guess.
+                || (constructor_parameter
+                    && (!self.manifest_ready(&[*actual], 0)?
+                        || self.resolve(*actual, 0)?.is_none()))
                 || !self.lazy_input_frontier(*actual, &[], 0)?
                 || !self.manifest_ready_with_defaults(&[*actual], 0, true)?
                 || (self.manifest_ready(&[*actual], 0)? && self.resolve(*actual, 0)?.is_none())
@@ -1471,6 +1503,63 @@ impl<'s> Solver<'_, '_, 's> {
             iteration::Pending::Ordinary(_, result) => *result,
             iteration::Pending::ArrayMethod { result, .. } => *result,
         }));
+        // A constructor's exact generic field can supply the parameter of
+        // a source callable bound before its closure body reads that field
+        // (`Some(Box::new(pair)).map(|node| node.value)`). Only projections
+        // of this established local frontier may contribute dependent roots.
+        // An unrelated unknown closure parameter is never added here.
+        self.checker.infer_storage(projections.len())?;
+        for projection in projections {
+            self.checker.infer_work(0)?;
+            let mut local_base = false;
+            for target in &targets {
+                self.checker.infer_work(0)?;
+                local_base |= self.root(*target) == self.root(projection.base);
+            }
+            if !matches!(self.domain(projection.base), Domain::Unknown) || !local_base {
+                return Ok(false);
+            }
+            targets.push(projection.result);
+        }
+        // A deferred body coercion consumes its source; it does not produce
+        // the expected type independently. Follow only unknown local inputs
+        // already anchored above, without equating or resolving either end.
+        // At most one new root per coercion can enter this bounded closure.
+        self.checker.infer_storage(self.coercions.len())?;
+        for _ in 0..self.coercions.len() {
+            let mut progress = false;
+            for (actual, expected) in &self.coercions {
+                self.checker.infer_work(0)?;
+                if !matches!(self.domain(*actual), Domain::Unknown)
+                    || !matches!(self.domain(*expected), Domain::Unknown)
+                    || self.unknown_closure_parameter(*expected)?
+                {
+                    continue;
+                }
+                let mut independent = false;
+                for result in &self.delayed_results {
+                    self.checker.infer_work(0)?;
+                    independent |= self.root(*result) == self.root(*expected);
+                }
+                if independent {
+                    continue;
+                }
+                let mut source = false;
+                let mut target = false;
+                for known in &targets {
+                    self.checker.infer_work(0)?;
+                    source |= self.root(*known) == self.root(*actual);
+                    target |= self.root(*known) == self.root(*expected);
+                }
+                if source && !target {
+                    targets.push(*expected);
+                    progress = true;
+                }
+            }
+            if !progress {
+                break;
+            }
+        }
         for operator in &self.operators {
             let Some((left, right)) = operator.lazy_frontier_inputs() else {
                 return Ok(false);
@@ -1964,15 +2053,7 @@ impl<'s> Solver<'_, '_, 's> {
             }
             if !progress
                 && self.preparation.is_some()
-                && projections.iter().all(|projection| {
-                    // Field reads of a still-pending local method result
-                    // (`x.cloned().unwrap().n`) wait on the same local cycle.
-                    matches!(self.domain(projection.base), Domain::Unknown)
-                        && methods
-                            .iter()
-                            .any(|m| self.root(m.result) == self.root(projection.base))
-                })
-                && self.local_lazy_inputs_ready(&methods)?
+                && self.local_lazy_inputs_ready(&methods, &projections)?
             {
                 for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
                     self.unify(actual, expected)?;

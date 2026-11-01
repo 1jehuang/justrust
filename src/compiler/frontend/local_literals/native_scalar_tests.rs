@@ -158,6 +158,7 @@ fn inspect_with_opaque_hint(
         delayed_results: Vec::new(),
         coercions: Vec::new(),
         lazy_coercions: Vec::new(),
+        constructor_coercions: Vec::new(),
         iterator_items: Vec::new(),
         tries: Vec::new(),
         patterns: Vec::new(),

@@ -60,6 +60,7 @@ fn fixture_case(source: &str, unsupported: Option<&str>, stock_invalid: Option<&
         assert!(expected.status.success());
         Some(expected)
     };
+    let mut replay = [None, None];
     for workers in [1, 8] {
         for check in [true, false] {
             if stock_invalid.is_some() {
@@ -86,6 +87,23 @@ fn fixture_case(source: &str, unsupported: Option<&str>, stock_invalid: Option<&
             assert!(compiled.analyses.iter().all(|analysis| analysis.passed()));
             assert_eq!(compiled.executable.is_none(), check);
             assert_graph_authority(source, &compiled, check);
+            // Independent compilations have distinct source snapshots. Compare
+            // their producer inventories, not their snapshot-bearing keys, and
+            // require each exact canonical key to be evaluated once locally.
+            let mut canonical = Vec::new();
+            for (key, evaluations) in &compiled.report.node_evaluations {
+                if matches!(key.kind, 126 | 138 | 139) {
+                    assert_eq!(*evaluations, 1, "repeated canonical producer {key:?}");
+                    canonical.push((key.kind, key.version));
+                }
+            }
+            canonical.sort();
+            let previous = &mut replay[usize::from(check)];
+            if let Some(previous) = previous {
+                assert_eq!(*previous, canonical, "source graph inventory changed");
+            } else {
+                *previous = Some(canonical);
+            }
             if let Some(executable) = compiled.executable {
                 fs::write(&native, executable).unwrap();
                 fs::set_permissions(&native, fs::Permissions::from_mode(0o700)).unwrap();
@@ -301,14 +319,37 @@ fn projected_receiver_calls_preserve_mutable_alias_and_returned_loan_rejection()
 
 #[test]
 fn concrete_box_option_closure_nominal_frontier_matches_stock() {
-    fixture(
-        r#"struct Witness{count:*mut u64}
+    const SOURCE: &str = r#"struct Witness{count:*mut u64}
 impl Drop for Witness{fn drop(&mut self){unsafe{*self.count=*self.count+1u64;}println!("witness");}}
 struct Pair{value:i32,witness:Witness}
 fn main(){let mut count=0u64;let count_ptr=&mut count as *mut u64;
 let input=Some(Box::new(Pair{value:7,witness:Witness{count:count_ptr}}));
 let mut sum=0;let result=input.map(|node|{sum+=node.value;node.value});
-assert!(result==Some(7));assert!(sum==7);assert!(count==1u64);println!("count {} sum {}",count,sum);}"#,
-        Some("nominal source constraints cannot progress"),
+assert!(result==Some(7));assert!(sum==7);assert!(count==1u64);println!("count {} sum {}",count,sum);}"#;
+    fixture(SOURCE, None);
+    fixture_case(
+        &SOURCE.replace("node.value", "node.absent"),
+        None,
+        Some("error[E0609]"),
+    );
+    fixture_case(
+        &format!(
+            "{}\nfn main(){{}}",
+            SOURCE
+                .replace("fn main()", "fn unused()")
+                .replace("node.value", "node.absent")
+        ),
+        None,
+        Some("error[E0609]"),
+    );
+    fixture_case(
+        &SOURCE.replace("let mut sum=0;", "let mut sum=false;"),
+        None,
+        Some("error[E0368]"),
+    );
+    fixture_case(
+        &SOURCE.replace("|node|", "|node: bool|"),
+        None,
+        Some("error[E0610]"),
     );
 }

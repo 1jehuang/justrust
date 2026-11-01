@@ -222,6 +222,170 @@ fn primitive_source(ty: &Type) -> Result<Option<Shape>, String> {
 }
 
 #[test]
+fn constructor_closure_equations_preserve_source_and_missing_graph_authority() {
+    const SOURCE: &str = "struct Wrap<T>{value:T}impl<T> Wrap<T>{fn apply<U,F:FnOnce(T)->U>(self,f:F)->U{f(self.value)}}fn probe(){let outer=(7u8,);let wrapped=Wrap{value:&outer};let result=wrapped.apply(|node|node.0);let expected:u8=result;}fn main(){}";
+    const FRONTIER: &str = "struct Wrap<T>{value:T}impl<T:PartialEq> PartialEq for Wrap<T>{fn eq(&self,other:&Self)->bool{self.value==other.value}}impl<T> Wrap<T>{fn apply<U,F:FnOnce(T)->U>(self,f:F)->Wrap<U>{Wrap{value:f(self.value)}}}fn probe(){let outer=(7u8,);let wrapped=Wrap{value:&outer};let result=wrapped.apply(|node|node.0);let expected=result==Wrap{value:7u8};}fn main(){}";
+    for source in [
+        SOURCE.to_owned(),
+        SOURCE.replace(
+            "let result=wrapped.apply(|node|node.0);",
+            "let f=|node|node.0;let result=7u8;",
+        ),
+        SOURCE.replace("|node|", "|node: &(u16,)|"),
+        SOURCE.replace("let expected:u8=result;", "let expected:bool=result;"),
+        FRONTIER.to_owned(),
+    ] {
+        let stock = crate::compiler::frontend::parser_tests::stock_compile(
+            &source,
+            std::path::Path::new("/dev/null"),
+            true,
+        );
+        assert_eq!(
+            stock.status.success(),
+            source == SOURCE || source == FRONTIER,
+            "{}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "constructor-closure-equations.rs",
+            &source,
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let index = program
+            .functions
+            .iter()
+            .position(|function| {
+                function
+                    .name
+                    .segments()
+                    .last()
+                    .is_some_and(|name| program.names.spelling(*name).unwrap() == "probe")
+            })
+            .unwrap();
+        let declaration = plan.function_decl(index).unwrap();
+        let function = plan.callable_body(&program, declaration).unwrap();
+        let mut checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        checker
+            .install_lexical_scope(function.lexical_scope)
+            .unwrap();
+        checker.declaration = Some(declaration);
+        let declaration_schema = |declaration| {
+            let (env, _) = plan.nominal_schema(declaration, &plan.budget)?;
+            let parameter = ir::ParamId {
+                owner: env.binder(),
+                index: 0,
+            };
+            Ok(Some(DeclarationRecipe {
+                env,
+                fields: DeclarationFields::Struct(
+                    vec![Shape::Leaf(ir::Ty::Param(parameter))].into(),
+                ),
+            }))
+        };
+        let source_type = |ty: &Type| plan.nominal_source_shape(declaration, ty);
+        let missing = |_: &Demand| Ok(None);
+        let inputs = Inputs::new(&declaration_schema, &source_type, &missing);
+        if source == FRONTIER {
+            let empty = Block {
+                statements: Vec::new(),
+                tail: None,
+            };
+            let mut solver = solve_body(&checker, &empty, None, Some(&inputs)).unwrap();
+            solver.block(&function.body, 0).unwrap();
+            let methods = std::mem::take(&mut solver.methods);
+            let projections = std::mem::take(&mut solver.projections);
+            assert_eq!(solver.coercions.len(), 1);
+            let (actual, expected) = solver.coercions[0];
+            assert!(matches!(solver.domain(expected), Domain::Unknown));
+            assert!(
+                solver
+                    .local_lazy_inputs_ready(&methods, &projections)
+                    .unwrap()
+            );
+            // The readiness closure describes dependencies, never equations.
+            assert!(matches!(solver.domain(expected), Domain::Unknown));
+            // Split the same deferred dependency into a reverse-ordered chain.
+            // A bounded fixed point must not depend on queue insertion order.
+            let intermediate = solver.fresh().unwrap();
+            solver.coercions = vec![(intermediate, expected), (actual, intermediate)];
+            assert!(
+                solver
+                    .local_lazy_inputs_ready(&methods, &projections)
+                    .unwrap()
+            );
+            assert!(matches!(solver.domain(intermediate), Domain::Unknown));
+            assert!(matches!(solver.domain(expected), Domain::Unknown));
+            // Even the same tail dependency cannot authorize an unrelated
+            // closure parameter or an independently delayed producer result.
+            solver.delayed_results.push(intermediate);
+            assert!(
+                !solver
+                    .local_lazy_inputs_ready(&methods, &projections)
+                    .unwrap()
+            );
+            solver.delayed_results.pop();
+            solver.constructor_coercions.clear();
+            assert!(
+                !solver
+                    .local_lazy_inputs_ready(&methods, &projections)
+                    .unwrap()
+            );
+            assert!(checker.exprs.is_empty());
+            assert!(checker.locals.is_empty());
+            continue;
+        }
+        let solved = solve_body(&checker, &function.body, None, Some(&inputs));
+        if source.contains("node: &(u16,)") || source.contains("let expected:bool=result;") {
+            assert!(
+                solved.is_err(),
+                "a source equation must not erase a written closure/output type"
+            );
+            continue;
+        }
+        let solver = solved.unwrap();
+        assert_eq!(solver.constructor_coercions.len(), 1);
+        if source != SOURCE {
+            let error = solver.closure_hints().unwrap_err();
+            assert!(error.contains("E0282"), "{error}");
+            continue;
+        }
+        let hints = solver.closure_hints().unwrap();
+        let signature = hints.values().next().unwrap();
+        assert_eq!(hints.len(), 1);
+        assert_eq!(signature.result, ir::Ty::Int(ir::IntTy::U8));
+        assert_eq!(
+            signature.params,
+            vec![ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::U8)].into())),
+            }]
+        );
+        // A solved source equation is still not permission to materialize its
+        // nominal owner. Replaying the same source with the same absent read
+        // must demand the same exact application and emit no executable IR.
+        for _ in 0..2 {
+            let PreparedHints::Blocked(Preparation::Blocked { nominals, .. }) =
+                finalize_callable(&checker, declaration, None, &inputs).unwrap()
+            else {
+                panic!("constructor inference cannot manufacture a graph realization");
+            };
+            assert_eq!(nominals.len(), 1);
+            assert!(
+                matches!(nominals[0].arguments.as_ref(), [Shape::Ref(ir::BorrowKind::Shared, inner)]
+                if matches!(inner.as_ref(), Shape::Tuple(fields)
+                    if matches!(fields.as_ref(), [Shape::Leaf(ir::Ty::Int(ir::IntTy::U8))])))
+            );
+        }
+        assert!(checker.exprs.is_empty());
+        assert!(checker.locals.is_empty());
+    }
+}
+
+#[test]
 fn missing_graph_read_blocks_after_later_numeric_constraint_without_emitting() {
     let program =
         parse("struct Wrap<T>{value:T}fn main(){let x=Wrap{value:1};let y:u8=x.value;}").unwrap();

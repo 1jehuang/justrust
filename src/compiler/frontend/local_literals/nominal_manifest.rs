@@ -656,6 +656,15 @@ impl<'s> Solver<'_, '_, 's> {
             let actual = self.expr(value, depth + 1)?;
             let formal = self.manifest_term_in(shape, &params, depth + 1)?;
             self.coerce(actual, formal)?;
+            // Preserve the exact source equation, not merely a closure's
+            // membership in the solver. Only a bare owning recipe parameter
+            // can anchor the local constructor/callable inference frontier.
+            if matches!(shape, Shape::Leaf(ir::Ty::Param(parameter))
+                if params.contains_key(parameter))
+            {
+                self.checker.infer_storage(1)?;
+                self.constructor_coercions.push((actual, formal));
+            }
         }
         let result = self.recipe_nominal(declaration, &recipe.env, &params)?;
         if let Some(self_ty) = self_ty {
