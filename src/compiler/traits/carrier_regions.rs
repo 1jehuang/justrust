@@ -585,6 +585,48 @@ impl ValidatedTraitWorld {
         }) else {
             return Ok(None);
         };
+        if let ir::CarrierRegionTerm::Family { parameter } = output.region {
+            if !matches!(destination.location.channel,
+                ir::CarrierChannel::ParamTail { parameter: actual, prefix: 0 }
+                    if actual == parameter)
+                || destination.location.path.0.last() != Some(&ir::CarrierStep::SliceElement)
+                || charged(
+                    &self.budget,
+                    ir::carrier_at(
+                        &signature.params[destination.param],
+                        &destination.location,
+                        &self.budget,
+                    ),
+                )? != Ty::Param(parameter)
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "slice family write changed its exact source channel",
+                ));
+            }
+            // A by-value original T, including an owned physical field,
+            // carries this same symbolic family without a source lifetime row.
+            // Replay its exact original field path and rigid parameter binder.
+            // A borrow crossing, another parameter or substituted type equality
+            // cannot supply this equation or grant shared storage a write.
+            if input
+                .location
+                .path
+                .0
+                .iter()
+                .all(|step| matches!(step, ir::CarrierStep::Field(_)))
+                && input.location.channel == destination.location.channel
+                && let Some(original_input) = signature.params.get(input.param)
+                && charged(
+                    &self.budget,
+                    ir::carrier_at(original_input, &input.location, &self.budget),
+                )? == Ty::Param(parameter)
+            {
+                return self
+                    .carrier_writable(&signature.params[destination.param], &destination.location)
+                    .map(Some);
+            }
+        }
         let Some(incoming) = source
             .carriers
             .iter()
@@ -980,6 +1022,288 @@ mod tests {
                 "mode {mode}"
             );
         }
+    }
+
+    #[test]
+    fn original_family_write_admits_only_exact_owned_value_and_mutable_storage() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "fn store<T,U>(s:&mut[T],value:T,other:U){}fn main(){}",
+        )
+        .unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let signature = world
+            .normalized_declaration_schema(declaration)
+            .unwrap()
+            .signature;
+        let source = world
+            .validate_source_regions(declaration, &signature)
+            .unwrap();
+        let output = source
+            .carriers
+            .iter()
+            .find(|row| {
+                row.parameter == Some(0)
+                    && matches!(row.region, ir::CarrierRegionTerm::Family { .. })
+            })
+            .unwrap();
+        let ir::CarrierRegionTerm::Family { parameter } = output.region else {
+            unreachable!()
+        };
+        let destination = ir::InputCarrier {
+            param: 0,
+            location: output.location.clone(),
+        };
+        let value = ir::InputCarrier {
+            param: 1,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            },
+        };
+        assert!(
+            !source.carriers.iter().any(|row| {
+                row.parameter == Some(value.param) && row.location == value.location
+            })
+        );
+        assert_eq!(
+            world
+                .source_write_eligible(&source, &signature, &destination, &value)
+                .unwrap(),
+            Some(true)
+        );
+        let facts = world.callable_facts(declaration).unwrap();
+        let view = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        let row = view
+            .contract()
+            .writes
+            .iter()
+            .find(|row| row.destination == destination)
+            .unwrap();
+        assert!(row.sources.contains(&value));
+        for mode in 0..5 {
+            let mut forged = value.clone();
+            match mode {
+                0 => forged.param = 2,
+                1 => {
+                    forged.location.path =
+                        ir::CarrierPath(Arc::from([ir::CarrierStep::SliceElement]))
+                }
+                2 => {
+                    forged.location.channel = ir::CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    }
+                }
+                3 => {
+                    forged.location.channel = ir::CarrierChannel::ParamTail {
+                        parameter: ir::ParamId {
+                            index: parameter.index + 1,
+                            ..parameter
+                        },
+                        prefix: 0,
+                    }
+                }
+                _ => forged.param = usize::MAX,
+            }
+            assert!(
+                !matches!(
+                    world.source_write_eligible(&source, &signature, &destination, &forged),
+                    Ok(Some(true))
+                ),
+                "forged input mode {mode}"
+            );
+        }
+        let mut shared = signature.clone();
+        let Ty::Ref { referent, .. } = &signature.params[0] else {
+            unreachable!()
+        };
+        let mut parameters = signature.params.to_vec();
+        parameters[0] = Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            referent: referent.clone(),
+        };
+        shared.params = parameters;
+        assert_eq!(
+            world
+                .source_write_eligible(&source, &shared, &destination, &value)
+                .unwrap(),
+            Some(false)
+        );
+        let mut forged_source = source.as_ref().clone();
+        let mut rows = forged_source.carriers.to_vec();
+        let row = rows
+            .iter_mut()
+            .find(|row| row.parameter == Some(0) && row.location == destination.location)
+            .unwrap();
+        row.region = ir::CarrierRegionTerm::Family {
+            parameter: ir::ParamId {
+                index: parameter.index + 1,
+                ..parameter
+            },
+        };
+        forged_source.carriers = rows.into();
+        assert!(
+            world
+                .source_write_eligible(&forged_source, &signature, &destination, &value)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn original_family_write_replays_owned_field_without_borrow_or_family_guessing() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "struct Carry<'a,T,U>{storage:&'a mut[T],value:T,other:U,borrowed:&'a T}fn store<'a,T,U>(entry:Carry<'a,T,U>){}fn main(){}",
+        ).unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let signature = world
+            .normalized_declaration_schema(declaration)
+            .unwrap()
+            .signature;
+        let source = world
+            .validate_source_regions(declaration, &signature)
+            .unwrap();
+        let output = source
+            .carriers
+            .iter()
+            .find(|row| {
+                row.parameter == Some(0)
+                    && matches!(row.region, ir::CarrierRegionTerm::Family { .. })
+            })
+            .unwrap();
+        let ir::CarrierRegionTerm::Family { parameter } = output.region else {
+            unreachable!()
+        };
+        let destination = ir::InputCarrier {
+            param: 0,
+            location: output.location.clone(),
+        };
+        let value = ir::InputCarrier {
+            param: 0,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([ir::CarrierStep::Field(1)])),
+                channel: ir::CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            },
+        };
+        assert!(
+            !source
+                .carriers
+                .iter()
+                .any(|row| row.parameter == Some(0) && row.location == value.location)
+        );
+        assert_eq!(
+            world
+                .source_write_eligible(&source, &signature, &destination, &value)
+                .unwrap(),
+            Some(true)
+        );
+        let facts = world.callable_facts(declaration).unwrap();
+        let view = facts.carrier_contract(SignatureSubject::Body).unwrap();
+        let row = view
+            .contract()
+            .writes
+            .iter()
+            .find(|row| row.destination == destination)
+            .unwrap();
+        assert!(row.sources.contains(&value));
+        let foreign_owner = ir::BinderId {
+            declaration: plan.nominal_declaration(0).unwrap(),
+        };
+        assert_ne!(foreign_owner, parameter.owner);
+        for mode in 0..6 {
+            let mut forged = value.clone();
+            match mode {
+                0 => forged.location.path = ir::CarrierPath(Arc::from([ir::CarrierStep::Field(2)])),
+                1 => forged.location.path = ir::CarrierPath(Arc::from([ir::CarrierStep::Field(3)])),
+                2 => {
+                    forged.location.path = ir::CarrierPath(Arc::from([
+                        ir::CarrierStep::Field(3),
+                        ir::CarrierStep::Referent,
+                    ]))
+                }
+                3 => {
+                    forged.location.channel = ir::CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    }
+                }
+                4 => {
+                    forged.location.channel = ir::CarrierChannel::ParamTail {
+                        parameter: ir::ParamId {
+                            owner: foreign_owner,
+                            ..parameter
+                        },
+                        prefix: 0,
+                    }
+                }
+                _ => {
+                    forged.location.path =
+                        ir::CarrierPath(Arc::from([ir::CarrierStep::Field(usize::MAX)]))
+                }
+            }
+            assert!(
+                !matches!(
+                    world.source_write_eligible(&source, &signature, &destination, &forged),
+                    Ok(Some(true))
+                ),
+                "owned field forgery mode {mode}"
+            );
+        }
+    }
+
+    #[test]
+    fn original_family_write_does_not_invent_named_lifetime_outlives() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "fn store<'a,'b>(s:&mut[&'a i32],value:&'b i32){}fn main(){}",
+        )
+        .unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let signature = world
+            .normalized_declaration_schema(declaration)
+            .unwrap()
+            .signature;
+        let source = world
+            .validate_source_regions(declaration, &signature)
+            .unwrap();
+        let output = source
+            .carriers
+            .iter()
+            .find(|row| {
+                row.parameter == Some(0)
+                    && row.location.path.0.last() == Some(&ir::CarrierStep::SliceElement)
+            })
+            .unwrap();
+        let destination = ir::InputCarrier {
+            param: 0,
+            location: output.location.clone(),
+        };
+        let input = ir::InputCarrier {
+            param: 1,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            },
+        };
+        assert_eq!(
+            world
+                .source_write_eligible(&source, &signature, &destination, &input)
+                .unwrap(),
+            Some(false)
+        );
     }
 
     #[test]

@@ -258,6 +258,59 @@ fn call_binding_view_matches(
         .is_some_and(|validated| Arc::ptr_eq(validated, &binding.contract))
 }
 
+fn source_region_input(
+    view: &super::traits::CarrierContractView,
+    row: &ir::SourceCarrierRegion,
+    budget: &mut Budget,
+) -> Result<Option<InputCarrier>, Exhausted> {
+    budget.spend(view.source_region_env().carriers.len() + view.contract().inputs.len() + 1)?;
+    if !view.source_region_env().carriers.contains(row) {
+        return Ok(None);
+    }
+    let Some(param) = row.parameter else {
+        return Ok(None);
+    };
+    let input = InputCarrier {
+        param,
+        location: row.location.clone(),
+    };
+    Ok(view.contract().inputs.contains(&input).then_some(input))
+}
+
+/// Read an authored writable referent region only from the exact sealed call
+/// binding. A type-equal or source-equivalent foreign call is not authority.
+fn call_result_slot_region(
+    binding: &CallCarrierBinding,
+    f: &cfg::Function,
+    function: Option<&Arc<cfg::Function>>,
+    facts: Option<&Arc<super::traits::ValidatedFacts>>,
+    calls: &[Option<Arc<super::traits::CarrierContractView>>],
+    location: &CarrierLocation,
+    budget: &mut Budget,
+) -> Result<Result<Option<ir::CarrierRegionTerm>, Problem>, Exhausted> {
+    if !call_binding_subject_matches(binding, f, function, facts)
+        || !call_binding_view_matches(binding, calls)
+    {
+        return Ok(Err(Problem::Invalid(
+            "carrier write changed its exact authored call-result authority".into(),
+        )));
+    }
+    let CarrierChannel::Fixed(position) = location.channel else {
+        return Ok(Ok(None));
+    };
+    let depth = position.depth.checked_add(1).ok_or(Exhausted)?;
+    let rows = &binding.contract.source_region_env().carriers;
+    budget.spend(rows.len() + location.path.0.len())?;
+    Ok(Ok(rows
+        .iter()
+        .find(|row| {
+            row.parameter.is_none()
+                && row.location.path == location.path
+                && row.location.channel == CarrierChannel::Fixed(ReferencePosition { depth })
+        })
+        .map(|row| row.region.clone())))
+}
+
 /// The diagnostic pass visits blocks in ascending order, and publication
 /// rejects duplicates or reordered rows. Search only that immutable table,
 /// charging before every comparison, including failed/absent-key probes.
@@ -1339,6 +1392,235 @@ fn substituted_family_result(
     Ok(false)
 }
 
+/// Exact descriptor reborrow shape, not an admission of arbitrary non-Copy
+/// referents. The descriptor loan and stored element family remain separate.
+fn identity_slice_reborrow_rows(
+    original: &ir::CarrierContract,
+    expanded: &ir::CarrierContract,
+    budget: &mut Budget,
+) -> Result<Option<ir::ParamId>, Exhausted> {
+    budget.spend(64)?;
+    if original.inputs.len() != 2
+        || original.results.len() != 2
+        || original.writes.len() != 1
+        || expanded.inputs.len() != 2
+        || expanded.results.len() != 2
+        || expanded.writes.len() != 1
+    {
+        return Ok(None);
+    }
+    let family = &original.writes[0].destination;
+    let CarrierChannel::ParamTail {
+        parameter,
+        prefix: 0,
+    } = family.location.channel
+    else {
+        return Ok(None);
+    };
+    if family.location.path.0.as_ref() != [CarrierStep::Referent, CarrierStep::SliceElement]
+        || !exact_identity_write_rows(original, budget)?
+        || !exact_identity_write_rows(expanded, budget)?
+    {
+        return Ok(None);
+    }
+    let root = InputCarrier {
+        param: family.param,
+        location: fixed_location(ReferencePosition { depth: 0 }),
+    };
+    if !original.inputs.contains(&root) {
+        return Ok(None);
+    }
+    let Some(original_root) = original
+        .results
+        .iter()
+        .find(|row| row.location == root.location)
+    else {
+        return Ok(None);
+    };
+    let Some(original_family) = original
+        .results
+        .iter()
+        .find(|row| row.location == family.location)
+    else {
+        return Ok(None);
+    };
+    if original_root.sources.len() != 2
+        || !original_root.sources.contains(&root)
+        || !original_root.sources.contains(family)
+        || original_family.sources.as_ref() != std::slice::from_ref(family)
+    {
+        return Ok(None);
+    }
+    let actual = &expanded.writes[0].destination;
+    if actual.param != family.param
+        || actual.location.path != family.location.path
+        || actual.location.channel != CarrierChannel::Fixed(ReferencePosition { depth: 0 })
+        || !expanded.inputs.contains(&root)
+    {
+        return Ok(None);
+    }
+    let Some(expanded_root) = expanded
+        .results
+        .iter()
+        .find(|row| row.location == root.location)
+    else {
+        return Ok(None);
+    };
+    let Some(expanded_family) = expanded
+        .results
+        .iter()
+        .find(|row| row.location == actual.location)
+    else {
+        return Ok(None);
+    };
+    if expanded_root.sources.as_ref() != std::slice::from_ref(&root)
+        || expanded_family.sources.as_ref() != std::slice::from_ref(actual)
+    {
+        return Ok(None);
+    }
+    Ok(Some(parameter))
+}
+
+/// One returned mutable slot containing one mutable reference is a linked
+/// reborrow, not two independent affine results. Shape alone grants nothing:
+/// the consumer also authenticates both component anchors and the exact actual.
+fn identity_nested_slot_reborrow_rows(
+    original: &ir::CarrierContract,
+    expanded: &ir::CarrierContract,
+    budget: &mut Budget,
+) -> Result<Option<ir::ParamId>, Exhausted> {
+    budget.spend(96)?;
+    if original.inputs.len() != 2
+        || original.results.len() != 2
+        || original.writes.len() != 1
+        || expanded.inputs.len() != 2
+        || expanded.results.len() != 2
+        || expanded.writes.len() != 1
+        || !exact_identity_write_rows(original, budget)?
+        || !exact_identity_write_rows(expanded, budget)?
+    {
+        return Ok(None);
+    }
+    let family = &original.writes[0].destination;
+    let CarrierChannel::ParamTail {
+        parameter,
+        prefix: 0,
+    } = family.location.channel
+    else {
+        return Ok(None);
+    };
+    if family.location.path.0.as_ref() != [CarrierStep::Referent, CarrierStep::SliceElement] {
+        return Ok(None);
+    }
+    let root = InputCarrier {
+        param: family.param,
+        location: fixed_location(ReferencePosition { depth: 0 }),
+    };
+    let nested_original = CarrierLocation {
+        path: CarrierPath::default(),
+        channel: CarrierChannel::ParamTail {
+            parameter,
+            prefix: 1,
+        },
+    };
+    let nested_expanded = fixed_location(ReferencePosition { depth: 1 });
+    let actual = &expanded.writes[0].destination;
+    if original.inputs[0] != root
+        || original.inputs[1] != *family
+        || original.results[0].location != root.location
+        || original.results[0].sources.as_ref() != [root.clone(), family.clone()]
+        || original.results[1].location != nested_original
+        || original.results[1].sources.as_ref() != std::slice::from_ref(family)
+        || actual.param != family.param
+        || actual.location.path != family.location.path
+        || actual.location.channel != CarrierChannel::Fixed(ReferencePosition { depth: 0 })
+        || expanded.inputs[0] != root
+        || expanded.inputs[1] != *actual
+        || expanded.results[0].location != root.location
+        || expanded.results[0].sources.as_ref() != std::slice::from_ref(&root)
+        || expanded.results[1].location != nested_expanded
+        || expanded.results[1].sources.as_ref() != std::slice::from_ref(actual)
+    {
+        return Ok(None);
+    }
+    Ok(Some(parameter))
+}
+
+/// An identity envelope is a no-replacement proof only when its one source is
+/// the exact original input, not a type-equal sibling or a duplicated row.
+/// This predicate grants no loan or write permission by itself.
+fn exact_identity_write_rows(
+    contract: &ir::CarrierContract,
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    if contract.writes.is_empty() {
+        return Ok(false);
+    }
+    for (index, row) in contract.writes.iter().enumerate() {
+        budget.spend(add(contract.inputs.len(), add(index, row.sources.len())?)?)?;
+        if row.sources.len() != 1
+            || row.sources[0] != row.destination
+            || !contract.inputs.contains(&row.destination)
+            || contract.writes[..index]
+                .iter()
+                .any(|prior| prior.destination == row.destination)
+        {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Shape only: every authored write exchanges carriers of one exact original
+/// parameter family. Return only families with a nonidentity authored row:
+/// identity rows retain their exact source without copying the whole value.
+/// Actual carrier Copy permission and complete instantiation replay remain
+/// independent consumer checks, never inferred from this shape.
+fn copy_family_effect_rows(
+    contract: &ir::CarrierContract,
+    budget: &mut Budget,
+) -> Result<Option<Vec<ir::ParamId>>, Exhausted> {
+    if contract.writes.is_empty() {
+        return Ok(None);
+    }
+    let mut families = Vec::new();
+    for (index, row) in contract.writes.iter().enumerate() {
+        budget.spend(contract.inputs.len() + index + row.sources.len() + 1)?;
+        let CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        } = row.destination.location.channel
+        else {
+            return Ok(None);
+        };
+        if !contract.inputs.contains(&row.destination)
+            || contract.writes[..index]
+                .iter()
+                .any(|old| old.destination == row.destination)
+            || row.sources.is_empty()
+        {
+            return Ok(None);
+        }
+        for (source_index, source) in row.sources.iter().enumerate() {
+            budget.spend(contract.inputs.len() + source_index + 1)?;
+            if source.location.channel != row.destination.location.channel
+                || !contract.inputs.contains(source)
+                || row.sources[..source_index].contains(source)
+            {
+                return Ok(None);
+            }
+        }
+        budget.spend(families.len() + 1)?;
+        if row.sources.as_ref() != std::slice::from_ref(&row.destination)
+            && !families.contains(&parameter)
+        {
+            checked_vec_growth(&mut families, budget)?;
+            families.push(parameter);
+        }
+    }
+    Ok(Some(families))
+}
+
 fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signature, Exhausted> {
     budget.spend(f.params.len() + 1)?;
     budget.reserve_bytes(mul(f.params.len(), size_of::<Ty>())?)?;
@@ -1900,7 +2182,82 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
-        // Explicit `'static` slice element carriers admit only data that
+        // Concrete sequence carriers are not represented by the positional
+        // RefContract rows. Bind their original source locations independently,
+        // using exactly the same input snapshot and occurrence as the call.
+        for row in view.source_region_env().carriers.iter().filter(|row| {
+            row.parameter.is_some()
+                && row.location.path.0.contains(&CarrierStep::SliceElement)
+                && matches!(
+                    row.region,
+                    ir::CarrierRegionTerm::Named(_) | ir::CarrierRegionTerm::Fixed(_)
+                )
+        }) {
+            let Some(input) = source_region_input(view, row, self.budget)? else {
+                self.problem(
+                    block,
+                    None,
+                    Problem::Invalid(
+                        "source carrier region has no exact original issued input".into(),
+                    ),
+                )?;
+                continue;
+            };
+            let param = input.param;
+            let Some(snapshot) = entry.iter().find(|snapshot| snapshot.input == input) else {
+                return Err(Exhausted);
+            };
+            let actual = snapshot.origins.clone();
+            let sources = self.origin_regions(&actual)?;
+            self.retain(mul(sources.len(), size_of::<RegionKey>())?, sources.len())?;
+            let source_keys: Vec<_> = sources
+                .iter()
+                .map(|region| self.regions.keys[region.0].clone())
+                .collect();
+            let variable = regions
+                .iter()
+                .find(|binding| binding.schema == row.region && binding.component.is_none())
+                .ok_or(Exhausted)?
+                .region;
+            let prefix = value_projection(&row.location);
+            let mut invariant = false;
+            for (depth, step) in prefix.iter().enumerate() {
+                self.budget.spend(1)?;
+                if *step == Projection::Deref
+                    && matches!(
+                        ir::projected_ty(&signature.params[param], &prefix[..depth], &self.ledger)
+                            .map_err(|_| Exhausted)?,
+                        Ty::Ref {
+                            kind: BorrowKind::Mut,
+                            ..
+                        }
+                    )
+                {
+                    invariant = true;
+                }
+            }
+            let external = if invariant {
+                if let Some(Operand::Copy(actual) | Operand::Move(actual)) = args.get(param) {
+                    let mut component = actual.clone();
+                    component.projection.extend(prefix);
+                    self.lens(state, &component)?.0.iter().any(|target| {
+                        matches!(target.place.root, CanonicalRoot::ParameterReferent(..))
+                    })
+                } else {
+                    false
+                }
+            } else {
+                false
+            };
+            for key in source_keys {
+                let source = relation.node(key, self.budget)?;
+                relation.edge(source, variable, self.budget)?;
+                if external {
+                    relation.edge(variable, source, self.budget)?;
+                }
+            }
+        }
+        // Explicit 'static slice element carriers admit only data that
         // outlives every region, exactly like a fixed `'static` parameter.
         if self.diagnosing {
             let own_static = self
@@ -2824,6 +3181,35 @@ impl CarrierBuilder<'_, '_> {
         {
             target.precision = TargetPrecision::Subtree;
         }
+        // A shared slice descriptor denotes the complete issued element domain,
+        // not the storage of one returned element. Its original parameter
+        // carrier is authenticated by the same retained template substitution
+        // as every read cover. Widening retains that root and all authority,
+        // and cannot manufacture an element cell or a disjoint target.
+        if target.precision == TargetPrecision::Exact
+            && target.place.projection.is_empty()
+            && let CanonicalRoot::ParameterReferent(local, source) = &target.place.root
+            && let Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: result_referent,
+            } = ir::carrier_at(result, location, &self.ledger).map_err(|_| Exhausted)?
+        {
+            let locals = self
+                .family_cover_locals
+                .as_deref()
+                .unwrap_or(&self.original_locals);
+            let root = locals.get(local.0).ok_or(Exhausted)?;
+            let original = ir::carrier_at(root, source, &self.ledger).map_err(|_| Exhausted)?;
+            if let Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent,
+            } = original
+                && let Ty::Slice { .. } = referent.as_ref()
+                && referent.as_ref() != result_referent.as_ref()
+            {
+                target.precision = TargetPrecision::Subtree;
+            }
+        }
         Ok(target)
     }
     fn read_value(
@@ -3630,6 +4016,114 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(true)
     }
+    fn check_result_slot_write(
+        &mut self,
+        targets: &[Target],
+        origins: &CarrierOrigins,
+        block: BlockId,
+        statement: Option<usize>,
+    ) -> Result<(), Exhausted> {
+        // Authority follows the reference origin through moves, reborrows and
+        // forwarding. Do not infer authored lifetimes from the erased value Ty.
+        let mut obligations = Vec::new();
+        for (call, rows) in self.call_rows.iter().enumerate() {
+            self.budget.spend(rows.len())?;
+            for (location, origin) in rows {
+                self.budget.spend(
+                    targets
+                        .iter()
+                        .map(|target| target.authority.len() + 1)
+                        .sum(),
+                )?;
+                if targets
+                    .iter()
+                    .any(|target| target.authority.contains(&origin.0))
+                {
+                    checked_vec_growth(&mut obligations, self.budget)?;
+                    self.budget
+                        .reserve_bytes(location.path.0.len() * size_of::<CarrierStep>())?;
+                    obligations.push((BlockId(call), location.clone()));
+                }
+            }
+        }
+        if obligations.is_empty() {
+            return Ok(());
+        }
+        let sources = self.origin_regions(origins)?;
+        let own_static = self
+            .body
+            .as_ref()
+            .map_or(0, |body| body.ref_contract().static_regions);
+        for (call, location) in obligations {
+            let Some(index) = call_binding_index(&self.bindings, call, self.budget)? else {
+                self.problem(
+                    block,
+                    statement,
+                    Problem::Invalid(
+                        "carrier write lacks its exact sealed call-result region binding".into(),
+                    ),
+                )?;
+                continue;
+            };
+            let term = match call_result_slot_region(
+                &self.bindings[index],
+                self.f,
+                self.function.as_ref(),
+                self.authority.as_ref(),
+                &self.calls,
+                &location,
+                self.budget,
+            )? {
+                Ok(Some(term)) => term,
+                Ok(None) => continue,
+                Err(problem) => {
+                    self.problem(block, statement, problem)?;
+                    continue;
+                }
+            };
+            let binding = &self.bindings[index];
+            self.budget.spend(add(
+                binding.regions.len(),
+                mul(sources.len(), add(binding.relation.keys.len(), 1)?)?,
+            )?)?;
+            let invalid = if term == ir::CarrierRegionTerm::Static {
+                sources.iter().any(|region| {
+                    !matches!(self.regions.keys[region.0], RegionKey::Fixed(id)
+                        if own_static & (1u64 << id.0) != 0)
+                })
+            } else {
+                let expected = binding
+                    .regions
+                    .iter()
+                    .find(|row| row.schema == term && row.component.is_none());
+                sources.iter().any(|source| {
+                    let key = &self.regions.keys[source.0];
+                    let actual = binding
+                        .relation
+                        .keys
+                        .iter()
+                        .position(|candidate| candidate == key);
+                    match (actual, expected) {
+                        (Some(actual), Some(expected)) => !binding
+                            .relation
+                            .entails(AnalysisRegionId(actual), expected.region),
+                        _ => true,
+                    }
+                })
+            };
+            if invalid {
+                self.problem(
+                    block,
+                    statement,
+                    Problem::Invalid(
+                        "carrier store does not outlive the authored call-result referent lifetime"
+                            .into(),
+                    ),
+                )?;
+            }
+        }
+        Ok(())
+    }
     fn write_components(
         &mut self,
         state: &mut FlowState,
@@ -3689,7 +4183,10 @@ impl CarrierBuilder<'_, '_> {
             }
             let copy = self.copy_permission(&semantic)?;
             let mut weak_cover = false;
-            if copy && !definite && indices.len() != targets.len() {
+            if copy && indices.len() != targets.len() {
+                // Even a definite store through a summarized result selects
+                // only one element of its issued cover. Join every covered
+                // cell without claiming that any one was overwritten.
                 // Same weak subtree join as call effects: a store through a
                 // summarized element family updates every covered cell.
                 let mut covered = Vec::new();
@@ -3737,6 +4234,9 @@ impl CarrierBuilder<'_, '_> {
                         "affine carrier write requires one exact canonical destination".into(),
                     ),
                 )?;
+            }
+            if diagnose && !indices.is_empty() {
+                self.check_result_slot_write(&targets, origins, block, statement)?;
             }
             for index in indices {
                 // A by-value parameter's own reference slot keeps its declared
@@ -3812,7 +4312,7 @@ impl CarrierBuilder<'_, '_> {
                         )?;
                     }
                 }
-                if definite && targets.len() == 1 {
+                if definite && !weak_cover && targets.len() == 1 {
                     state.cells[index] = origins.clone();
                     state.overwritten.insert(index);
                 } else {
@@ -4399,6 +4899,7 @@ impl CarrierBuilder<'_, '_> {
             }
             let mut value = self.empty_origins()?;
             let mut fixed_contract = false;
+            let mut fixed_positioned = false;
             // A fixed result row whose region is reached only through a
             // parameter nested in an input aggregate (`Option<T>::unwrap`
             // with `T = &'a U`) names no positioned input. Its origin is the
@@ -4418,6 +4919,7 @@ impl CarrierBuilder<'_, '_> {
                 // structural sources always join the result's liveness.
                 fixed_sourceless = true;
                 for (input, suffix, precision) in return_inputs(&result.returns) {
+                    fixed_positioned = true;
                     let input_value = self.input_value(
                         &entry,
                         &args,
@@ -4477,15 +4979,43 @@ impl CarrierBuilder<'_, '_> {
                     .iter()
                     .find(|result| result.location == location)
             {
+                let result_carrier = ir::carrier_at(&signature.result, &location, &self.ledger)
+                    .map_err(|_| Exhausted)?;
+                let result_stores_carriers = if let Ty::Ref { referent, .. } = result_carrier {
+                    !ir::carrier_locations(&referent, &self.ledger)
+                        .map_err(|_| Exhausted)?
+                        .is_empty()
+                } else {
+                    false
+                };
                 for source in result
                     .sources
                     .iter()
                     .filter(|source| !source.location.path.0.is_empty())
                 {
                     let input = self.input_value(&entry, &args, source)?;
+                    let source_carrier = ir::carrier_at(
+                        signature.params.get(source.param).ok_or(Exhausted)?,
+                        &source.location,
+                        &self.ledger,
+                    )
+                    .map_err(|_| Exhausted)?;
+                    // An outlives source is not necessarily the returned
+                    // storage. A reference-free pointee (`str` here) cannot
+                    // contain the reference slot selected by a positioned
+                    // `&mut &str` result. Keep every loan dependency, but do
+                    // not turn that pointee into a carrier-storage target.
+                    let liveness_only = fixed_positioned
+                        && result_stores_carriers
+                        && matches!(source_carrier, Ty::Ref { ref referent, .. }
+                            if ir::carrier_locations(referent, &self.ledger)
+                                .map_err(|_| Exhausted)?.is_empty());
                     for parent in input.references.0.members() {
                         self.parents[row.0].insert(parent);
                         self.dependencies[row.0].insert(parent);
+                        if liveness_only {
+                            continue;
+                        }
                         for target in self.targets[parent].clone() {
                             let mut target = self.structural_result_target(
                                 target,
@@ -5178,6 +5708,490 @@ impl CarrierBuilder<'_, '_> {
             }
         }
     }
+    fn identity_slice_component_matches(
+        &mut self,
+        parameter: ir::ParamId,
+        original: &CarrierLocation,
+        expanded: &CarrierLocation,
+        mapping: &ir::CarrierComponentMapping,
+        nominals: &[ir::NominalCarrierMapping],
+    ) -> Result<bool, Exhausted> {
+        self.budget.spend(1)?;
+        if mapping.original_family != ir::CarrierFamily::Parameter(parameter) {
+            return Ok(false);
+        }
+        // Component mappings are relative to the substituted actual, not to
+        // the parameter's occurrence within the function signature. Replay
+        // both sides at that exact occurrence using the existing composer.
+        Ok(
+            self.compose_component(original, &mapping.original, nominals)? == *original
+                && self.compose_component(original, &mapping.substituted, nominals)? == *expanded,
+        )
+    }
+    fn identity_copy_slice_reborrow_admitted(
+        &mut self,
+        params: &[Ty],
+        referent: &Ty,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        let Ty::Slice { element } = referent else {
+            return Ok(false);
+        };
+        let Some(parameter) =
+            identity_slice_reborrow_rows(view.original_contract(), view.contract(), self.budget)?
+        else {
+            return Ok(false);
+        };
+        let original = &view.original_contract().writes[0].destination;
+        let expanded = &view.contract().writes[0].destination;
+        let Some(Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: input,
+        }) = params.get(original.param)
+        else {
+            return Ok(false);
+        };
+        if input.owned_sequence_element().is_none() {
+            return Ok(false);
+        }
+        let mut mapped = false;
+        for mapping in view.component_mappings() {
+            mapped |= self.identity_slice_component_matches(
+                parameter,
+                &original.location,
+                &expanded.location,
+                mapping,
+                view.nominal_mappings(),
+            )?;
+        }
+        if !mapped {
+            return Ok(false);
+        }
+        let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
+            return Ok(false);
+        };
+        // The entire slice is unsized and non-Copy. Permission is restricted
+        // instead to this sealed family actual and the result's stored element.
+        Ok(self.copy_permission_in(actual, authority)?
+            && self.copy_permission_in(element, authority)?)
+    }
+    fn identity_nested_slot_reborrow_admitted(
+        &mut self,
+        params: &[Ty],
+        result: &Ty,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: actual,
+        } = result
+        else {
+            return Ok(false);
+        };
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: leaf,
+        } = actual.as_ref()
+        else {
+            return Ok(false);
+        };
+        let Some(parameter) = identity_nested_slot_reborrow_rows(
+            view.original_contract(),
+            view.contract(),
+            self.budget,
+        )?
+        else {
+            return Ok(false);
+        };
+        let original = view.original_contract();
+        let expanded = view.contract();
+        let owner = original.writes[0].destination.param;
+        let Some(Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: sequence,
+        }) = params.get(owner)
+        else {
+            return Ok(false);
+        };
+        if sequence.owned_sequence_element() != Some(actual.as_ref()) {
+            return Ok(false);
+        }
+        let Some((_, sealed_actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)?
+        else {
+            return Ok(false);
+        };
+        if sealed_actual != actual.as_ref() || view.component_mappings().len() != 1 {
+            return Ok(false);
+        }
+        let mapping = &view.component_mappings()[0];
+        if !self.identity_slice_component_matches(
+            parameter,
+            &original.writes[0].destination.location,
+            &expanded.writes[0].destination.location,
+            mapping,
+            view.nominal_mappings(),
+        )? || !self.identity_slice_component_matches(
+            parameter,
+            &original.results[1].location,
+            &expanded.results[1].location,
+            mapping,
+            view.nominal_mappings(),
+        )? {
+            return Ok(false);
+        }
+        let facts = authority
+            .or(self.authority.as_deref())
+            .or(match self.facts {
+                FactsCtx::Validated(facts) => Some(facts),
+                _ => None,
+            });
+        if !facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
+            return Ok(false);
+        }
+        // The mutable reference itself stays affine. Only the reference-free
+        // pointee must be Copy, excluding nested or hidden carrier families.
+        let Some(locations) = self.metadata_value(ir::carrier_locations(leaf, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        Ok(locations.is_empty() && self.copy_permission_in(leaf, authority)?)
+    }
+    /// A single mutable reborrow may coexist with unchanged Copy referent
+    /// cells. This is not the general identity-effect fallback: both authored
+    /// and instantiated envelopes must be exact identities, every expanded
+    /// destination must be accounted for once, and no affine slot is writable.
+    fn identity_copy_reborrow_admitted(
+        &mut self,
+        params: &[Ty],
+        result: &Ty,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        let Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent,
+        } = result
+        else {
+            return Ok(false);
+        };
+        let referent_copy = self.copy_permission_in(referent, authority)?;
+        let slice_copy = !referent_copy
+            && self.identity_copy_slice_reborrow_admitted(params, referent, view, authority)?;
+        if !(referent_copy || slice_copy)
+            || !exact_identity_write_rows(view.original_contract(), self.budget)?
+            || !exact_identity_write_rows(view.contract(), self.budget)?
+        {
+            return Ok(false);
+        }
+        let mut destinations = Vec::new();
+        for write in view.original_contract().writes.iter() {
+            for (destination, _) in self.transport_effect_input(&write.destination, view, true)? {
+                self.budget
+                    .spend(destinations.len() + view.contract().writes.len() + 1)?;
+                if destinations.contains(&destination)
+                    || !view
+                        .contract()
+                        .writes
+                        .iter()
+                        .any(|row| row.destination == destination)
+                {
+                    return Ok(false);
+                }
+                let Some(parameter) = params.get(destination.param) else {
+                    return Ok(false);
+                };
+                let Some(semantic) = self.metadata_value(ir::carrier_at(
+                    parameter,
+                    &destination.location,
+                    &self.ledger,
+                ))?
+                else {
+                    return Ok(false);
+                };
+                if !self.copy_permission_in(&semantic, authority)? {
+                    return Ok(false);
+                }
+                self.retain(
+                    size_of::<InputCarrier>()
+                        + mul(destination.location.path.0.len(), size_of::<CarrierStep>())?,
+                    1,
+                )?;
+                checked_vec_growth(&mut destinations, self.budget)?;
+                destinations.push(destination);
+            }
+        }
+        Ok(destinations.len() == view.contract().writes.len())
+    }
+    /// Copy effects may retain an owned nested component of a non-Copy value.
+    /// Authenticate its relative coordinate against the selected actual, then
+    /// replay that coordinate at this exact original parameter occurrence.
+    /// The root-only identity-slice proof deliberately remains unchanged.
+    fn copy_family_component_matches(
+        &mut self,
+        parameter: ir::ParamId,
+        original: &CarrierLocation,
+        expanded: &CarrierLocation,
+        mapping: &ir::CarrierComponentMapping,
+        view: &super::traits::CarrierContractView,
+    ) -> Result<bool, Exhausted> {
+        self.budget.spend(1)?;
+        if mapping.original_family != ir::CarrierFamily::Parameter(parameter)
+            || original.channel
+                != (CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                })
+        {
+            return Ok(false);
+        }
+        let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
+            return Ok(false);
+        };
+        let Some(locations) = self.metadata_value(ir::carrier_locations(actual, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        for relative in locations.iter() {
+            self.budget
+                .spend(relative.path.0.len() + mapping.original.path.0.len() + 1)?;
+            if *relative == mapping.substituted
+                && mapping.original.path == relative.path
+                && mapping.original.channel
+                    == (CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: relative.channel.prefix(),
+                    })
+            {
+                return Ok(
+                    self.compose_component(original, relative, view.nominal_mappings())?
+                        == *expanded,
+                );
+            }
+        }
+        Ok(false)
+    }
+    /// Copy-only family writes do not transport affine authority. This proof
+    /// replays every original write/source and the one returned mutable loan;
+    /// it does not alter target, lifetime, alias or callee-envelope checks.
+    fn copy_family_reborrow_admitted(
+        &mut self,
+        params: &[Ty],
+        result: &Ty,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        let facts = authority
+            .or(self.authority.as_deref())
+            .or(match self.facts {
+                FactsCtx::Validated(facts) => Some(facts),
+                _ => None,
+            });
+        if !facts.is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed) {
+            return Ok(false);
+        }
+        let Some(families) = copy_family_effect_rows(view.original_contract(), self.budget)? else {
+            return Ok(false);
+        };
+        for parameter in families {
+            let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
+                return Ok(false);
+            };
+            if !self.copy_permission_in(actual, authority)? {
+                return Ok(false);
+            }
+        }
+        let mut affine_result = false;
+        for row in view.contract().results.iter() {
+            self.budget.spend(
+                row.sources.len()
+                    + view.contract().inputs.len()
+                    + view.original_contract().results.len()
+                    + 1,
+            )?;
+            let Some(semantic) =
+                self.metadata_value(ir::carrier_at(result, &row.location, &self.ledger))?
+            else {
+                return Ok(false);
+            };
+            if self.copy_permission_in(&semantic, authority)? {
+                continue;
+            }
+            if affine_result
+                || !matches!(
+                    semantic,
+                    Ty::Ref {
+                        kind: BorrowKind::Mut,
+                        ..
+                    }
+                )
+                || row.location.channel != CarrierChannel::Fixed(ReferencePosition { depth: 0 })
+                || !row
+                    .location
+                    .path
+                    .0
+                    .iter()
+                    .all(|step| matches!(step, CarrierStep::Field(_)))
+                || row.sources.len() != 1
+            {
+                return Ok(false);
+            }
+            let input = &row.sources[0];
+            if input.location.channel != CarrierChannel::Fixed(ReferencePosition { depth: 0 })
+                || !input
+                    .location
+                    .path
+                    .0
+                    .iter()
+                    .all(|step| matches!(step, CarrierStep::Field(_)))
+                || !view.contract().inputs.contains(input)
+            {
+                return Ok(false);
+            }
+            let Some(parameter) = params.get(input.param) else {
+                return Ok(false);
+            };
+            let Some(source) =
+                self.metadata_value(ir::carrier_at(parameter, &input.location, &self.ledger))?
+            else {
+                return Ok(false);
+            };
+            if !matches!(
+                source,
+                Ty::Ref {
+                    kind: BorrowKind::Mut,
+                    ..
+                }
+            ) {
+                return Ok(false);
+            }
+            let Some(original) = view
+                .original_contract()
+                .results
+                .iter()
+                .find(|original| original.location == row.location)
+            else {
+                return Ok(false);
+            };
+            let mut fixed_sources = original
+                .sources
+                .iter()
+                .filter(|source| matches!(source.location.channel, CarrierChannel::Fixed(_)));
+            if fixed_sources.next() != Some(input) || fixed_sources.next().is_some() {
+                return Ok(false);
+            }
+            affine_result = true;
+        }
+        if !affine_result || view.contract().writes.len() != 1 {
+            return Ok(false);
+        }
+        let mut destinations = Vec::new();
+        for write in view.original_contract().writes.iter() {
+            let CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0,
+            } = write.destination.location.channel
+            else {
+                return Ok(false);
+            };
+            for (destination, component) in
+                self.transport_effect_input(&write.destination, view, true)?
+            {
+                self.budget
+                    .spend(destinations.len() + view.contract().writes.len() + 1)?;
+                if destinations.contains(&destination) {
+                    return Ok(false);
+                }
+                let Some(expanded) = view
+                    .contract()
+                    .writes
+                    .iter()
+                    .find(|row| row.destination == destination)
+                else {
+                    return Ok(false);
+                };
+                let mut mapped = false;
+                for mapping in view.component_mappings() {
+                    mapped |= component.as_ref() == Some(&mapping.original)
+                        && self.copy_family_component_matches(
+                            parameter,
+                            &write.destination.location,
+                            &destination.location,
+                            mapping,
+                            view,
+                        )?;
+                }
+                if !mapped {
+                    return Ok(false);
+                }
+                let Some(input) = params.get(destination.param) else {
+                    return Ok(false);
+                };
+                let Some(semantic) = self.metadata_value(ir::carrier_at(
+                    input,
+                    &destination.location,
+                    &self.ledger,
+                ))?
+                else {
+                    return Ok(false);
+                };
+                if !self.copy_permission_in(&semantic, authority)? {
+                    return Ok(false);
+                }
+                let mut sources = Vec::new();
+                for source in write.sources.iter() {
+                    for (source, source_component) in
+                        self.transport_effect_input(source, view, false)?
+                    {
+                        if component.is_some()
+                            && source_component.is_some()
+                            && component != source_component
+                        {
+                            continue;
+                        }
+                        self.budget
+                            .spend(sources.len() + expanded.sources.len() + 1)?;
+                        if sources.contains(&source) || !expanded.sources.contains(&source) {
+                            return Ok(false);
+                        }
+                        let Some(input) = params.get(source.param) else {
+                            return Ok(false);
+                        };
+                        let Some(semantic) = self.metadata_value(ir::carrier_at(
+                            input,
+                            &source.location,
+                            &self.ledger,
+                        ))?
+                        else {
+                            return Ok(false);
+                        };
+                        if !self.copy_permission_in(&semantic, authority)? {
+                            return Ok(false);
+                        }
+                        self.retain(
+                            size_of::<InputCarrier>()
+                                + mul(source.location.path.0.len(), size_of::<CarrierStep>())?,
+                            1,
+                        )?;
+                        checked_vec_growth(&mut sources, self.budget)?;
+                        sources.push(source);
+                    }
+                }
+                if sources.len() != expanded.sources.len() {
+                    return Ok(false);
+                }
+                self.retain(
+                    size_of::<InputCarrier>()
+                        + mul(destination.location.path.0.len(), size_of::<CarrierStep>())?,
+                    1,
+                )?;
+                checked_vec_growth(&mut destinations, self.budget)?;
+                destinations.push(destination);
+            }
+        }
+        Ok(destinations.len() == view.contract().writes.len())
+    }
     fn affine_contract_admitted(
         &mut self,
         params: &[Ty],
@@ -5302,10 +6316,26 @@ impl CarrierBuilder<'_, '_> {
                 }
             }
         }
-        Ok((affine_results == 0 && affine_writes == 0)
+        let bounded = (affine_results == 0 && affine_writes == 0)
             || (affine_results <= 1 && write_channels == 0)
             || (affine_writes <= 1 && result_channels == 0)
-            || independent_pair)
+            || independent_pair;
+        if bounded {
+            return Ok(true);
+        }
+        if affine_results == 1
+            && affine_writes == 0
+            && write_channels == 1
+            && result_channels <= 2
+            && self.copy_family_reborrow_admitted(params, result, view, authority)?
+        {
+            return Ok(true);
+        }
+        Ok(affine_results == 1
+            && result_channels == 1
+            && affine_writes == 0
+            && (self.identity_copy_reborrow_admitted(params, result, view, authority)?
+                || self.identity_nested_slot_reborrow_admitted(params, result, view, authority)?))
     }
     fn audit_call_admission(&mut self) -> Result<(), Exhausted> {
         for index in 0..self.f.blocks.len() {
@@ -8381,6 +9411,123 @@ mod parameter_equality_tests {
     }
 
     #[test]
+    fn parameter_slice_result_widening_retains_original_issued_cover() {
+        let snapshot = Arc::new(crate::compiler::Snapshot {
+            input: crate::compiler::Input::Text(
+                "fn inspect(values:&[&i32]){let _=values;}fn main(){}".into(),
+            ),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let ledger = snapshot.budget.clone();
+        let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+        let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+        let requested = engine.request(key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = engine
+            .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+            .unwrap();
+        let publication = body
+            .publication
+            .as_ref()
+            .expect("genuine original slice parameter");
+        let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
+        let facts = publication.facts().clone();
+        let mut budget = Budget::new(32_000_000);
+        let mut builder = CarrierBuilder::new(
+            &function,
+            FactsCtx::Validated(&facts),
+            ledger,
+            &mut budget,
+            128 * 1024 * 1024,
+            None,
+        )
+        .unwrap();
+        let location = fixed_location(ReferencePosition { depth: 0 });
+        let (_, origin) = builder
+            .reference_inputs
+            .iter()
+            .find(|(input, _)| input.param == 0 && input.location == location)
+            .unwrap();
+        let target = builder.targets[origin.0][0].clone();
+        let element = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+        };
+        let result = Ty::Ref {
+            kind: BorrowKind::Shared,
+            referent: Arc::new(element.clone()),
+        };
+        let widened = builder
+            .structural_result_target(target.clone(), &result, &location)
+            .unwrap();
+        assert_eq!(widened.precision, TargetPrecision::Subtree);
+        assert_eq!(widened.place, target.place);
+        assert_eq!(widened.authority, target.authority);
+        let covers = builder
+            .family_cover_locals
+            .as_deref()
+            .unwrap_or(&builder.original_locals);
+        let complete = read_cell_cover(
+            covers,
+            &builder.cell_index,
+            &widened,
+            &CellChannel::ReferenceValue,
+            &mut Budget::new(1_000_000),
+        )
+        .unwrap();
+        assert!(complete.is_some_and(|cells| !cells.is_empty()));
+        assert!(
+            read_cell_cover(
+                covers,
+                &HashMap::new(),
+                &widened,
+                &CellChannel::ReferenceValue,
+                &mut Budget::new(1_000_000)
+            )
+            .unwrap()
+            .is_none()
+        );
+        let mut foreign = target.clone();
+        foreign.place.root =
+            CanonicalRoot::ParameterReferent(LocalId(usize::MAX), location.clone());
+        assert!(
+            builder
+                .structural_result_target(foreign, &result, &location)
+                .is_err()
+        );
+        let mut forged = target.clone();
+        let mut wrong_location = location.clone();
+        wrong_location.path = CarrierPath(Arc::from([CarrierStep::Field(0)]));
+        forged.place.root = CanonicalRoot::ParameterReferent(function.params[0], wrong_location);
+        assert!(
+            builder
+                .structural_result_target(forged, &result, &location)
+                .is_err()
+        );
+        let same = function.locals[function.params[0].0].ty.clone();
+        assert_eq!(
+            builder
+                .structural_result_target(target.clone(), &same, &location)
+                .unwrap()
+                .precision,
+            TargetPrecision::Exact
+        );
+        let mutable = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(element),
+        };
+        assert_eq!(
+            builder
+                .structural_result_target(target, &mutable, &location)
+                .unwrap()
+                .precision,
+            TargetPrecision::Exact
+        );
+    }
+
+    #[test]
     fn slice_summary_cover_requires_the_issued_cell_and_original_domain() {
         let element = Ty::Ref {
             kind: BorrowKind::Shared,
@@ -8451,6 +9598,162 @@ mod parameter_equality_tests {
             fixed_location(ReferencePosition { depth: 0 }),
         );
         assert_eq!(read(&locals, &cells, &foreign), None);
+    }
+
+    #[test]
+    fn heap_subtree_cover_requires_original_issued_reference_cells() {
+        let snapshot = Arc::new(crate::compiler::Snapshot {
+            input: crate::compiler::Input::Text(
+                "fn probe(values:&mut Vec<&'static str>,shared:&Vec<&'static str>,nested:&mut Vec<&&'static str>){}fn main(){}".into(),
+            ),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let budget = snapshot.budget.clone();
+        let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+        let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+        let requested = engine.request(key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = engine
+            .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+            .unwrap();
+        let publication = body
+            .publication
+            .as_ref()
+            .expect("genuine source publication");
+        let function = match publication.facts().phase() {
+            crate::compiler::traits::FactsPhase::Universal => {
+                cfg::lower_source_template(publication, &budget)
+                    .unwrap()
+                    .function()
+                    .clone()
+            }
+            crate::compiler::traits::FactsPhase::Closed => {
+                Arc::new(cfg::lower_source_closed(publication, &budget).unwrap())
+            }
+            crate::compiler::traits::FactsPhase::Schema => {
+                panic!("expected executable source facts")
+            }
+        };
+        let locals: Vec<_> = function
+            .locals
+            .iter()
+            .map(|local| local.ty.clone())
+            .collect();
+        let slot = CarrierLocation {
+            path: CarrierPath(Arc::from([
+                CarrierStep::Referent,
+                CarrierStep::SliceElement,
+            ])),
+            channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+        };
+        let view = publication
+            .facts()
+            .carrier_contract(ir::SignatureSubject::Body)
+            .unwrap();
+        let original = view
+            .source_region_env()
+            .carriers
+            .iter()
+            .find(|row| row.parameter == Some(0) && row.location == slot)
+            .expect("original typed sequence input region");
+        let issued = InputCarrier {
+            param: 0,
+            location: slot.clone(),
+        };
+        assert_eq!(
+            source_region_input(&view, original, &mut Budget::new(1_000_000)).unwrap(),
+            Some(issued)
+        );
+        for control in 0..3 {
+            let mut forged = original.clone();
+            match control {
+                0 => forged.parameter = Some(usize::MAX),
+                1 => forged.parameter = None,
+                2 => forged.location.path = CarrierPath(Arc::from([CarrierStep::Field(0)])),
+                _ => unreachable!(),
+            }
+            assert!(
+                source_region_input(&view, &forged, &mut Budget::new(1_000_000))
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let world = publication.facts().world();
+        assert!(
+            world
+                .carrier_writable_for_tests(&locals[function.params[0].0], &slot)
+                .unwrap()
+        );
+        assert!(
+            !world
+                .carrier_writable_for_tests(&locals[function.params[1].0], &slot)
+                .unwrap()
+        );
+        let mut nested_slot = slot.clone();
+        nested_slot.channel = CarrierChannel::Fixed(ReferencePosition { depth: 1 });
+        assert!(
+            !world
+                .carrier_writable_for_tests(&locals[function.params[2].0], &nested_slot)
+                .unwrap()
+        );
+        assert!(
+            !world
+                .carrier_writable_for_tests(&locals[function.params[0].0], &nested_slot)
+                .unwrap()
+        );
+        let local = function.params[0];
+        let root =
+            CanonicalRoot::ParameterReferent(local, fixed_location(ReferencePosition { depth: 0 }));
+        let target = Target {
+            place: CanonicalPlace {
+                root: root.clone(),
+                projection: vec![],
+            },
+            precision: TargetPrecision::Subtree,
+            authority: vec![],
+        };
+        let key = CellKey {
+            storage: CanonicalPlace {
+                root,
+                projection: vec![Projection::DynamicIndex(LocalId(usize::MAX))],
+            },
+            channel: CellChannel::ReferenceValue,
+        };
+        let read = |locals: &[Ty], cells: &HashMap<CellKey, usize>, target: &Target| {
+            read_cell_cover(
+                locals,
+                cells,
+                target,
+                &CellChannel::ReferenceValue,
+                &mut Budget::new(1_000_000),
+            )
+            .unwrap()
+        };
+        let cells = HashMap::from([(key.clone(), 17)]);
+        assert_eq!(read(&locals, &cells, &target), Some(vec![17]));
+        assert_eq!(read(&locals, &HashMap::new(), &target), None);
+        for projection in [
+            vec![Projection::ConstantIndex(0)],
+            vec![Projection::DynamicIndex(LocalId(0))],
+            vec![Projection::Field(0)],
+        ] {
+            let mut forged = key.clone();
+            forged.storage.projection = projection;
+            assert_eq!(read(&locals, &HashMap::from([(forged, 17)]), &target), None);
+        }
+        let mut foreign = target.clone();
+        foreign.place.root = CanonicalRoot::Owned(local);
+        assert_eq!(read(&locals, &cells, &foreign), None);
+        let mut wrong_original = locals.clone();
+        wrong_original[local.0] = Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Slice {
+                element: Arc::new(Ty::Int(ir::IntTy::I32)),
+            }),
+        };
+        assert_eq!(read(&wrong_original, &cells, &target), Some(vec![]));
     }
 
     pub(super) fn source_template(source: &str, index: usize) -> cfg::TemplateCfg {
@@ -8665,6 +9968,943 @@ mod parameter_equality_tests {
     }
 
     #[test]
+    fn copy_family_reborrow_replays_real_entry_calls_and_rejects_noncopy_sources() {
+        for (text, expected, check_key_carrier_forgeries) in [
+            (
+                r#"use std::collections::HashMap;fn main(){let mut m:HashMap<&str,usize>=HashMap::new();*m.entry("a").or_insert(0)+=1;}"#,
+                2,
+                true,
+            ),
+            (
+                r#"use std::collections::HashMap;fn main(){let mut m:HashMap<String,usize>=HashMap::new();let _entry=m.entry(String::from("a"));}"#,
+                0,
+                false,
+            ),
+            (
+                r#"use std::collections::BTreeMap;fn main(){let mut m:BTreeMap<usize,Vec<&str>>=BTreeMap::new();let _entry=m.entry(0);}"#,
+                1,
+                false,
+            ),
+            (
+                r#"use std::collections::BTreeMap;fn main(){let mut m:BTreeMap<usize,Vec<&mut i32>>=BTreeMap::new();let _entry=m.entry(0);}"#,
+                0,
+                false,
+            ),
+        ] {
+            let snapshot = Arc::new(crate::compiler::Snapshot {
+                input: crate::compiler::Input::Text(text.into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let ledger = snapshot.budget.clone();
+            let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+            let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+            let requested = engine.request(key.clone());
+            engine.run(1).unwrap();
+            requested.completion().unwrap();
+            let body = engine
+                .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+                .unwrap();
+            let publication = body
+                .publication
+                .as_ref()
+                .expect("genuine original main publication");
+            let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
+            let facts = publication.facts().clone();
+            let mut budget = Budget::new(32_000_000);
+            let mut builder = CarrierBuilder::new(
+                &function,
+                FactsCtx::Validated(&facts),
+                ledger,
+                &mut budget,
+                128 * 1024 * 1024,
+                None,
+            )
+            .unwrap();
+            builder.function = Some(function.clone());
+            builder.authority = Some(facts.clone());
+            let mut candidates = 0;
+            let mut admitted = 0;
+            for (index, block) in function.blocks.iter().enumerate() {
+                let Terminator::Call { signature, .. } = &block.terminator.value else {
+                    continue;
+                };
+                let Some(view) = builder.calls[index].clone() else {
+                    continue;
+                };
+                if copy_family_effect_rows(view.original_contract(), &mut Budget::new(1_000_000))
+                    .unwrap()
+                    .is_none()
+                    || view.original_contract().results.is_empty()
+                {
+                    continue;
+                }
+                candidates += 1;
+                let accepted = builder
+                    .copy_family_reborrow_admitted(
+                        &signature.params,
+                        &signature.result,
+                        &view,
+                        Some(&facts),
+                    )
+                    .unwrap();
+                admitted += usize::from(accepted);
+                if accepted {
+                    assert!(
+                        builder
+                            .affine_contract_admitted(
+                                &signature.params,
+                                &signature.result,
+                                &view,
+                                Some(&facts)
+                            )
+                            .unwrap()
+                    );
+                    let original = view.original_contract();
+                    let mut mapping_witnesses = 0;
+                    for write in original.writes.iter() {
+                        let CarrierChannel::ParamTail {
+                            parameter,
+                            prefix: 0,
+                        } = write.destination.location.channel
+                        else {
+                            unreachable!()
+                        };
+                        for (destination, component) in builder
+                            .transport_effect_input(&write.destination, &view, true)
+                            .unwrap()
+                        {
+                            let mapping = view
+                                .component_mappings()
+                                .iter()
+                                .find(|mapping| {
+                                    mapping.original_family
+                                        == ir::CarrierFamily::Parameter(parameter)
+                                        && component.as_ref() == Some(&mapping.original)
+                                })
+                                .expect("authenticated retained relative component");
+                            assert!(
+                                builder
+                                    .copy_family_component_matches(
+                                        parameter,
+                                        &write.destination.location,
+                                        &destination.location,
+                                        mapping,
+                                        &view
+                                    )
+                                    .unwrap()
+                            );
+                            mapping_witnesses += 1;
+                            for control in 0..6 {
+                                let mut forged = mapping.clone();
+                                let mut occurrence = write.destination.location.clone();
+                                let mut expanded = destination.location.clone();
+                                match control {
+                                    0 => {
+                                        forged.original.path =
+                                            CarrierPath(Arc::from([CarrierStep::Field(0)]))
+                                    }
+                                    1 => {
+                                        forged.substituted.path =
+                                            CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]))
+                                    }
+                                    2 => {
+                                        forged.original.channel = CarrierChannel::ParamTail {
+                                            parameter,
+                                            prefix: 1,
+                                        }
+                                    }
+                                    3 => {
+                                        forged.original_family =
+                                            ir::CarrierFamily::Parameter(ir::ParamId {
+                                                owner: parameter.owner,
+                                                index: u16::MAX,
+                                            })
+                                    }
+                                    4 => {
+                                        occurrence.path =
+                                            CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]))
+                                    }
+                                    _ => {
+                                        expanded.path =
+                                            CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]))
+                                    }
+                                }
+                                assert!(
+                                    !builder
+                                        .copy_family_component_matches(
+                                            parameter,
+                                            &occurrence,
+                                            &expanded,
+                                            &forged,
+                                            &view
+                                        )
+                                        .unwrap(),
+                                    "forged relative component {control}"
+                                );
+                            }
+                        }
+                    }
+                    assert!(mapping_witnesses > 0);
+                    if !check_key_carrier_forgeries {
+                        let families =
+                            copy_family_effect_rows(original, &mut Budget::new(1_000_000))
+                                .unwrap()
+                                .unwrap();
+                        let mut noncopy_identity = false;
+                        for (index, row) in original.writes.iter().enumerate() {
+                            let CarrierChannel::ParamTail {
+                                parameter,
+                                prefix: 0,
+                            } = row.destination.location.channel
+                            else {
+                                unreachable!()
+                            };
+                            let (_, actual) = view.parameter_actual(parameter).unwrap().unwrap();
+                            if row.sources.as_ref() != std::slice::from_ref(&row.destination)
+                                || builder.copy_permission_in(actual, Some(&facts)).unwrap()
+                            {
+                                continue;
+                            }
+                            noncopy_identity = true;
+                            assert!(!families.contains(&parameter));
+                            // A second same-family source changes identity into
+                            // mutation and must restore whole-actual Copy demand.
+                            let mut changed = original.clone();
+                            let mut inputs = changed.inputs.to_vec();
+                            let mut writes = changed.writes.to_vec();
+                            let mut other = row.destination.clone();
+                            other.param = usize::MAX;
+                            inputs.push(other.clone());
+                            writes[index].sources = Arc::from([row.destination.clone(), other]);
+                            changed.inputs = inputs.into();
+                            changed.writes = writes.into();
+                            assert!(
+                                copy_family_effect_rows(&changed, &mut Budget::new(1_000_000))
+                                    .unwrap()
+                                    .unwrap()
+                                    .contains(&parameter)
+                            );
+                        }
+                        assert!(noncopy_identity, "genuine nested non-Copy identity family");
+                    }
+                    for control in 0..7 {
+                        let mut forged = original.clone();
+                        let mut writes = forged.writes.to_vec();
+                        let mut inputs = forged.inputs.to_vec();
+                        match control {
+                            0 => writes[0].sources = Arc::from([]),
+                            1 => writes.push(writes[0].clone()),
+                            2 => {
+                                writes[0].sources = Arc::from([
+                                    writes[0].sources[0].clone(),
+                                    writes[0].sources[0].clone(),
+                                ])
+                            }
+                            3 => writes[0].destination.param = usize::MAX,
+                            4 => {
+                                writes[0].destination.location.path =
+                                    CarrierPath(Arc::from([CarrierStep::Field(usize::MAX)]))
+                            }
+                            5 => {
+                                let mut source = writes[0].sources[0].clone();
+                                source.location.channel =
+                                    CarrierChannel::Fixed(ReferencePosition { depth: 0 });
+                                writes[0].sources = Arc::from([source]);
+                            }
+                            _ => {
+                                let missing = inputs
+                                    .iter()
+                                    .position(|input| *input == writes[0].destination)
+                                    .unwrap();
+                                inputs.remove(missing);
+                            }
+                        }
+                        forged.writes = writes.into();
+                        forged.inputs = inputs.into();
+                        assert!(
+                            copy_family_effect_rows(&forged, &mut Budget::new(1_000_000))
+                                .unwrap()
+                                .is_none(),
+                            "forged shape {control}"
+                        );
+                    }
+                    assert!(copy_family_effect_rows(original, &mut Budget::new(0)).is_err());
+                    if check_key_carrier_forgeries
+                        && matches!(
+                            signature.params.first(),
+                            Some(Ty::Ref {
+                                kind: BorrowKind::Mut,
+                                ..
+                            })
+                        )
+                    {
+                        let mut shared = signature.params.clone();
+                        let Ty::Ref { referent, .. } = &shared[0] else {
+                            unreachable!()
+                        };
+                        shared[0] = Ty::Ref {
+                            kind: BorrowKind::Shared,
+                            referent: referent.clone(),
+                        };
+                        assert!(
+                            !builder
+                                .copy_family_reborrow_admitted(
+                                    &shared,
+                                    &signature.result,
+                                    &view,
+                                    Some(&facts)
+                                )
+                                .unwrap()
+                        );
+                        let mut noncopy = signature.params.clone();
+                        noncopy[1] = Ty::Ref {
+                            kind: BorrowKind::Mut,
+                            referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+                        };
+                        assert!(
+                            !builder
+                                .copy_family_reborrow_admitted(
+                                    &noncopy,
+                                    &signature.result,
+                                    &view,
+                                    Some(&facts)
+                                )
+                                .unwrap()
+                        );
+                        let write = &original.writes[0].destination;
+                        let expanded = &view.contract().writes[0].destination;
+                        let CarrierChannel::ParamTail { parameter, .. } = write.location.channel
+                        else {
+                            unreachable!()
+                        };
+                        let mapping = &view.component_mappings()[0];
+                        let mut forged = mapping.clone();
+                        forged.original.path = CarrierPath(Arc::from([CarrierStep::Field(0)]));
+                        assert!(
+                            !builder
+                                .identity_slice_component_matches(
+                                    parameter,
+                                    &write.location,
+                                    &expanded.location,
+                                    &forged,
+                                    view.nominal_mappings()
+                                )
+                                .unwrap()
+                        );
+                    }
+                }
+            }
+            assert!(
+                candidates > 0,
+                "real source must exercise the proof boundary"
+            );
+            assert_eq!(admitted, expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn identity_nested_slot_reborrow_authenticates_original_and_expanded_ownership() {
+        for (text, expected) in [
+            (
+                r#"fn main(){let mut a=1i32;let mut b=5i32;let mut v:Vec<&mut i32>=vec![&mut a,&mut b];*v[0]+=10;*v[1]=7;println!("{} {}",v[0],v[1]);}"#,
+                true,
+            ),
+            (
+                r#"fn main(){let mut text=String::from("text");let mut values=vec![&mut text];let _=&mut values[0usize];}"#,
+                false,
+            ),
+        ] {
+            let snapshot = Arc::new(crate::compiler::Snapshot {
+                input: crate::compiler::Input::Text(text.into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let ledger = snapshot.budget.clone();
+            let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+            let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+            let requested = engine.request(key.clone());
+            engine.run(1).unwrap();
+            requested.completion().unwrap();
+            let body = engine
+                .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+                .unwrap();
+            let publication = body
+                .publication
+                .as_ref()
+                .expect("genuine original main publication");
+            let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
+            let facts = publication.facts().clone();
+            let mut budget = Budget::new(32_000_000);
+            let mut builder = CarrierBuilder::new(
+                &function,
+                FactsCtx::Validated(&facts),
+                ledger,
+                &mut budget,
+                128 * 1024 * 1024,
+                None,
+            )
+            .unwrap();
+            builder.function = Some(function.clone());
+            builder.authority = Some(facts.clone());
+            let (signature, view) = function
+                .blocks
+                .iter()
+                .enumerate()
+                .find_map(|(index, block)| {
+                    let Terminator::Call { signature, .. } = &block.terminator.value else {
+                        return None;
+                    };
+                    let view = builder.calls[index].clone()?;
+                    identity_nested_slot_reborrow_rows(
+                        view.original_contract(),
+                        view.contract(),
+                        &mut Budget::new(1_000_000),
+                    )
+                    .unwrap()
+                    .map(|_| (signature.clone(), view))
+                })
+                .expect("genuine original nested-slot carrier rows");
+            assert!(
+                !builder
+                    .identity_copy_reborrow_admitted(
+                        &signature.params,
+                        &signature.result,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap(),
+                "the mutable reference leaf remains non-Copy"
+            );
+            assert_eq!(
+                builder
+                    .identity_nested_slot_reborrow_admitted(
+                        &signature.params,
+                        &signature.result,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap(),
+                expected
+            );
+            let Ty::Ref {
+                referent: actual, ..
+            } = &signature.result
+            else {
+                unreachable!()
+            };
+            let Ty::Ref { referent: leaf, .. } = actual.as_ref() else {
+                unreachable!()
+            };
+            assert_eq!(
+                builder.copy_permission_in(leaf, Some(&facts)).unwrap(),
+                expected,
+                "genuine non-Copy String pointee reaches the exclusive leaf boundary"
+            );
+            if !expected {
+                continue;
+            }
+            assert!(
+                builder
+                    .affine_contract_admitted(
+                        &signature.params,
+                        &signature.result,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap()
+            );
+            for side in 0..2 {
+                for mutation in 0..10 {
+                    let mut original = view.original_contract().clone();
+                    let mut expanded = view.contract().clone();
+                    let changed = if side == 0 {
+                        &mut original
+                    } else {
+                        &mut expanded
+                    };
+                    let mut inputs = changed.inputs.to_vec();
+                    let mut results = changed.results.to_vec();
+                    let mut writes = changed.writes.to_vec();
+                    match mutation {
+                        0 => writes[0].sources = Arc::from([inputs[0].clone()]),
+                        1 => writes[0].destination.param += 1,
+                        2 => writes[0].destination.location.path = CarrierPath::default(),
+                        3 => results[1].sources = Arc::from([inputs[0].clone()]),
+                        4 => results[0].sources = Arc::from([inputs[1].clone()]),
+                        5 => {
+                            results[1].location.path =
+                                CarrierPath(Arc::from([CarrierStep::Field(0)]))
+                        }
+                        6 => inputs.swap(0, 1),
+                        7 => writes.push(writes[0].clone()),
+                        8 => results.push(results[1].clone()),
+                        9 => writes[0].sources = Arc::from([inputs[1].clone(), inputs[1].clone()]),
+                        _ => unreachable!(),
+                    }
+                    changed.inputs = inputs.into();
+                    changed.results = results.into();
+                    changed.writes = writes.into();
+                    assert!(
+                        identity_nested_slot_reborrow_rows(
+                            &original,
+                            &expanded,
+                            &mut Budget::new(1_000_000)
+                        )
+                        .unwrap()
+                        .is_none(),
+                        "side={side} mutation={mutation}"
+                    );
+                }
+            }
+            let parameter = identity_nested_slot_reborrow_rows(
+                view.original_contract(),
+                view.contract(),
+                &mut Budget::new(1_000_000),
+            )
+            .unwrap()
+            .unwrap();
+            let mapping = &view.component_mappings()[0];
+            for control in 0..5 {
+                let mut forged = mapping.clone();
+                match control {
+                    0 => forged.original.path = CarrierPath(Arc::from([CarrierStep::Field(0)])),
+                    1 => forged.substituted.path = CarrierPath(Arc::from([CarrierStep::Field(0)])),
+                    2 => {
+                        forged.original_family = ir::CarrierFamily::Parameter(ir::ParamId {
+                            index: parameter.index + 1,
+                            ..parameter
+                        })
+                    }
+                    3 => {
+                        forged.original.channel = CarrierChannel::ParamTail {
+                            parameter,
+                            prefix: 1,
+                        }
+                    }
+                    4 => {
+                        forged.substituted.channel =
+                            CarrierChannel::Fixed(ReferencePosition { depth: 1 })
+                    }
+                    _ => unreachable!(),
+                }
+                for (original, expanded) in [
+                    (
+                        &view.original_contract().writes[0].destination.location,
+                        &view.contract().writes[0].destination.location,
+                    ),
+                    (
+                        &view.original_contract().results[1].location,
+                        &view.contract().results[1].location,
+                    ),
+                ] {
+                    assert!(
+                        !builder
+                            .identity_slice_component_matches(
+                                parameter,
+                                original,
+                                expanded,
+                                &forged,
+                                view.nominal_mappings()
+                            )
+                            .unwrap()
+                    );
+                }
+            }
+            let wrong_result = Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    referent: leaf.clone(),
+                }),
+            };
+            assert!(
+                !builder
+                    .identity_nested_slot_reborrow_admitted(
+                        &signature.params,
+                        &wrong_result,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap()
+            );
+            let same_shape = Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Ref {
+                    kind: BorrowKind::Mut,
+                    referent: Arc::new(Ty::Int(ir::IntTy::I64)),
+                }),
+            };
+            assert!(
+                !builder
+                    .identity_nested_slot_reborrow_admitted(
+                        &signature.params,
+                        &same_shape,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap()
+            );
+            let owner_index = view.original_contract().writes[0].destination.param;
+            let mut shared_owner = signature.params.clone();
+            let Ty::Ref {
+                referent: sequence, ..
+            } = &signature.params[owner_index]
+            else {
+                unreachable!()
+            };
+            shared_owner[owner_index] = Ty::Ref {
+                kind: BorrowKind::Shared,
+                referent: sequence.clone(),
+            };
+            assert!(
+                !builder
+                    .identity_nested_slot_reborrow_admitted(
+                        &shared_owner,
+                        &signature.result,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap()
+            );
+            let mut wrong_owner = signature.params.clone();
+            wrong_owner[view.original_contract().writes[0].destination.param] = Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Tuple(Arc::from([actual.as_ref().clone()]))),
+            };
+            assert!(
+                !builder
+                    .identity_nested_slot_reborrow_admitted(
+                        &wrong_owner,
+                        &signature.result,
+                        &view,
+                        Some(&facts)
+                    )
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn identity_slice_reborrow_rejects_noncopy_result_element_at_proof_boundary() {
+        let snapshot = Arc::new(crate::compiler::Snapshot {
+            input: crate::compiler::Input::Text(
+                r#"fn observe(values:&mut[&'static str]){println!("{}",values[0usize]);}fn main(){let mut values=vec!["first","second"];observe(&mut values);println!("{}",values[1usize]);}"#.into(),
+            ),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: ir::PlanBudget::default(),
+        });
+        let ledger = snapshot.budget.clone();
+        let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+        let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(1).key();
+        let requested = engine.request(key.clone());
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = engine
+            .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+            .unwrap();
+        let publication = body
+            .publication
+            .as_ref()
+            .expect("genuine original main publication");
+        let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
+        let facts = publication.facts().clone();
+        let mut budget = Budget::new(32_000_000);
+        let mut builder = CarrierBuilder::new(
+            &function,
+            FactsCtx::Validated(&facts),
+            ledger,
+            &mut budget,
+            128 * 1024 * 1024,
+            None,
+        )
+        .unwrap();
+        builder.function = Some(function.clone());
+        builder.authority = Some(facts.clone());
+        let mut selected = None;
+        for (index, block) in function.blocks.iter().enumerate() {
+            let Terminator::Call { signature, .. } = &block.terminator.value else {
+                continue;
+            };
+            let Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent,
+            } = &signature.result
+            else {
+                continue;
+            };
+            if !matches!(referent.as_ref(), Ty::Slice { .. }) {
+                continue;
+            }
+            let Some(view) = builder.calls[index].clone() else {
+                continue;
+            };
+            if identity_slice_reborrow_rows(
+                view.original_contract(),
+                view.contract(),
+                &mut Budget::new(1_000_000),
+            )
+            .unwrap()
+            .is_some()
+            {
+                selected = Some((signature.clone(), view));
+                break;
+            }
+        }
+        let (signature, view) =
+            selected.expect("exact original owned-sequence descriptor reborrow");
+        let Ty::Ref { referent, .. } = &signature.result else {
+            unreachable!()
+        };
+        assert!(
+            builder
+                .identity_copy_slice_reborrow_admitted(
+                    &signature.params,
+                    referent,
+                    &view,
+                    Some(&facts),
+                )
+                .unwrap(),
+            "genuine Copy element proof must reach and pass its leaf checks"
+        );
+        let parameter = identity_slice_reborrow_rows(
+            view.original_contract(),
+            view.contract(),
+            &mut Budget::new(1_000_000),
+        )
+        .unwrap()
+        .unwrap();
+        let original = &view.original_contract().writes[0].destination.location;
+        let expanded = &view.contract().writes[0].destination.location;
+        let mapping = view
+            .component_mappings()
+            .iter()
+            .find(|mapping| mapping.original_family == ir::CarrierFamily::Parameter(parameter))
+            .expect("genuine relative family mapping");
+        assert!(mapping.original.path.0.is_empty());
+        assert!(mapping.substituted.path.0.is_empty());
+        assert_ne!(&mapping.original, original);
+        assert!(
+            builder
+                .identity_slice_component_matches(
+                    parameter,
+                    original,
+                    expanded,
+                    mapping,
+                    view.nominal_mappings(),
+                )
+                .unwrap()
+        );
+        for control in 0..5 {
+            let mut forged = mapping.clone();
+            match control {
+                0 => forged.original.path = CarrierPath(Arc::from([CarrierStep::Field(0)])),
+                1 => forged.substituted.path = CarrierPath(Arc::from([CarrierStep::Field(0)])),
+                2 => {
+                    forged.original_family = ir::CarrierFamily::Parameter(ir::ParamId {
+                        index: parameter.index + 1,
+                        ..parameter
+                    })
+                }
+                3 => {
+                    forged.original.channel = CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    }
+                }
+                4 => {
+                    forged.substituted.channel =
+                        CarrierChannel::Fixed(ReferencePosition { depth: 1 })
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                !builder
+                    .identity_slice_component_matches(
+                        parameter,
+                        original,
+                        expanded,
+                        &forged,
+                        view.nominal_mappings(),
+                    )
+                    .unwrap(),
+                "forged relative mapping control {control}"
+            );
+        }
+        // This is a proof-level forged result leaf, not an unsupported source
+        // slice annotation. All original call/family/mapping authority is kept.
+        let noncopy = Ty::Slice {
+            element: Arc::new(Ty::Ref {
+                kind: BorrowKind::Mut,
+                referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+            }),
+        };
+        assert!(
+            !builder
+                .identity_copy_slice_reborrow_admitted(
+                    &signature.params,
+                    &noncopy,
+                    &view,
+                    Some(&facts),
+                )
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn identity_slice_reborrow_rows_reject_descriptor_family_aliases() {
+        let program = frontend::parse("fn view<T>(){}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let facts = plan.callable_facts(plan.function_decl(0).unwrap()).unwrap();
+        let parameter = facts.env().ordered_params().next().unwrap();
+        let root = InputCarrier {
+            param: 0,
+            location: fixed_location(ReferencePosition { depth: 0 }),
+        };
+        let family = InputCarrier {
+            param: 0,
+            location: CarrierLocation {
+                path: CarrierPath(Arc::from([
+                    CarrierStep::Referent,
+                    CarrierStep::SliceElement,
+                ])),
+                channel: CarrierChannel::ParamTail {
+                    parameter,
+                    prefix: 0,
+                },
+            },
+        };
+        let mut actual = family.clone();
+        actual.location.channel = CarrierChannel::Fixed(ReferencePosition { depth: 0 });
+        let original = ir::CarrierContract {
+            inputs: Arc::from([root.clone(), family.clone()]),
+            results: Arc::from([
+                ir::CarrierReturn {
+                    location: root.location.clone(),
+                    sources: Arc::from([root.clone(), family.clone()]),
+                },
+                ir::CarrierReturn {
+                    location: family.location.clone(),
+                    sources: Arc::from([family.clone()]),
+                },
+            ]),
+            writes: Arc::from([ir::CarrierWriteEnvelope {
+                destination: family.clone(),
+                sources: Arc::from([family.clone()]),
+            }]),
+        };
+        let expanded = ir::CarrierContract {
+            inputs: Arc::from([root.clone(), actual.clone()]),
+            results: Arc::from([
+                ir::CarrierReturn {
+                    location: root.location.clone(),
+                    sources: Arc::from([root.clone()]),
+                },
+                ir::CarrierReturn {
+                    location: actual.location.clone(),
+                    sources: Arc::from([actual.clone()]),
+                },
+            ]),
+            writes: Arc::from([ir::CarrierWriteEnvelope {
+                destination: actual.clone(),
+                sources: Arc::from([actual.clone()]),
+            }]),
+        };
+        let admitted = |original: &ir::CarrierContract, expanded: &ir::CarrierContract| {
+            identity_slice_reborrow_rows(original, expanded, &mut Budget::new(1_000_000))
+                .unwrap()
+                .is_some()
+        };
+        assert!(admitted(&original, &expanded));
+        let mut forged = original.clone();
+        let mut rows = forged.results.to_vec();
+        rows[0].sources = Arc::from([root.clone(), root.clone()]);
+        forged.results = rows.into();
+        assert!(!admitted(&forged, &expanded));
+        let mut forged = expanded.clone();
+        let mut rows = forged.results.to_vec();
+        rows[0].sources = Arc::from([root.clone(), actual.clone()]);
+        forged.results = rows.into();
+        assert!(!admitted(&original, &forged));
+        let mut forged = expanded.clone();
+        let mut rows = forged.results.to_vec();
+        rows[1].sources = Arc::from([root.clone()]);
+        forged.results = rows.into();
+        assert!(!admitted(&original, &forged));
+        let mut forged = expanded.clone();
+        let mut writes = forged.writes.to_vec();
+        writes[0].sources = Arc::from([root]);
+        forged.writes = writes.into();
+        assert!(!admitted(&original, &forged));
+        let mut forged = expanded.clone();
+        let mut inputs = forged.inputs.to_vec();
+        inputs[1].param = 1;
+        forged.inputs = inputs.into();
+        assert!(!admitted(&original, &forged));
+        assert!(identity_slice_reborrow_rows(&original, &expanded, &mut Budget::new(0)).is_err());
+    }
+
+    #[test]
+    fn identity_copy_reborrow_requires_exact_original_self_sources() {
+        let input = |param| InputCarrier {
+            param,
+            location: CarrierLocation {
+                path: ir::CarrierPath(Arc::from([
+                    CarrierStep::Referent,
+                    CarrierStep::SliceElement,
+                ])),
+                channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+            },
+        };
+        let row = ir::CarrierWriteEnvelope {
+            destination: input(0),
+            sources: Arc::from([input(0)]),
+        };
+        let original = ir::CarrierContract {
+            inputs: Arc::from([input(0), input(1)]),
+            results: Arc::from([]),
+            writes: Arc::from([row.clone()]),
+        };
+        let admitted = |contract: &ir::CarrierContract| {
+            exact_identity_write_rows(contract, &mut Budget::new(1_000_000)).unwrap()
+        };
+        assert!(admitted(&original));
+        let mut forged = original.clone();
+        let mut changed = row.clone();
+        // Type and path remain identical. Parameter identity must not change.
+        changed.sources = Arc::from([input(1)]);
+        forged.writes = Arc::from([changed]);
+        assert!(!admitted(&forged));
+        let mut changed = row.clone();
+        let mut sibling = input(0);
+        sibling.location.path = ir::CarrierPath(Arc::from([
+            CarrierStep::Referent,
+            CarrierStep::ConstantIndex(0),
+        ]));
+        changed.sources = Arc::from([sibling]);
+        forged.writes = Arc::from([changed]);
+        assert!(!admitted(&forged));
+        let mut changed = row.clone();
+        changed.sources = Arc::from([]);
+        forged.writes = Arc::from([changed]);
+        assert!(!admitted(&forged));
+        let mut changed = row.clone();
+        changed.sources = Arc::from([input(0), input(1)]);
+        forged.writes = Arc::from([changed]);
+        assert!(!admitted(&forged));
+        forged.writes = Arc::from([row.clone(), row]);
+        assert!(!admitted(&forged));
+        forged = original.clone();
+        forged.inputs = Arc::from([input(1)]);
+        assert!(!admitted(&forged));
+        forged = original.clone();
+        forged.writes = Arc::from([]);
+        assert!(!admitted(&forged));
+        assert!(exact_identity_write_rows(&original, &mut Budget::new(0)).is_err());
+    }
+
+    #[test]
     fn identity_fallback_does_not_admit_affine_results_or_replacement() {
         for source in [
             "fn pair<T,U>(x:T,y:U)->(T,U){(x,y)}fn main(){let mut a=1i32;let mut b=2i32;let (x,y)=pair::<&mut i32,&mut i32>(&mut a,&mut b);*x=10;*y=20;}",
@@ -8808,6 +11048,57 @@ mod parameter_equality_tests {
             Some(template.function()),
             None
         ));
+        // The authored-result write consumer uses these same exact subject
+        // and view guards before it can read any lifetime obligation.
+        let slot_region =
+            |binding: &CallCarrierBinding,
+             function: &Arc<cfg::Function>,
+             facts: Option<&Arc<super::super::traits::ValidatedFacts>>,
+             calls: &[Option<Arc<super::super::traits::CarrierContractView>>]| {
+                call_result_slot_region(
+                    binding,
+                    function,
+                    Some(function),
+                    facts,
+                    calls,
+                    &fixed_location(ReferencePosition { depth: 0 }),
+                    &mut Budget::new(1_000_000),
+                )
+                .unwrap()
+            };
+        assert!(matches!(
+            slot_region(
+                &original[0],
+                template.function(),
+                Some(template.facts()),
+                &calls
+            ),
+            Ok(None)
+        ));
+        for forged in [&foreign_view, &stale, &stale_call] {
+            assert!(
+                slot_region(forged, template.function(), Some(template.facts()), &calls).is_err()
+            );
+        }
+        assert!(
+            slot_region(
+                &original[0],
+                &cloned_function,
+                Some(template.facts()),
+                &calls
+            )
+            .is_err()
+        );
+        assert!(slot_region(&original[0], template.function(), None, &calls).is_err());
+        assert!(
+            slot_region(
+                &original[0],
+                template.function(),
+                Some(template.facts()),
+                &missing_view
+            )
+            .is_err()
+        );
         assert!(ordered_call_bindings(original, &mut Budget::new(1)).unwrap());
         for (index, binding) in original.iter().enumerate() {
             assert_eq!(

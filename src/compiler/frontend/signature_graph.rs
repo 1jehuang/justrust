@@ -512,6 +512,94 @@ pub(super) fn immediate<T>(
     }
 }
 
+// A direct original indexed borrow has a known type before return-origin
+// mapping exists. Diagnose its rigid mismatch before a missing origin can be
+// mistaken for forged metadata. This is rejection only, not contract authority.
+pub(super) fn validate_original_sequence_return(
+    program: &Program,
+    function: &Function,
+    params: &[ir::Ty],
+    result: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<(), String> {
+    budget.charge_work(1)?;
+    if !function.body.statements.is_empty() || params.len() != function.params.len() {
+        return Ok(());
+    }
+    let Some(Expr::BorrowValue { kind, value }) = function.body.tail.as_deref() else {
+        return Ok(());
+    };
+    let ir::Ty::Ref {
+        kind: expected_kind,
+        referent: expected,
+    } = result
+    else {
+        return Ok(());
+    };
+    if kind != expected_kind || !matches!(expected.as_ref(), ir::Ty::Param(_)) {
+        return Ok(());
+    }
+    let Expr::DynamicIndex { base, index, .. } = value.as_ref() else {
+        return Ok(());
+    };
+    if !matches!(
+        index.as_ref(),
+        Expr::Integer(IntegerLiteral {
+            suffix: Some(ir::IntTy::Usize),
+            ..
+        })
+    ) {
+        return Ok(());
+    }
+    let Expr::Var(path) = base.as_ref() else {
+        return Ok(());
+    };
+    // Reuse the original-source owner, including its distinction between a
+    // function's lexical scope and unrelated embedded scopes in the program.
+    // Never infer a local binding from the presence of program.scopes alone.
+    let identity = sr::OriginalBodyId::new(budget).map_err(|error| error.to_string())?;
+    let inventory = SourceInventory::build(program, function, identity, budget)
+        .map_err(|error| error.to_string())?;
+    let Some(binding) = inventory
+        .lookup(path, budget)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(());
+    };
+    for site in &inventory.bindings {
+        budget.charge_work(1)?;
+        if site.node != binding {
+            continue;
+        }
+        let Some(index) = site.parameter else {
+            return Ok(());
+        };
+        let parameter = params
+            .get(index)
+            .ok_or("invalid metadata: original indexed return parameter outside signature")?;
+        let ir::Ty::Ref {
+            kind: owner_kind,
+            referent: owner,
+        } = parameter
+        else {
+            return Ok(());
+        };
+        if *kind == ir::BorrowKind::Mut && *owner_kind != ir::BorrowKind::Mut {
+            return Ok(());
+        }
+        // This accessor authenticates the original native sequence binding,
+        // not the spelling Vec or an arbitrary user Index implementation.
+        let Some(element) = owner.owned_sequence_element() else {
+            return Ok(());
+        };
+        if matches!(element, ir::Ty::Param(_)) && element != expected.as_ref() {
+            return Err("E0308: original indexed return borrows a different rigid type parameter than the declared reference result".into());
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 pub(crate) fn compute_callable_signature(
     inputs: Arc<CallableSignatureInputs>,
     index: usize,
@@ -594,6 +682,7 @@ pub(crate) fn compute_callable_signature(
             }
         }
     }
+    validate_original_sequence_return(program, f, &params, &result, budget)?;
     let region_mode = source_region_mode(
         &f.regions,
         &f.params,

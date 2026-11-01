@@ -7343,9 +7343,9 @@ impl ValidatedTraitWorld {
                     element.as_ref().clone()
                 }
                 (ir::CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
-                    // A heap summary, like a slice summary, never grants write
-                    // authority to its potentially shared element family.
-                    all_mutable = false;
+                    // The authenticated owned sequence preserves enclosing access,
+                    // just like an array or slice. A shared referent anywhere on
+                    // the path still clears authority, including inside elements.
                     ty.owned_sequence_element().unwrap().clone()
                 }
                 (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {

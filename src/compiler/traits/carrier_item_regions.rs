@@ -677,9 +677,9 @@ impl ValidatedTraitWorld {
         if header.declaration != owner
             || parameter.owner.declaration != owner
             || info.own_env.arity() != 0
-            || header.schema_env.total_arity() != 4
-            || arguments.len() != 4
-            || raw.env.total_arity() != 4
+            || !matches!(header.schema_env.total_arity(), 2 | 4)
+            || arguments.len() != header.schema_env.total_arity()
+            || raw.env.total_arity() != header.schema_env.total_arity()
             || !self.method_environment_matches(&raw.env, &header.schema_env, &info.own_env)?
             || !header.trait_ref.args.is_empty()
             || !self.eq_ty(referent, &header.trait_ref.self_ty, 0)?
@@ -806,18 +806,36 @@ impl ValidatedTraitWorld {
             self_ty: &header.trait_ref.self_ty,
         };
         let mut output_projection = None;
+        let mut borrowed_output = false;
         for row in header.predicates.iter() {
-            if let Predicate::ProjectionEq {
-                projection,
-                ty: Ty::Param(p),
-            } = row
-                && p == parameter
-                && output_projection.replace(projection).is_some()
-            {
-                return Ok(None);
+            if let Predicate::ProjectionEq { projection, ty } = row {
+                let borrowed = matches!(ty,
+                    Ty::Ref { kind: ir::BorrowKind::Shared, referent }
+                        if referent.as_ref() == &Ty::Param(*parameter));
+                if (ty == &Ty::Param(*parameter) || borrowed)
+                    && output_projection.replace(projection).is_some()
+                {
+                    return Ok(None);
+                }
+                if borrowed {
+                    borrowed_output = true;
+                }
             }
         }
-        if output_projection.is_none() {
+        let Some(output_projection) = output_projection else {
+            return Ok(None);
+        };
+        if borrowed_output {
+            if !self.closed_borrowed_item_context(
+                *parameter,
+                output_projection,
+                projection,
+                &context,
+                facts,
+            )? {
+                return Ok(None);
+            }
+        } else if header.schema_env.total_arity() != 4 {
             return Ok(None);
         }
         // item_parameter_regions below follows this unique original equality
@@ -886,9 +904,30 @@ impl ValidatedTraitWorld {
         };
         retain::<ir::CarrierStep>(&self.budget, 1)?;
         let prefix = ir::CarrierPath(Arc::from([ir::CarrierStep::Referent]));
-        let Some(locations) =
+        let locations = if borrowed_output {
+            let ir::CarrierChannel::Fixed(position) = component.channel else {
+                return Ok(None);
+            };
+            let selected = if component.path.0.is_empty() {
+                ir::CarrierLocation {
+                    path: ir::CarrierPath::default(),
+                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                        depth: position.depth.checked_add(1).ok_or_else(|| {
+                            FactsError::resource(
+                                &self.budget,
+                                "borrowed item reference depth overflow",
+                            )
+                        })?,
+                    }),
+                }
+            } else {
+                self.item_region_prefix(&prefix, component)?
+            };
+            self.item_projection_regions(output_projection, &selected, &context, &prefix, facts, 0)?
+        } else {
             self.item_parameter_regions(*parameter, component, &context, &prefix, facts, 0)?
-        else {
+        };
+        let Some(locations) = locations else {
             return Ok(None);
         };
         if locations.is_empty() {
@@ -1326,6 +1365,89 @@ impl ValidatedTraitWorld {
             return Ok(None);
         }
         self.declared_callable_context(declaration).map(Some)
+    }
+
+    /// The borrowed-item inverse is an original declaration protocol, not a
+    /// monomorphic type match. Its two parameters are linked only by one exact
+    /// associated equality `I::Item = &T`, with canonical Clone(T). The wrapper
+    /// physically owns I and no T, so the outer item-reference region cannot
+    /// become a source for a stored carrier inside the cloned T.
+    fn closed_borrowed_item_context(
+        &self,
+        parameter: ParamId,
+        input: &ir::AssociatedTypeProjection,
+        required: &ir::AssociatedTypeProjection,
+        context: &ItemRegionContext<'_>,
+        facts: &ValidatedFacts,
+    ) -> Result<bool> {
+        if context.env.total_arity() != 2
+            || !input.trait_ref.args.is_empty()
+            || input.item != required.item
+            || input.trait_ref.declaration != required.trait_ref.declaration
+        {
+            return Ok(false);
+        }
+        let Ty::Param(iterator) = input.trait_ref.self_ty else {
+            return Ok(false);
+        };
+        if iterator == parameter
+            || iterator.owner != parameter.owner
+            || !context.env.contains(iterator)
+            || !context.env.contains(parameter)
+        {
+            return Ok(false);
+        }
+        let Ty::Struct(wrapper) = context.self_ty else {
+            return Ok(false);
+        };
+        if wrapper.def().type_args.as_ref() != [Ty::Param(iterator)] {
+            return Ok(false);
+        }
+        let fields = nominal_fields(&wrapper.def().fields, &self.budget)?;
+        if fields.len() != 1 || fields[0].ty != Ty::Param(iterator) {
+            return Ok(false);
+        }
+        let rows = self.item_region_predicates(context.predicates, context, facts)?;
+        if rows.len() != 3 {
+            return Ok(false);
+        }
+        retain::<Ty>(&self.budget, 1)?;
+        let expected = [
+            Predicate::Implements(TraitRef {
+                declaration: self.catalog.id(CatalogItem::Clone),
+                self_ty: Ty::Param(parameter),
+                args: Arc::from([]),
+            }),
+            Predicate::Implements(input.trait_ref.clone()),
+            Predicate::ProjectionEq {
+                projection: input.clone(),
+                ty: Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent: Arc::new(Ty::Param(parameter)),
+                },
+            },
+        ];
+        for expected in &expected {
+            let mut count = 0;
+            for row in &rows {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                count += usize::from(self.eq_predicate(row, expected)?);
+            }
+            if count != 1 {
+                return Ok(false);
+            }
+        }
+        let actual = self.item_region_substitution(&Ty::Param(parameter), context, facts)?;
+        self.require_in(
+            &Predicate::Implements(TraitRef {
+                declaration: self.catalog.id(CatalogItem::Clone),
+                self_ty: actual,
+                args: Arc::from([]),
+            }),
+            ProofContext::from_facts(facts),
+            &mut ProofScratch::default(),
+        )?;
+        Ok(true)
     }
 
     // Only the canonical built-in Sized obligation is lifetime-neutral. Replay
@@ -2155,5 +2277,97 @@ impl ValidatedTraitWorld {
             }
         }
         Ok(Some(sources))
+    }
+}
+
+#[cfg(test)]
+mod cloned_item_source_tests {
+    use super::*;
+    use crate::compiler::{CompilerProvider, Input, Snapshot, TemplateBodyFact, keys};
+    use crate::engine::Engine;
+
+    #[test]
+    fn cloned_struct_item_result_sources_use_original_stored_field() {
+        let budget = PlanBudget::default();
+        let source = "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let value=1i32;let escaped;{let values=vec![Item{value:&value}];let mut result=None;for item in values.iter().cloned(){result=Some(item);}escaped=result.unwrap();}println!(\"{}\",escaped.value);}";
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text(source.into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: budget.clone(),
+        });
+        let engine = Engine::new(CompilerProvider(snapshot));
+        let signatures = engine.request(keys::SignaturesDebtRoot.key());
+        let main = engine.request(keys::item(crate::compiler::TEMPLATE_BODY, 0));
+        engine.run(1).unwrap();
+        main.completion().unwrap();
+        let plan = signatures
+            .fact::<crate::compiler::frontend::PlanCtx>(0)
+            .unwrap();
+        let template = main.fact::<TemplateBodyFact>(0).unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let facts = plan
+            .instance_facts(&CallTarget {
+                declaration,
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        let calls = template
+            .checked
+            .exprs
+            .iter()
+            .filter_map(|expression| {
+                let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                    return None;
+                };
+                name.ends_with("next").then_some(target)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        let view = facts
+            .carrier_contract(SignatureSubject::Call(calls[0]))
+            .unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract.results.len(), 1);
+        let expected = ir::InputCarrier {
+            param: 0,
+            location: ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([
+                    ir::CarrierStep::Referent,
+                    ir::CarrierStep::Field(0),
+                    ir::CarrierStep::Field(0),
+                    ir::CarrierStep::Referent,
+                    ir::CarrierStep::SliceElement,
+                    ir::CarrierStep::Field(0),
+                ])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            },
+        };
+        assert_eq!(
+            view.contract.results[0].sources.as_ref(),
+            &[expected],
+            "original next result must retain only the original stored-field source",
+        );
+        for mutation in 0..3 {
+            let mut forged = view.as_ref().clone();
+            match mutation {
+                0 => {
+                    let source = &mut Arc::make_mut(
+                        &mut Arc::make_mut(&mut forged.contract.results)[0].sources,
+                    )[0];
+                    source.location.path = ir::CarrierPath(Arc::from([
+                        ir::CarrierStep::Referent,
+                        ir::CarrierStep::Field(0),
+                        ir::CarrierStep::Field(0),
+                    ]));
+                }
+                1 => forged.declaration = declaration,
+                _ => Arc::make_mut(&mut forged.contract.results)[0].sources = Arc::from([]),
+            }
+            assert!(
+                matches!(forged.validate_for(&facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                "forged original stored-field source mutation={mutation}"
+            );
+        }
+        assert!(!budget.has_resource_failure());
     }
 }
