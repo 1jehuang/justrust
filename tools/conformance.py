@@ -170,6 +170,7 @@ def source_identity(root: Path = ROOT) -> dict:
 def discover(root: Path = ROOT) -> dict:
     """Lexical discovery flags needing triage, not semantic classifications."""
     markers = []
+    oracle_selectors = []
     test_functions = []
     for path in sorted((root / "tests").rglob("*.rs")):
         lines = path.read_text().splitlines()
@@ -185,10 +186,14 @@ def discover(root: Path = ROOT) -> dict:
             if re.search(r"(?i)unsupported|#\[ignore|known.?gap|wrong.?code", line):
                 markers.append({"file": str(path.relative_to(root)), "line": number,
                                 "text": line.strip()[:240]})
+            if re.search(r'Command::new\s*\(\s*"rustc"\s*\)|var(?:_os)?\s*\(\s*"(?:RUSTC|JUSTRUST_REAL_RUSTC)"', line):
+                oracle_selectors.append({"file": str(path.relative_to(root)), "line": number,
+                                         "text": line.strip()[:240]})
     manifest = root / "tests/fixtures/full_programs/manifest.tsv"
     return {"integration_suites": integration_suites(root), "source_test_functions": test_functions,
             "triage_markers": markers,
-            "warning": "Lexical markers include rejection assertions and comments. Do not count them as features or proven gaps.",
+            "oracle_selector_leads": oracle_selectors,
+            "warning": "Lexical markers include rejection assertions, comments and source strings. Oracle selector leads require identity review, not automatic rewriting. Do not count them as features or proven gaps.",
             "full_program_manifest": str(manifest.relative_to(root)) if manifest.exists() else None}
 
 

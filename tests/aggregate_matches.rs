@@ -1,6 +1,9 @@
 //! Single-arm irrefutable aggregate matches, not general Rust pattern support.
 //! Refutable, guard/or/ref/ergonomic/enum-child patterns remain boundaries.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod pinned_stock;
+
 use justrust_engine::compiler::{self, frontend, ir, source};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -322,9 +325,19 @@ fn runtime(path: &Path, expected: &str, scratch: &Scratch) {
 }
 fn stock_all() {
     let scratch = Scratch::new();
-    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let version = capture(Command::new(&rustc).arg("-vV"), &scratch, 10);
-    assert_eq!(version.code, 0);
+    let rustc = pinned_stock::stock_rustc();
+    let version = capture(
+        Command::new(&rustc)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .arg("-vV"),
+        &scratch,
+        10,
+    );
+    pinned_stock::verify_version_output(
+        version.code == 0,
+        &String::from_utf8_lossy(&version.stdout),
+    )
+    .unwrap_or_else(|error| panic!("aggregate match differential oracle identity: {error}"));
     eprintln!(
         "AGGREGATE MATCH BASELINE:{BASELINE_STOCK}\nACTUAL STOCK:\n{}",
         String::from_utf8_lossy(&version.stdout)

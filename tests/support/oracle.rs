@@ -1,15 +1,20 @@
 //! Shared stock-oracle harness for small whole-program cases.
 //!
 //! Each case is compiled natively with `jr-rust` and its stdout/exit status or
-//! rejection is compared against the recorded expectation. When stock rustc is
-//! installed the same source is also compiled with it (edition 2024,
-//! `-Cpanic=abort`) and must agree, so expectations stay measured rather than
-//! assumed. Stock rustc is an external oracle only, never a compiler input.
+//! rejection is compared against the recorded expectation. The same source is
+//! compiled with the independently pinned stock rustc (edition 2024,
+//! `-Cpanic=abort`) and must agree. A missing or changed oracle fails closed,
+//! never silently skipping stock comparison. Stock rustc is an external oracle
+//! only, never a compiler input.
 #![allow(dead_code)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicU64, Ordering};
+
+#[path = "stock_rustc.rs"]
+#[allow(clippy::duplicate_mod)] // Some targets also use a specialized oracle harness.
+pub mod pinned_stock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Expect {
@@ -53,37 +58,24 @@ fn run(image: &Path) -> Output {
     Command::new(image).output().expect("run native image")
 }
 
-fn stock_available(compiler: &Path) -> bool {
-    let Ok(output) = Command::new(compiler)
-        .env_remove("RUSTC_BOOTSTRAP")
-        .arg("-vV")
-        .output()
-    else {
-        return false;
-    };
-    eprintln!(
-        "stock oracle executable: {}\n{}",
-        compiler.display(),
-        String::from_utf8_lossy(&output.stdout)
-    );
-    output.status.success()
+/// Run every case against jr-rust and the independently pinned stock rustc.
+pub fn check(tag: &str, cases: &[Case]) {
+    // Build-tool RUSTC/JUSTRUST_REAL_RUSTC selects the bootstrap, not this oracle.
+    let compiler = PathBuf::from(pinned_stock::stock_rustc());
+    check_with_compiler(tag, cases, &compiler);
 }
 
-/// Run every case against jr-rust (and stock rustc when installed).
-pub fn check(tag: &str, cases: &[Case]) {
-    // Bypass the recording shim: one exact compiler must own every case.
-    let compiler = std::env::var_os("JUSTRUST_REAL_RUSTC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("rustc"));
-    let stock = stock_available(&compiler);
+pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
+    pinned_stock::verify_compiler(compiler)
+        .unwrap_or_else(|error| panic!("{tag}: differential oracle identity: {error}"));
     let mut failures = Vec::new();
     for case in cases {
         let scratch = Scratch::new(tag);
         let source = scratch.path("main.rs");
         fs::write(&source, case.source).unwrap();
-        if stock {
+        {
             let image = scratch.path("stock");
-            let output = Command::new(&compiler)
+            let output = Command::new(compiler)
                 .env_remove("RUSTC_BOOTSTRAP")
                 .args(["--edition=2024", "-Cpanic=abort", "--color=never"])
                 .args(["--crate-name=oracle", "-Awarnings"])
@@ -155,10 +147,9 @@ pub fn check(tag: &str, cases: &[Case]) {
     }
     assert!(
         failures.is_empty(),
-        "{} of {} {tag} cases failed (stock oracle {}):\n{}",
+        "{} of {} {tag} cases failed (pinned stock oracle):\n{}",
         failures.len(),
         cases.len(),
-        if stock { "on" } else { "unavailable" },
         failures.join("\n")
     );
 }

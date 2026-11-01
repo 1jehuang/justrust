@@ -61,6 +61,18 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(result["known_gaps"], self.data["known_gaps"])
         self.assertFalse(result["requirements"][0]["mapped_gates_passed"])
 
+    def test_discovery_exposes_oracle_selection_without_claiming_semantic_coverage(self):
+        (self.root / "tests/a.rs").write_text(
+            'let a = Command::new("rustc");\n'
+            'let b = std::env::var_os("RUSTC");\n'
+            'let c = std::env::var("JUSTRUST_REAL_RUSTC");\n'
+            'let d = Command::new(pinned_stock::stock_rustc());\n'
+        )
+        result = c.discover(self.root)
+        self.assertEqual([row["line"] for row in result["oracle_selector_leads"]], [1, 2, 3])
+        self.assertIn("require identity review", result["warning"])
+        self.assertNotIn("full_rust_support_established", result)
+
     def test_even_green_all_tests_cannot_close_semantic_inventory(self):
         result = self.assess(self.report(["all-tests"]))
         self.assertTrue(result["full_gate_set_passed"])

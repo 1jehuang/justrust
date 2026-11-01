@@ -66,7 +66,10 @@ can rewrite both a report and its logs. Reports are not signed attestations.
 ## Discovery and development loop
 
 `discover` inventories every integration target and lexical unsupported/ignored/
-wrong-code markers. Its markers are *triage leads*, not feature coverage or an
+wrong-code markers, plus direct stock-oracle selectors needing identity review.
+Selectors can occur inside source strings or intentional bootstrap tests, so
+they must not be automatically rewritten or counted as oracle failures.
+Its markers are *triage leads*, not feature coverage or an
 automatic semantic classification. Known real failures have explicit requirement
 and test identities in the manifest. Never delete a valid unsupported source to
 make a gate green. Promote it only after unchanged stock/native acceptance and
