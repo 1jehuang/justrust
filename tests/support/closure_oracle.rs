@@ -28,6 +28,87 @@ impl Drop for Scratch {
     }
 }
 
+// Recognize compiler-owned diagnostic categories, not words in source names or
+// user identifiers. Source diagnostics can prepend path:line:column (or just
+// line:column), so strip only an actual numeric location before classification.
+fn diagnostic_head(diagnostic: &str) -> &str {
+    let head = diagnostic.lines().next().unwrap_or(diagnostic);
+    if let Some((location, message)) = head.split_once(": ") {
+        let mut parts = location.rsplit(':');
+        if parts
+            .next()
+            .is_some_and(|part| part.parse::<usize>().is_ok())
+            && parts
+                .next()
+                .is_some_and(|part| part.parse::<usize>().is_ok())
+        {
+            return message;
+        }
+    }
+    head
+}
+
+fn nonsemantic_diagnostic(diagnostic: &str) -> bool {
+    let head = diagnostic_head(diagnostic);
+    [
+        "infrastructure:",
+        "Infrastructure:",
+        "ResourceLimit:",
+        "source planning ResourceLimit (",
+        "contract:",
+        "unsupported:",
+        "Unsupported:",
+        "unsupported ",
+        "engine worker panicked:",
+        "provider outputs panicked:",
+        "provider start panicked:",
+        "provider future poll panicked:",
+        "provider future drop panicked:",
+        "cannot spawn worker:",
+    ]
+    .iter()
+    .any(|prefix| head.starts_with(prefix))
+        || matches!(
+            head,
+            "engine execution aborted" | "task future missing during poll"
+        )
+}
+
+/// A failed native run is evidence of invalid Rust only with a healthy resource
+/// ledger and complete graph capture. Pre-graph syntax failures may lack a
+/// report, but a reserved infrastructure/unsupported diagnostic is never proof.
+/// Error currently exposes text, not a typed diagnostic category, so only its
+/// reserved prefixes are examined. Resource words in user names are irrelevant.
+pub fn validate_invalid_failure(
+    failure: &justrust_engine::compiler::Failure,
+) -> Result<(), &'static str> {
+    if failure.resource_usage.first_failure.is_some() {
+        return Err("resource exhaustion is not semantic rejection");
+    }
+    if failure.resource_usage.poisoned {
+        return Err("poisoned resource ledger is not semantic rejection");
+    }
+    if let Some(report) = &failure.report {
+        if !report.capture_complete {
+            return Err("incomplete graph capture is not semantic rejection");
+        }
+        if report.events_dropped != 0 {
+            return Err("dropped graph events are not semantic rejection");
+        }
+        if report
+            .node_errors
+            .iter()
+            .any(|(_, error)| nonsemantic_diagnostic(&error.0))
+        {
+            return Err("nonsemantic graph failure is not invalid Rust evidence");
+        }
+    }
+    if nonsemantic_diagnostic(&failure.error.0) {
+        return Err("nonsemantic diagnostic is not invalid Rust evidence");
+    }
+    Ok(())
+}
+
 pub fn check(tag: &str, cases: &[Case]) {
     // The hosted bootstrap compiler is not the language oracle. Only the
     // independently pinned stock lookup (JR_STOCK_RUSTC) selects this binary.
@@ -103,8 +184,11 @@ pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
                 let image = scratch
                     .0
                     .join(format!("native-{index}-{workers}-{check_only}"));
-                let compiled =
-                    justrust_engine::compiler::compile(case.source.into(), workers, check_only);
+                let compiled = justrust_engine::compiler::compile_observed(
+                    case.source.into(),
+                    workers,
+                    check_only,
+                );
                 match (case.expect, compiled) {
                     (Expect::Run(expected), Ok(compiled)) => {
                         assert_eq!(
@@ -153,14 +237,12 @@ pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
                         case.name
                     ),
                     (Expect::Invalid(_), Err(error)) => {
-                        assert!(
-                            !error
-                                .to_string()
-                                .to_ascii_lowercase()
-                                .contains("unsupported"),
-                            "{} workers={workers} CHECK={check_only}: invalid closure reached unsupported boundary: {error}",
-                            case.name
-                        );
+                        validate_invalid_failure(&error).unwrap_or_else(|reason| {
+                            panic!(
+                                "{} workers={workers} CHECK={check_only}: {reason}: {error}",
+                                case.name
+                            )
+                        });
                         assert!(!image.exists(), "rejection wrote an image");
                     }
                 }
