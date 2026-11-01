@@ -73,18 +73,40 @@ fn native_heap_reference_carriers_preserve_initialized_origins() {
             {
                 assert!(
                     failure.error.to_string().contains("E0308"),
-                    "workers={workers} check={check}: {}",
+                    "workers={workers} check={check}: {}\n{source}",
                     failure.error
                 );
             }
             assert!(
                 failure.resource_usage.first_failure.is_none(),
-                "workers={workers} check={check}: {}",
+                "workers={workers} check={check}: {}\n{source}",
                 failure.error
             );
             assert!(
                 !failure.error.to_string().contains("unsupported"),
-                "workers={workers} check={check}: {}",
+                "workers={workers} check={check}: {}\n{source}",
+                failure.error
+            );
+        });
+    }
+}
+
+#[test]
+fn native_heap_reference_carrier_writes_reject_invalid_lifetimes() {
+    // Run these write controls independently of unrelated slice rejections.
+    for source in [
+        r#"fn head_mut<'a>(values:&'a mut Vec<&'static str>)->&'a mut &'static str{&mut values[0usize]}fn main(){let mut values=vec!["first"];let owner=String::from("local");*head_mut(&mut values)=owner.as_str();println!("{}",values[0usize]);}"#,
+        r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn main(){let escaped;{let owner=String::from("local");let mut values=vec![owner.as_str(),"tail"];*head_mut(&mut values)="second";escaped=values;}println!("{:?}",escaped);}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}\n{source}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}\n{source}",
                 failure.error
             );
         });
