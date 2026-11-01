@@ -28,6 +28,143 @@ pub(super) enum InferKind {
     Projection(ir::DeclId, ir::DeclId, Arc<[InferTerm]>),
 }
 
+// Partial context is reconstructed only from an original method header and an
+// authored outer annotation. Unmentioned receiver parameters stay unknown.
+pub(super) fn source_receiver_context(
+    view: &tr::OriginalCallableView,
+    expected: &ir::Ty,
+    budget: &ir::PlanBudget,
+) -> Result<InferTerm, FactsError> {
+    let receiver =
+        view.signature().params.first().ok_or_else(|| {
+            FactsError::unsupported(budget, "source context method has no receiver")
+        })?;
+    let state = CallInferenceState::new(None, budget)?;
+    let output = state.type_term(&view.signature().result, None, 0)?;
+    let expected = state.type_term(expected, None, 0)?;
+    let receiver = state.type_term(receiver, None, 0)?;
+    let mut bindings = Vec::new();
+    source_context_bindings(
+        &state,
+        view.generic_env(),
+        &output,
+        &expected,
+        &mut bindings,
+        0,
+    )?;
+    source_context_receiver(&state, view.generic_env(), &receiver, &bindings, 0)
+}
+
+fn source_context_bindings(
+    state: &CallInferenceState,
+    env: &ir::GenericEnv,
+    schema: &InferTerm,
+    expected: &InferTerm,
+    bindings: &mut Vec<(ir::ParamId, InferTerm)>,
+    at: usize,
+) -> Result<(), FactsError> {
+    state.work(at)?;
+    match (schema.as_ref(), expected.as_ref()) {
+        (InferKind::Rigid(ir::Ty::Param(parameter)), _) if env.contains(*parameter) => {
+            for (prior, value) in bindings.iter() {
+                state.work(at)?;
+                if prior == parameter {
+                    return if terms_equal(value, expected, &state.budget, at + 1)? {
+                        Ok(())
+                    } else {
+                        Err(FactsError::invalid(
+                            &state.budget,
+                            "source context parameter conflicts",
+                        ))
+                    };
+                }
+            }
+            push(bindings, (*parameter, expected.clone()), &state.budget)
+        }
+        (InferKind::Nominal(owner, children), InferKind::Nominal(actual, values))
+            if owner == actual && children.len() == values.len() =>
+        {
+            for (child, value) in children.iter().zip(values.iter()) {
+                source_context_bindings(state, env, child, value, bindings, at + 1)?;
+            }
+            Ok(())
+        }
+        (InferKind::Tuple(children), InferKind::Tuple(values))
+            if children.len() == values.len() =>
+        {
+            for (child, value) in children.iter().zip(values.iter()) {
+                source_context_bindings(state, env, child, value, bindings, at + 1)?;
+            }
+            Ok(())
+        }
+        (InferKind::Ref(kind, child), InferKind::Ref(actual, value)) if kind == actual => {
+            source_context_bindings(state, env, child, value, bindings, at + 1)
+        }
+        // Never invert a projection family, even if its checked value happens
+        // to equal the authored type. It supplies no receiver constraints.
+        (InferKind::Projection(..), _) => Err(FactsError::unsupported(
+            &state.budget,
+            "source context cannot invert a projection",
+        )),
+        _ if terms_equal(schema, expected, &state.budget, at + 1)? => Ok(()),
+        _ => Err(FactsError::unsupported(
+            &state.budget,
+            "source context output shape unsupported",
+        )),
+    }
+}
+
+fn source_context_receiver(
+    state: &CallInferenceState,
+    env: &ir::GenericEnv,
+    schema: &InferTerm,
+    bindings: &[(ir::ParamId, InferTerm)],
+    at: usize,
+) -> Result<InferTerm, FactsError> {
+    state.work(at)?;
+    let kind = match schema.as_ref() {
+        InferKind::Rigid(ir::Ty::Param(parameter)) if env.contains(*parameter) => {
+            for (prior, value) in bindings {
+                state.work(at)?;
+                if prior == parameter {
+                    return Ok(value.clone());
+                }
+            }
+            InferKind::Unknown(false)
+        }
+        InferKind::Nominal(owner, children) => {
+            let mut values = Vec::new();
+            for child in children.iter() {
+                let value = source_context_receiver(state, env, child, bindings, at + 1)?;
+                push(&mut values, value, &state.budget)?;
+            }
+            InferKind::Nominal(*owner, values.into())
+        }
+        InferKind::Tuple(children) => {
+            let mut values = Vec::new();
+            for child in children.iter() {
+                let value = source_context_receiver(state, env, child, bindings, at + 1)?;
+                push(&mut values, value, &state.budget)?;
+            }
+            InferKind::Tuple(values.into())
+        }
+        InferKind::Ref(kind, child) => InferKind::Ref(
+            *kind,
+            source_context_receiver(state, env, child, bindings, at + 1)?,
+        ),
+        // A receiver projection cannot be resolved using a checked actual.
+        InferKind::Projection(..) => InferKind::Unknown(false),
+        InferKind::Rigid(_) => return Ok(schema.clone()),
+        _ => {
+            return Err(FactsError::unsupported(
+                &state.budget,
+                "source context receiver shape unsupported",
+            ));
+        }
+    };
+    state.node(kind)
+}
+
 pub(super) struct CallInferenceState {
     budget: ir::PlanBudget,
     env: Option<Arc<ir::ParamEnv>>,
@@ -1945,12 +2082,61 @@ fn infer_input_schema_trace(
     )
 }
 
+pub(super) fn infer_call_input_trace_with_partial_context(
+    view: &tr::OriginalCallableView,
+    inputs: &[ir::Ty],
+    expected: Option<&InferTerm>,
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    let scopes = view.generic_env().scopes();
+    if scopes.len() > 1 {
+        return Err(FactsError::unsupported(
+            budget,
+            "input inference requires an authenticated own binder",
+        ));
+    }
+    infer_input_schema_trace_with_partial_context(
+        scopes.first().cloned(),
+        &view.signature().params,
+        &view.signature().result,
+        inputs,
+        expected,
+        budget,
+        materialize,
+    )
+}
+
 fn infer_input_schema_trace_with_context(
     env: Option<Arc<ir::ParamEnv>>,
     parameters: &[ir::Ty],
     result: &ir::Ty,
     inputs: &[ir::Ty],
     expected: Option<&ir::Ty>,
+    budget: &ir::PlanBudget,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+) -> Result<Arc<CallInputTrace>, FactsError> {
+    let state = CallInferenceState::new(None, budget)?;
+    let expected = expected
+        .map(|ty| state.type_term(ty, None, 0))
+        .transpose()?;
+    infer_input_schema_trace_with_partial_context(
+        env,
+        parameters,
+        result,
+        inputs,
+        expected.as_ref(),
+        budget,
+        materialize,
+    )
+}
+
+fn infer_input_schema_trace_with_partial_context(
+    env: Option<Arc<ir::ParamEnv>>,
+    parameters: &[ir::Ty],
+    result: &ir::Ty,
+    inputs: &[ir::Ty],
+    expected: Option<&InferTerm>,
     budget: &ir::PlanBudget,
     materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
 ) -> Result<Arc<CallInputTrace>, FactsError> {
@@ -1973,9 +2159,7 @@ fn infer_input_schema_trace_with_context(
         .try_reserve_exact(inputs.len())
         .map_err(|_| FactsError::resource(budget, "input evidence trace allocation"))?;
     let result_schema = state.type_term(result, binder, 0)?;
-    let expected = expected
-        .map(|ty| state.type_term(ty, None, 0))
-        .transpose()?;
+    let expected = expected.cloned();
     if let Some(expected) = &expected {
         state.constrain(&result_schema, expected, 0)?;
     }
@@ -2694,6 +2878,152 @@ mod call_input_trace_tests {
             .is_resource()
         );
         assert_eq!(tiny.first_resource_failure(), Some(first));
+    }
+
+    #[test]
+    fn source_method_output_context_preserves_only_shared_parameter_identities() {
+        let budget = ir::PlanBudget::default();
+        let owner = env(2);
+        let method = env(2);
+        let generic = ir::GenericEnv::new(&[owner.clone(), method.clone()], &budget).unwrap();
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let nominal = owner.binder().declaration;
+        let term = |ty: &ir::Ty| state.type_term(ty, None, 0).unwrap();
+        let output = state
+            .node(InferKind::Nominal(
+                nominal,
+                vec![term(&param(&owner, 0)), term(&param(&method, 0))].into(),
+            ))
+            .unwrap();
+        let receiver = state
+            .node(InferKind::Nominal(
+                nominal,
+                vec![term(&param(&owner, 0)), term(&param(&owner, 1))].into(),
+            ))
+            .unwrap();
+        let authored = state
+            .node(InferKind::Nominal(
+                nominal,
+                vec![
+                    term(&ir::Ty::Int(ir::IntTy::I32)),
+                    term(&ir::Ty::Int(ir::IntTy::U8)),
+                ]
+                .into(),
+            ))
+            .unwrap();
+        let mut bindings = Vec::new();
+        source_context_bindings(&state, &generic, &output, &authored, &mut bindings, 0).unwrap();
+        assert_eq!(bindings.len(), 2);
+        let partial = source_context_receiver(&state, &generic, &receiver, &bindings, 0).unwrap();
+        let InferKind::Nominal(_, fields) = partial.as_ref() else {
+            panic!("receiver nominal lost")
+        };
+        assert!(terms_equal(&fields[0], &term(&ir::Ty::Int(ir::IntTy::I32)), &budget, 0).unwrap());
+        assert!(matches!(fields[1].as_ref(), InferKind::Unknown(false)));
+        let projection = state
+            .node(InferKind::Projection(
+                nominal,
+                method.binder().declaration,
+                vec![term(&param(&owner, 0))].into(),
+            ))
+            .unwrap();
+        assert_eq!(
+            source_context_bindings(
+                &state,
+                &generic,
+                &projection,
+                &term(&ir::Ty::Int(ir::IntTy::I32)),
+                &mut Vec::new(),
+                0
+            )
+            .unwrap_err()
+            .kind(),
+            tr::FactsErrorKind::Unsupported
+        );
+        let duplicate = state
+            .node(InferKind::Nominal(
+                nominal,
+                vec![term(&param(&owner, 0)), term(&param(&owner, 0))].into(),
+            ))
+            .unwrap();
+        assert!(
+            source_context_bindings(&state, &generic, &duplicate, &authored, &mut Vec::new(), 0)
+                .is_err()
+        );
+        let foreign = env(1);
+        assert!(
+            source_context_bindings(
+                &state,
+                &generic,
+                &term(&param(&foreign, 0)),
+                &term(&ir::Ty::Int(ir::IntTy::I32)),
+                &mut Vec::new(),
+                0
+            )
+            .is_err()
+        );
+        let wrong_owner = state
+            .node(InferKind::Nominal(
+                method.binder().declaration,
+                match authored.as_ref() {
+                    InferKind::Nominal(_, fields) => fields.clone(),
+                    _ => unreachable!(),
+                },
+            ))
+            .unwrap();
+        assert!(
+            source_context_bindings(&state, &generic, &output, &wrong_owner, &mut Vec::new(), 0)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn partial_source_context_does_not_copy_changed_output_component() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let state = CallInferenceState::new(None, &budget).unwrap();
+        let expected = state
+            .node(InferKind::Tuple(
+                vec![
+                    state
+                        .type_term(&ir::Ty::Int(ir::IntTy::I32), None, 0)
+                        .unwrap(),
+                    state.node(InferKind::Unknown(false)).unwrap(),
+                ]
+                .into(),
+            ))
+            .unwrap();
+        let result = ir::Ty::Tuple(vec![param(&own, 0), ir::Ty::Bool].into());
+        let trace = infer_input_schema_trace_with_partial_context(
+            Some(own.clone()),
+            &[],
+            &result,
+            &[],
+            Some(&expected),
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(trace.actuals(), &[ir::Ty::Int(ir::IntTy::I32)]);
+        assert_eq!(
+            trace
+                .result_type(&budget, &mut |_, _| unreachable!())
+                .unwrap(),
+            ir::Ty::Tuple(vec![ir::Ty::Int(ir::IntTy::I32), ir::Ty::Bool].into())
+        );
+        let no_evidence = state.node(InferKind::Unknown(false)).unwrap();
+        assert!(
+            infer_input_schema_trace_with_partial_context(
+                Some(own),
+                &[],
+                &result,
+                &[],
+                Some(&no_evidence),
+                &budget,
+                &mut |_, _| unreachable!()
+            )
+            .is_err()
+        );
     }
 
     fn env(count: usize) -> Arc<ir::ParamEnv> {

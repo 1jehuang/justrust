@@ -7146,6 +7146,81 @@ fn source_result_context(
     checked: &ir::CheckedFunction,
     signatures: &Signatures,
     budget: &ir::PlanBudget,
+) -> Result<Option<sr::InferTerm>, FactsError> {
+    if let Some(expected) =
+        authored_source_result_context(original, site, call, checked, signatures, budget)?
+    {
+        let state = sr::CallInferenceState::new(None, budget)?;
+        return state.type_term(&expected, None, 0).map(Some);
+    }
+    // Only the exact source receiver edge may transfer context. Neither the
+    // selected method's spelling nor its instantiated result supplies a type.
+    for (index, parent) in original.calls.iter().enumerate() {
+        sr::work(budget, 1)?;
+        if parent.ordinary.is_some()
+            || !source_node_equal(&parent.node.child(10, 0, budget)?, &site.node, budget)?
+        {
+            continue;
+        }
+        let mut mapping = None;
+        for row in &original.call_mapping {
+            sr::work(budget, 1)?;
+            if row.0 == index && mapping.replace(row).is_some() {
+                return Err(FactsError::invalid(
+                    budget,
+                    "source context parent has duplicate correspondence",
+                ));
+            }
+        }
+        let Some((_, parent_id, original_target)) = mapping else {
+            // A source occurrence may precede its parent's checked receipt
+            // during producer preparation. Absence supplies no context and
+            // must not authorize inference from the checked result instead.
+            return Ok(None);
+        };
+        let Some(expression) = checked.exprs.get(parent_id.0) else {
+            return Err(FactsError::invalid(
+                budget,
+                "source context parent outside checked arena",
+            ));
+        };
+        let ir::ExprKind::Call { target, args, .. } = &expression.kind else {
+            return Ok(None);
+        };
+        validate_original_callee(original_target, target, budget)?;
+        if args.first() != Some(&call) {
+            return Err(FactsError::invalid(
+                budget,
+                "source context receiver correspondence changed",
+            ));
+        }
+        let Some(expected) = authored_source_result_context(
+            original, parent, *parent_id, checked, signatures, budget,
+        )?
+        else {
+            return Ok(None);
+        };
+        let ir::Callee::Direct(original_target) = original_target else {
+            return Ok(None);
+        };
+        let view = original
+            .facts
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(
+                original_target.declaration,
+            ))?;
+        view.validate_for(&original.facts)?;
+        return sr::source_receiver_context(&view, &expected, budget).map(Some);
+    }
+    Ok(None)
+}
+
+fn authored_source_result_context(
+    original: &OriginalSource,
+    site: &SourceCallSite,
+    call: ir::ExprId,
+    checked: &ir::CheckedFunction,
+    signatures: &Signatures,
+    budget: &ir::PlanBudget,
 ) -> Result<Option<ir::Ty>, FactsError> {
     let root = sr::SourceNode {
         owner: site.node.owner.clone(),
@@ -7273,7 +7348,7 @@ fn replay_shared_local_inputs(
         }
         sr::push(&mut input_types, input, budget)?;
     }
-    let trace = sr::infer_call_input_trace_with_context(
+    let trace = sr::infer_call_input_trace_with_partial_context(
         view,
         &input_types,
         expected.as_ref(),

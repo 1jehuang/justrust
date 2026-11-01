@@ -1460,8 +1460,7 @@ impl Replay<'_> {
         let mut state = sr::CallInferenceState::new(Some(env.clone()), self.budget)?;
         let result_schema =
             state.type_term(&view.signature().result, Some(env.binder()), depth + 1)?;
-        let expected_term = state.type_term(&expected, None, depth + 1)?;
-        state.constrain(&result_schema, &expected_term, depth + 1)?;
+        state.constrain(&result_schema, &expected, depth + 1)?;
         let mut materialize = |decl, args: &[ir::Ty]| {
             self.original
                 .plan

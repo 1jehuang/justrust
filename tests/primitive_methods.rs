@@ -1290,6 +1290,20 @@ fn main() {
                 source: r#"fn bad(s: &str) -> Result<i32, u8> { let n: i32 = s.parse().map_err(|e: u8| e)?; Ok(n) } fn main() {}"#,
                 expect: Expect::Invalid("E0271"),
             },
+            Case {
+                name: "unused_adapter_context_cannot_override_original_input",
+                source: r#"fn get<T>(value: T) -> Result<T, bool> { Ok(value) }
+fn unused() { let result: Result<i32, u8> = get(true).map_err(|_| 0u8); }
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_adapter_mapped_result_must_match_authored_context",
+                source: r#"fn get<T>(value: T) -> Result<T, bool> { Ok(value) }
+fn unused() { let result: Result<i32, u8> = get(7i32).map_err(|_| true); }
+fn main() {}"#,
+                expect: Expect::Invalid("E0308"),
+            },
         ],
     );
 }
