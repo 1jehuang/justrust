@@ -3,8 +3,9 @@
 //! struct or enum declaration. The generated text is inserted after the item
 //! during source preparation (as synthetic provenance) and is then parsed,
 //! resolved and checked exactly like hand-written impls. Generated code uses
-//! fully qualified `<FieldTy as Trait>::method` calls so it never depends on
-//! method-probe or operator lowering, and every type parameter receives the
+//! qualified `<FieldTy as Trait>::method` calls (with reference Clone Self
+//! inferred from the exact field binding), so it never depends on method-probe
+//! or operator lowering, and every type parameter receives the
 //! derived trait as a bound, as stock rustc does.
 use std::fmt::Write;
 
@@ -517,7 +518,20 @@ fn gen_clone(input: &Input, copy: bool) -> String {
         let (pat, binds) = pattern(&path, fields, "f");
         let values: Vec<_> = binds
             .iter()
-            .map(|(b, t)| format!("<{t} as Clone>::clone({b})"))
+            .map(|(b, t)| {
+                // A ref-pattern binding has type &FieldTy. Infer Self from
+                // that exact binding for a reference field, rather than
+                // replaying its named declaration lifetime as a body-local
+                // type annotation. The original field and impl result retain
+                // their declaration-owned lifetime rows. Qualified Clone
+                // selection still requires Clone on FieldTy, not its referent.
+                let owner = if t.trim_start().starts_with('&') {
+                    "_"
+                } else {
+                    t.as_str()
+                };
+                format!("<{owner} as Clone>::clone({b})")
+            })
             .collect();
         let _ = write!(arms, "&{pat} => {}, ", construct(&path, fields, &values));
     }
@@ -833,6 +847,22 @@ pub(super) fn default_attribute_ranges(item: &str) -> Vec<std::ops::Range<usize>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reference_clone_uses_original_field_binding_not_a_local_lifetime_annotation() {
+        let item = "struct Item<'a>{value:&'a i32,tag:i32}";
+        let output = expand(item, &["Clone".into()]).unwrap();
+        let input = parse(item).unwrap();
+        assert!(output.contains(&input.header("Clone", Some("Clone"))));
+        assert!(output.contains(&format!("-> {}", input.self_ty())));
+        assert!(output.contains("value: ref f0"), "{output}");
+        assert!(output.contains("<_ as Clone>::clone(f0)"), "{output}");
+        assert!(output.contains("<i32 as Clone>::clone(f1)"), "{output}");
+        assert!(!output.contains("<&"), "{output}");
+        let tuple = expand("struct Pair<'a>(&'a i32,i32);", &["Clone".into()]).unwrap();
+        assert!(tuple.contains("<_ as Clone>::clone(f0)"), "{tuple}");
+        assert!(tuple.contains("<i32 as Clone>::clone(f1)"), "{tuple}");
+    }
 
     #[test]
     fn generates_struct_and_enum_impls() {

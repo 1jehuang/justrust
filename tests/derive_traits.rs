@@ -9,6 +9,40 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn derived_reference_fields_keep_original_lifetime_authority() {
+    oracle::check(
+        "derive-reference-field-authority",
+        &[
+            Case {
+                name: "reference_clone_survives_carrier",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let value=7i32;let escaped;{let item=Item{value:&value};escaped=item.clone();}println!(\"{}\",escaped.value);}",
+                expect: Expect::Run("7\n"),
+            },
+            Case {
+                name: "reference_self_not_referent_must_implement_clone",
+                source: "struct NonClone;#[derive(Clone)]struct Item<'a>{value:&'a NonClone,tag:i32}fn main(){let value=NonClone;let item=Item{value:&value,tag:9i32};let cloned=item.clone();let _=cloned.value;println!(\"{}\",cloned.tag);}",
+                expect: Expect::Run("9\n"),
+            },
+            Case {
+                name: "reference_clone_cannot_escape_original_referent",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let escaped;{let value=7i32;let item=Item{value:&value};escaped=item.clone();}println!(\"{}\",escaped.value);}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "reference_clone_keeps_original_referent_loan",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let mut value=7i32;let item=Item{value:&value};let cloned=item.clone();value=8i32;println!(\"{}\",cloned.value);}",
+                expect: Expect::Invalid("E0506"),
+            },
+            Case {
+                name: "unused_mutable_reference_field_is_not_clone",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a mut i32}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn derived_impls_match_stock() {
     oracle::check(
         "derive_traits_run",
