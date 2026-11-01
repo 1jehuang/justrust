@@ -14,7 +14,7 @@ fn overloadable(ty: &ir::Ty) -> bool {
     )
 }
 
-fn constructor_operand(e: &Expr) -> bool {
+pub(super) fn constructor_operand(e: &Expr) -> bool {
     let mut base = e;
     while let Expr::Apply { value, .. } = base {
         base = value;
@@ -845,13 +845,14 @@ impl type_check::Checker<'_> {
         Ok(Some((result, completes)))
     }
 
-    /// Prelude trait `std::<module>::<name>` and its method `method`.
-    pub(super) fn operator_trait(
+    /// Inspect only already-present canonical trait metadata. Absence supplies
+    /// no inference equation and does not demand an operator capability early.
+    pub(super) fn available_operator_trait(
         &self,
         module: &str,
         name: &str,
         method: &str,
-    ) -> Result<(ir::DeclId, AstIdent), String> {
+    ) -> Result<Option<(ir::DeclId, AstIdent)>, String> {
         let plan = self.signatures.plan()?;
         let names = plan.program.names.as_ref();
         let suffix = format!("::{module}::{name}");
@@ -866,13 +867,24 @@ impl type_check::Checker<'_> {
                     .spelling(item.signature.name)
                     .map_err(native_adapter::name_diagnostic)?;
                 if spelling == method {
-                    return Ok((*id, item.signature.name));
+                    return Ok(Some((*id, item.signature.name)));
                 }
             }
         }
-        Err(format!(
-            "unsupported: operator trait std::{module}::{name} is not available"
-        ))
+        Ok(None)
+    }
+
+    /// Prelude trait `std::<module>::<name>` and its method `method`.
+    pub(super) fn operator_trait(
+        &self,
+        module: &str,
+        name: &str,
+        method: &str,
+    ) -> Result<(ir::DeclId, AstIdent), String> {
+        self.available_operator_trait(module, name, method)?
+            .ok_or_else(|| {
+                format!("unsupported: operator trait std::{module}::{name} is not available")
+            })
     }
 
     pub(super) fn operator_call(
@@ -967,7 +979,16 @@ impl type_check::Checker<'_> {
                             let (place, _, _) = self.checked_place(&place)?;
                             self.borrow_expression(kind, place)?
                         } else {
-                            self.borrow_value(kind, value, None)?
+                            // The selected comparison signature constrains a
+                            // constructor receiver just as it constrains the
+                            // RHS in finish_checked_call_mode. Do not default
+                            // the LHS's literals again while borrowing it.
+                            let expected = if module == "cmp" && constructor_operand(value) {
+                                signature.params.first()
+                            } else {
+                                None
+                            };
+                            self.borrow_value(kind, value, expected)?
                         }
                     }
                     First::Place(kind, place) => {
@@ -1038,7 +1059,14 @@ impl type_check::Checker<'_> {
                 // stock. Typing it standalone would apply literal fallback
                 // (`W<i32>`) before the trait candidate is tried.
                 let rhs = if constructor_operand(right) {
-                    None
+                    // A completed body equation can identify a heterogeneous
+                    // RHS. Do not invoke independent constructor inference:
+                    // absent a solved hint, preserve the selected-impl path.
+                    if spec.0 == "cmp" {
+                        self.solved_receiver_hint(right)
+                    } else {
+                        None
+                    }
                 } else {
                     self.method_receiver_hint(right)?
                 };

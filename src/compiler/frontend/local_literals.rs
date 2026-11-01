@@ -2913,8 +2913,33 @@ impl<'s> Solver<'_, '_, 's> {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                let left_site = left.as_ref() as *const Expr as usize;
+                let right_site = right.as_ref() as *const Expr as usize;
+                let constructor = super::super::operators::constructor_operand(left);
+                let right_constructor = super::super::operators::constructor_operand(right);
                 let left = self.expr(left, depth + 1)?;
                 let right = self.expr(right, depth + 1)?;
+                // Keep the solved LHS constructor specialization for checked
+                // comparison selection. Independent receiver inference would
+                // default its literals again before reading the RHS equation.
+                // This is the existing per-body hint channel, not call proof.
+                if constructor
+                    && operators::comparison(*op)
+                    && matches!(self.domain(left), Domain::Nominal(..))
+                {
+                    self.checker.infer_storage(1)?;
+                    self.receiver_sites.push((left_site, left));
+                }
+                // A unique heterogeneous comparison impl may constrain the
+                // constructor RHS to a different nominal declaration. Retain
+                // that solved type without independently defaulting literals.
+                if right_constructor
+                    && operators::comparison(*op)
+                    && matches!(self.domain(right), Domain::Nominal(..))
+                {
+                    self.checker.infer_storage(1)?;
+                    self.receiver_sites.push((right_site, right));
+                }
                 self.operator_binary(*op, left, right)
             }
             Expr::Cast { value, target } => {

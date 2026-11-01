@@ -2,6 +2,260 @@
 use super::*;
 
 #[test]
+fn nominal_comparison_constructor_equations_require_unique_canonical_impl() {
+    for (source, inferred, op) in [
+        (
+            "#[derive(PartialEq)]struct W<T>{a:T}fn main(){}",
+            true,
+            BinaryOp::Eq,
+        ),
+        (
+            "#[derive(PartialEq,PartialOrd)]struct W<T>{a:T}fn main(){}",
+            true,
+            BinaryOp::Gt,
+        ),
+        (
+            "struct W<T>{a:T}trait FakeOrd{fn gt(&self,r:&Self)->bool;}impl<T> FakeOrd for W<T>{fn gt(&self,r:&Self)->bool{true}}fn main(){}",
+            false,
+            BinaryOp::Gt,
+        ),
+        (
+            "struct W<T>{a:T}trait FakeEq<R>{fn eq(&self,r:&R)->bool;}impl<T> FakeEq<W<T>> for W<T>{fn eq(&self,r:&W<T>)->bool{true}}fn main(){}",
+            false,
+            BinaryOp::Eq,
+        ),
+        (
+            "struct W<T>{a:T}impl<T> PartialEq<W<u8>> for W<T>{fn eq(&self,r:&W<u8>)->bool{true}}impl<T> PartialEq<W<u16>> for W<T>{fn eq(&self,r:&W<u16>)->bool{false}}fn main(){}",
+            false,
+            BinaryOp::Eq,
+        ),
+    ] {
+        let source = format!("{source}struct Other<T>{{a:T}}");
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "nominal-comparison-equations.rs",
+            &source,
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let index = program
+            .structs
+            .iter()
+            .position(|item| {
+                item.name
+                    .segments()
+                    .last()
+                    .is_some_and(|name| program.names.spelling(*name).unwrap() == "W")
+            })
+            .unwrap();
+        let nominal = plan.nominal_declaration(index).unwrap();
+        let function = program
+            .functions
+            .iter()
+            .find(|function| {
+                function
+                    .name
+                    .segments()
+                    .last()
+                    .is_some_and(|name| program.names.spelling(*name).unwrap() == "main")
+            })
+            .unwrap();
+        let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        let absent_schema = |_| Ok(None);
+        let missing = |_: &Demand| Ok(None);
+        let inputs = Inputs::new(&absent_schema, &primitive_source, &missing);
+        let mut solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
+        let known = solver.fixed(ir::Ty::Int(ir::IntTy::U8)).unwrap();
+        let unknown = solver.fresh().unwrap();
+        let left = solver.node(Domain::Nominal(nominal, vec![known])).unwrap();
+        let right = solver
+            .node(Domain::Nominal(nominal, vec![unknown]))
+            .unwrap();
+        let result = solver.operator_binary(op, left, right).unwrap();
+        // No typed realization read is supplied. The impl may constrain a
+        // constructor's actual, but must never publish a type or operator body.
+        assert!(!solver.solve_operators().unwrap());
+        assert_eq!(solver.operators.len(), 1);
+        assert!(matches!(solver.domain(result), Domain::Unknown));
+        if inferred {
+            assert!(matches!(
+                solver.domain(unknown),
+                Domain::Fixed(ir::Ty::Int(ir::IntTy::U8))
+            ));
+        } else {
+            assert!(
+                matches!(solver.domain(unknown), Domain::Unknown),
+                "{source}"
+            );
+        }
+        let pending = solver.pending_nominals().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].declaration, nominal);
+        assert!(matches!(
+            pending[0].arguments.as_ref(),
+            [Shape::Leaf(ir::Ty::Int(ir::IntTy::U8))]
+        ));
+        if inferred {
+            // Inject a declaration-substituted RHS term with the same actual
+            // list. The unique impl equation must preserve the nominal owner,
+            // not treat similarly shaped source declarations as interchangeable.
+            let other = program
+                .structs
+                .iter()
+                .position(|item| {
+                    item.name
+                        .segments()
+                        .last()
+                        .is_some_and(|name| program.names.spelling(*name).unwrap() == "Other")
+                })
+                .unwrap();
+            let other = plan.nominal_declaration(other).unwrap();
+            let forged_actual = solver.fresh().unwrap();
+            let forged = solver
+                .node(Domain::Nominal(other, vec![forged_actual]))
+                .unwrap();
+            solver.operator_binary(op, left, forged).unwrap();
+            let error = solver.solve_operators().unwrap_err();
+            assert!(error.contains("E0308"), "{error}");
+        }
+        assert!(checker.exprs.is_empty());
+        assert!(checker.locals.is_empty());
+    }
+}
+
+#[test]
+fn nominal_comparison_missing_metadata_preserves_old_lookup_frontier() {
+    // A reduced source probe has no prelude operator trait capability. An
+    // optional inference equation must not require it before the original
+    // receiver graph read is available, nor suppress the required diagnostic.
+    let program = parse("struct W<T>{a:T}fn main(){}").unwrap();
+    let signatures = signature_table(&program).unwrap();
+    let plan = signatures.plan().unwrap();
+    let nominal = plan.nominal_declaration(0).unwrap();
+    let function = &program.functions[0];
+    let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+    assert!(
+        checker
+            .available_operator_trait("cmp", "PartialEq", "eq")
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        checker
+            .operator_trait("cmp", "PartialEq", "eq")
+            .unwrap_err()
+            .contains("unsupported: operator trait")
+    );
+    let absent_schema = |_| Ok(None);
+    let missing = |_: &Demand| Ok(None);
+    let inputs = Inputs::new(&absent_schema, &primitive_source, &missing);
+    let mut solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
+    let known = solver.fixed(ir::Ty::Int(ir::IntTy::U8)).unwrap();
+    let unknown = solver.fresh().unwrap();
+    let left = solver.node(Domain::Nominal(nominal, vec![known])).unwrap();
+    let right = solver
+        .node(Domain::Nominal(nominal, vec![unknown]))
+        .unwrap();
+    solver.operator_binary(BinaryOp::Eq, left, right).unwrap();
+    assert!(!solver.solve_operators().unwrap());
+    assert!(matches!(solver.domain(unknown), Domain::Unknown));
+    assert_eq!(solver.pending_nominals().unwrap().len(), 1);
+    assert!(checker.exprs.is_empty());
+    assert!(checker.locals.is_empty());
+}
+
+#[test]
+fn nominal_comparison_constructor_receiver_hint_retains_source_equation() {
+    for (text, expected) in [
+        (
+            "#[derive(PartialEq)]struct W<T>{a:T}fn main(){let x:W<u8>=W{a:1};let same=W{a:1}==x;}",
+            vec![ir::IntTy::U8],
+        ),
+        (
+            "struct L<T>{a:T}struct R<T>{a:T}impl<T:PartialEq> PartialEq<R<T>> for L<T>{fn eq(&self,r:&R<T>)->bool{self.a==r.a}}fn main(){let x:L<u8>=L{a:7};let same=x==R{a:7};}",
+            vec![ir::IntTy::U8],
+        ),
+        (
+            "#[derive(PartialEq,PartialOrd)]struct W<T>{a:T}#[derive(PartialEq)]enum G<T>{N,S(T)}fn main(){let x:W<u8>=W{a:1};let g:G<u16>=G::S(3);println!(\"{} {} {} {}\",W{a:1}==x,W{a:2}>x,G::S(3)==g,G::N==g);}",
+            vec![ir::IntTy::U8, ir::IntTy::U8, ir::IntTy::U16, ir::IntTy::U16],
+        ),
+    ] {
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "nominal-comparison-receiver.rs",
+            text,
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+        let signatures = signature_table(&program).unwrap();
+        let plan = signatures.plan().unwrap();
+        let index = program
+            .functions
+            .iter()
+            .position(|function| {
+                function
+                    .name
+                    .segments()
+                    .last()
+                    .is_some_and(|name| program.names.spelling(*name).unwrap() == "main")
+            })
+            .unwrap();
+        let declaration = plan.function_decl(index).unwrap();
+        let function = plan.callable_body(&program, declaration).unwrap();
+        let mut checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+        checker
+            .install_lexical_scope(function.lexical_scope)
+            .unwrap();
+        checker.declaration = Some(declaration);
+        let schema = |owner| {
+            let (env, template) = plan.nominal_schema(owner, &plan.budget)?;
+            let shapes = |fields: &ir::NominalFields| -> Result<Arc<[Shape]>, String> {
+                Ok(fields
+                    .read(&plan.budget)?
+                    .iter()
+                    .map(|field| Shape::Leaf(field.ty.clone()))
+                    .collect::<Vec<_>>()
+                    .into())
+            };
+            let fields = match template {
+                ir::Ty::Struct(value) => DeclarationFields::Struct(shapes(&value.def().fields)?),
+                ir::Ty::Enum(value) => DeclarationFields::Enum(
+                    value
+                        .def()
+                        .variants
+                        .iter()
+                        .map(|variant| shapes(&variant.fields))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into(),
+                ),
+                _ => return Err("test source recipe must be nominal".into()),
+            };
+            Ok(Some(DeclarationRecipe { env, fields }))
+        };
+        let source = |ty: &Type| plan.nominal_source_shape(declaration, ty);
+        let missing = |_: &Demand| Ok(None);
+        let inputs = Inputs::new(&schema, &source, &missing);
+        let solver = solve_callable(&checker, declaration, None, &inputs).unwrap();
+        assert_eq!(solver.receiver_sites.len(), expected.len());
+        for ((_, receiver), integer) in solver.receiver_sites.iter().zip(expected) {
+            let Domain::Nominal(_, arguments) = solver.domain(*receiver) else {
+                panic!("constructor hint must retain its canonical nominal owner");
+            };
+            assert_eq!(arguments.len(), 1);
+            assert!(
+                matches!(solver.domain(arguments[0]), Domain::Fixed(ir::Ty::Int(actual)) if actual == integer)
+            );
+            assert!(solver.resolve(*receiver, 0).unwrap().is_none());
+        }
+        assert!(!solver.pending_nominals().unwrap().is_empty());
+        assert!(checker.exprs.is_empty());
+        assert!(checker.locals.is_empty());
+    }
+}
+
+#[test]
 fn projected_copy_record_keeps_graph_identity_at_runtime() {
     // Exact unchanged tests/associated_types.rs case20_copy_record source.
     crate::compiler::frontend::parser_tests::stock_native_run(

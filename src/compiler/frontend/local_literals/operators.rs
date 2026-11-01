@@ -37,7 +37,7 @@ impl Operation {
     }
 }
 
-fn comparison(op: BinaryOp) -> bool {
+pub(super) fn comparison(op: BinaryOp) -> bool {
     matches!(
         op,
         BinaryOp::Eq | BinaryOp::Ne | BinaryOp::Lt | BinaryOp::Le | BinaryOp::Gt | BinaryOp::Ge
@@ -254,6 +254,58 @@ impl Solver<'_, '_, '_> {
             };
             self.unify(result, output)?;
             return Ok(true);
+        }
+        // Apply source equations only to genuinely open nominal comparison
+        // operands and only from canonical metadata already present here.
+        // A reduced source probe may not have that capability yet. Do not turn
+        // its absence into an early required-trait error, or bypass the later
+        // required lookup/selector when the operands are ready.
+        if let Kind::Binary(op) = kind
+            && comparison(op)
+            && let Domain::Nominal(_, left_actuals) = self.domain(left)
+            && let Some(right) = right
+            && let Domain::Nominal(_, right_actuals) = self.domain(right)
+            && !self.contains_callable(left, 0)?
+            && !self.contains_callable(right, 0)?
+            && (!self.manifest_ready_with_defaults(&left_actuals, 0, false)?
+                || !self.manifest_ready_with_defaults(&right_actuals, 0, false)?)
+            && let Some((module, name, method)) = super::super::operators::binary_trait(op)
+            && let Some((declaration, method)) = self
+                .checker
+                .available_operator_trait(module, name, method)?
+            && let Some(header) = self.structural_impl(left, declaration)?
+        {
+            // Inference equations only: neither a selected impl nor a nominal
+            // realization is fabricated. Resolve/selection below still needs
+            // exact graph reads and proves the instantiated application/bounds.
+            if let [rhs] = header.trait_ref.args.as_ref() {
+                let params = self.structural_impl_parameters(left, &header, 0)?;
+                let expected = self.schema(rhs, &params, 0)?;
+                self.unify(right, expected)?;
+            } else if header.trait_ref.args.is_empty() {
+                // Native PartialOrd has no Rhs parameter. Only its actual
+                // canonical method schema can authorize a homogeneous equation.
+                let plan = self.checker.signatures.plan()?;
+                if let Some(item) = plan.trait_item(declaration, &method, &plan.budget)? {
+                    let schema = plan.raw_schema(item)?;
+                    let owner = plan.param_env(declaration)?;
+                    let self_param = ir::ParamId {
+                        owner: owner.binder(),
+                        index: 0,
+                    };
+                    if owner.arity() == 1
+                        && plan.param_env(item)?.arity() == 0
+                        && schema.signature.params.len() == 2
+                        && matches!(
+                            &schema.signature.params[1],
+                            ir::Ty::Ref { referent, .. }
+                                if matches!(referent.as_ref(), ir::Ty::Param(id) if *id == self_param)
+                        )
+                    {
+                        self.unify(right, left)?;
+                    }
+                }
+            }
         }
         let Some(receiver) = self.resolve(left, 0)? else {
             // An overloaded deref with an open receiver adds no evidence.

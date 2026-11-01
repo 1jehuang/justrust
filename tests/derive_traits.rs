@@ -78,6 +78,66 @@ fn derived_impls_match_stock() {
 }
 
 #[test]
+fn comparison_constructor_reverse_generic_operands() {
+    oracle::check(
+        "comparison-constructor-authority",
+        &[Case {
+            name: "reverse_generic_constructor_operands",
+            source: "#[derive(PartialEq,PartialOrd)]struct W<T>{a:T}#[derive(PartialEq)]enum G<T>{N,S(T)}fn main(){let x:W<u8>=W{a:1};let g:G<u16>=G::S(3);println!(\"{} {} {} {}\",W{a:1}==x,W{a:2}>x,G::S(3)==g,G::N==g);}",
+            expect: Expect::Run("true true true false\n"),
+        }],
+    );
+}
+
+#[test]
+fn comparison_constructor_unique_cross_nominal_rhs() {
+    oracle::check(
+        "comparison-constructor-cross-nominal",
+        &[Case {
+            name: "unique_cross_nominal_rhs_equation",
+            source: "struct L<T>{a:T}struct R<T>{a:T}impl<T:PartialEq> PartialEq<R<T>> for L<T>{fn eq(&self,r:&R<T>)->bool{self.a==r.a}}fn main(){let x:L<u8>=L{a:7};println!(\"{}\",x==R{a:7});}",
+            expect: Expect::Run("true\n"),
+        }],
+    );
+}
+
+#[test]
+fn comparison_constructor_preserves_explicit_rhs_type() {
+    oracle::check(
+        "comparison-constructor-explicit-rhs",
+        &[Case {
+            name: "derived_equation_does_not_erase_explicit_rhs_type",
+            source: "#[derive(PartialEq)]struct W<T>{a:T}fn main(){let x:W<u8>=W{a:1};let y:W<u16>=W{a:1};let same=x==y;}",
+            expect: Expect::Invalid("E0308"),
+        }],
+    );
+}
+
+#[test]
+fn comparison_constructor_preserves_field_bound() {
+    oracle::check(
+        "comparison-constructor-field-bound",
+        &[Case {
+            name: "derived_equation_does_not_prove_field_bound",
+            source: "struct N;#[derive(PartialEq)]struct W<T>{a:T}fn main(){let x:W<N>=W{a:N};let same=x==W{a:N};}",
+            expect: Expect::Invalid("E0369"),
+        }],
+    );
+}
+
+#[test]
+fn comparison_constructor_rejects_noncanonical_eq() {
+    oracle::check(
+        "comparison-constructor-noncanonical",
+        &[Case {
+            name: "lookalike_eq_method_is_not_canonical_comparison",
+            source: "struct W<T>{a:T}trait FakeEq<R>{fn eq(&self,r:&R)->bool;}impl<T> FakeEq<W<T>> for W<T>{fn eq(&self,r:&W<T>)->bool{true}}fn main(){let x:W<u8>=W{a:1};let same=x==W{a:1u8};}",
+            expect: Expect::Invalid("E0369"),
+        }],
+    );
+}
+
+#[test]
 fn missing_field_impls_reject_like_stock() {
     let cases = [
         Case {

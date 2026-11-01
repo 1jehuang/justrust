@@ -5076,12 +5076,16 @@ impl<'a> Checker<'a> {
             "unsupported: cannot infer Self type of trait path call; use `<T as Trait>::`".into()
         })
     }
-    pub(super) fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
-        if let Some(ty) = self
-            .method_receiver_hints
+    /// Only a completed per-body source equation, without independent literal
+    /// fallback. This remains a hint: checked selection proves the application.
+    pub(super) fn solved_receiver_hint(&self, receiver: &Expr) -> Option<ir::Ty> {
+        self.method_receiver_hints
             .get(&(receiver as *const Expr as usize))
-        {
-            return Ok(Some(ty.clone()));
+            .cloned()
+    }
+    pub(super) fn method_receiver_hint(&self, receiver: &Expr) -> Result<Option<ir::Ty>, String> {
+        if let Some(ty) = self.solved_receiver_hint(receiver) {
+            return Ok(Some(ty));
         }
         self.independent_method_receiver_hint(receiver)
     }
