@@ -7,8 +7,9 @@
 //! fd408d9dddd1bb02b52879af25e7205d6cd37a5dfd570e80386faeb21026a015
 //! Rejection phases corrected from root gate 7276008oo0. Native gates not run by author.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
-#[path = "support/stock_rustc.rs"]
-mod stock_rustc;
+#[path = "support/closure_oracle.rs"]
+mod rejection_oracle;
+use rejection_oracle::pinned_stock as stock_rustc;
 use stock_rustc::stock_rustc;
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
@@ -486,7 +487,7 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
             source_bytes: 142,
             source_fingerprint: 7978254030129490507,
             source_sha256: r###"c1d7e17ee999aa5279f10d964c55ba45ab1a55bb14d55dc2b002b866915077b4"###,
-            native: Native::Unsupported,
+            native: Native::Live,
             boundary: r###"unsupported macro fragment kind"###,
             phase: r###"parse"###,
             stock_compile_code: 0,
@@ -539,7 +540,7 @@ error: aborting due to 1 previous error
             source_bytes: 66,
             source_fingerprint: 8264326413192169909,
             source_sha256: r###"e6e2de2a97f94e1f750735ee2b8a124bb4bdd1eda01d5f2be88445085735df98"###,
-            native: Native::Unsupported,
+            native: Native::Live,
             boundary: r###"assert_ne! formatting placeholders are unsupported"###,
             phase: r###"parse"###,
             stock_compile_code: 0,
@@ -559,7 +560,7 @@ error: aborting due to 1 previous error
             source_bytes: 53,
             source_fingerprint: 9913753239745323877,
             source_sha256: r###"db45ade450a559baceea62b3c136890716ab0f15ec1a00ebd31e19c445c2f5ba"###,
-            native: Native::Unsupported,
+            native: Native::Live,
             boundary: r###"reference comparisons and arithmetic are unsupported"###,
             phase: r###"check"###,
             stock_compile_code: 0,
@@ -600,7 +601,7 @@ error: aborting due to 1 previous error
             source_fingerprint: 17137236600886063978,
             source_sha256: r###"835d20650bfd43d10fa8c24469394349c9915f6088db8c2c23c6e44955e5d287"###,
             native: Native::Invalid,
-            boundary: r###"equality operands differ: Bool and Int(I32)"###,
+            boundary: r###"E0308: mismatched types: expected Fixed(Bool), found Integer"###,
             phase: r###"check"###,
             stock_compile_code: 1,
             stock_code: None,
@@ -1078,15 +1079,25 @@ fn frozen_equality_sources_and_strict_phases() {
                 if matches!(case.native, Native::Live | Native::Abort) {
                     checked.expect("positive all-body check");
                 } else {
-                    diagnostic(
-                        case,
-                        &checked.expect_err("frozen check rejection").to_string(),
-                    );
+                    let text = checked.expect_err("frozen check rejection").to_string();
+                    // The direct frontend has no graph-provided operator catalog.
+                    // Its exact rejection differs from the native graph entrypoint.
+                    if case.name == "aggregate_boundary" {
+                        assert!(
+                            text.contains(
+                                "unsupported: operator trait std::cmp::PartialEq is not available"
+                            ),
+                            "{}: {text}",
+                            case.name
+                        );
+                    } else {
+                        diagnostic(case, &text);
+                    }
                 }
             }
         });
     }
-    assert_eq!(partition, [18, 3, 1, 5]);
+    assert_eq!(partition, [21, 3, 1, 2]);
     failures.finish();
 }
 fn stock_all() {
@@ -1156,6 +1167,44 @@ fn stock_all_uncached() {
 fn stock_equality_assertion_exact_sources() {
     stock_all();
 }
+fn promoted_unused_invalid(name: &'static str, source: &'static str, code: &'static str) {
+    rejection_oracle::check(
+        name,
+        &[rejection_oracle::Case {
+            name,
+            source,
+            expect: rejection_oracle::Expect::Invalid(code),
+        }],
+    );
+}
+
+#[test]
+fn equality_shadow_expansion_checks_unused_operand_types() {
+    promoted_unused_invalid(
+        "equality_shadow_unused_type_error",
+        "fn unused(){macro_rules! assert_eq {($a:expr,$b:expr)=>{let value:bool=$a;};}assert_eq!(1,2);}fn main(){}",
+        "E0308",
+    );
+}
+
+#[test]
+fn equality_format_message_resolves_unused_arguments() {
+    promoted_unused_invalid(
+        "equality_format_unused_unresolved_argument",
+        "fn unused(){assert_ne!(1,2,\"value {}\",missing);}fn main(){}",
+        "E0425",
+    );
+}
+
+#[test]
+fn equality_reference_comparison_rejects_unused_mismatched_referents() {
+    promoted_unused_invalid(
+        "equality_reference_unused_mismatched_referents",
+        "fn unused(){assert_eq!(&1i32,&true);}fn main(){}",
+        "E0277",
+    );
+}
+
 fn diagnostic(case: &Case, text: &str) {
     assert!(
         matches!(case.native, Native::Invalid | Native::Unsupported),
