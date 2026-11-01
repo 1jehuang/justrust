@@ -831,7 +831,7 @@ fn main() {
     println!("{:?}", m.next());
 }
 "#,
-                expect: Expect::Invalid("E0277"),
+                expect: Expect::Invalid("E0631"),
             },
         ],
     );
