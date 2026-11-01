@@ -4,8 +4,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-#[path = "stock_rustc.rs"]
-mod stock_rustc;
+#[path = "closure_oracle.rs"]
+#[allow(dead_code)]
+pub mod closure_oracle;
+use closure_oracle::pinned_stock as stock_rustc;
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
 fn run_image(path: &std::path::Path, root: &std::path::Path) -> Output {
@@ -119,6 +121,14 @@ pub fn stock_and_native_reject_at_build(source: &str) {
     stock_and_native_reject_at_stage(source, true, |_, _, _| {});
 }
 
+/// Validate the exact failure observed by every invalid iterator control.
+/// Reuse the closure oracle's resource, capture and typed ownership checks so
+/// an unsupported boundary or infrastructure fault cannot prove invalid Rust.
+#[allow(dead_code)]
+pub fn validate_native_rejection(failure: &compiler::Failure) -> Result<(), &'static str> {
+    closure_oracle::validate_native_rejection(failure)
+}
+
 fn stock_and_native_reject_at_stage(
     source: &str,
     build: bool,
@@ -172,6 +182,9 @@ fn stock_and_native_reject_at_stage(
             let failure = compiler::compile_observed(source.into(), workers, check)
                 .err()
                 .unwrap_or_else(|| panic!("invalid control accepted: {source}"));
+            validate_native_rejection(&failure).unwrap_or_else(|reason| {
+                panic!("workers={workers} CHECK={check} stock_build={build}: {reason}: {failure}\n{source}")
+            });
             observe(workers, check, &failure);
         }
     }

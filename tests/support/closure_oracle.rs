@@ -58,6 +58,8 @@ fn nonsemantic_diagnostic(diagnostic: &str) -> bool {
         "contract:",
         "unsupported:",
         "Unsupported:",
+        "UnsupportedBorrowing:",
+        "UnsupportedResource:",
         "unsupported ",
         "engine worker panicked:",
         "provider outputs panicked:",
@@ -105,6 +107,31 @@ pub fn validate_invalid_failure(
     }
     if nonsemantic_diagnostic(&failure.error.0) {
         return Err("nonsemantic diagnostic is not invalid Rust evidence");
+    }
+    Ok(())
+}
+
+/// Also inspect typed ownership diagnostics: their rendered headline can look
+/// semantic even when the actual analysis is incomplete or unsupported.
+pub fn validate_native_rejection(
+    failure: &justrust_engine::compiler::Failure,
+) -> Result<(), &'static str> {
+    use justrust_engine::compiler::ownership::ErrorKind;
+    validate_invalid_failure(failure)?;
+    for (_, analysis) in &failure.analyses {
+        if !analysis.complete || analysis.stats.diagnostics_suppressed != 0 {
+            return Err("incomplete ownership analysis is not semantic rejection");
+        }
+        if analysis.diagnostics.iter().any(|diagnostic| {
+            matches!(
+                diagnostic.kind,
+                ErrorKind::UnsupportedBorrowing(_)
+                    | ErrorKind::ResourceLimit
+                    | ErrorKind::InvalidCfg(_)
+            )
+        }) {
+            return Err("nonsemantic ownership failure is not invalid Rust evidence");
+        }
     }
     Ok(())
 }
@@ -237,7 +264,7 @@ pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
                         case.name
                     ),
                     (Expect::Invalid(_), Err(error)) => {
-                        validate_invalid_failure(&error).unwrap_or_else(|reason| {
+                        validate_native_rejection(&error).unwrap_or_else(|reason| {
                             panic!(
                                 "{} workers={workers} CHECK={check_only}: {reason}: {error}",
                                 case.name

@@ -5,6 +5,161 @@ use justrust_engine::compiler;
 #[path = "support/iterator_oracle.rs"]
 mod oracle;
 
+#[cfg(test)]
+mod rejection_integrity {
+    use super::oracle;
+    use justrust_engine::compiler::{self, ownership};
+    use std::sync::Arc;
+
+    fn failure(diagnostic: &str, with_report: bool) -> compiler::Failure {
+        compiler::Failure {
+            error: justrust_engine::engine::Error::new(diagnostic),
+            report: with_report.then(|| {
+                let mut report = justrust_engine::engine::Report::default();
+                report.capture_complete = true;
+                Box::new(report)
+            }),
+            analyses: Vec::new(),
+            resource_usage: Box::default(),
+        }
+    }
+
+    #[test]
+    fn iterator_rejection_validator_rejects_fault_categories() {
+        for diagnostic in [
+            "infrastructure: missing native toolchain",
+            "ResourceLimit: work exhausted",
+            "UnsupportedResource: diagnostic transport exhausted",
+            "unsupported: iterator boundary",
+            "UnsupportedBorrowing: iterator carrier boundary",
+            "main.rs:2:3: UnsupportedResource: source boundary",
+            "provider future poll panicked: fault",
+            "contract: stale evidence",
+        ] {
+            for with_report in [false, true] {
+                let observed = failure(diagnostic, with_report);
+                assert!(
+                    oracle::validate_native_rejection(&observed).is_err(),
+                    "{diagnostic}"
+                );
+                let mut hidden = failure("expected expression", true);
+                hidden
+                    .report
+                    .as_mut()
+                    .unwrap()
+                    .node_errors
+                    .push((7, justrust_engine::engine::Error::new(diagnostic)));
+                assert!(
+                    oracle::validate_native_rejection(&hidden).is_err(),
+                    "hidden {diagnostic}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn iterator_rejection_validator_rejects_capture_and_resource_faults() {
+        use compiler::ir::{ResourceBudgetFailure, ResourceBudgetKind};
+        let mut observed = failure("expected expression", true);
+        observed.report.as_mut().unwrap().capture_complete = false;
+        assert!(oracle::validate_native_rejection(&observed).is_err());
+        observed.report.as_mut().unwrap().capture_complete = true;
+        observed.report.as_mut().unwrap().events_dropped = 1;
+        assert!(oracle::validate_native_rejection(&observed).is_err());
+        for with_report in [false, true] {
+            let mut observed = failure("expected expression", with_report);
+            observed.resource_usage.poisoned = true;
+            assert!(oracle::validate_native_rejection(&observed).is_err());
+            observed.resource_usage.poisoned = false;
+            observed.resource_usage.first_failure = Some(ResourceBudgetFailure {
+                kind: ResourceBudgetKind::Work,
+                requested: 2,
+                used: 1,
+                limit: 1,
+                arithmetic_overflow: false,
+                file: file!(),
+                line: line!(),
+                column: column!(),
+                graph_id: None,
+                task_id: None,
+            });
+            assert!(oracle::validate_native_rejection(&observed).is_err());
+        }
+    }
+
+    #[test]
+    fn iterator_rejection_validator_checks_typed_analyses_not_headline() {
+        for (complete, kind) in [
+            (
+                true,
+                ownership::ErrorKind::UnsupportedBorrowing("E0502: disguised boundary".into()),
+            ),
+            (true, ownership::ErrorKind::ResourceLimit),
+            (
+                true,
+                ownership::ErrorKind::InvalidCfg("invalid graph".into()),
+            ),
+            (false, ownership::ErrorKind::ReadNotDefinitelyInitialized),
+        ] {
+            let mut observed = failure("E0502: semantic-looking headline", true);
+            observed.analyses.push((
+                0,
+                Arc::new(ownership::Analysis {
+                    stats: ownership::AnalysisStats::default(),
+                    complete,
+                    diagnostics: vec![ownership::Diagnostic {
+                        kind,
+                        block: compiler::cfg::BlockId(0),
+                        statement: None,
+                        origin: None,
+                        place: None,
+                    }]
+                    .into_boxed_slice(),
+                }),
+            ));
+            assert!(oracle::validate_native_rejection(&observed).is_err());
+        }
+        let semantic = ownership::Analysis {
+            stats: ownership::AnalysisStats::default(),
+            complete: true,
+            diagnostics: vec![ownership::Diagnostic {
+                kind: ownership::ErrorKind::BorrowConflict("E0502: conflict".into()),
+                block: compiler::cfg::BlockId(0),
+                statement: None,
+                origin: None,
+                place: None,
+            }]
+            .into_boxed_slice(),
+        };
+        let mut observed = failure("E0502: conflict", true);
+        observed.analyses.push((0, Arc::new(semantic.clone())));
+        assert_eq!(oracle::validate_native_rejection(&observed), Ok(()));
+        let mut suppressed = semantic;
+        suppressed.stats.diagnostics_suppressed = 1;
+        observed.analyses[0].1 = Arc::new(suppressed);
+        assert!(oracle::validate_native_rejection(&observed).is_err());
+    }
+
+    #[test]
+    fn iterator_rejection_validator_allows_semantic_control() {
+        for diagnostic in [
+            "expected expression",
+            "cannot find value `UnsupportedResource` in this scope",
+            "unsupported.rs:2:3: cannot find value `resource` in this scope",
+        ] {
+            for with_report in [false, true] {
+                assert_eq!(
+                    oracle::validate_native_rejection(&failure(diagnostic, with_report)),
+                    Ok(())
+                );
+            }
+        }
+        // Real stock/native rejection through the same strict path, CHECK and
+        // BUILD at workers 1 and 8, rather than only fabricated observations.
+        oracle::stock_and_native_reject("fn bad()->bool{1i32}fn main(){}");
+    }
+}
+
 #[test]
 fn generic_nominal_iterator_closure_inputs() {
     oracle::stock_native(
