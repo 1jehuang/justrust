@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Adversarial tests of the compatibility evidence system, not compiler proofs."""
+import contextlib
 import copy
+import io
 from pathlib import Path
 import subprocess
 import sys
@@ -9,6 +11,15 @@ import unittest
 from unittest.mock import patch
 
 import conformance as c
+
+
+CLIENT_RETRY_LINES = (
+    "justrust: assertions-d44df8670daae726: stock_assertion_exact_sources_and_appended_controls "
+    "failed while other test processes ran in parallel and passed when rerun alone by name; "
+    "not counted as failures",
+    "justrust: equality_assertions-ddc5c8fac31707b3: confirming 3 failures by replaying the "
+    "original test group alone instead of retrying each test serially",
+)
 
 
 class EvidenceTests(unittest.TestCase):
@@ -137,6 +148,64 @@ class EvidenceTests(unittest.TestCase):
         self.assertEqual(c.outcome(None, "missing executable", "tests"), "infrastructure")
         self.assertEqual(c.outcome(None, "", "tests", True), "timeout")
         self.assertEqual(c.outcome(0, "", "fmt"), "passed")
+
+    def test_client_retried_or_ignored_failures_never_pass(self):
+        for marker in CLIENT_RETRY_LINES:
+            for newline in ("\n", "\r\n"):
+                text = marker + newline + "test result: ok. 9 passed;" + newline
+                self.assertEqual(c.test_count(text), 9)
+                for kind in ("tests", "lib", "all-tests", "fmt", "clippy"):
+                    self.assertEqual(c.outcome(0, text, kind), "unverified")
+                    self.assertEqual(c.outcome(1, text, kind), "failed")
+
+    def test_retry_words_user_identifiers_and_quoted_markers_do_not_false_positive(self):
+        text = "\n".join([
+            "test user::retry::not_counted_as_failures ... ok",
+            "test user::failed_while_other_test_processes_ran_in_parallel ... ok",
+            "test user::passed_when_rerun_alone_by_name ... ok",
+            "test user::confirming_failures_by_replaying ... ok",
+            "ordinary message: not counted as failures",
+            "quoted user source: " + CLIENT_RETRY_LINES[0],
+            repr(CLIENT_RETRY_LINES[1]),
+            "justrust: ok: 7 tests passed in 1.0s",
+        ])
+        self.assertFalse(c.client_retried_failures(text))
+        self.assertEqual(c.outcome(0, text, "all-tests"), "passed")
+
+    def test_assessment_recomputes_client_retry_status_from_original_log(self):
+        for marker in CLIENT_RETRY_LINES:
+            report = self.report()
+            payload = (marker + "\njustrust: ok: 2 tests passed in 1.0s\n").encode()
+            (self.root / "sample.log").write_bytes(payload)
+            report["results"][0]["log_sha256"] = c.digest(payload)
+            # A client success cannot be laundered by retaining a forged passed row.
+            self.assertFalse(self.assess(report)["selected_gates_passed"])
+            report["results"][0]["outcome"] = "unverified"
+            result = self.assess(report)
+            self.assertFalse(result["selected_gates_passed"])
+            self.assertIn("sample: unverified", result["problems"])
+
+    def test_client_retry_command_and_full_failure_log_are_preserved(self):
+        for index, marker in enumerate(CLIENT_RETRY_LINES):
+            for code in (0, 1):
+                stdout = b"original stdout: \xff\n" + b"x" * 70000 + b"\n"
+                stderr = marker.encode() + b"\njustrust: ok: 2 tests passed in 1.0s\n"
+                payload = stdout + stderr
+                command = [sys.executable, "-c",
+                           "import sys; sys.stdout.buffer.write(" + repr(stdout)
+                           + "); sys.stdout.flush(); sys.stderr.buffer.write(" + repr(stderr)
+                           + "); sys.stderr.flush(); raise SystemExit(" + str(code) + ")"]
+                entry = {"id": f"retry-{index}-{code}", "kind": "all-tests", "command": command}
+                visible = io.StringIO()
+                with contextlib.redirect_stdout(visible):
+                    result = c.execute(entry, self.root, 5, self.root)
+                self.assertEqual(result["command"], command)
+                self.assertEqual(result["returncode"], code)
+                self.assertEqual(result["outcome"], "unverified" if code == 0 else "failed")
+                self.assertEqual(result["tests_passed"], 2)
+                self.assertEqual((self.root / result["log"]).read_bytes(), payload)
+                self.assertEqual(result["log_sha256"], c.digest(payload))
+                self.assertIn(payload.decode(errors="replace"), visible.getvalue())
 
     def test_rewritten_outcome_or_exit_code_fails(self):
         report = self.report()

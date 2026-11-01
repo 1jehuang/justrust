@@ -47,9 +47,12 @@ python3 tools/conformance.py assess \
 ```
 
 Use a new output directory per invocation. A full run can be expensive. Run
-`plan` first. The runner never silently retries failures or stops after the
-first failing gate. Full logs, exit status, timeout status, commands, source
-revision/input digest, suite inventory and manifest digest accompany each run.
+`plan` first. The runner never retries a gate or stops after the first failure.
+It cannot disable internal retries in the installed stable client. Exact client
+diagnostics reporting failed-test replay or ignored failures make a zero-exit
+gate unverified, never passed, even with a positive test count. Full logs, exit
+status, timeout status, commands, source revision/input digest, suite inventory
+and manifest digest accompany each run.
 Changing compiler/test/runner inputs during a run invalidates its assessment.
 An interrupted run retains partial evidence but cannot pass assessment. Reports
 from a different revision cannot establish the current revision's result.

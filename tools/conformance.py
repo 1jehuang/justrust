@@ -205,6 +205,19 @@ def test_count(text: str) -> int:
     return sum(map(int, counts))
 
 
+def client_retried_failures(text: str) -> bool:
+    # Match complete compiler-owned diagnostics, not user test names containing
+    # "retry", "parallel" or "failures". The installed client can replay failed
+    # tests itself even though this driver never retries a command.
+    markers = (
+        r"justrust: [^:\r\n]+: \S+ failed while other test processes ran in parallel "
+        r"and passed when rerun alone by name; not counted as failures",
+        r"justrust: [^:\r\n]+: confirming \d+ failures by replaying the original test "
+        r"group alone instead of retrying each test serially",
+    )
+    return any(re.fullmatch(marker, line) for line in text.splitlines() for marker in markers)
+
+
 def outcome(returncode: int | None, text: str, kind: str, timed_out: bool = False) -> str:
     if timed_out:
         return "timeout"
@@ -212,6 +225,8 @@ def outcome(returncode: int | None, text: str, kind: str, timed_out: bool = Fals
         return "infrastructure"
     if returncode != 0:
         return "failed"
+    if client_retried_failures(text):
+        return "unverified"
     if "0 tests matched" in text:
         return "unverified"
     if kind in {"tests", "lib", "all-tests"} and test_count(text) == 0:
@@ -245,7 +260,8 @@ def execute(entry: dict, directory: Path, timeout: int, root: Path = ROOT) -> di
               "returncode": code, "timed_out": timed_out,
               "seconds": round(time.monotonic() - started, 3),
               "tests_passed": test_count(text), "log": log.name, "log_sha256": digest(payload)}
-    # Failures stay fully accessible and visible; no silent successful retry.
+    # Preserve the full original log, including any client-owned retry. Such a
+    # retry cannot turn this gate green even when the client exits successfully.
     print(f"{entry['id']}: {result['outcome']} ({result['seconds']}s), {log}", flush=True)
     if result["outcome"] != "passed":
         print(text, flush=True)
