@@ -1146,6 +1146,11 @@ fn user_data(idle: u32) -> String {
     format!(
         r#"#!/bin/bash
 set -eux
+if ! command -v nft >/dev/null; then
+  DEBIAN_FRONTEND=noninteractive apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nftables
+fi
+{ipv4_tcp_mitigation}
 mkdir -p /var/lib/justrust
 cat >/usr/local/bin/justrust-idle-check <<'EOF'
 #!/bin/bash
@@ -1189,14 +1194,15 @@ systemctl daemon-reload
 systemctl enable --now justrust-boot.service justrust-idle.timer
 export DEBIAN_FRONTEND=noninteractive
 apt-get update
-apt-get install -y build-essential clang lld mold pkg-config libssl-dev cmake git rsync \
+apt-get install -y nftables build-essential clang lld mold pkg-config libssl-dev cmake git rsync \
   libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libasound2-dev libfontconfig1-dev libfreetype-dev \
   libxcb1-dev libx11-dev libx11-xcb-dev libdbus-1-dev libegl-dev libgl-dev libvulkan-dev protobuf-compiler \
   poppler-utils xvfb
 {SH_IS_BASH}
 sudo -u {SSH_USER} -H bash -c 'curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable -c clippy,rustfmt'
 touch /var/lib/justrust/ready
-"#
+"#,
+        ipv4_tcp_mitigation = include_str!("linux_security.sh"),
     )
 }
 
@@ -1703,6 +1709,20 @@ mod tests {
         };
         let v: serde_json::Value = serde_json::from_str(&render_waybar(&s)).unwrap();
         assert_eq!(v["text"], "");
+    }
+
+    #[test]
+    fn user_data_ipv4_tcp_guard_precedes_ready() {
+        let ud = user_data(30);
+        assert!(ud.contains("nftables build-essential"));
+        assert!(ud.contains("ip protocol tcp ip hdrlength > 5 counter drop"));
+        assert!(ud.contains("Requires=justrust-ipv4-tcp-guard.service"));
+        assert!(!ud.contains("flush ruleset"));
+        assert!(
+            ud.find("systemctl start justrust-ipv4-tcp-guard.service")
+                .unwrap()
+                < ud.find("touch /var/lib/justrust/ready").unwrap()
+        );
     }
 
     #[test]
