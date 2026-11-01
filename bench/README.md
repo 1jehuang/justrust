@@ -17,6 +17,16 @@ snapshots. Its headline is the expected wait per agent call. Prefer it for
 any claim about agents in general; the named scenarios stay for targeted
 questions and for comparing with older results.
 
+## Direct justrust versus Cargo versus Blaze
+
+`bench/three_stack.py` is the controlled-local common-subset comparison. It
+compares the installed shipping client, explicit stock Cargo/rustc, and a
+source-built Blaze executable, rather than relabeling experimental native
+feature toggles as stack comparisons. See
+[`docs/three-stack-benchmarks.md`](../docs/three-stack-benchmarks.md) for the
+identity, cache, correctness, repetition and coverage contract. These focused
+results do not replace the comprehensive synthetic gate below.
+
 ## Measurement policy: comprehensive first, focused when diagnosing
 
 The primary score is **mean agent-visible wait across the session-weighted
