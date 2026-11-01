@@ -54,6 +54,16 @@ Prebuilt installs update automatically. Opt out with `justrust update off`;
 disable anonymous telemetry with `justrust telemetry off`.
 [Send feedback](docs/feedback.md) with `justrust feedback "Your suggestion"`.
 
+## Experimental native compiler
+
+The stable client can also explicitly run our owned, **Blaze-derived resident
+compiler** with `justrust native test --lib -- TEST_FILTER` (or native `build`,
+`check`, `run`, `status`, `stop`, and `toolchain`). Build/install its separate
+`jr-native` executable using `toolchain/resident/build-jr.sh TOOLCHAIN_DIRECTORY`.
+This is opt-in, local, and not yet a general rustc replacement. Ordinary justrust
+commands retain the Cargo/hosted path. See [native setup and exact Blaze techniques](docs/stable-native-engine.md)
+for pinned toolchain requirements, private state, compatibility and limitations.
+
 ## Use
 
 ```sh

@@ -42,6 +42,7 @@ mod history;
 #[cfg(unix)]
 mod hotpatch;
 mod msvc_tools;
+mod native;
 mod platform_config;
 /// Hot patching rewrites ELF binaries: nothing to do on Windows.
 #[cfg(windows)]
@@ -158,6 +159,9 @@ struct Passthrough {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Experimental local Blaze-derived compiler. Cargo remains the default.
+    #[command(disable_help_flag = true)]
+    Native(Passthrough),
     /// Pack or execute portable, trusted test executable bundles.
     TestBundle {
         #[command(subcommand)]
@@ -750,6 +754,13 @@ pub fn main() -> anyhow::Result<()> {
     if shim::invoked_as_shim(&argv0) {
         shim::main();
     }
+    // Native is explicit and bypasses Cargo-specific defaults, account polling
+    // and update notices. Preserve argv, particularly the test runner separator.
+    if name != "cargo"
+        && std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("native"))
+    {
+        return native::main(std::env::args_os().skip(2).collect());
+    }
     if std::env::args_os().nth(1).as_deref() != Some(std::ffi::OsStr::new("setup")) {
         platform_config::apply_defaults()?;
     }
@@ -802,7 +813,8 @@ pub fn main() -> anyhow::Result<()> {
 /// build commands (recorded as runs) and for `telemetry` itself.
 fn command_name(c: &Command) -> Option<&'static str> {
     Some(match c {
-        Command::Check(_)
+        Command::Native(_)
+        | Command::Check(_)
         | Command::Test(_)
         | Command::Build(_)
         | Command::Zigbuild(_)
@@ -853,6 +865,7 @@ fn command_name(c: &Command) -> Option<&'static str> {
 
 fn dispatch(command: Command) -> anyhow::Result<()> {
     match command {
+        Command::Native(p) => native::main(p.args)?,
         Command::TestBundle { cmd } => test_bundle::main(cmd),
         Command::Check(p) => agent("check", p.args),
         Command::Test(p) => agent("test", p.args),

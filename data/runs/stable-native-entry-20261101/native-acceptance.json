@@ -1,0 +1,27 @@
+{
+  "schema": "stable-native-entry-acceptance/v1",
+  "date": "2026-11-01",
+  "scope": "Installed stable client native correctness acceptance, not a performance comparison",
+  "platform": "Linux x86_64",
+  "source": {"revision": "f97fcc2", "original_files": 63, "private_copy": true, "original_bytes_restored": true},
+  "client_sha256": "b0650275dce482e0c3ba9de6eb9bc6f571942fb5b067c42f4093fa607ca0d6a8",
+  "engine_sha256": "abd252517a8860eb09282ece72dcac034a36d90099153a792e5ad659b5ee60a8",
+  "engine_build_id": "resident-v1-2ccc6152c30dc36f4927cf0b5873bd7fa7f3ffc82ba2fceddd1efba6ffcce756",
+  "blaze_origin": "5d4f78f7577cf7170993b74f735099dd03f5c6ca",
+  "compiler_commit": "16d1ffac17ad8b739e32483ac2e65fe7e1804977",
+  "entry": ["justrust", "native", "test", "--lib", "--", "summary::tests::", "--test-threads=1", "--nocapture"],
+  "controls": {"engine_discovery": "installed sibling jr-native, no override", "state": "fresh default JUSTRUST_HOME/native", "native_home_mode": "0700", "RUSTC": "explicit matching pinned compiler", "cargo_network": "offline", "proc_macro_server": "disabled under both BLAZE and RA_JIT spellings", "noise": "unknown", "comparison": false, "speed_claim": false},
+  "rows": [
+    {"phase": "cold", "exit": 0, "oracle": "exact four expected summary tests, 4 passed, 0 failed", "accepted": true},
+    {"phase": "noop", "exit": 0, "oracle": "exact four expected summary tests, 4 passed, 0 failed", "accepted": true},
+    {"phase": "reachable-edit", "exit": 0, "oracle": "four expected passing tests plus newly generated runtime nonce", "nonce": "stable-native-6d7784ef881a4fd87795", "accepted": true},
+    {"phase": "type-error", "exit": 101, "oracle": "E0308 with no test-result execution", "accepted": true},
+    {"phase": "type-recovery", "exit": 0, "oracle": "exact four expected summary tests, 4 passed, 0 failed", "accepted": true},
+    {"phase": "assertion-failure", "exit": 101, "oracle": "shares_overlapping_time named with exactly one failed test", "accepted": true},
+    {"phase": "assertion-recovery", "exit": 0, "oracle": "exact four expected summary tests, 4 passed, 0 failed", "accepted": true}
+  ],
+  "cleanup": {"native_stop_exit": 0, "source_restored": true, "stores_deleted": false},
+  "validation": {"new_unit_tests": 5, "new_subprocess_tests": 13, "full_report_passed": 866, "full_report_ignored": 12, "clippy": "all-targets -D warnings passed", "hosted_attempt": "connection reset, local gates used after verified outage"},
+  "original_private_receipts": {"summary_sha256": "085f362ff4eb83d3e7dd5573280aaff9220d8e9816cb1444383a8a113c54a75e", "acceptance_driver_sha256": "b52f7a11ae146d0b47fe60e9ca9d1ed716a59f3b78041429a7dfe0ed296cc049", "task": "170801j14u"},
+  "privacy": "Coordinator-produced allowlist projection of actual acceptance receipts. Original logs and fixture workspace remain private. No ambient environment, absolute private paths, binaries or comparative timing claims are included. This summary is not an independently replayable full archive."
+}
