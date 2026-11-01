@@ -1,5 +1,13 @@
 # Exposure reduction only, not a kernel fix. Keep aligned with justrust-cloud/src/linux_security.js.
 install -d -m 755 /etc/justrust
+# Optional defense in depth, not a substitute for nft or a fixed kernel.
+install -d -m 755 /etc/sysctl.d
+printf '%s\n' '-net.mptcp.enabled = 0' > /etc/sysctl.d/90-justrust-mptcp.conf
+chmod 644 /etc/sysctl.d/90-justrust-mptcp.conf
+if [ -e /proc/sys/net/mptcp/enabled ]; then
+  printf '0\n' > /proc/sys/net/mptcp/enabled
+  [ "$(cat /proc/sys/net/mptcp/enabled)" = 0 ]
+fi
 cat > /etc/justrust/cve-2026-98432.nft <<'NFT'
 table inet cve_2026_98432 {
   chain input {

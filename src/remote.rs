@@ -1716,6 +1716,8 @@ mod tests {
         let ud = user_data(30);
         assert!(ud.contains("nftables build-essential"));
         assert!(ud.contains("ip protocol tcp ip hdrlength > 5 counter drop"));
+        assert!(ud.contains("-net.mptcp.enabled = 0"));
+        assert!(ud.contains("if [ -e /proc/sys/net/mptcp/enabled ]; then"));
         assert!(ud.contains("Requires=justrust-ipv4-tcp-guard.service"));
         assert!(!ud.contains("flush ruleset"));
         assert!(
