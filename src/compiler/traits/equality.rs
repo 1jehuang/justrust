@@ -581,7 +581,11 @@ impl ValidatedTraitWorld {
                 &Predicate::Implements(b.trait_ref.clone()),
             )?)
     }
-    fn compare_predicate_rows(&self, left: &[Predicate], right: &[Predicate]) -> Result<()> {
+    pub(super) fn compare_predicate_rows(
+        &self,
+        left: &[Predicate],
+        right: &[Predicate],
+    ) -> Result<()> {
         if left.len() != right.len() {
             return Err(FactsError::invalid(
                 &self.budget,
@@ -780,7 +784,7 @@ impl ValidatedTraitWorld {
         }
     }
 
-    fn checked_assignment_source(
+    pub(super) fn checked_assignment_source(
         &self,
         value: &AssociatedTypeValue,
     ) -> Result<Arc<AssociatedTypeSource>> {
@@ -1363,7 +1367,10 @@ impl ValidatedTraitWorld {
     }
 
     /// Replays an implementation-selected equality from its membership record.
-    pub(super) fn implementation_equality_rhs(
+    /// Replay the selected original assignment and its exact substitution without
+    /// admitting its residual projections to rigid equality. Callers must still
+    /// validate their own narrower source protocol before normalizing this type.
+    pub(super) fn replay_implementation_assignment(
         &self,
         projection: &ir::AssociatedTypeProjection,
         membership: &ProofEvidence,
@@ -1409,6 +1416,67 @@ impl ValidatedTraitWorld {
                 "implementation equality changed trait or binder arity",
             ));
         }
+        let mut slots = Vec::new();
+        for _ in header.schema_env.ordered_params() {
+            push(&self.budget, &mut slots, None)?;
+        }
+        if header.trait_ref.args.len() != projection.trait_ref.args.len()
+            || !self.match_head(
+                &header.trait_ref.self_ty,
+                &projection.trait_ref.self_ty,
+                &header.schema_env,
+                &mut slots,
+                0,
+            )?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "assignment replay changed selected impl head",
+            ));
+        }
+        for (raw, actual) in header
+            .trait_ref
+            .args
+            .iter()
+            .zip(projection.trait_ref.args.iter())
+        {
+            if !self.match_head(raw, actual, &header.schema_env, &mut slots, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "assignment replay changed selected trait arguments",
+                ));
+            }
+        }
+        // Replay the same original projection-equality inference used by
+        // prove_implementation_in. A parameter absent from the head must be
+        // derived from that header's predicates, never copied from the witness.
+        if slots.iter().any(Option::is_none)
+            && !self.infer_impl_equality_arguments(
+                header,
+                &mut slots,
+                context,
+                &mut ProofScratch::default(),
+            )?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "assignment replay could not derive original equality parameter",
+            ));
+        }
+        for (slot, argument) in slots.iter().zip(arguments.iter()) {
+            let Some(slot) = slot else {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "assignment replay lost original parameter",
+                ));
+            };
+            if !self.eq_ty(slot, argument, 0)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "assignment replay changed selected substitution",
+                ));
+            }
+        }
         let value = self.associated_value(*declaration, projection.item)?;
         self.checked_assignment_source(value)?;
         let raw_rhs = self
@@ -1446,30 +1514,36 @@ impl ValidatedTraitWorld {
                 "implementation equality substitution invented obligations",
             ));
         }
+        Ok(instantiated.signature.result)
+    }
+
+    pub(super) fn implementation_equality_rhs(
+        &self,
+        projection: &ir::AssociatedTypeProjection,
+        membership: &ProofEvidence,
+        context: ProofContext<'_>,
+    ) -> Result<Ty> {
+        let instantiated =
+            self.replay_implementation_assignment(projection, membership, context)?;
         // Residual projections stay symbolic only for rigid parameter subjects
         // whose membership the genuine caller context proves. Anything else
         // (closed or nominal nested projection) stays outside this path.
-        let normal = self.map_equality_type(
-            &instantiated.signature.result,
-            context.env(),
-            0,
-            &mut |nested| {
-                if !matches!(nested.trait_ref.self_ty, Ty::Param(_))
-                    || self.goal_is_closed(&nested.trait_ref, context.env())?
-                {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: projected RHS in rigid implementation equality",
-                    ));
-                }
-                self.require_in(
-                    &Predicate::Implements(nested.trait_ref.clone()),
-                    context,
-                    &mut ProofScratch::default(),
-                )?;
-                self.projection_type(nested)
-            },
-        )?;
+        let normal = self.map_equality_type(&instantiated, context.env(), 0, &mut |nested| {
+            if !matches!(nested.trait_ref.self_ty, Ty::Param(_))
+                || self.goal_is_closed(&nested.trait_ref, context.env())?
+            {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projected RHS in rigid implementation equality",
+                ));
+            }
+            self.require_in(
+                &Predicate::Implements(nested.trait_ref.clone()),
+                context,
+                &mut ProofScratch::default(),
+            )?;
+            self.projection_type(nested)
+        })?;
         self.validate_ty_metadata_in(&normal, context.env(), 0)?;
         Ok(normal)
     }

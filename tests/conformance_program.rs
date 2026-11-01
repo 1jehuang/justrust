@@ -173,7 +173,11 @@ fn compatibility_manifest_maps_real_acceptance_suites_without_claiming_completen
     let full = python("tools/conformance.py", &["plan", "--profile", "full"]);
     assert!(full.contains("--all-targets"), "{full}");
     assert!(full.contains("--no-fail-fast"), "{full}");
-    assert!(full.contains("borrowed-closure-result"), "{full}");
+    assert!(full.contains("\"known_gaps\""), "{full}");
+    assert!(
+        full.contains("\"semantic_inventory\": \"incomplete\""),
+        "{full}"
+    );
 }
 
 #[test]

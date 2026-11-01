@@ -22,6 +22,11 @@ fn closure_shared_argument_results_match_stock() {
                 expect: Expect::Run("apple\n"),
             },
             Case {
+                name: "inner_argument_result_still_blocks_original_owner_mutation",
+                source: "struct Item{name:String}fn main(){let mut item=Item{name:String::from(\"apple\")};let names:Vec<&str>;{let refs=vec![&item];names=refs.iter().map(|i|i.name.as_str()).collect();}item.name.push('x');println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0502"),
+            },
+            Case {
                 name: "borrowed_field_cannot_escape_owned_iteration_argument",
                 source: "struct Item{name:String}fn main(){let items=vec![Item{name:String::from(\"apple\")}];let names:Vec<&str>=items.into_iter().map(|i|i.name.as_str()).collect();println!(\"{}\",names[0]);}",
                 expect: Expect::Invalid("E0515"),
@@ -34,7 +39,7 @@ fn closure_shared_argument_results_match_stock() {
             Case {
                 name: "unused_static_string_constructor_keeps_declared_input_type",
                 source: "struct Item{name:String}fn unused(){let item=Item{name:String::from(7i32)};let items=vec![&item];let names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();}fn main(){}",
-                expect: Expect::Invalid("E0308"),
+                expect: Expect::Invalid("E0277"),
             },
             Case {
                 name: "argument_origin_cannot_be_replaced_with_local_temporary",

@@ -219,7 +219,70 @@ impl CarrierContractView {
     }
 }
 
+// Issued only by the canonical publishing producer below. Neither this owned
+// construction capsule nor its immutable borrowed proof can escape into a fact.
+struct CanonicalCarrierParts<'a> {
+    view: CarrierContractView,
+    facts: &'a ValidatedFacts,
+}
+struct CanonicalSourceProof<'a> {
+    view: &'a CarrierContractView,
+    facts: &'a ValidatedFacts,
+}
+impl CanonicalCarrierParts<'_> {
+    fn seal(self, world: &ValidatedTraitWorld) -> Result<CarrierContractView> {
+        let Self { mut view, facts } = self;
+        let proof = CanonicalSourceProof { view: &view, facts };
+        let authority = world.derive_equality_results(&view, facts, Some(&proof))?;
+        view.equality_results = authority;
+        Ok(view)
+    }
+}
+
 impl ValidatedTraitWorld {
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn transport_carrier_contract(
+        &self,
+        declaration: DeclId,
+        arguments: Arc<[Ty]>,
+        signature: Signature,
+        facts: &ValidatedFacts,
+        raw: GenericSchema,
+        retained: &DeclarationCarriers,
+        origin: Arc<ir::SignatureOriginSchema>,
+        projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
+        result_subject: parameter_equality::EqualityResultSubject,
+    ) -> Result<Arc<CarrierContractView>> {
+        let mut view = self.transport_carrier_parts(
+            declaration,
+            arguments,
+            signature,
+            facts,
+            raw,
+            retained,
+            origin,
+            projected,
+            result_subject,
+        )?;
+        if facts.phase() == FactsPhase::Closed
+            && view.projected.is_none()
+            && matches!(
+                view.result_subject,
+                EqualityResultSubject::Body { .. } | EqualityResultSubject::Direct(_)
+            )
+        {
+            view = CanonicalCarrierParts { view, facts }.seal(self)?;
+        } else {
+            self.seal_equality_results(&mut view, facts)?;
+        }
+        // Sealing just derived the complete canonical equality proof for this
+        // exact local view and facts. Nothing can mutate it before publication.
+        // Replay all other authorities here; consumers still independently run
+        // validate_for, including full equality-result reconstruction.
+        view.validate_carrier_authorities(facts)?;
+        Ok(Arc::new(view))
+    }
+
     fn clone_equality_origins(
         &self,
         origins: &[EqualityObligationOrigin],
@@ -377,7 +440,7 @@ impl ValidatedTraitWorld {
         view: &mut CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        view.equality_results = self.derive_equality_results(view, facts)?;
+        view.equality_results = self.derive_equality_results(view, facts, None)?;
         Ok(())
     }
 
@@ -388,7 +451,7 @@ impl ValidatedTraitWorld {
         view: &CarrierContractView,
         facts: &ValidatedFacts,
     ) -> Result<()> {
-        let expected = self.derive_equality_results(view, facts)?;
+        let expected = self.derive_equality_results(view, facts, None)?;
         match (&view.equality_results, expected) {
             (None, None) => Ok(()),
             (Some(stored), Some(expected)) => {
@@ -405,6 +468,7 @@ impl ValidatedTraitWorld {
         &self,
         view: &CarrierContractView,
         facts: &ValidatedFacts,
+        construction: Option<&CanonicalSourceProof<'_>>,
     ) -> Result<Option<Arc<EqualityResultAuthority>>> {
         self.check_facts(facts, true)?;
         if !self.owner_normalization_finalized {
@@ -599,9 +663,30 @@ impl ValidatedTraitWorld {
         if origins.is_empty() {
             return Ok(None);
         }
-        self.validate_result_source_transport(view, &raw, facts)?;
-        // Source transport above reconstructs the canonical body or direct
-        // signature, including direct requirements, before comparing it.
+        if let Some(proof) = construction {
+            if !std::ptr::eq(proof.view, view)
+                || !std::ptr::eq(proof.facts, facts)
+                || facts.phase() != FactsPhase::Closed
+                || view.projected.is_some()
+                || !matches!(
+                    view.result_subject,
+                    EqualityResultSubject::Body { .. } | EqualityResultSubject::Direct(_)
+                )
+            {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "source construction proof changed exact view or caller facts",
+                ));
+            }
+            // The private owned capsule came directly from completed canonical
+            // transport. Its immutable borrow covers this entire derivation.
+            // All equality rows and certificates above are still replayed.
+        } else {
+            self.validate_result_source_transport(view, &raw, facts)?;
+        }
+        // Either source transport above reconstructed the canonical signature,
+        // or the consumed producer capsule retained that exact completed work.
+        // Both paths include direct requirements before certificate publication.
         // Keep metadata validation here without discharging the same target
         // again. Closure bodies and required calls retain their distinct
         // subject-specific validation below.
@@ -612,9 +697,9 @@ impl ValidatedTraitWorld {
             EqualityResultSubject::Body { .. } => {
                 self.validate_signature_shape(&view.result_signature, facts.env(), None)?;
             }
-            // Source transport above already discharges this exact direct
-            // target, checks every predicate, and compares its canonical
-            // signature against result_signature. Repeating validate_signature
+            // Canonical transport or its independent replay already discharges
+            // this exact direct target, checks every predicate, and establishes
+            // the canonical result_signature. Repeating validate_signature
             // here rebuilds the same nested projection proofs without adding
             // an independent check.
             EqualityResultSubject::Direct(_) => {
@@ -812,6 +897,14 @@ impl ValidatedTraitWorld {
                 "result transport changed original source regions",
             ));
         }
+        // The complete canonical contract above already replayed these sources.
+        // Reuse that proof only for the exact immutable argument payloads, not
+        // merely semantically equal nominal identities. Different payloads still
+        // take the independent candidate-argument replay below.
+        if schema_instantiation::same_inputs(&expected.arguments, &view.arguments, &self.budget, 0)?
+        {
+            return Ok(());
+        }
         let mut expected_results = Vec::new();
         for result in retained.contract.results.iter() {
             for output in self.expand_carrier(
@@ -822,10 +915,11 @@ impl ValidatedTraitWorld {
                 facts,
             )? {
                 let sources = self.expand_result_sources(
+                    view.declaration,
                     result,
                     &output,
                     &retained.contract.inputs,
-                    &canonical.env,
+                    &canonical,
                     &view.arguments,
                     &view.nominals,
                     facts,
@@ -1199,7 +1293,7 @@ mod tests {
         for _ in 0..16 {
             assert!(
                 world
-                    .derive_equality_results(&view, &facts)
+                    .derive_equality_results(&view, &facts, None)
                     .unwrap()
                     .is_none()
             );

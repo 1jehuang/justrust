@@ -16,6 +16,7 @@ mod associated_constants;
 mod associated_types;
 mod body_validation;
 mod callable_inputs;
+mod carrier_item_regions;
 mod carrier_regions;
 mod catalog;
 #[path = "traits/closure_dispatch.rs"]
@@ -2632,6 +2633,15 @@ impl CarrierContractView {
         Ok(())
     }
     pub fn validate_for(&self, facts: &ValidatedFacts) -> Result<()> {
+        if self.validate_carrier_authorities(facts)? {
+            facts.world.validate_equality_results(self, facts)?;
+        }
+        Ok(())
+    }
+
+    // True selects ordinary equality-result replay. Nominal and closure views
+    // retain their independent, complete authority validators.
+    fn validate_carrier_authorities(&self, facts: &ValidatedFacts) -> Result<bool> {
         if self.physical.is_some() {
             return Err(FactsError::invalid(
                 facts.budget(),
@@ -2652,12 +2662,14 @@ impl CarrierContractView {
             ));
         }
         if let Some(authority) = &self.nominal {
-            return authority.validate(self, facts);
+            authority.validate(self, facts)?;
+            return Ok(false);
         }
         if let Some((closure, mode)) = &self.closure_result {
-            return facts
+            facts
                 .world
-                .validate_closure_result_carrier(self, closure, *mode, facts);
+                .validate_closure_result_carrier(self, closure, *mode, facts)?;
+            return Ok(false);
         }
         if let Some(evidence) = &self.projected {
             facts
@@ -2669,8 +2681,7 @@ impl CarrierContractView {
                 .world
                 .validate_equality_required_carrier(self, evidence, facts)?;
         }
-        facts.world.validate_equality_results(self, facts)?;
-        Ok(())
+        Ok(true)
     }
 }
 
@@ -6132,35 +6143,6 @@ impl ValidatedTraitWorld {
             result_subject,
         )
     }
-    #[allow(clippy::too_many_arguments)]
-    fn transport_carrier_contract(
-        &self,
-        declaration: DeclId,
-        arguments: Arc<[Ty]>,
-        signature: Signature,
-        facts: &ValidatedFacts,
-        raw: GenericSchema,
-        retained: &DeclarationCarriers,
-        origin: Arc<ir::SignatureOriginSchema>,
-        projected: Option<Arc<projected_methods::ProjectedMethodEvidence>>,
-        result_subject: parameter_equality::EqualityResultSubject,
-    ) -> Result<Arc<CarrierContractView>> {
-        let mut view = self.transport_carrier_parts(
-            declaration,
-            arguments,
-            signature,
-            facts,
-            raw,
-            retained,
-            origin,
-            projected,
-            result_subject,
-        )?;
-        self.seal_equality_results(&mut view, facts)?;
-        view.validate_for(facts)?;
-        Ok(Arc::new(view))
-    }
-
     /// Private structural replay only. A view cannot be published from this
     /// helper: the publishing wrapper always seals and validates all authority.
     #[allow(clippy::too_many_arguments)]
@@ -6337,10 +6319,11 @@ impl ValidatedTraitWorld {
                 self.expand_carrier(&result.location, &raw.env, &arguments, &nominals, facts)?
             {
                 let sources = self.expand_result_sources(
+                    declaration,
                     result,
                     &output,
                     &retained.contract.inputs,
-                    &raw.env,
+                    &raw,
                     &arguments,
                     &nominals,
                     facts,
@@ -6554,14 +6537,16 @@ impl ValidatedTraitWorld {
     #[allow(clippy::too_many_arguments)]
     fn expand_result_sources(
         &self,
+        declaration: DeclId,
         result: &ir::CarrierReturn,
         output: &ExpandedCarrier,
         declared_inputs: &[ir::InputCarrier],
-        env: &GenericEnv,
+        raw: &GenericSchema,
         args: &[Ty],
         nominals: &[ir::NominalCarrierMapping],
         facts: &ValidatedFacts,
     ) -> Result<Arc<[ir::InputCarrier]>> {
+        let env = raw.env.as_ref();
         if result.sources.is_empty()
             && matches!(
                 result.location.channel,
@@ -6569,6 +6554,31 @@ impl ValidatedTraitWorld {
             )
             && matches!(output.location.channel, ir::CarrierChannel::Fixed(_))
         {
+            if let Some(sources) =
+                self.projected_item_result_sources(declaration, result, output, raw, args, facts)?
+            {
+                for source in sources.iter() {
+                    let mut admitted = false;
+                    for input in declared_inputs {
+                        charged(&self.budget, self.budget.charge_work(1))?;
+                        if input.param != source.param {
+                            continue;
+                        }
+                        for expanded in
+                            self.expand_carrier(&input.location, env, args, nominals, facts)?
+                        {
+                            admitted |= self.same_location(&source.location, &expanded.location)?;
+                        }
+                    }
+                    if !admitted {
+                        return Err(FactsError::invalid(
+                            &self.budget,
+                            "projected item source leaves original input family",
+                        ));
+                    }
+                }
+                return Ok(sources);
+            }
             let mut sources = Vec::new();
             for input in declared_inputs {
                 charged(&self.budget, self.budget.charge_work(1))?;
@@ -10922,9 +10932,9 @@ impl TraitCx for ValidatedTraitWorld {
         }
         // The same obligation engine runs with the world's private empty
         // environment, even when a caller body has unrelated generic bounds.
-        let closed = if facts.phase() == FactsPhase::Closed
-            && std::ptr::eq(facts.predicates.as_ref(), self.empty.as_ref())
-        {
+        let same_closed_context = facts.phase() == FactsPhase::Closed
+            && std::ptr::eq(facts.predicates.as_ref(), self.empty.as_ref());
+        let closed = if same_closed_context {
             // Re-resolution has exactly the same closed environment, not a
             // newly invented caller or an upgrade of a raw predicate context.
             ProofContext::from_facts(facts)
@@ -10935,7 +10945,14 @@ impl TraitCx for ValidatedTraitWorld {
                 phase: FactsPhase::Closed,
             }
         };
-        let (signature, topology) = self.trait_signature_with_topology(call, closed)?;
+        // The first signature was formed by this same canonical API for the
+        // same call and exact facts authority. Reuse its immutable proof only
+        // when closed re-resolution has not changed the context at all.
+        let (signature, topology) = if same_closed_context {
+            (signature, caller_topology)
+        } else {
+            self.trait_signature_with_topology(call, closed)?
+        };
         let evidence = self.require_in(&predicate, closed, scratch)?;
         if evidence.0.world != self.id
             || evidence.0.environment != self.empty.index
@@ -12220,6 +12237,500 @@ mod tests {
             result,
         }
     }
+    #[test]
+    fn projected_item_result_keeps_inner_parameter_and_rejects_forged_sources() {
+        use crate::compiler::{CompilerProvider, Input, Snapshot, TemplateBodyFact, keys};
+        use crate::engine::Engine;
+        let budget = PlanBudget::default();
+        let source = "struct Item{name:String}fn main(){let item=Item{name:String::from(\"apple\")};let names:Vec<&str>;{let refs=vec![&item];names=refs.iter().map(|i|i.name.as_str()).collect();}println!(\"{}\",names[0]);}";
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text(source.into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: budget.clone(),
+        });
+        struct ActualCollectBody(CompilerProvider);
+        impl crate::engine::Provider for ActualCollectBody {
+            fn outputs(&self, key: &crate::engine::Key) -> usize {
+                if key.kind == u32::MAX {
+                    2
+                } else {
+                    crate::engine::Provider::outputs(&self.0, key)
+                }
+            }
+            fn start(
+                &self,
+                cx: crate::engine::Context,
+                key: crate::engine::Key,
+            ) -> crate::engine::TaskFuture {
+                if key.kind != u32::MAX {
+                    return crate::engine::Provider::start(&self.0, cx, key);
+                }
+                let budget = self.0.0.budget.clone();
+                Box::pin(async move {
+                    let signatures = cx.request(keys::SignaturesDebtRoot.key()).get(0);
+                    let template = cx
+                        .request(keys::item(crate::compiler::TEMPLATE_BODY, 0))
+                        .get(0);
+                    let plan: Arc<crate::compiler::frontend::PlanCtx> =
+                        cx.read_fact(signatures).await?;
+                    let template: Arc<TemplateBodyFact> = cx.read_fact(template).await?;
+                    let facts = plan
+                        .instance_facts(&CallTarget {
+                            declaration: plan.function_decl(0).unwrap(),
+                            type_args: Arc::from([]),
+                        })
+                        .unwrap();
+                    let callee = template
+                        .checked
+                        .exprs
+                        .iter()
+                        .find_map(|expression| {
+                            let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                                return None;
+                            };
+                            name.ends_with("collect").then_some(target)
+                        })
+                        .expect("original main collect call");
+                    let target = match callee {
+                        Callee::Direct(target) => target.clone(),
+                        Callee::TraitItem(call) => {
+                            let selected = facts.world().resolve_trait_call(call, &facts).unwrap();
+                            let Callee::Direct(target) = selected.callee() else {
+                                panic!("collect selected non-direct body");
+                            };
+                            target.clone()
+                        }
+                        _ => panic!("unexpected collect callee kind"),
+                    };
+                    let words =
+                        crate::compiler::instances::graph_key::encode(&target, &budget).unwrap();
+                    let body = cx
+                        .request(
+                            keys::words(crate::compiler::CANONICAL_BODY, words.clone()).unwrap(),
+                        )
+                        .get(0);
+                    let body: Arc<crate::compiler::InstanceBodyFact> = cx.read_fact(body).await?;
+                    assert_eq!(
+                        crate::compiler::instances::graph_key::encode(
+                            body.facts.target().unwrap(),
+                            &budget,
+                        )
+                        .unwrap(),
+                        words,
+                    );
+                    cx.publish_fact(
+                        0,
+                        crate::compiler::InstanceBodyFact {
+                            facts: body.facts.clone(),
+                            checked: body.checked.clone(),
+                        },
+                    )?;
+                    let callee = body
+                        .checked
+                        .exprs
+                        .iter()
+                        .find_map(|expression| {
+                            let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                                return None;
+                            };
+                            name.ends_with("from_iter").then_some(target)
+                        })
+                        .expect("actual collect from_iter call");
+                    let target = match callee {
+                        Callee::Direct(target) => target.clone(),
+                        Callee::TraitItem(call) => {
+                            let selected = body
+                                .facts
+                                .world()
+                                .resolve_trait_call(call, &body.facts)
+                                .unwrap();
+                            let Callee::Direct(target) = selected.callee() else {
+                                panic!("from_iter selected non-direct body");
+                            };
+                            target.clone()
+                        }
+                        _ => panic!("unexpected from_iter callee kind"),
+                    };
+                    let words =
+                        crate::compiler::instances::graph_key::encode(&target, &budget).unwrap();
+                    let inner = cx
+                        .request(
+                            keys::words(crate::compiler::CANONICAL_BODY, words.clone()).unwrap(),
+                        )
+                        .get(0);
+                    let inner: Arc<crate::compiler::InstanceBodyFact> = cx.read_fact(inner).await?;
+                    assert_eq!(
+                        crate::compiler::instances::graph_key::encode(
+                            inner.facts.target().unwrap(),
+                            &budget
+                        )
+                        .unwrap(),
+                        words
+                    );
+                    cx.publish_fact(
+                        1,
+                        crate::compiler::InstanceBodyFact {
+                            facts: inner.facts.clone(),
+                            checked: inner.checked.clone(),
+                        },
+                    )
+                })
+            }
+        }
+        let engine = Engine::new(ActualCollectBody(CompilerProvider(snapshot)));
+        let actual_body = engine.request(keys::test_key(u32::MAX, vec![0]));
+        let signatures = engine.request(keys::SignaturesDebtRoot.key());
+        let parent = engine.request(keys::item(crate::compiler::TEMPLATE_BODY, 0));
+        engine.run(1).unwrap();
+        parent.completion().unwrap();
+        let plan = signatures
+            .fact::<crate::compiler::frontend::PlanCtx>(0)
+            .unwrap();
+        let template = parent.fact::<TemplateBodyFact>(0).unwrap();
+        let facts = plan
+            .instance_facts(&CallTarget {
+                declaration: plan.function_decl(0).unwrap(),
+                type_args: Arc::from([]),
+            })
+            .unwrap();
+        assert_eq!(facts.phase(), FactsPhase::Closed);
+        let calls: Vec<_> = template
+            .checked
+            .exprs
+            .iter()
+            .filter_map(|expression| {
+                let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                    return None;
+                };
+                name.ends_with("collect").then_some(target)
+            })
+            .collect();
+        assert_eq!(calls.len(), 1);
+        let view = facts
+            .carrier_contract(SignatureSubject::Call(calls[0]))
+            .unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.contract.results.len(), 1);
+        let sources = &view.contract.results[0].sources;
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].param, 0);
+        assert_eq!(
+            sources[0].location.path.0.as_ref(),
+            &[
+                ir::CarrierStep::Field(0),
+                ir::CarrierStep::Field(0),
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::SliceElement,
+            ]
+        );
+        assert_eq!(
+            sources[0].location.channel,
+            ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 })
+        );
+        // Inspect the actual closed collect body, not a reconstructed required
+        // call under main's facts. BUILD consumes this exact callee and context.
+        actual_body.completion().unwrap();
+        let actual_from_iter = actual_body
+            .fact::<crate::compiler::InstanceBodyFact>(1)
+            .unwrap();
+        let actual_body = actual_body
+            .fact::<crate::compiler::InstanceBodyFact>(0)
+            .unwrap();
+        assert_eq!(actual_body.facts.phase(), FactsPhase::Closed);
+        let actual_outer = actual_body
+            .facts
+            .carrier_contract(SignatureSubject::Body)
+            .unwrap();
+        actual_outer.validate_for(&actual_body.facts).unwrap();
+        assert_eq!(
+            actual_outer.contract.results[0].sources.as_ref(),
+            sources.as_ref()
+        );
+        let actual_inner_calls: Vec<_> = actual_body
+            .checked
+            .exprs
+            .iter()
+            .filter_map(|expression| {
+                let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                    return None;
+                };
+                name.ends_with("from_iter").then_some(target)
+            })
+            .collect();
+        assert_eq!(actual_inner_calls.len(), 1);
+        let actual_inner_target = actual_inner_calls[0];
+        let actual_inner = actual_body
+            .facts
+            .carrier_contract(SignatureSubject::Call(actual_inner_target))
+            .unwrap();
+        actual_inner.validate_for(&actual_body.facts).unwrap();
+        let (callee_kind, callee_declaration) = match actual_inner_target {
+            Callee::Direct(target) => ("direct", target.declaration),
+            Callee::TraitItem(call) => ("required", call.item),
+            _ => panic!("unexpected actual from_iter callee kind"),
+        };
+        assert_eq!(actual_inner.declaration, callee_declaration);
+        let actual_raw = actual_body
+            .facts
+            .world()
+            .normalized_declaration_schema(callee_declaration)
+            .unwrap();
+        let expected_inner_sources: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                let mut source = source.clone();
+                let mut path = vec![ir::CarrierStep::Field(0)];
+                path.extend_from_slice(&source.location.path.0);
+                source.location.path = ir::CarrierPath(path.into());
+                source
+            })
+            .collect();
+        assert_eq!(actual_inner.contract.results.len(), 1);
+        assert_eq!(
+            actual_inner.contract.results[0].sources.as_ref(),
+            expected_inner_sources.as_slice(),
+            "actual from_iter kind={callee_kind} declaration={callee_declaration:?} raw_result={:?} raw_params={} raw_predicates={} actual_args={} projected={} required={}",
+            std::mem::discriminant(&actual_raw.signature.result),
+            actual_raw.signature.params.len(),
+            actual_raw.predicates.len(),
+            actual_inner.arguments.len(),
+            actual_inner.projected.is_some(),
+            actual_inner.equality_required.is_some(),
+        );
+        assert!(
+            actual_body
+                .facts
+                .world()
+                .rejects_forged_direct_item_regions_for_tests(&actual_inner, &actual_body.facts)
+                .unwrap()
+        );
+        for mutation in 0..5 {
+            let mut forged = actual_inner.as_ref().clone();
+            match mutation {
+                0 => Arc::make_mut(&mut forged.contract.results)[0].sources = sources.clone(),
+                1 => forged.declaration = view.declaration,
+                2 => forged.arguments = Arc::from([]),
+                3 => forged.equality_results = None,
+                4 => {
+                    let Ty::Struct(nominal) = &forged.arguments[1] else {
+                        panic!("actual from_iter input must retain its nominal payload");
+                    };
+                    let mut definition = nominal.def().clone();
+                    let mut fields = nominal_fields(&definition.fields, actual_body.facts.budget())
+                        .unwrap()
+                        .to_vec();
+                    fields[0].ty = Ty::Bool;
+                    definition.fields = fields.into();
+                    Arc::make_mut(&mut forged.arguments)[1] =
+                        Ty::Struct(ir::StructTy::new(definition));
+                    assert!(
+                        !schema_instantiation::same_inputs(
+                            &actual_inner.arguments,
+                            &forged.arguments,
+                            actual_body.facts.budget(),
+                            0,
+                        )
+                        .unwrap()
+                    );
+                }
+                _ => unreachable!(),
+            }
+            assert!(
+                matches!(forged.validate_for(&actual_body.facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                "actual inner mutation={mutation}, usage={:?}",
+                actual_body.facts.budget().usage_snapshot()
+            );
+        }
+        assert_eq!(actual_from_iter.facts.phase(), FactsPhase::Closed);
+        let next_calls: Vec<_> = actual_from_iter
+            .checked
+            .exprs
+            .iter()
+            .filter_map(|expression| {
+                let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                    return None;
+                };
+                name.ends_with("next").then_some(target)
+            })
+            .collect();
+        assert_eq!(next_calls.len(), 1);
+        let next = actual_from_iter
+            .facts
+            .carrier_contract(SignatureSubject::Call(next_calls[0]))
+            .unwrap();
+        next.validate_for(&actual_from_iter.facts).unwrap();
+        assert_eq!(next.contract.results.len(), 1);
+        let Ty::Enum(next_result) = &next.result_signature.result else {
+            panic!("next result envelope")
+        };
+        let next_variant = ir::VariantId {
+            owner: next_result.def().id,
+            index: 1,
+        };
+        assert_eq!(
+            next.contract.results[0].location,
+            ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([ir::CarrierStep::VariantField {
+                    variant: next_variant,
+                    field: 0
+                }])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            }
+        );
+        let expected_next_sources: Vec<_> = sources
+            .iter()
+            .map(|source| {
+                let mut source = source.clone();
+                let mut path = vec![ir::CarrierStep::Referent];
+                path.extend_from_slice(&source.location.path.0);
+                source.location.path = ir::CarrierPath(path.into());
+                source
+            })
+            .collect();
+        assert_eq!(
+            next.contract.results[0].sources.as_ref(),
+            expected_next_sources.as_slice()
+        );
+        assert!(
+            actual_from_iter
+                .facts
+                .world()
+                .rejects_forged_projected_envelope_for_tests(&next, &actual_from_iter.facts)
+                .unwrap()
+        );
+        for mutation in 0..5 {
+            let mut forged = next.as_ref().clone();
+            match mutation {
+                0 => {
+                    Arc::make_mut(&mut Arc::make_mut(&mut forged.contract.results)[0].sources)[0]
+                        .location
+                        .path = ir::CarrierPath(Arc::from([
+                        ir::CarrierStep::Referent,
+                        ir::CarrierStep::Field(0),
+                        ir::CarrierStep::Field(0),
+                    ]));
+                }
+                1 => {
+                    Arc::make_mut(&mut forged.contract.results)[0].location.path =
+                        ir::CarrierPath(Arc::from([ir::CarrierStep::VariantField {
+                            variant: ir::VariantId {
+                                owner: next_variant.owner,
+                                index: 0,
+                            },
+                            field: 0,
+                        }]))
+                }
+                2 => forged.equality_results = None,
+                3 => forged.arguments = Arc::from([]),
+                4 => forged.declaration = actual_inner.declaration,
+                _ => unreachable!(),
+            }
+            let rejection = forged.validate_for(&actual_from_iter.facts);
+            assert!(
+                matches!(&rejection, Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                "actual next mutation={mutation}: {rejection:?}"
+            );
+        }
+        assert!(view.equality_results.is_some());
+        assert!(
+            facts
+                .world()
+                .rejects_partial_item_regions_for_tests(&view, &facts)
+                .unwrap()
+        );
+        for mutation in 0..9 {
+            // Each forged input is an independent compiler task. Reconstruct
+            // its own authority instead of spending the real BODY graph
+            // budget repeatedly on unrelated adversarial candidates. No
+            // facts, nominal identities, or receipts cross these engines.
+            let engine = Engine::new(CompilerProvider(Arc::new(Snapshot {
+                input: Input::Text(source.into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: PlanBudget::default(),
+            })));
+            let signatures = engine.request(keys::SignaturesDebtRoot.key());
+            let parent = engine.request(keys::item(crate::compiler::TEMPLATE_BODY, 0));
+            engine.run(1).unwrap();
+            parent.completion().unwrap();
+            let plan = signatures
+                .fact::<crate::compiler::frontend::PlanCtx>(0)
+                .unwrap();
+            let template = parent.fact::<TemplateBodyFact>(0).unwrap();
+            let facts = plan
+                .instance_facts(&CallTarget {
+                    declaration: plan.function_decl(0).unwrap(),
+                    type_args: Arc::from([]),
+                })
+                .unwrap();
+            let calls: Vec<_> = template
+                .checked
+                .exprs
+                .iter()
+                .filter_map(|expression| {
+                    let ir::ExprKind::Call { target, name, .. } = &expression.kind else {
+                        return None;
+                    };
+                    name.ends_with("collect").then_some(target)
+                })
+                .collect();
+            assert_eq!(calls.len(), 1);
+            let view = facts
+                .carrier_contract(SignatureSubject::Call(calls[0]))
+                .unwrap();
+            view.validate_for(&facts).unwrap();
+            let sources = &view.contract.results[0].sources;
+            let mut forged = view.as_ref().clone();
+            match mutation {
+                0 => {
+                    let row = &mut Arc::make_mut(&mut forged.contract.results)[0];
+                    let mut source = row.sources[0].clone();
+                    source.location.path = ir::CarrierPath(Arc::from([
+                        ir::CarrierStep::Field(0),
+                        ir::CarrierStep::Field(0),
+                    ]));
+                    row.sources = Arc::from([source]);
+                }
+                1 => {
+                    Arc::make_mut(&mut Arc::make_mut(&mut forged.contract.results)[0].sources)[0]
+                        .param = 1
+                }
+                2 => {
+                    Arc::make_mut(&mut forged.original_contract.results)[0].sources =
+                        sources.clone()
+                }
+                3 => forged.arguments = Arc::from([]),
+                4 => forged.equality_results = None,
+                5 => {
+                    Arc::make_mut(&mut forged.source_regions).declaration =
+                        plan.function_decl(0).unwrap()
+                }
+                6 => {
+                    Arc::make_mut(&mut Arc::make_mut(&mut forged.contract.results)[0].sources)[0]
+                        .location
+                        .channel = ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 })
+                }
+                7 => Arc::make_mut(&mut forged.contract.results)[0].sources = Arc::from([]),
+                8 => forged.contract.results = Arc::from([]),
+                _ => unreachable!(),
+            }
+            let rejection = forged.validate_for(&facts);
+            assert!(
+                matches!(&rejection, Err(error) if error.kind() == FactsErrorKind::InvalidMetadata),
+                "mutation={mutation}: {rejection:?}; usage={:?}",
+                facts.budget().usage_snapshot()
+            );
+        }
+        let budget = facts.budget();
+        for bit in (0..usize::BITS).rev() {
+            let _ = budget.charge_work(1usize << bit);
+        }
+        assert!(budget.charge_work(1).is_err());
+        assert!(matches!(view.validate_for(&facts), Err(error) if error.is_resource()));
+        assert!(
+            matches!(facts.carrier_contract(SignatureSubject::Call(calls[0])), Err(error) if error.is_resource())
+        );
+    }
+
     #[test]
     fn body_replay_live_guard_rejects_forged_context_and_module_failure() {
         use crate::compiler::expansion_budget::Counter;

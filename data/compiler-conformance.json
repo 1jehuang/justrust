@@ -45,7 +45,5 @@
     {"id":"optimizer", "area":"Graph-native optimizer correctness", "state":"partial", "gates":["all-tests","graph"], "remaining":"Validate every admitted optimization against observable behavior, unsafe/overflow/unwind and cross-feature interactions."},
     {"id":"completion", "area":"Compatibility review and representative performance", "state":"open", "gates":["all-tests","graph","lint","format"], "remaining":"Independent completeness review plus representative performance measurements. Correctness gates do not establish a speed claim."}
   ],
-  "known_gaps": [
-    {"id":"borrowed-closure-result", "requirement":"ownership", "suite":"inline_closure_arguments", "test":"closure_shared_argument_results_match_stock", "source_case":"temporary_outer_iterator_borrow_does_not_shorten_inner_input", "classification":"valid-rejected", "detail":"A Vec<&Item> in an inner scope may return names borrowing the outer Item. The original source is rejected with a live-loan conflict at destruction of the temporary reference container; inner-reference provenance must remain separate from the outer iterator borrow."}
-  ]
+  "known_gaps": []
 }
