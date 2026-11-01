@@ -5,6 +5,94 @@
 mod closure_oracle;
 
 #[test]
+fn option_equality_preserves_payload_traits_and_borrows() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "option-equality",
+        &[
+            Case {
+                name: "fully_explicit_some_equality",
+                source: "fn main(){let a:Option<i32>=Some(7i32);let b:Option<i32>=Some(7i32);println!(\"{}\",a==b);}",
+                expect: Expect::Run("true\n"),
+            },
+            Case {
+                name: "all_variant_equality_branches",
+                source: r#"fn main(){
+                    let a:Option<i32>=Some(7i32);let b:Option<i32>=Some(8i32);let n:Option<i32>=None;
+                    println!("{} {} {} {} {}",a==a,a!=b,a==n,n==a,n==n);
+                }"#,
+                expect: Expect::Run("true true false false true\n"),
+            },
+            Case {
+                name: "nested_option_equality",
+                source: r#"fn main(){let a:Option<Option<i32>>=Some(Some(7i32));let b:Option<Option<i32>>=Some(Some(7i32));
+                    let n:Option<Option<i32>>=None;let inner:Option<Option<i32>>=Some(None);
+                    println!("{} {}",a==b,inner!=n);
+                }"#,
+                expect: Expect::Run("true true\n"),
+            },
+            Case {
+                name: "shared_reference_payload_equality",
+                source: r#"fn main(){let n=7i32;let a:Option<&i32>=Some(&n);let b:Option<&i32>=Some(&n);println!("{}",a==b);}"#,
+                expect: Expect::Run("true\n"),
+            },
+            Case {
+                name: "eq_supertrait_proves_option_partial_eq",
+                source: r#"fn equal<T: Eq>(a:Option<T>,b:Option<T>)->bool{a==b}
+                fn main(){
+                    println!("{}",equal::<i32>(Some(9i32),Some(9i32)));
+                }"#,
+                expect: Expect::Run("true\n"),
+            },
+            Case {
+                name: "noncopy_comparison_dispatches_without_moving_payloads",
+                source: r#"struct Value{id:i32}
+                impl PartialEq for Value{fn eq(&self,other:&Self)->bool{println!("eq {} {}",self.id,other.id);self.id==other.id}}
+                impl Drop for Value{fn drop(&mut self){println!("drop {}",self.id);}}
+                fn main(){let a:Option<Value>=Some(Value{id:1});let b:Option<Value>=Some(Value{id:1});let n:Option<Value>=None;
+                    println!("{}",a==b);println!("{}",a!=b);
+                    println!("{}",a==n);println!("{}",n==b);
+                    println!("{} {}",a.unwrap().id,b.unwrap().id);
+                }"#,
+                expect: Expect::Run(
+                    "eq 1 1\ntrue\neq 1 1\nfalse\nfalse\nfalse\n1 1\ndrop 1\ndrop 1\n",
+                ),
+            },
+            Case {
+                name: "option_ne_negates_option_eq_not_payload_ne",
+                source: r#"struct Value;
+                impl PartialEq for Value{
+                    fn eq(&self,_other:&Self)->bool{println!("eq");false}
+                    fn ne(&self,_other:&Self)->bool{println!("ne");false}
+                }
+                fn main(){let a:Option<Value>=Some(Value);let b:Option<Value>=Some(Value);println!("{}",a!=b);}"#,
+                expect: Expect::Run("eq\ntrue\n"),
+            },
+            Case {
+                name: "unused_comparison_requires_payload_partial_eq",
+                source: "struct Value;fn unused(){let a:Option<Value>=Some(Value);let b:Option<Value>=None;let _=a==b;}fn main(){}",
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "same_spelling_user_option_has_no_equality_grant",
+                source: "enum Option<T>{None,Some(T)}fn unused(){let a:Option<i32>=Option::Some(7i32);let b:Option<i32>=Option::None;let _=a==b;}fn main(){}",
+                expect: Expect::Invalid("E0369"),
+            },
+            Case {
+                name: "partial_eq_does_not_supply_eq",
+                source: "fn needs<T:Eq>(_:T){}fn unused(){let a:Option<f64>=Some(1f64);needs::<Option<f64>>(a);}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "different_payload_types_are_not_interchangeable",
+                source: "fn unused(){let a:Option<i32>=Some(7i32);let b:Option<bool>=Some(true);let _=a==b;}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn option_pairs_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check(

@@ -258,3 +258,17 @@ impl<T: Clone> Clone for Option<T> {
 }
 
 impl<T: Copy> Copy for Option<T> {}
+
+impl<T: super::cmp::PartialEq> super::cmp::PartialEq for Option<T> {
+    fn eq(&self, other: &Option<T>) -> bool {
+        match self {
+            Option::Some(left) => match other {
+                Option::Some(right) => <T as super::cmp::PartialEq>::eq(left, right),
+                Option::None => false,
+            },
+            Option::None => other.is_none(),
+        }
+    }
+}
+
+impl<T: super::cmp::Eq> super::cmp::Eq for Option<T> {}
