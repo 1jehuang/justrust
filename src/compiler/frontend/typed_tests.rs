@@ -1,5 +1,104 @@
 use super::*;
 
+#[test]
+fn original_native_sequence_return_mismatch_precedes_origin_contract() {
+    for source in [
+        r#"fn bad_mut<'a,T,U>(values:&'a mut Vec<T>)->&'a mut U{&mut values[0usize]}fn main(){}"#,
+        r#"fn bad<'a,T,U>(values:&'a Vec<T>)->&'a U{&values[0usize]}fn main(){}"#,
+    ] {
+        let program = native_box_source_program_text(source);
+        let budget = ir::PlanBudget::default();
+        let error = PlanCtx::from_program(&program, &budget).unwrap_err();
+        assert!(error.contains("E0308"), "{error}");
+        assert!(!error.contains("no origin mapping"), "{error}");
+    }
+    let program = native_box_source_program_text(
+        r#"fn head<'a,T,U>(values:&'a mut Vec<T>)->&'a mut T{&mut values[0usize]}fn main(){}"#,
+    );
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let declaration = plan
+        .registry
+        .function_ids
+        .iter()
+        .copied()
+        .find(|id| {
+            let info = plan.registry.declaration(*id).unwrap();
+            plan.program.functions[info.source_index]
+                .name
+                .segments()
+                .last()
+                .is_some_and(|name| plan.program.names.spelling(*name).unwrap() == "head")
+        })
+        .unwrap();
+    let info = plan.registry.declaration(declaration).unwrap();
+    let function = &program.functions[info.source_index];
+    let signature = plan.signature(declaration).unwrap().signature;
+    signature_graph::validate_original_sequence_return(
+        &program,
+        function,
+        &signature.params,
+        &signature.result,
+        &budget,
+    )
+    .unwrap();
+    let other_result = ir::Ty::Ref {
+        kind: ir::BorrowKind::Mut,
+        referent: Arc::new(ir::Ty::Param(ir::ParamId {
+            owner: info.param_env.binder(),
+            index: 1,
+        })),
+    };
+    assert!(
+        signature_graph::validate_original_sequence_return(
+            &program,
+            function,
+            &signature.params,
+            &other_result,
+            &budget
+        )
+        .unwrap_err()
+        .contains("E0308")
+    );
+    // A signature alone never proves a body mismatch. A diverging original
+    // body must not acquire this diagnostic, or any return-origin authority.
+    let divergent = native_box_source_program_text(
+        r#"fn divergent<'a,T,U>(values:&'a mut Vec<T>)->&'a mut U{loop{}}fn main(){}"#,
+    );
+    let body = divergent
+        .functions
+        .iter()
+        .find(|f| {
+            f.name
+                .segments()
+                .last()
+                .is_some_and(|name| divergent.names.spelling(*name).unwrap() == "divergent")
+        })
+        .unwrap();
+    signature_graph::validate_original_sequence_return(
+        &divergent,
+        body,
+        &signature.params,
+        &other_result,
+        &budget,
+    )
+    .unwrap();
+    // The same original indexed syntax over an unissued aggregate cannot
+    // borrow native sequence authority from its field shape or type argument.
+    let counterfeit = vec![ir::Ty::Ref {
+        kind: ir::BorrowKind::Mut,
+        referent: Arc::new(ir::Ty::Tuple(Arc::from([signature.result.clone()]))),
+    }];
+    signature_graph::validate_original_sequence_return(
+        &program,
+        function,
+        &counterfeit,
+        &other_result,
+        &budget,
+    )
+    .unwrap();
+}
+
 fn native_box_application_fixture() -> (PlanCtx, Arc<tr::ValidatedFacts>) {
     let program = native_box_source_program_text(
         "struct UserRecursive{next:*mut UserRecursive}fn deferred<T>(value:Box<T>){}fn main(){}",
