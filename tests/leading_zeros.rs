@@ -163,21 +163,148 @@ fn semantic_rejection(message: &str, case: &str) {
             "{case}: infrastructure/resource failure masquerading as rejection: {message}"
         );
     }
-    let expected = if case == "result" {
-        (lower.contains("expected")
-            && lower.contains("got")
-            && lower.contains("i32")
-            && lower.contains("u32"))
-            || lower.contains("type mismatch")
+    let expected = if case == "arity" {
+        lower.contains("e0061: leading_zeros takes no arguments")
+    } else if case == "turbofish" {
+        lower.contains("e0107: leading_zeros takes no type arguments")
+    } else if case == "result" {
+        lower.contains("e0308: mismatched types: expected fixed(int(u32)), found fixed(int(i32))")
     } else {
         lower.contains("no applicable method leading_zeros")
             || lower.contains("unsupported unresolved receiver type")
+            || (matches!(case, "bool" | "dead")
+                && lower.contains(
+                    "e0599: no method named `leading_zeros` found for `bool` in the current scope",
+                ))
+            || (case == "generic"
+                && lower.contains(
+                    "e0599: no method named `leading_zeros` found for `t` in the current scope",
+                ))
     };
     assert!(
         expected,
         "{case}: expected receiver/method or result-type rejection, got {message}"
     );
 }
+
+#[test]
+fn bool_method_rejection_requires_exact_diagnostic() {
+    let diagnostic = "E0599: no method named `leading_zeros` found for `bool` in the current scope";
+    semantic_rejection(diagnostic, "bool");
+    for (message, case) in [
+        ("E0599", "bool"),
+        (
+            "E0599: no method named `count_ones` found for `bool` in the current scope",
+            "bool",
+        ),
+        (
+            "E0599: no method named `leading_zeros` found for `char` in the current scope",
+            "bool",
+        ),
+        (diagnostic, "result"),
+        (diagnostic, "char"),
+        (
+            "internal: E0599: no method named `leading_zeros` found for `bool` in the current scope",
+            "bool",
+        ),
+    ] {
+        assert!(
+            std::panic::catch_unwind(|| semantic_rejection(message, case)).is_err(),
+            "{case}: unexpectedly recognized {message}"
+        );
+    }
+}
+#[test]
+fn generic_method_rejection_requires_exact_diagnostic() {
+    let diagnostic = "E0599: no method named `leading_zeros` found for `T` in the current scope";
+    semantic_rejection(diagnostic, "generic");
+    semantic_rejection(
+        &format!("InvalidMetadata: in callable crate::f: {diagnostic}"),
+        "generic",
+    );
+    for (message, case) in [
+        ("E0599", "generic"),
+        (
+            "E0599: no method named `count_ones` found for `T` in the current scope",
+            "generic",
+        ),
+        (
+            "E0599: no method named `leading_zeros` found for `U` in the current scope",
+            "generic",
+        ),
+        (diagnostic, "bool"),
+        (diagnostic, "result"),
+        (diagnostic, "char"),
+        (&format!("internal: {diagnostic}"), "generic"),
+    ] {
+        assert!(std::panic::catch_unwind(|| semantic_rejection(message, case)).is_err());
+    }
+}
+
+#[test]
+fn remaining_invalid_cases_require_exact_diagnostics() {
+    let arity = "E0061: leading_zeros takes no arguments";
+    let turbofish = "E0107: leading_zeros takes no type arguments";
+    let dead = "E0599: no method named `leading_zeros` found for `bool` in the current scope";
+    for (diagnostic, case) in [(arity, "arity"), (turbofish, "turbofish"), (dead, "dead")] {
+        semantic_rejection(diagnostic, case);
+        semantic_rejection(
+            &format!("InvalidMetadata: in callable crate::unused: {diagnostic}"),
+            case,
+        );
+        for prefix in ["internal: ", "resource: ", "budget: "] {
+            let message = format!("{prefix}{diagnostic}");
+            assert!(std::panic::catch_unwind(|| semantic_rejection(&message, case)).is_err());
+        }
+    }
+    for (message, case) in [
+        ("E0061", "arity"),
+        ("E0107", "turbofish"),
+        ("E0061: count_ones takes no arguments", "arity"),
+        ("E0107: count_ones takes no type arguments", "turbofish"),
+        (arity, "turbofish"),
+        (turbofish, "arity"),
+        (arity, "dead"),
+        (turbofish, "dead"),
+        (
+            "E0599: no method named `leading_zeros` found for `char` in the current scope",
+            "dead",
+        ),
+        ("unsupported unresolved receiver type", "arity"),
+        ("unsupported unresolved receiver type", "turbofish"),
+    ] {
+        assert!(std::panic::catch_unwind(|| semantic_rejection(message, case)).is_err());
+    }
+}
+
+#[test]
+fn result_rejection_requires_exact_diagnostic() {
+    let diagnostic = "E0308: mismatched types: expected Fixed(Int(U32)), found Fixed(Int(I32))";
+    semantic_rejection(diagnostic, "result");
+    semantic_rejection(
+        &format!("InvalidMetadata: in callable crate::main: {diagnostic}"),
+        "result",
+    );
+    for message in [
+        "E0308",
+        "type mismatch",
+        "expected i32 got u32",
+        "E0308: mismatched types: expected Fixed(Int(I32)), found Fixed(Int(U32))",
+        "E0308: mismatched types: expected Fixed(Int(U64)), found Fixed(Int(I32))",
+        "E0308: mismatched types: expected Fixed(Int(U32)), found Fixed(Int(I64))",
+        "E0599: mismatched types: expected Fixed(Int(U32)), found Fixed(Int(I32))",
+    ] {
+        assert!(std::panic::catch_unwind(|| semantic_rejection(message, "result")).is_err());
+    }
+    for case in ["bool", "generic", "arity", "turbofish", "dead"] {
+        assert!(std::panic::catch_unwind(|| semantic_rejection(diagnostic, case)).is_err());
+    }
+    for prefix in ["internal: ", "resource: ", "budget: "] {
+        let message = format!("{prefix}{diagnostic}");
+        assert!(std::panic::catch_unwind(|| semantic_rejection(&message, "result")).is_err());
+    }
+}
+
 struct Case {
     name: String,
     category: String,
