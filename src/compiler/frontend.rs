@@ -4839,6 +4839,7 @@ pub(super) struct OriginalSource {
     calls: Vec<SourceCallSite>,
     bindings: Vec<SourceBindingSite>,
     literal_temporaries: HashMap<ir::ExprId, ir::LocalId>,
+    array_borrows: Vec<source_input_replay::ArrayBorrowReceipt>,
     call_mapping: Vec<(usize, ir::ExprId, ir::Callee)>,
     nominal_call_realizations: Option<Vec<nominal_call_receipts::Receipt>>,
     builtin_leading_zeros_mapping: Vec<BuiltinLeadingZerosOccurrence>,
@@ -8684,6 +8685,12 @@ impl PlanCtx {
                 for call in &mut calls {
                     call.args_pointer = 0;
                 }
+                let array_borrows = source_input_replay::capture_array_borrows(
+                    &cap,
+                    &checked,
+                    &root_positions,
+                    budget,
+                )?;
                 let source = OriginalSource {
                     plan: self.clone(),
                     declaration,
@@ -8696,6 +8703,7 @@ impl PlanCtx {
                     calls,
                     bindings: std::mem::take(&mut cap.inventory.bindings),
                     literal_temporaries,
+                    array_borrows,
                     call_mapping: cap.calls.take(),
                     nominal_call_realizations: cap.nominal_call_realizations.borrow().clone(),
                     builtin_leading_zeros_mapping: cap.builtin_leading_zeros.take(),

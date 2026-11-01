@@ -138,6 +138,135 @@ pub(super) fn capture_scoped_initializers(
     Ok(result)
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct ArrayBorrowReceipt {
+    binding: usize,
+    node: sr::SourceNode,
+    initializer: ir::ExprId,
+    reference: ir::ExprId,
+    temporary: ir::LocalId,
+    value: ir::ExprId,
+    borrowed: ir::ExprId,
+}
+
+// This slice deliberately covers only authored shared byte-slice annotations
+// and closed integer arrays. Storage identities are captured before publication.
+fn shared_byte_array<'a>(source: &'a Expr, annotation: Option<&Type>) -> Option<&'a Expr> {
+    let Some(Type::Ref {
+        kind: ir::BorrowKind::Shared,
+        referent,
+        ..
+    }) = annotation
+    else {
+        return None;
+    };
+    if !matches!(referent.as_ref(), Type::Slice(element) if matches!(element.as_ref(), Type::Int(ir::IntTy::U8)))
+    {
+        return None;
+    }
+    let Expr::BorrowValue {
+        kind: ir::BorrowKind::Shared,
+        value,
+    } = source
+    else {
+        return None;
+    };
+    match value.as_ref() {
+        Expr::Array(elements)
+            if elements
+                .iter()
+                .all(|element| matches!(element, Expr::Integer(_))) =>
+        {
+            Some(value)
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn capture_array_borrows(
+    cap: &CanonicalSourceCapability,
+    checked: &ir::CheckedFunction,
+    root_positions: &[Option<usize>],
+    budget: &ir::PlanBudget,
+) -> Result<Vec<ArrayBorrowReceipt>, FactsError> {
+    let function = cap
+        .plan
+        .callable_body(&cap.plan.program, cap.declaration)
+        .map_err(|e| source_error(budget, &e))?;
+    let mut result = Vec::new();
+    for (binding, site) in cap.inventory.bindings.iter().enumerate() {
+        sr::work(budget, 1)?;
+        // Nested/scoped initializer capture is intentionally not generalized.
+        let Some(position) = root_positions.get(binding).copied().flatten() else {
+            continue;
+        };
+        let Some(Stmt::Let { value: source, .. }) =
+            source_statement(function, &cap.inventory, &site.node, budget)?
+        else {
+            continue;
+        };
+        if let Expr::BorrowValue { value, .. } = source
+            && let Expr::Array(elements) = value.as_ref()
+        {
+            sr::work(budget, elements.len())?;
+        }
+        if shared_byte_array(source, site.annotation.as_ref()).is_none() {
+            continue;
+        }
+        let Some(ir::TypedStmt::Let {
+            value: initializer, ..
+        }) = checked.body.statements.get(position)
+        else {
+            return Err(FactsError::invalid(
+                budget,
+                "original byte-array initializer missing",
+            ));
+        };
+        let Some(ir::TypedExpr {
+            kind: ir::ExprKind::ArrayToSlice { reference },
+            ..
+        }) = checked.exprs.get(initializer.0)
+        else {
+            return Err(FactsError::invalid(
+                budget,
+                "original byte-array unsizing missing",
+            ));
+        };
+        let Some(ir::TypedExpr {
+            kind: ir::ExprKind::Block(block),
+            ..
+        }) = checked.exprs.get(reference.0)
+        else {
+            return Err(FactsError::invalid(
+                budget,
+                "original byte-array temporary block missing",
+            ));
+        };
+        let ([ir::TypedStmt::Assign { local, value }], Some(borrowed)) =
+            (block.statements.as_slice(), block.tail)
+        else {
+            return Err(FactsError::invalid(
+                budget,
+                "original byte-array temporary shape changed",
+            ));
+        };
+        sr::push(
+            &mut result,
+            ArrayBorrowReceipt {
+                binding,
+                node: site.node.child(3, 0, budget)?,
+                initializer: *initializer,
+                reference: *reference,
+                temporary: *local,
+                value: *value,
+                borrowed,
+            },
+            budget,
+        )?;
+    }
+    Ok(result)
+}
+
 fn precedes(binding: &sr::SourceNode, operand: &sr::SourceNode) -> bool {
     let Some((ordinal, parent)) = binding.path.split_last() else {
         return false;
@@ -999,6 +1128,143 @@ impl Replay<'_> {
             .validate_ty_metadata_with_budget(b, self.budget)?;
         sr::replay_types_equal(a, b, self.budget)
     }
+    #[allow(clippy::too_many_arguments)]
+    fn array_borrow_initializer(
+        &self,
+        index: usize,
+        source: &Expr,
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        annotation: Option<&Type>,
+        depth: usize,
+    ) -> Result<Option<ir::Ty>, FactsError> {
+        sr::depth(self.budget, depth)?;
+        if let Expr::BorrowValue { value, .. } = source
+            && let Expr::Array(elements) = value.as_ref()
+        {
+            sr::work(self.budget, elements.len())?;
+        }
+        let Some(array) = shared_byte_array(source, annotation) else {
+            return Ok(None);
+        };
+        validate_original_occurrence(self.original, node, self.budget)?;
+        let mut receipt = None;
+        for row in &self.original.array_borrows {
+            sr::work(self.budget, 1)?;
+            if row.binding == index && receipt.replace(row).is_some() {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "duplicate byte-array borrow receipt",
+                ));
+            }
+        }
+        let row = receipt.ok_or_else(|| {
+            FactsError::invalid(self.budget, "original byte-array borrow receipt missing")
+        })?;
+        sr::work(self.budget, row.node.path.len().max(node.path.len()))?;
+        if row.node != *node || row.initializer != id {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array borrow source occurrence changed",
+            ));
+        }
+        let get = |id: ir::ExprId| {
+            self.checked.exprs.get(id.0).ok_or_else(|| {
+                FactsError::invalid(self.budget, "byte-array borrow expression missing")
+            })
+        };
+        let wrapper = get(id)?;
+        if !matches!(wrapper.kind, ir::ExprKind::ArrayToSlice { reference } if reference == row.reference)
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array borrow unsizing changed",
+            ));
+        }
+        sr::work(self.budget, self.original.unsize_mapping.len())?;
+        if !self
+            .original
+            .unsize_mapping
+            .iter()
+            .any(|entry| entry.wrapper == id && entry.reference == row.reference)
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array borrow lacks original unsizing",
+            ));
+        }
+        let reference = get(row.reference)?;
+        let ir::ExprKind::Block(block) = &reference.kind else {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array temporary block changed",
+            ));
+        };
+        if !matches!(block.statements.as_slice(), [ir::TypedStmt::Assign { local, value }] if *local == row.temporary && *value == row.value)
+            || block.tail != Some(row.borrowed)
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array temporary identities changed",
+            ));
+        }
+        let borrowed = get(row.borrowed)?;
+        if !matches!(&borrowed.kind, ir::ExprKind::Borrow { kind: ir::BorrowKind::Shared, place, timing: ir::BorrowTiming::Immediate }
+            if place.local == row.temporary && place.projection.is_empty())
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array temporary borrow changed",
+            ));
+        }
+        let Expr::Array(elements) = array else {
+            unreachable!();
+        };
+        sr::retain(self.budget, std::mem::size_of::<ir::Ty>() + 32)?;
+        let array_type = ir::Ty::Array {
+            element: Arc::new(ir::Ty::Int(ir::IntTy::U8)),
+            len: elements.len(),
+        };
+        let actual_array = self.expression(
+            array,
+            &node.child(11, 0, self.budget)?,
+            row.value,
+            Some(&array_type),
+            depth + 1,
+        )?;
+        let temporary = self.checked.locals.get(row.temporary.0).ok_or_else(|| {
+            FactsError::invalid(self.budget, "byte-array temporary local missing")
+        })?;
+        let reference_type = self.reference(ir::BorrowKind::Shared, array_type.clone())?;
+        sr::retain(self.budget, std::mem::size_of::<ir::Ty>() + 32)?;
+        let slice = self.reference(
+            ir::BorrowKind::Shared,
+            ir::Ty::Slice {
+                element: Arc::new(ir::Ty::Int(ir::IntTy::U8)),
+            },
+        )?;
+        if !self.equal(&actual_array, &array_type)?
+            || !self.equal(&temporary.ty, &array_type)?
+            || !temporary.mutable
+            || !self.equal(&reference.ty, &reference_type)?
+            || !self.equal(&borrowed.ty, &reference_type)?
+            || !self.equal(&wrapper.ty, &slice)?
+            || [
+                wrapper.completion,
+                reference.completion,
+                borrowed.completion,
+            ]
+            .iter()
+            .any(|completion| *completion != ir::Completion::Returns)
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "byte-array temporary type or completion changed",
+            ));
+        }
+        Ok(Some(slice))
+    }
+
     pub fn binding(&self, index: usize, depth: usize) -> Result<(ir::LocalId, ir::Ty), FactsError> {
         sr::depth(self.budget, depth)?;
         sr::work(self.budget, 1)?;
@@ -1087,13 +1353,18 @@ impl Replay<'_> {
             }
             return Ok((local, annotation.clone()));
         }
-        let ty = self.expression(
+        let node = site.node.child(3, 0, self.budget)?;
+        let ty = match self.array_borrow_initializer(
+            index,
             source,
-            &site.node.child(3, 0, self.budget)?,
+            &node,
             value,
-            annotation.as_ref(),
+            site.annotation.as_ref(),
             depth + 1,
-        )?;
+        )? {
+            Some(ty) => ty,
+            None => self.expression(source, &node, value, annotation.as_ref(), depth + 1)?,
+        };
         let annotation_matches = match annotation.as_ref() {
             Some(annotation) => self.equal(annotation, &ty)?,
             None => true,
@@ -1335,14 +1606,186 @@ impl Replay<'_> {
         Ok(declared.result.clone())
     }
 
-    /// Only an authored result context can resolve this zero-input producer.
-    /// The original call receipt authenticates the declaration, not its actuals.
-    /// Reference-bearing instantiations remain outside this bounded route.
+    /// Replay the exact declaration-owned transfer of one shared reference
+    /// actual from one root input into one result component. No spelling, raw
+    /// checked actual, or independently supplied contract authorizes this path.
     #[allow(clippy::too_many_arguments)]
-    fn generic_empty_static_result(
+    fn shared_static_result_transfer(
+        &self,
+        target: &ir::Callee,
+        schema: &tr::OriginalCallableView,
+        env: &ir::ParamEnv,
+        actuals: &[ir::Ty],
+        inputs: &[ir::Ty],
+        results: &[ir::CarrierLocation],
+        canonical: &ir::Signature,
+        depth: usize,
+    ) -> Result<(), FactsError> {
+        sr::depth(self.budget, depth)?;
+        if env.arity() != 1
+            || actuals.len() != 1
+            || results.len() != 1
+            || !matches!(
+                &actuals[0],
+                ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                }
+            )
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static result requires one authenticated shared carrier",
+            ));
+        }
+        let actual_locations = ir::carrier_locations(&actuals[0], self.budget)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let root = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        if actual_locations.as_ref() != std::slice::from_ref(&root) {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static result requires a single-layer shared actual",
+            ));
+        }
+        // The target was authenticated against the immutable original call
+        // receipt, and its actuals were independently inferred and compared.
+        let transfer = self
+            .original
+            .facts
+            .carrier_contract(ir::SignatureSubject::Call(target))?;
+        transfer.validate_for(&self.original.facts)?;
+        let ir::Callee::Direct(direct) = target else {
+            return Err(FactsError::invalid(
+                self.budget,
+                "static transfer lost direct target",
+            ));
+        };
+        sr::work(
+            self.budget,
+            schema.generic_env().total_arity() + actuals.len(),
+        )?;
+        if transfer.declaration() != direct.declaration
+            || transfer.arguments().len() != actuals.len()
+            || transfer.original_env().total_arity() != schema.generic_env().total_arity()
+            || !transfer
+                .original_env()
+                .ordered_params()
+                .eq(schema.generic_env().ordered_params())
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static result transfer changed original identity or binder",
+            ));
+        }
+        for (actual, retained) in actuals.iter().zip(transfer.arguments()) {
+            if !self.equal(actual, retained)? {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "generic static result transfer changed independently inferred actual",
+                ));
+            }
+        }
+        let original = transfer.original_contract();
+        let mapped = transfer.contract();
+        if original.inputs.len() != 1
+            || original.results.len() != 1
+            || original.results[0].sources.len() != 1
+            || mapped.inputs.len() != 1
+            || mapped.results.len() != 1
+            || mapped.results[0].sources.len() != 1
+            || !mapped.writes.is_empty()
+            || transfer.component_mappings().len() != 1
+            || transfer.source_region_env().region_count != 0
+            || !transfer.source_region_env().carriers.is_empty()
+            || !transfer.source_region_env().outlives.is_empty()
+            || !transfer.region_schema().constraints.is_empty()
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "generic static result requires exact single-source declaration transfer",
+            ));
+        }
+        let parameter = ir::ParamId {
+            owner: env.binder(),
+            index: 0,
+        };
+        let tail = ir::CarrierChannel::ParamTail {
+            parameter,
+            prefix: 0,
+        };
+        let original_input = &original.inputs[0];
+        let original_result = &original.results[0];
+        let mapped_input = &mapped.inputs[0];
+        let mapped_result = &mapped.results[0];
+        let component = &transfer.component_mappings()[0];
+        sr::work(
+            self.budget,
+            original_result.location.path.0.len()
+                + mapped_result.location.path.0.len()
+                + component.original.path.0.len()
+                + component.substituted.path.0.len()
+                + inputs.len(),
+        )?;
+        if !original_input.location.path.0.is_empty()
+            || original_input.location.channel != tail
+            || original_result.location.channel != tail
+            || original_result.location.path.0.is_empty()
+            || original_result.sources[0] != *original_input
+            || mapped_input.param != original_input.param
+            || mapped_input.location != root
+            || mapped_result.location != results[0]
+            || mapped_result.location.path != original_result.location.path
+            || mapped_result.location.channel != root.channel
+            || mapped_result.sources[0] != *mapped_input
+            || component.original_family != ir::CarrierFamily::Parameter(parameter)
+            || component.original != original_input.location
+            || component.substituted != root
+            || transfer.ref_contract().as_ref() != canonical.ref_contract.as_ref()
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static result changed exact original carrier transfer",
+            ));
+        }
+        let source = inputs.get(mapped_input.param).ok_or_else(|| {
+            FactsError::invalid(self.budget, "generic static transfer source input missing")
+        })?;
+        if schema.signature().params.get(mapped_input.param) != Some(&ir::Ty::Param(parameter))
+            || !self.equal(source, &actuals[0])?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static transfer source differs from authenticated input",
+            ));
+        }
+        for (index, input) in inputs.iter().enumerate() {
+            let locations = ir::carrier_locations(input, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?;
+            if (index == mapped_input.param && locations.as_ref() != std::slice::from_ref(&root))
+                || (index != mapped_input.param && !locations.is_empty())
+            {
+                return Err(FactsError::unsupported(
+                    self.budget,
+                    "generic static transfer contains additional input carriers",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Infer an omitted generic owner only from authored result context and
+    /// recursively authenticated original inputs. Reference results additionally
+    /// require the narrow declaration-owned carrier transfer above.
+    #[allow(clippy::too_many_arguments)]
+    fn generic_static_result(
         &self,
         owner: &Type,
         name: &AstIdent,
+        node: &sr::SourceNode,
+        inputs: &[Expr],
         id: ir::ExprId,
         direct: &ir::CallTarget,
         signature: &ir::Signature,
@@ -1363,13 +1806,13 @@ impl Replay<'_> {
                 "generic static producer requires an empty own binder",
             ));
         }
-        if !arguments.is_empty()
-            || !view.signature().params.is_empty()
-            || !signature.params.is_empty()
+        if inputs.len() != arguments.len()
+            || inputs.len() != view.signature().params.len()
+            || inputs.len() != signature.params.len()
         {
             return Err(FactsError::invalid(
                 self.budget,
-                "generic static producer changed original zero-input arity",
+                "generic static producer changed original input arity",
             ));
         }
         let Type::Apply(path) = owner else {
@@ -1450,17 +1893,76 @@ impl Replay<'_> {
             self.checked,
             self.signatures,
             self.budget,
-        )?
-        .ok_or_else(|| {
-            FactsError::unsupported(
+        )?;
+        let target = ir::Callee::Direct(direct.clone());
+        let canonical = nominal_call_receipts::original_call_signature(
+            self.original,
+            position,
+            id,
+            &target,
+            signature,
+            &self.original.facts,
+            self.budget,
+            &mut tr::TraitScratch::default(),
+        )?;
+        sr::work(self.budget, self.checked.call_evidence.len())?;
+        let evidence = self
+            .checked
+            .call_evidence
+            .iter()
+            .find(|row| row.call == id)
+            .ok_or_else(|| {
+                FactsError::invalid(
+                    self.budget,
+                    "generic static producer argument trace missing",
+                )
+            })?;
+        if canonical.params.len() != inputs.len() || evidence.arguments.len() != inputs.len() {
+            return Err(FactsError::invalid(
                 self.budget,
-                "generic static producer requires an authored result context",
-            )
-        })?;
+                "generic static producer original input arity changed",
+            ));
+        }
         let mut state = sr::CallInferenceState::new(Some(env.clone()), self.budget)?;
         let result_schema =
             state.type_term(&view.signature().result, Some(env.binder()), depth + 1)?;
-        state.constrain(&result_schema, &expected, depth + 1)?;
+        if let Some(expected) = &expected {
+            // Context may intentionally contain unresolved receiver terms.
+            // Constrain that authored term directly, never materialize it or
+            // seed it from the checked call result or inferred actuals.
+            state.constrain(&result_schema, expected, depth + 1)?;
+        }
+        let mut input_types = Vec::new();
+        for (index, (source, argument)) in inputs.iter().zip(arguments).enumerate() {
+            let parameter = &view.signature().params[index];
+            let expectation = match parameter {
+                ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+                _ => ir::CallExpectation::NoFirmReference,
+            };
+            let input = self.argument(
+                source,
+                &node.child(9, index, self.budget)?,
+                *argument,
+                id,
+                index,
+                expectation,
+                parameter.is_closed_shallow().then_some(parameter),
+                depth + 1,
+            )?;
+            let row = &evidence.arguments[index];
+            if !self.equal(&input, &canonical.params[index])?
+                || !self.equal(&input, &signature.params[index])?
+                || row.argument != index
+                || row.value != *argument
+            {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "generic static producer changed original input identity or type",
+                ));
+            }
+            state.constrain_input(parameter, &input)?;
+            sr::push(&mut input_types, input, self.budget)?;
+        }
         let mut materialize = |decl, args: &[ir::Ty]| {
             self.original
                 .plan
@@ -1485,19 +1987,9 @@ impl Replay<'_> {
                     "generic static producer changed independently inferred actuals",
                 ));
             }
-            if !ir::carrier_locations(authored, self.budget)
-                .map_err(|e| source_error(self.budget, &e))?
-                .is_empty()
-            {
-                return Err(FactsError::unsupported(
-                    self.budget,
-                    "generic static source actual contains reference carriers",
-                ));
-            }
         }
-        // finish resolves actuals, not schema Slot markers. Re-instantiate
-        // the authenticated original declaration with independently inferred
-        // actuals through the existing validated signature/carrier boundary.
+        // Schema Slots are not concrete types. Instantiate the original
+        // declaration only with the independently inferred actual vector.
         sr::retain(
             self.budget,
             actuals.len().saturating_mul(std::mem::size_of::<ir::Ty>()) + 32,
@@ -1506,7 +1998,7 @@ impl Replay<'_> {
             declaration: direct.declaration,
             type_args: actuals.into(),
         };
-        let result = self
+        let inferred = self
             .original
             .plan
             .instantiate_signature(
@@ -1514,55 +2006,109 @@ impl Replay<'_> {
                 ir::FactsCtx::Validated(&self.original.facts),
                 self.budget,
             )
-            .map_err(|e| source_error(self.budget, &e))?
-            .result;
-        if contains_source_ref(&result, self.budget, depth + 1)?
-            || !ir::carrier_locations(&result, self.budget)
-                .map_err(|e| source_error(self.budget, &e))?
-                .is_empty()
-        {
-            return Err(FactsError::unsupported(
-                self.budget,
-                "generic static source result contains reference carriers",
-            ));
-        }
-        let target = ir::Callee::Direct(direct.clone());
-        let canonical = nominal_call_receipts::original_call_signature(
-            self.original,
-            position,
-            id,
-            &target,
-            signature,
-            &self.original.facts,
-            self.budget,
-            &mut tr::TraitScratch::default(),
-        )?;
-        if !canonical.params.is_empty()
-            || !self.equal(&result, &canonical.result)?
-            || view.signature().ref_contract != canonical.ref_contract
+            .map_err(|e| source_error(self.budget, &e))?;
+        if inferred.params.len() != inputs.len() || inferred.ref_contract != canonical.ref_contract
         {
             return Err(FactsError::invalid(
                 self.budget,
-                "generic static producer changed original result contract",
+                "generic static producer changed independently instantiated contract",
             ));
         }
-        sr::work(self.budget, self.checked.call_evidence.len())?;
-        let evidence = self
-            .checked
-            .call_evidence
-            .iter()
-            .find(|row| row.call == id)
-            .ok_or_else(|| {
-                FactsError::invalid(
+        // Associated-call checking infers and instantiates the owner before
+        // checking arguments. Unlike an inferred ordinary free call, an owner
+        // slot instantiated to a reference supplies a firm reference context.
+        // Reconstruct that context only AFTER independent source inference.
+        for (index, (source, argument)) in inputs.iter().zip(arguments).enumerate() {
+            let parameter = &inferred.params[index];
+            let expectation = match parameter {
+                ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+                _ => ir::CallExpectation::NoFirmReference,
+            };
+            let input = self.argument(
+                source,
+                &node.child(9, index, self.budget)?,
+                *argument,
+                id,
+                index,
+                expectation,
+                Some(parameter),
+                depth + 1,
+            )?;
+            let row = &evidence.arguments[index];
+            if !self.equal(&input, &input_types[index])?
+                || !self.equal(&input, parameter)?
+                || !self.equal(parameter, &canonical.params[index])?
+                || !self.equal(parameter, &signature.params[index])?
+                || row.argument != index
+                || row.value != *argument
+                || row.expectation != expectation
+            {
+                return Err(FactsError::invalid(
                     self.budget,
-                    "generic static producer argument trace missing",
-                )
-            })?;
-        if !evidence.arguments.is_empty() || !evidence.type_actual_regions.is_empty() {
+                    "generic static producer changed independently reconstructed input expectation",
+                ));
+            }
+        }
+        let result = inferred.result;
+        let actuals = inferred_target.type_args.as_ref();
+        if !self.equal(&result, &canonical.result)? {
             return Err(FactsError::invalid(
                 self.budget,
-                "generic static producer changed empty argument or carrier evidence",
+                "generic static producer changed independently inferred result",
             ));
+        }
+        let result_locations = ir::carrier_locations(&result, self.budget)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let mut expected_regions = Vec::new();
+        let mut actual_has_carriers = false;
+        for (argument, actual) in actuals.iter().enumerate() {
+            let locations = ir::carrier_locations(actual, self.budget)
+                .map_err(|e| source_error(self.budget, &e))?;
+            actual_has_carriers |= !locations.is_empty();
+            for location in locations.iter() {
+                sr::work(self.budget, 1)?;
+                if matches!(location.channel, ir::CarrierChannel::Fixed(_)) {
+                    // Both owner and own actuals are omitted in this route.
+                    // No authored lifetime occurrence is erased or fabricated.
+                    sr::push(
+                        &mut expected_regions,
+                        ir::TypeActualRegion {
+                            argument,
+                            location: location.clone(),
+                            source: ir::ActualRegion::Elided,
+                        },
+                        self.budget,
+                    )?;
+                }
+            }
+        }
+        if expected_regions.as_slice() != evidence.type_actual_regions.as_ref() {
+            return Err(FactsError::invalid(
+                self.budget,
+                "generic static producer changed original actual-region occurrences",
+            ));
+        }
+        if result_locations.is_empty()
+            && !actual_has_carriers
+            && !contains_source_ref(&result, self.budget, depth + 1)?
+        {
+            if view.signature().ref_contract != canonical.ref_contract {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "generic static producer changed reference-free result contract",
+                ));
+            }
+        } else {
+            self.shared_static_result_transfer(
+                &target,
+                view,
+                &env,
+                actuals,
+                &input_types,
+                &result_locations,
+                canonical,
+                depth + 1,
+            )?;
         }
         ir::validate_callee(
             &target,
@@ -1663,15 +2209,11 @@ impl Replay<'_> {
             ));
         }
         if view.generic_env().total_arity() != 0 {
-            if !args.is_empty() {
-                return Err(FactsError::unsupported(
-                    self.budget,
-                    "generic static producer requires zero inputs",
-                ));
-            }
-            return self.generic_empty_static_result(
+            return self.generic_static_result(
                 owner,
                 name,
+                node,
+                args,
                 id,
                 direct,
                 signature,
@@ -2986,6 +3528,180 @@ mod literal_context_tests {
         let error = replay_source_body(&forged, checked, publication.facts(), &budget)
             .expect_err("missing generic static source receipt must fail");
         assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+    }
+
+    #[test]
+    fn generic_shared_static_producer_rejects_forged_authority() {
+        let program = parse(
+            "struct Wrap<T>{inner:T}impl<T> Wrap<T>{fn new(inner:T)->Wrap<T>{Wrap{inner}}}fn take<T>(s:&T){}fn main(){let n:u32=7;let r:&u32=&n;let wrap=Wrap::new(r);take(&wrap);}",
+        ).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected original shared static producer source");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        let producer = checked
+            .exprs
+            .iter()
+            .enumerate()
+            .find_map(|(index, expression)| {
+                let ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    args,
+                    ..
+                } = &expression.kind
+                else {
+                    return None;
+                };
+                let info = plan.registry.declaration(target.declaration).unwrap();
+                (args.len() == 1 && info.path.associated.is_some() && target.type_args.len() == 1)
+                    .then_some(ir::ExprId(index))
+            })
+            .expect("generic shared static producer call");
+        for mutation in 0..5 {
+            let mut forged = checked.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        ..
+                    } = &mut forged.exprs[producer.0].kind
+                    else {
+                        unreachable!();
+                    };
+                    target.type_args = vec![ir::Ty::Ref {
+                        kind: ir::BorrowKind::Shared,
+                        referent: Arc::new(ir::Ty::Bool),
+                    }]
+                    .into();
+                }
+                1 => forged.exprs[producer.0].ty = ir::Ty::Bool,
+                2 => {
+                    let mut evidence = forged.call_evidence.to_vec();
+                    let row = evidence
+                        .iter_mut()
+                        .find(|row| row.call == producer)
+                        .unwrap();
+                    row.type_actual_regions = Arc::from([]);
+                    forged.call_evidence = evidence.into();
+                }
+                3 => {
+                    let mut evidence = forged.call_evidence.to_vec();
+                    let row = evidence
+                        .iter_mut()
+                        .find(|row| row.call == producer)
+                        .unwrap();
+                    let mut arguments = row.arguments.to_vec();
+                    arguments[0].expectation = ir::CallExpectation::NoFirmReference;
+                    row.arguments = arguments.into();
+                    forged.call_evidence = evidence.into();
+                }
+                _ => {
+                    let ir::ExprKind::Call { signature, .. } = &mut forged.exprs[producer.0].kind
+                    else {
+                        unreachable!();
+                    };
+                    signature.ref_contract = Arc::new(ir::RefContract::default());
+                    signature.params[0] = ir::Ty::Bool;
+                }
+            }
+            let error =
+                replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                    .expect_err("forged shared static producer must fail");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+        let mut forged = original.clone();
+        forged
+            .call_mapping
+            .retain(|(_, expression, _)| *expression != producer);
+        let error = replay_source_body(&forged, checked, publication.facts(), &budget)
+            .expect_err("missing shared static source receipt must fail");
+        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+    }
+
+    #[test]
+    fn annotated_byte_array_borrow_rejects_forged_temporary_evidence() {
+        let program = parse("struct Wrap<T>{inner:T} impl<T> Wrap<T>{fn new(inner:T)->Wrap<T>{Wrap{inner}}} fn take<T>(s:&T){} fn main(){let data:&[u8]=&[3,4,5];let wrap=Wrap::new(data);take(&wrap);}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected source");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        assert_eq!(original.array_borrows.len(), 1);
+        let row = original.array_borrows[0].clone();
+        let ir::ExprKind::Array(elements) = &checked.exprs[row.value.0].kind else {
+            panic!("expected array");
+        };
+        let first = elements[0];
+        for mutation in 0..12 {
+            let mut source = original.clone();
+            let mut payload = checked.as_ref().clone();
+            match mutation {
+                0 => source.array_borrows.clear(),
+                1 => source.array_borrows[0].node = row.node.child(11, 0, &budget).unwrap(),
+                2 => source.array_borrows[0].temporary = ir::LocalId(usize::MAX),
+                3 => {
+                    let ir::ExprKind::Block(block) = &mut payload.exprs[row.reference.0].kind
+                    else {
+                        unreachable!();
+                    };
+                    block.statements.clear();
+                }
+                4 => {
+                    let ir::ExprKind::Block(block) = &mut payload.exprs[row.reference.0].kind
+                    else {
+                        unreachable!();
+                    };
+                    block.tail = Some(row.value);
+                }
+                5 => {
+                    let ir::ExprKind::Borrow { place, .. } =
+                        &mut payload.exprs[row.borrowed.0].kind
+                    else {
+                        unreachable!();
+                    };
+                    place.local = ir::LocalId(usize::MAX);
+                }
+                6 => {
+                    let ir::ExprKind::Borrow { kind, .. } = &mut payload.exprs[row.borrowed.0].kind
+                    else {
+                        unreachable!();
+                    };
+                    *kind = ir::BorrowKind::Mut;
+                }
+                7 => payload.exprs[row.reference.0].completion = ir::Completion::Never,
+                8 => payload.exprs[row.borrowed.0].ty = ir::Ty::Bool,
+                9 => {
+                    let ir::ExprKind::Int(value) = &mut payload.exprs[first.0].kind else {
+                        unreachable!();
+                    };
+                    value.bits = 9;
+                }
+                10 => payload.exprs[first.0].ty = ir::Ty::Bool,
+                11 => payload.locals[row.temporary.0].ty = ir::Ty::Bool,
+                _ => unreachable!(),
+            }
+            let error =
+                replay_source_body(&source, &Arc::new(payload), publication.facts(), &budget)
+                    .expect_err("forged byte-array temporary must not replay");
+            assert_eq!(
+                error.kind(),
+                tr::FactsErrorKind::InvalidMetadata,
+                "mutation {mutation}"
+            );
+        }
     }
 
     #[test]

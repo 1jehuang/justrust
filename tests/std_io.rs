@@ -6,6 +6,62 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn buffered_static_producers_preserve_source_regions() {
+    closure_oracle::check(
+        "std-io-static-regions",
+        &[
+            Case {
+                name: "named_reader_input_and_result",
+                source: r#"use std::io::{BufRead, BufReader};
+fn reader<'a>(data: &'a [u8]) -> BufReader<&'a [u8]> {
+    BufReader::with_capacity(2, data)
+}
+fn amount<R: BufRead>(mut reader: R) -> usize { reader.fill_buf().unwrap().len() }
+fn main() {
+    let data: &[u8] = &[3, 4, 5];
+    let mut buffered = reader(data);
+    println!("{}", amount(&mut buffered));
+}"#,
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "reader_cannot_change_unrelated_named_region",
+                source: r#"use std::io::BufReader;
+fn reader<'a, 'b>(data: &'a [u8], other: &'b [u8]) -> BufReader<&'b [u8]> {
+    BufReader::with_capacity(2, data)
+}
+fn main() {}"#,
+                expect: Expect::Invalid("lifetime"),
+            },
+            Case {
+                name: "reader_cannot_escape_local_input",
+                source: r#"use std::io::BufReader;
+fn bad<'a>() -> BufReader<&'a [u8]> {
+    let data = [1u8, 2u8];
+    let slice: &[u8] = &data;
+    BufReader::new(slice)
+}
+fn main() {}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "reader_retains_original_input_loan",
+                source: r#"use std::io::{BufRead, BufReader};
+fn amount<R: BufRead>(mut reader: R) -> usize { reader.fill_buf().unwrap().len() }
+fn main() {
+    let mut data = [1u8, 2u8];
+    let slice: &[u8] = &data;
+    let mut buffered = BufReader::with_capacity(2, slice);
+    data[0] = 9u8;
+    println!("{}", amount(&mut buffered));
+}"#,
+                expect: Expect::Invalid("E0506"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn buffered_byte_readers_match_stock() {
     closure_oracle::check(
         "std-io",
