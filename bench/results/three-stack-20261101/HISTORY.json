@@ -1,0 +1,29 @@
+{
+  "schema": "three-stack-history-supplement-1",
+  "scope": "Tool-rendered available preflight transcripts, not Rust/native workload tests. Historical PROJECTION missing-log notes describe generation time and are superseded only by this additive supplement.",
+  "transformation": "Private home path prefix replaced by /HOME; stdout/stderr rendering prefixes and terminal status preserved. Hashes/sizes identify original tool-rendered text, not unavailable original separated process streams.",
+  "preflights": [
+    {
+      "task_id": "149183jbgm",
+      "transcript": "three_stack.py: OK\ntest_three_stack.py: OK\ncandidate.patch: OK\nv87-to-v88.diff: OK\nmocked-tests.log: OK\nstatic.log: OK\n[stderr] cmp: /HOME/.jcode/scratch/blaze-native-engine-20261030/three-stack-harness-v88/candidates/three_stack.py: No such file or directory\n\n--- Command finished with exit code: 2 ---",
+      "original_rendered_sha256": "7ed0d6f3107cebd0d6c69c63988105afac2f743831b5a0b83d733d6a8a28e85b",
+      "original_rendered_bytes": 310,
+      "disposition": "Frozen bundle pathname preflight failed at cmp, status2; no Rust/Blaze workload invoked"
+    },
+    {
+      "task_id": "16908574mg",
+      "transcript": "[stderr] Traceback (most recent call last):\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 547, in <module>\n[stderr]     raise SystemExit(main())\n[stderr]                      ~~~~^^\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 543, in main\n[stderr]     return execute(args)\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 212, in execute\n[stderr]     validate(args)\n[stderr]     ~~~~~~~~^^^^^^\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 88, in validate\n[stderr]     public_seed(args.cargo_seed)\n[stderr]     ~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 100, in public_seed\n[stderr]     raise ValueError('seed must contain only public crates.io registry source/cache/index files')\n[stderr] ValueError: seed must contain only public crates.io registry source/cache/index files\n\n--- Command finished with exit code: 1 ---",
+      "original_rendered_sha256": "4c4ebb7bd7e6008e32be75c97e04ceed554b93ea7eef174e8dee3579562d4ac3",
+      "original_rendered_bytes": 955,
+      "disposition": "Seed validation failed before timed workload, status1. Transcript alone does not identify offending path; coordinator attributed CACHEDIR.TAG for16908574mg and legal module names for230717aa6k."
+    },
+    {
+      "task_id": "230717aa6k",
+      "transcript": "[stderr] Traceback (most recent call last):\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 547, in <module>\n[stderr]     raise SystemExit(main())\n[stderr]                      ~~~~^^\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 543, in main\n[stderr]     return execute(args)\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 212, in execute\n[stderr]     validate(args)\n[stderr]     ~~~~~~~~^^^^^^\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 88, in validate\n[stderr]     public_seed(args.cargo_seed)\n[stderr]     ~~~~~~~~~~~^^^^^^^^^^^^^^^^^\n[stderr]   File \"/HOME/justrust/bench/three_stack.py\", line 100, in public_seed\n[stderr]     raise ValueError('seed must contain only public crates.io registry source/cache/index files')\n[stderr] ValueError: seed must contain only public crates.io registry source/cache/index files\n\n--- Command finished with exit code: 1 ---",
+      "original_rendered_sha256": "4c4ebb7bd7e6008e32be75c97e04ceed554b93ea7eef174e8dee3579562d4ac3",
+      "original_rendered_bytes": 955,
+      "disposition": "Seed validation failed before timed workload, status1. Transcript alone does not identify offending path; coordinator attributed CACHEDIR.TAG for16908574mg and legal module names for230717aa6k."
+    }
+  ],
+  "pilot": "339382hn3n is workflow-only and excluded from both comparative summaries; no pilot timings inferred."
+}

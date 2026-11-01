@@ -1,0 +1,9 @@
+
+justrust: ok: 4 tests passed in 0.0s
+  time    startup 0.03s | compile 0.00s
+  units   0 compiled (0 local, 0 deps, 0 build scripts), 48 fresh
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, binary timing unavailable
+  cpu     0.0s total, avg 1.1/peak 0.0 of 16 cores; others used 4.7 cores
+  memory  peak 0 MB build, 0 MB largest rustc, 19.0 GB free; stalls cpu 0.00s mem 0.00s io 0.00s
+  waste   none detected
+  more    `justrust log 20261101-122444216-3393417` full output, `justrust show 20261101-122444216-3393417` full profile

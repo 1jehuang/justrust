@@ -1,0 +1,15 @@
+
+justrust: ok: 4 tests passed in 11.4s
+  time    startup 0.11s | compile 11.19s | gaps 0.09s | after 0.01s
+  units   57 compiled (1 local, 47 deps, 9 build scripts), 0 fresh, depcache 0 hit/56 miss, localcache 0 hit/1 miss
+          justrust (test)                    5.70s  cpu   7.7s    611 MB
+          serde_derive                       0.97s  cpu   2.3s    290 MB
+          regex_automata                     0.46s  cpu   2.9s    311 MB
+          syn                                0.43s  cpu   3.5s    319 MB
+  tests   4 passed, 0 failed, 0 ignored, 144 filtered out, binary timing unavailable
+  cpu     44.8s total, avg 3.9/peak 8.8 of 16 cores; others used 6.1 cores
+  memory  peak 1611 MB build, 611 MB largest rustc, 18.4 GB free; stalls cpu 0.76s mem 0.00s io 0.02s
+  waste   2 issues (estimated cost each; they can overlap):
+          ~  4.1s  rebuilt 47 registry dependencies and 9 build scripts (4.1s)
+          ~  1.9s  56 dependency units missed the shared dependency cache and compiled (30.7s of rustc); they are cached now, so other target dirs, slots, and checkouts reuse them. Their keys include CARGO_NET_OFFLINE, CARGO_PROFILE_DEV_DEBUG, CARGO_PROFILE_DEV_INCREMENTAL, CARGO_PROFILE_DEV_OPT_LEVEL, CARGO_PROFILE_TEST_DEBUG, CARGO_PROFILE_TEST_INCREMENTAL, CARGO_PROFILE_TEST_OPT_LEVEL (set in your environment or a cargo [env] table), so they can never match the prebuilt store or machines without it
+  more    `justrust log 20261101-122426886-3389600` full output, `justrust show 20261101-122426886-3389600` full profile

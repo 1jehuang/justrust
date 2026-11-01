@@ -1,0 +1,65 @@
+{"t":1793535630.4879324,"s":"e","l":"       Fresh unicode-ident v1.0.26"}
+{"t":1793535630.4879348,"s":"e","l":"       Fresh proc-macro2 v1.0.107"}
+{"t":1793535630.4879372,"s":"e","l":"       Fresh serde_core v1.0.229"}
+{"t":1793535630.4880266,"s":"e","l":"       Fresh utf8parse v0.2.2"}
+{"t":1793535630.4880273,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793535630.488028,"s":"e","l":"       Fresh memchr v2.8.3"}
+{"t":1793535630.4880285,"s":"e","l":"       Fresh anstyle-query v1.1.5"}
+{"t":1793535630.4880292,"s":"e","l":"       Fresh is_terminal_polyfill v1.70.2"}
+{"t":1793535630.4880297,"s":"e","l":"       Fresh anstyle v1.0.14"}
+{"t":1793535630.4880302,"s":"e","l":"       Fresh colorchoice v1.0.5"}
+{"t":1793535630.4880307,"s":"e","l":"       Fresh winnow v1.0.4"}
+{"t":1793535630.4880311,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793535630.4880316,"s":"e","l":"       Fresh option-ext v0.2.0"}
+{"t":1793535630.4880319,"s":"e","l":"       Fresh quote v1.0.47"}
+{"t":1793535630.4880872,"s":"e","l":"       Fresh anstyle-parse v1.0.0"}
+{"t":1793535630.488088,"s":"e","l":"       Fresh toml_parser v1.1.3+spec-1.1.0"}
+{"t":1793535630.4880886,"s":"e","l":"       Fresh toml_datetime v1.1.1+spec-1.1.0"}
+{"t":1793535630.4880896,"s":"e","l":"       Fresh aho-corasick v1.1.5"}
+{"t":1793535630.4881384,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793535630.488139,"s":"e","l":"       Fresh regex-syntax v0.8.11"}
+{"t":1793535630.4881396,"s":"e","l":"       Fresh clap_lex v1.1.1"}
+{"t":1793535630.4881876,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793535630.4881883,"s":"e","l":"       Fresh toml_writer v1.1.2+spec-1.1.0"}
+{"t":1793535630.4881887,"s":"e","l":"       Fresh strsim v0.11.1"}
+{"t":1793535630.4882402,"s":"e","l":"       Fresh syn v3.0.6"}
+{"t":1793535630.488241,"s":"e","l":"       Fresh libc v0.2.190"}
+{"t":1793535630.4882894,"s":"e","l":"       Fresh anstream v1.0.0"}
+{"t":1793535630.48829,"s":"e","l":"       Fresh zmij v1.0.23"}
+{"t":1793535630.4882905,"s":"e","l":"       Fresh regex-automata v0.4.18"}
+{"t":1793535630.488291,"s":"e","l":"       Fresh indexmap v2.14.2"}
+{"t":1793535630.4883382,"s":"e","l":"       Fresh serde_spanned v1.1.1"}
+{"t":1793535630.4883392,"s":"e","l":"       Fresh iana-time-zone v0.1.65"}
+{"t":1793535630.4883397,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793535630.488388,"s":"e","l":"       Fresh clap_builder v4.6.7"}
+{"t":1793535630.4883888,"s":"e","l":"       Fresh clap_derive v4.6.7"}
+{"t":1793535630.4883893,"s":"e","l":"       Fresh dirs-sys v0.5.0"}
+{"t":1793535630.488437,"s":"e","l":"       Fresh serde_derive v1.0.229"}
+{"t":1793535630.4884377,"s":"e","l":"       Fresh num-traits v0.2.19"}
+{"t":1793535630.4884381,"s":"e","l":"       Fresh toml_edit v0.25.15+spec-1.1.0"}
+{"t":1793535630.4884863,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793535630.488487,"s":"e","l":"       Fresh serde_json v1.0.151"}
+{"t":1793535630.4884875,"s":"e","l":"       Fresh regex v1.13.1"}
+{"t":1793535630.488488,"s":"e","l":"       Fresh toml v1.1.6+spec-1.1.0"}
+{"t":1793535630.4885347,"s":"e","l":"       Fresh chrono v0.4.45"}
+{"t":1793535630.4885354,"s":"e","l":"       Fresh dirs v6.0.0"}
+{"t":1793535630.488536,"s":"e","l":"       Fresh serde v1.0.229"}
+{"t":1793535630.4885817,"s":"e","l":"       Fresh clap v4.6.7"}
+{"t":1793535630.4885826,"s":"e","l":"       Fresh justrust v0.1.0-alpha.1 (/SOURCE)"}
+{"t":1793535630.4887362,"s":"e","l":"    Finished `test` profile [unoptimized] target(s) in 0.03s"}
+{"t":1793535630.4910083,"s":"e","l":"     Running `/TOOLS/justrust __test-runner --pool=env /RUN/r0/justrust/target/debug/build/justrust/30a7fb6e6d55007e/out/justrust-30a7fb6e6d55007e 'summary::tests::' --test-threads=1 --nocapture`"}
+{"t":1793535630.4934587,"s":"o","l":"running 4 tests"}
+{"t":1793535630.4937015,"s":"o","l":"test summary::tests::parses_libtest_results ... ok <0.000s>"}
+{"t":1793535630.4938323,"s":"e","l":"thread 'summary::tests::shares_overlapping_time' (3337284) panicked at src/summary.rs:1100:1:"}
+{"t":1793535630.4938347,"s":"e","l":"assertion `left == right` failed: JR_RUNTIME_FAILURE"}
+{"t":1793535630.4938402,"s":"e","l":"  left: 1"}
+{"t":1793535630.4938412,"s":"e","l":" right: 2"}
+{"t":1793535630.4938424,"s":"e","l":"note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"}
+{"t":1793535630.4939342,"s":"o","l":"test summary::tests::shares_overlapping_time ... FAILED <0.000s>"}
+{"t":1793535630.4940367,"s":"o","l":"test summary::tests::splits_passes_without_double_counting ... ok <0.000s>"}
+{"t":1793535630.4940987,"s":"o","l":"test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>"}
+{"t":1793535630.4941058,"s":"o","l":"failures:"}
+{"t":1793535630.4941077,"s":"o","l":"failures:"}
+{"t":1793535630.4941123,"s":"o","l":"    summary::tests::shares_overlapping_time"}
+{"t":1793535630.4941242,"s":"o","l":"test result: FAILED. 3 passed; 1 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s"}
+{"t":1793535630.4943948,"s":"e","l":"error: test failed, to rerun pass `--lib`"}

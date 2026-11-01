@@ -1,0 +1,56 @@
+{"t":1793536951.5121982,"s":"e","l":"       Fresh unicode-ident v1.0.26"}
+{"t":1793536951.5122929,"s":"e","l":"       Fresh serde_core v1.0.229"}
+{"t":1793536951.512296,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793536951.5122964,"s":"e","l":"       Fresh memchr v2.8.3"}
+{"t":1793536951.5122972,"s":"e","l":"       Fresh utf8parse v0.2.2"}
+{"t":1793536951.5122979,"s":"e","l":"       Fresh colorchoice v1.0.5"}
+{"t":1793536951.5122983,"s":"e","l":"       Fresh anstyle v1.0.14"}
+{"t":1793536951.512299,"s":"e","l":"       Fresh is_terminal_polyfill v1.70.2"}
+{"t":1793536951.5122995,"s":"e","l":"       Fresh winnow v1.0.4"}
+{"t":1793536951.5123,"s":"e","l":"       Fresh anstyle-query v1.1.5"}
+{"t":1793536951.5123005,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793536951.512301,"s":"e","l":"       Fresh regex-syntax v0.8.11"}
+{"t":1793536951.5123537,"s":"e","l":"       Fresh proc-macro2 v1.0.107"}
+{"t":1793536951.5123544,"s":"e","l":"       Fresh anstyle-parse v1.0.0"}
+{"t":1793536951.5123549,"s":"e","l":"       Fresh toml_parser v1.1.3+spec-1.1.0"}
+{"t":1793536951.5123556,"s":"e","l":"       Fresh aho-corasick v1.1.5"}
+{"t":1793536951.512405,"s":"e","l":"       Fresh toml_datetime v1.1.1+spec-1.1.0"}
+{"t":1793536951.512406,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793536951.5124068,"s":"e","l":"       Fresh toml_writer v1.1.2+spec-1.1.0"}
+{"t":1793536951.5124073,"s":"e","l":"       Fresh option-ext v0.2.0"}
+{"t":1793536951.5124078,"s":"e","l":"       Fresh clap_lex v1.1.1"}
+{"t":1793536951.5124552,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793536951.512456,"s":"e","l":"       Fresh strsim v0.11.1"}
+{"t":1793536951.512504,"s":"e","l":"       Fresh quote v1.0.47"}
+{"t":1793536951.5125048,"s":"e","l":"       Fresh anstream v1.0.0"}
+{"t":1793536951.5125053,"s":"e","l":"       Fresh libc v0.2.190"}
+{"t":1793536951.5125568,"s":"e","l":"       Fresh zmij v1.0.23"}
+{"t":1793536951.5125575,"s":"e","l":"       Fresh indexmap v2.14.2"}
+{"t":1793536951.5125582,"s":"e","l":"       Fresh regex-automata v0.4.18"}
+{"t":1793536951.5125587,"s":"e","l":"       Fresh serde_spanned v1.1.1"}
+{"t":1793536951.5126061,"s":"e","l":"       Fresh iana-time-zone v0.1.65"}
+{"t":1793536951.5126069,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793536951.5126073,"s":"e","l":"       Fresh syn v3.0.6"}
+{"t":1793536951.5126553,"s":"e","l":"       Fresh clap_builder v4.6.7"}
+{"t":1793536951.512656,"s":"e","l":"       Fresh num-traits v0.2.19"}
+{"t":1793536951.5126567,"s":"e","l":"       Fresh dirs-sys v0.5.0"}
+{"t":1793536951.512657,"s":"e","l":"       Fresh serde_json v1.0.151"}
+{"t":1793536951.5127048,"s":"e","l":"       Fresh toml_edit v0.25.15+spec-1.1.0"}
+{"t":1793536951.5127056,"s":"e","l":"       Fresh regex v1.13.1"}
+{"t":1793536951.512706,"s":"e","l":"       Fresh toml v1.1.6+spec-1.1.0"}
+{"t":1793536951.5127065,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793536951.5127537,"s":"e","l":"       Fresh clap_derive v4.6.7"}
+{"t":1793536951.5127544,"s":"e","l":"       Fresh serde_derive v1.0.229"}
+{"t":1793536951.512755,"s":"e","l":"       Fresh chrono v0.4.45"}
+{"t":1793536951.5127554,"s":"e","l":"       Fresh dirs v6.0.0"}
+{"t":1793536951.512811,"s":"e","l":"       Fresh clap v4.6.7"}
+{"t":1793536951.5128117,"s":"e","l":"       Fresh serde v1.0.229"}
+{"t":1793536951.5128126,"s":"e","l":"       Fresh justrust v0.1.0-alpha.1 (/SOURCE)"}
+{"t":1793536951.5130029,"s":"e","l":"    Finished `test` profile [unoptimized] target(s) in 0.03s"}
+{"t":1793536951.515181,"s":"e","l":"     Running `/TOOLS/justrust __test-runner --pool=env /RUN/r3/justrust/target/debug/build/justrust/30a7fb6e6d55007e/out/justrust-30a7fb6e6d55007e 'summary::tests::' --test-threads=1 --nocapture`"}
+{"t":1793536951.517703,"s":"o","l":"running 4 tests"}
+{"t":1793536951.5179565,"s":"o","l":"test summary::tests::parses_libtest_results ... ok <0.000s>"}
+{"t":1793536951.5180962,"s":"o","l":"test summary::tests::shares_overlapping_time ... ok <0.000s>"}
+{"t":1793536951.5182405,"s":"o","l":"test summary::tests::splits_passes_without_double_counting ... ok <0.000s>"}
+{"t":1793536951.5183332,"s":"o","l":"test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>"}
+{"t":1793536951.518338,"s":"o","l":"test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s"}

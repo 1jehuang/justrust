@@ -1,0 +1,59 @@
+{"t":1793537150.1180446,"s":"e","l":"       Fresh unicode-ident v1.0.26"}
+{"t":1793537150.1181533,"s":"e","l":"       Fresh proc-macro2 v1.0.107"}
+{"t":1793537150.1181552,"s":"e","l":"       Fresh serde_core v1.0.229"}
+{"t":1793537150.1181562,"s":"e","l":"       Fresh utf8parse v0.2.2"}
+{"t":1793537150.1181567,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793537150.1181574,"s":"e","l":"       Fresh memchr v2.8.3"}
+{"t":1793537150.1181579,"s":"e","l":"       Fresh anstyle-query v1.1.5"}
+{"t":1793537150.1181586,"s":"e","l":"       Fresh is_terminal_polyfill v1.70.2"}
+{"t":1793537150.118159,"s":"e","l":"       Fresh anstyle v1.0.14"}
+{"t":1793537150.1181595,"s":"e","l":"       Fresh colorchoice v1.0.5"}
+{"t":1793537150.11816,"s":"e","l":"       Fresh winnow v1.0.4"}
+{"t":1793537150.1181605,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793537150.118161,"s":"e","l":"       Fresh option-ext v0.2.0"}
+{"t":1793537150.1181612,"s":"e","l":"       Fresh quote v1.0.47"}
+{"t":1793537150.1181617,"s":"e","l":"       Fresh anstyle-parse v1.0.0"}
+{"t":1793537150.1181622,"s":"e","l":"       Fresh toml_datetime v1.1.1+spec-1.1.0"}
+{"t":1793537150.1181626,"s":"e","l":"       Fresh toml_parser v1.1.3+spec-1.1.0"}
+{"t":1793537150.1181633,"s":"e","l":"       Fresh aho-corasick v1.1.5"}
+{"t":1793537150.1181638,"s":"e","l":"       Fresh clap_lex v1.1.1"}
+{"t":1793537150.1182058,"s":"e","l":"       Fresh regex-syntax v0.8.11"}
+{"t":1793537150.1182063,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793537150.1182067,"s":"e","l":"       Fresh toml_writer v1.1.2+spec-1.1.0"}
+{"t":1793537150.1182072,"s":"e","l":"       Fresh strsim v0.11.1"}
+{"t":1793537150.1182077,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793537150.1182082,"s":"e","l":"       Fresh syn v3.0.6"}
+{"t":1793537150.118244,"s":"e","l":"       Fresh libc v0.2.190"}
+{"t":1793537150.1182444,"s":"e","l":"       Fresh anstream v1.0.0"}
+{"t":1793537150.118245,"s":"e","l":"       Fresh zmij v1.0.23"}
+{"t":1793537150.1182454,"s":"e","l":"       Fresh indexmap v2.14.2"}
+{"t":1793537150.1182458,"s":"e","l":"       Fresh regex-automata v0.4.18"}
+{"t":1793537150.1182804,"s":"e","l":"       Fresh serde_spanned v1.1.1"}
+{"t":1793537150.118281,"s":"e","l":"       Fresh iana-time-zone v0.1.65"}
+{"t":1793537150.1182814,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793537150.1183138,"s":"e","l":"       Fresh clap_builder v4.6.7"}
+{"t":1793537150.1183143,"s":"e","l":"       Fresh clap_derive v4.6.7"}
+{"t":1793537150.1183147,"s":"e","l":"       Fresh serde_derive v1.0.229"}
+{"t":1793537150.118315,"s":"e","l":"       Fresh dirs-sys v0.5.0"}
+{"t":1793537150.118348,"s":"e","l":"       Fresh num-traits v0.2.19"}
+{"t":1793537150.1183484,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793537150.1183488,"s":"e","l":"       Fresh serde_json v1.0.151"}
+{"t":1793537150.1183493,"s":"e","l":"       Fresh toml_edit v0.25.15+spec-1.1.0"}
+{"t":1793537150.1183496,"s":"e","l":"       Fresh regex v1.13.1"}
+{"t":1793537150.1183834,"s":"e","l":"       Fresh toml v1.1.6+spec-1.1.0"}
+{"t":1793537150.118384,"s":"e","l":"       Fresh serde v1.0.229"}
+{"t":1793537150.1183841,"s":"e","l":"       Fresh chrono v0.4.45"}
+{"t":1793537150.118416,"s":"e","l":"       Fresh dirs v6.0.0"}
+{"t":1793537150.1184168,"s":"e","l":"       Fresh clap v4.6.7"}
+{"t":1793537150.1184506,"s":"e","l":"       Dirty justrust v0.1.0-alpha.1 (/SOURCE): the file `src/summary.rs` has changed (1793537150.084809386s, 4s after last build at 1793537146.532677133s)"}
+{"t":1793537150.1184516,"s":"e","l":"   Compiling justrust v0.1.0-alpha.1 (/SOURCE)"}
+{"t":1793537150.118702,"s":"e","l":"     Running `/RUN/r5/justrust/jr/bin/shim/bf1cf48ec7586368/rustc --crate-name justrust --edition=2024 src/lib.rs --error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat,unused-externs-silent --emit=dep-info,link -C embed-bitcode=no --test --check-cfg 'cfg(docsrs,test)' --check-cfg 'cfg(feature, values())' -C metadata=ca7c44864225c396 -C extra-filename=-30a7fb6e6d55007e --out-dir /RUN/r5/justrust/target/debug/build/justrust/30a7fb6e6d55007e/out -C incremental=/RUN/r5/justrust/target/debug/incremental -C strip=debuginfo -L dependency=/RUN/r5/justrust/target/debug/build/aho-corasick/e714c552eb49f225/out -L dependency=/RUN/r5/justrust/target/debug/build/anstream/43f1b12aaf9a1926/out -L dependency=/RUN/r5/justrust/target/debug/build/anstyle-parse/1b466305df08b903/out -L dependency=/RUN/r5/justrust/target/debug/build/anstyle-query/e1be0e62cc3579cb/out -L dependency=/RUN/r5/justrust/target/debug/build/anstyle/be783c0e0ead95ad/out -L dependency=/RUN/r5/justrust/target/debug/build/clap_builder/9d688c53651db252/out -L dependency=/RUN/r5/justrust/target/debug/build/clap_derive/155ae4937f4dfc27/out -L dependency=/RUN/r5/justrust/target/debug/build/clap_lex/08fbdfd8b140aa4e/out -L dependency=/RUN/r5/justrust/target/debug/build/colorchoice/d8d7f5b227e196b8/out -L dependency=/RUN/r5/justrust/target/debug/build/dirs-sys/fb6d8ae0b03a88c9/out -L dependency=/RUN/r5/justrust/target/debug/build/equivalent/5646cca33fb52363/out -L dependency=/RUN/r5/justrust/target/debug/build/hashbrown/1f4d51acaf4e1698/out -L dependency=/RUN/r5/justrust/target/debug/build/iana-time-zone/eea74e0253b8822b/out -L dependency=/RUN/r5/justrust/target/debug/build/indexmap/3a873f5f3539ed98/out -L dependency=/RUN/r5/justrust/target/debug/build/is_terminal_polyfill/2bcdbfdd881ee427/out -L dependency=/RUN/r5/justrust/target/debug/build/itoa/fd1d233bcfbca7b6/out -L dependency=/RUN/r5/justrust/target/debug/build/libc/ac47e3218d30107e/out -L dependency=/RUN/r5/justrust/target/debug/build/memchr/2e7fc7483fc10f16/out -L dependency=/RUN/r5/justrust/target/debug/build/num-traits/70501a03f4713ed1/out -L dependency=/RUN/r5/justrust/target/debug/build/option-ext/abc1ae3221fe8f12/out -L dependency=/RUN/r5/justrust/target/debug/build/regex-automata/31b63e745ef83b8f/out -L dependency=/RUN/r5/justrust/target/debug/build/regex-syntax/1cdd7196c22c357e/out -L dependency=/RUN/r5/justrust/target/debug/build/serde_core/450f395adbc8cd78/out -L dependency=/RUN/r5/justrust/target/debug/build/serde_derive/c516cdda3f0b5ca8/out -L dependency=/RUN/r5/justrust/target/debug/build/serde_spanned/22cae06a9a4778ba/out -L dependency=/RUN/r5/justrust/target/debug/build/strsim/7079a963fa25d7e3/out -L dependency=/RUN/r5/justrust/target/debug/build/toml_datetime/25f45bcba031165b/out -L dependency=/RUN/r5/justrust/target/debug/build/toml_parser/bf1eea933d567a96/out -L dependency=/RUN/r5/justrust/target/debug/build/toml_writer/8bf536cb70d4c714/out -L dependency=/RUN/r5/justrust/target/debug/build/utf8parse/0f50b79ca6eabe40/out -L dependency=/RUN/r5/justrust/target/debug/build/winnow/3fe7ccbf1a50099c/out -L dependency=/RUN/r5/justrust/target/debug/build/zmij/11835262a6454cde/out --extern anyhow=/RUN/r5/justrust/target/debug/build/anyhow/f3c8908c4edaba84/out/libanyhow-f3c8908c4edaba84.rlib --extern anyhow=/RUN/r5/justrust/target/debug/build/anyhow/f3c8908c4edaba84/out/libanyhow-f3c8908c4edaba84.rmeta --extern chrono=/RUN/r5/justrust/target/debug/build/chrono/b85dc93f5d53392e/out/libchrono-b85dc93f5d53392e.rlib --extern chrono=/RUN/r5/justrust/target/debug/build/chrono/b85dc93f5d53392e/out/libchrono-b85dc93f5d53392e.rmeta --extern clap=/RUN/r5/justrust/target/debug/build/clap/5a55305ed893f0d7/out/libclap-5a55305ed893f0d7.rlib --extern clap=/RUN/r5/justrust/target/debug/build/clap/5a55305ed893f0d7/out/libclap-5a55305ed893f0d7.rmeta --extern dirs=/RUN/r5/justrust/target/debug/build/dirs/fd98fda0c30dd056/out/libdirs-fd98fda0c30dd056.rlib --extern dirs=/RUN/r5/justrust/target/debug/build/dirs/fd98fda0c30dd056/out/libdirs-fd98fda0c30dd056.rmeta --extern libc=/RUN/r5/justrust/target/debug/build/libc/ac47e3218d30107e/out/liblibc-ac47e3218d30107e.rlib --extern libc=/RUN/r5/justrust/target/debug/build/libc/ac47e3218d30107e/out/liblibc-ac47e3218d30107e.rmeta --extern regex=/RUN/r5/justrust/target/debug/build/regex/dec5028a7951bb34/out/libregex-dec5028a7951bb34.rlib --extern regex=/RUN/r5/justrust/target/debug/build/regex/dec5028a7951bb34/out/libregex-dec5028a7951bb34.rmeta --extern serde=/RUN/r5/justrust/target/debug/build/serde/20a50353b555599b/out/libserde-20a50353b555599b.rlib --extern serde=/RUN/r5/justrust/target/debug/build/serde/20a50353b555599b/out/libserde-20a50353b555599b.rmeta --extern serde_json=/RUN/r5/justrust/target/debug/build/serde_json/2b631fea7ec9137b/out/libserde_json-2b631fea7ec9137b.rlib --extern serde_json=/RUN/r5/justrust/target/debug/build/serde_json/2b631fea7ec9137b/out/libserde_json-2b631fea7ec9137b.rmeta --extern toml=/RUN/r5/justrust/target/debug/build/toml/90f726963a48b702/out/libtoml-90f726963a48b702.rlib --extern toml=/RUN/r5/justrust/target/debug/build/toml/90f726963a48b702/out/libtoml-90f726963a48b702.rmeta --extern toml_edit=/RUN/r5/justrust/target/debug/build/toml_edit/de6174705183abab/out/libtoml_edit-de6174705183abab.rlib --extern toml_edit=/RUN/r5/justrust/target/debug/build/toml_edit/de6174705183abab/out/libtoml_edit-de6174705183abab.rmeta --force-warn=unused_crate_dependencies`"}
+{"t":1793537151.1094346,"s":"e","l":"    Finished `test` profile [unoptimized] target(s) in 1.01s"}
+{"t":1793537151.113246,"s":"e","l":"     Running `/TOOLS/justrust __test-runner --pool=env /RUN/r5/justrust/target/debug/build/justrust/30a7fb6e6d55007e/out/justrust-30a7fb6e6d55007e 'summary::tests::' --test-threads=1 --nocapture`"}
+{"t":1793537151.1186173,"s":"o","l":"running 4 tests"}
+{"t":1793537151.1189592,"s":"o","l":"test summary::tests::parses_libtest_results ... ok <0.000s>"}
+{"t":1793537151.1190443,"s":"o","l":"test summary::tests::shares_overlapping_time ... JR_RUNTIME_EXECUTED_205194137020290091"}
+{"t":1793537151.1190956,"s":"o","l":"ok <0.000s>"}
+{"t":1793537151.119146,"s":"o","l":"test summary::tests::splits_passes_without_double_counting ... ok <0.000s>"}
+{"t":1793537151.1192005,"s":"o","l":"test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>"}
+{"t":1793537151.1192148,"s":"o","l":"test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s"}

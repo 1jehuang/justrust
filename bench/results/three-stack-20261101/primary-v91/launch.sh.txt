@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd /HOME/justrust
+python3 -B bench/three_stack.py run \
+  --cargo /TOOLCHAIN/bin/cargo \
+  --rustc /TOOLCHAIN/bin/rustc \
+  --justrust /TOOLS/justrust \
+  --blaze /TOOLS/blaze \
+  --toolchain /TOOLCHAIN \
+  --source /SOURCE \
+  --cargo-seed /PREPARATION/public-registry-seed \
+  --output /RUN \
+  --samples 6 --timeout 360

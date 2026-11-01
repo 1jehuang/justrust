@@ -1,0 +1,35 @@
+test_actual_integrity_and_explicit_confounded_status (test_archive.ArchiveTests.test_actual_integrity_and_explicit_confounded_status) ... ok
+test_coherent_timing_history_rewrite_rejected (test_archive.ArchiveTests.test_coherent_timing_history_rewrite_rejected) ... ok
+test_confounded_review_cannot_be_silently_removed (test_archive.ArchiveTests.test_confounded_review_cannot_be_silently_removed) ... ok
+test_duplicate_nonce_rejected (test_archive.ArchiveTests.test_duplicate_nonce_rejected) ... ok
+test_empty_home_path_relocation_readonly_native_network_denied (test_archive.ArchiveTests.test_empty_home_path_relocation_readonly_native_network_denied) ... ok
+test_named_tests_and_counters_not_exitcode_only (test_archive.ArchiveTests.test_named_tests_and_counters_not_exitcode_only) ... ok
+test_native_network_write_denials_are_active (test_archive.ArchiveTests.test_native_network_write_denials_are_active) ... ok
+test_no_private_path_leak_in_public_derivative (test_archive.ArchiveTests.test_no_private_path_leak_in_public_derivative) ... ok
+test_order_and_missing_calls_rejected (test_archive.ArchiveTests.test_order_and_missing_calls_rejected) ... ok
+test_raw_tamper_rejected_by_fixed_commitment (test_archive.ArchiveTests.test_raw_tamper_rejected_by_fixed_commitment) ... ok
+test_remote_compiler_receipt_rejected (test_archive.ArchiveTests.test_remote_compiler_receipt_rejected) ... ok
+test_shared_cache_rejected (test_archive.ArchiveTests.test_shared_cache_rejected) ... ok
+test_stale_execution_raw_nonce_rejected_even_resealed (test_archive.ArchiveTests.test_stale_execution_raw_nonce_rejected_even_resealed) ... ok
+test_status_101_required_even_resealed (test_archive.ArchiveTests.test_status_101_required_even_resealed) ... ok
+test_tool_identity_rejected (test_archive.ArchiveTests.test_tool_identity_rejected) ... ok
+test_actual_integrity_and_explicit_confounded_status (test_archive.PrimaryArchiveTests.test_actual_integrity_and_explicit_confounded_status) ... ok
+test_coherent_timing_history_rewrite_rejected (test_archive.PrimaryArchiveTests.test_coherent_timing_history_rewrite_rejected) ... ok
+test_confounded_review_cannot_be_silently_removed (test_archive.PrimaryArchiveTests.test_confounded_review_cannot_be_silently_removed) ... ok
+test_duplicate_nonce_rejected (test_archive.PrimaryArchiveTests.test_duplicate_nonce_rejected) ... ok
+test_empty_home_path_relocation_readonly_native_network_denied (test_archive.PrimaryArchiveTests.test_empty_home_path_relocation_readonly_native_network_denied) ... ok
+test_named_tests_and_counters_not_exitcode_only (test_archive.PrimaryArchiveTests.test_named_tests_and_counters_not_exitcode_only) ... ok
+test_native_network_write_denials_are_active (test_archive.PrimaryArchiveTests.test_native_network_write_denials_are_active) ... ok
+test_no_private_path_leak_in_public_derivative (test_archive.PrimaryArchiveTests.test_no_private_path_leak_in_public_derivative) ... ok
+test_order_and_missing_calls_rejected (test_archive.PrimaryArchiveTests.test_order_and_missing_calls_rejected) ... ok
+test_raw_tamper_rejected_by_fixed_commitment (test_archive.PrimaryArchiveTests.test_raw_tamper_rejected_by_fixed_commitment) ... ok
+test_remote_compiler_receipt_rejected (test_archive.PrimaryArchiveTests.test_remote_compiler_receipt_rejected) ... ok
+test_shared_cache_rejected (test_archive.PrimaryArchiveTests.test_shared_cache_rejected) ... ok
+test_stale_execution_raw_nonce_rejected_even_resealed (test_archive.PrimaryArchiveTests.test_stale_execution_raw_nonce_rejected_even_resealed) ... ok
+test_status_101_required_even_resealed (test_archive.PrimaryArchiveTests.test_status_101_required_even_resealed) ... ok
+test_tool_identity_rejected (test_archive.PrimaryArchiveTests.test_tool_identity_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 30 tests in 26.264s
+
+OK

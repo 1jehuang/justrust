@@ -1,0 +1,57 @@
+{"t":1793535931.9059927,"s":"e","l":"       Fresh unicode-ident v1.0.26"}
+{"t":1793535931.9059954,"s":"e","l":"       Fresh proc-macro2 v1.0.107"}
+{"t":1793535931.9060912,"s":"e","l":"       Fresh serde_core v1.0.229"}
+{"t":1793535931.9060922,"s":"e","l":"       Fresh quote v1.0.47"}
+{"t":1793535931.9060926,"s":"e","l":"       Fresh syn v3.0.6"}
+{"t":1793535931.9060934,"s":"e","l":"       Fresh utf8parse v0.2.2"}
+{"t":1793535931.9060938,"s":"e","l":"       Fresh memchr v2.8.3"}
+{"t":1793535931.9060943,"s":"e","l":"       Fresh autocfg v1.5.1"}
+{"t":1793535931.9060948,"s":"e","l":"       Fresh anstyle-parse v1.0.0"}
+{"t":1793535931.9060955,"s":"e","l":"       Fresh anstyle v1.0.14"}
+{"t":1793535931.906096,"s":"e","l":"       Fresh colorchoice v1.0.5"}
+{"t":1793535931.9060965,"s":"e","l":"       Fresh is_terminal_polyfill v1.70.2"}
+{"t":1793535931.906097,"s":"e","l":"       Fresh anstyle-query v1.1.5"}
+{"t":1793535931.9060974,"s":"e","l":"       Fresh winnow v1.0.4"}
+{"t":1793535931.9061518,"s":"e","l":"       Fresh anstream v1.0.0"}
+{"t":1793535931.9061525,"s":"e","l":"       Fresh libc v0.2.190"}
+{"t":1793535931.906153,"s":"e","l":"       Fresh aho-corasick v1.1.5"}
+{"t":1793535931.906154,"s":"e","l":"       Fresh toml_datetime v1.1.1+spec-1.1.0"}
+{"t":1793535931.9061546,"s":"e","l":"       Fresh regex-syntax v0.8.11"}
+{"t":1793535931.9062047,"s":"e","l":"       Fresh option-ext v0.2.0"}
+{"t":1793535931.9062052,"s":"e","l":"       Fresh equivalent v1.0.2"}
+{"t":1793535931.906206,"s":"e","l":"       Fresh toml_writer v1.1.2+spec-1.1.0"}
+{"t":1793535931.9062064,"s":"e","l":"       Fresh clap_lex v1.1.1"}
+{"t":1793535931.9062557,"s":"e","l":"       Fresh hashbrown v0.17.1"}
+{"t":1793535931.9062564,"s":"e","l":"       Fresh toml_parser v1.1.3+spec-1.1.0"}
+{"t":1793535931.906257,"s":"e","l":"       Fresh strsim v0.11.1"}
+{"t":1793535931.9063058,"s":"e","l":"       Fresh heck v0.5.0"}
+{"t":1793535931.9063065,"s":"e","l":"       Fresh zmij v1.0.23"}
+{"t":1793535931.906307,"s":"e","l":"       Fresh indexmap v2.14.2"}
+{"t":1793535931.9063077,"s":"e","l":"       Fresh num-traits v0.2.19"}
+{"t":1793535931.906356,"s":"e","l":"       Fresh regex-automata v0.4.18"}
+{"t":1793535931.9063566,"s":"e","l":"       Fresh dirs-sys v0.5.0"}
+{"t":1793535931.9063573,"s":"e","l":"       Fresh serde_derive v1.0.229"}
+{"t":1793535931.9063582,"s":"e","l":"       Fresh serde_spanned v1.1.1"}
+{"t":1793535931.9064076,"s":"e","l":"       Fresh itoa v1.0.18"}
+{"t":1793535931.9064083,"s":"e","l":"       Fresh iana-time-zone v0.1.65"}
+{"t":1793535931.9064088,"s":"e","l":"       Fresh clap_derive v4.6.7"}
+{"t":1793535931.9064093,"s":"e","l":"       Fresh clap_builder v4.6.7"}
+{"t":1793535931.9064581,"s":"e","l":"       Fresh serde v1.0.229"}
+{"t":1793535931.9064589,"s":"e","l":"       Fresh anyhow v1.0.104"}
+{"t":1793535931.9064593,"s":"e","l":"       Fresh dirs v6.0.0"}
+{"t":1793535931.9064598,"s":"e","l":"       Fresh toml_edit v0.25.15+spec-1.1.0"}
+{"t":1793535931.9064603,"s":"e","l":"       Fresh regex v1.13.1"}
+{"t":1793535931.906513,"s":"e","l":"       Fresh toml v1.1.6+spec-1.1.0"}
+{"t":1793535931.9065137,"s":"e","l":"       Fresh chrono v0.4.45"}
+{"t":1793535931.9065142,"s":"e","l":"       Fresh serde_json v1.0.151"}
+{"t":1793535931.9065146,"s":"e","l":"       Fresh clap v4.6.7"}
+{"t":1793535931.9065626,"s":"e","l":"       Fresh justrust v0.1.0-alpha.1 (/SOURCE)"}
+{"t":1793535931.9066267,"s":"e","l":"    Finished `test` profile [unoptimized] target(s) in 0.02s"}
+{"t":1793535931.9086874,"s":"e","l":"     Running `/TOOLS/justrust __test-runner --pool=env /RUN/r4/justrust/target/debug/build/justrust/30a7fb6e6d55007e/out/justrust-30a7fb6e6d55007e 'summary::tests::' --test-threads=1 --nocapture`"}
+{"t":1793535931.910727,"s":"o","l":"running 4 tests"}
+{"t":1793535931.9110107,"s":"o","l":"test summary::tests::parses_libtest_results ... ok <0.000s>"}
+{"t":1793535931.9110885,"s":"o","l":"test summary::tests::shares_overlapping_time ... JR_RUNTIME_EXECUTED_238898801954911239"}
+{"t":1793535931.91117,"s":"o","l":"ok <0.000s>"}
+{"t":1793535931.9112377,"s":"o","l":"test summary::tests::splits_passes_without_double_counting ... ok <0.000s>"}
+{"t":1793535931.9112937,"s":"o","l":"test summary::tests::test_failures_are_not_compile_errors ... ok <0.000s>"}
+{"t":1793535931.9113023,"s":"o","l":"test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 144 filtered out; finished in 0.00s"}

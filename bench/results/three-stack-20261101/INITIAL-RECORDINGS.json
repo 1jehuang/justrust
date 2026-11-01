@@ -1,0 +1,2401 @@
+{
+  "schema": "three-stack-v89-1",
+  "original_journal_sha256": "3e60bf69a0b0b84a2ef78052ec3eee65df54fce1a1ba078cc8a4981b519f046a",
+  "original_final_chain_sha256": "84e62c02ad6a0cf02536186135232a480f3fe9593fc34dc6a5357753d87908d1",
+  "original_source_before_sha256": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "original_source_after_sha256": {
+    ".github/pull_request_template.md": "dce3a7ad2b89f01e2bb05e8f70ad15db593f985d503618f07b38dee3a65caf51",
+    ".github/workflows/ci.yml": "147666fae4789d416216533b24ebb0578398341b85932451357357692d77030a",
+    ".gitignore": "44c92e3a70ad3307b7056871c2bdb096d8bfa9373f5bf06a79bb6324a20ff2fb",
+    "AGENTS.md": "b9b2ef0cd612c592d738aac21803764e8839e2f501fb56f12d76ef56428dd11c",
+    "CHANGELOG.md": "0be955bd492f121b03ee238939227d5b6db1a4aae39103dbfd5f5b854b3f924e",
+    "CONTRIBUTING.md": "05d125b07517166c5c831edb9b8dae6c67fe8448ec1817bf3f7478abf9227781",
+    "Cargo.lock": "39d6d146027ef4b23c839030a6476f520aab875ede947c64e00c52c4fad65811",
+    "Cargo.toml": "16ce3d25ea6fda7adab4906008781cad3d1c7ba092d2de121c158c2acba45b78",
+    "FINDINGS.md": "4cf388d60126778d21212bd85824b56f3cfd954c24467b3ddbb67b52521b1d0d",
+    "LICENSE": "ed021f4de6462d46361a10a7af1daae8ae89fab63bce5c0d40b03c6a009e0f49",
+    "LICENSING.md": "b2525cb8582adb7eeb825a176d3aaae112ad47556634e89b9b2c374fddf0c09c",
+    "NOTICE": "a91ba9c76618d36a93bf5a85994044087dccc757ebf948342b3ef2689d9ea761",
+    "README.md": "00716dec5c85e0e859a208a8ab2d61782cbc580d55ecea99aa1b14cc5b3d6af0",
+    "bench/bench_edit.sh": "9c72ee447e3939d44e67098c8be38065f12f3c8f9e6d0e74bf10c440abe5deb3",
+    "bench/cranelift/bench.sh": "6147d998cc966db2a414fdd84c6029faf0a0a12b575d69f88ab5098f12d259cc",
+    "bench/cranelift/clif-local-wrapper": "e2a351b839f5b66cff3a0516b1cc74cd8afe3bd457256b37e04eddbfdbfc3027",
+    "bench/depcache-fresh.sh": "49bf9a45b1fd41a8e183928a37edbb5818a2971a0cb8c3de34012be4ff3a1d63",
+    "bench/edit-loop.sh": "f36334ed3501b4ebcbddddb0e49e37bb084afadd782abf6fedcb6f17e776ba07",
+    "bench/feature-switch.sh": "011c927031397293ef09d7f01d1bc44da2990678f6f332e2cc64b39241ccbb23",
+    "bench/sched-contention.sh": "a920a2a19a6177d8c838d201343ddcd54cbfeb5f962b0288e8e3052be5055a2f",
+    "bench/split-apply-e2e.sh": "4d645a3a8986935c1e0faec59fe0ee5791e3f535f25ec8c93e86618f00dbe6e0",
+    "bench/split-before-after.sh": "f33ea8dad30483f5af9eff3360016c078f107d6934a113dc07fc18c424b143e0",
+    "bench/split-fixture.sh": "a3bebd4d07306b1c7fb027ffe4e0aa4dba34540efa696651d765874a34d4631b",
+    "docs/AGENTS-snippet.md": "e3ebdbf1d0475dda9c482c81aa3db36855408fa105e6f44bc2759b7d55050eb7",
+    "docs/legal-review.md": "d19980eabff11d0a1541f1190e9e5c1e66e65ff6f880fe9231406944c72c064f",
+    "docs/remote-strategy.md": "e98bce12736539cbcad4d058c2f66a2a090bdac0a745361258fbd3f1bfb1dea4",
+    "docs/remote.md": "f09b2a7a738ebcccda7553aa0c31da09d23ed385a1556b79a6d5f28b78f30cc1",
+    "docs/toolchain.md": "299ae1a76960a0b6b1fed6e7329030b5e6775b49385598af787df741f84bbc43",
+    "server/LICENSE": "b1c4a7ff517c7427275919e298a913b5fbb941b8235977c175a37b4fe93f6aaa",
+    "server/README.md": "a5386f73f8c123157fdde27e97675f1fb505bcd3aef3ca9c3fd7db9293cc27e3",
+    "src/agent_output.rs": "8fdd8e3d60fd8475f9baa368ed7cb121a5f627e0ddab2385fd1df127d0f73119",
+    "src/buildscript.rs": "18940c329e34c486e770d5331bf8e46d2f4265e565eb4311822ed35b2b30bf3f",
+    "src/depcache.rs": "f4d1b5f8f7741117e50d68fa72152c1085c39512fd7840565082227f96c04d9a",
+    "src/depcache_gc.rs": "ed5a7742ffc230d9e762d76ef502065372cacee6bd94a52ebe62c148543280e8",
+    "src/findings.rs": "e17da6c5bac2c770878bae6296c372c66b40500c9470f0df9b362d090fd6726a",
+    "src/history.rs": "e74dfff9a19a48892087aa97cf68e9a265b2dc2a18ed123e137254eb78b66496",
+    "src/install.rs": "526546b6f8aa1e8e5b1b4fecd57dc60e4ea7d8d11703b08ec9921be648f37573",
+    "src/lib.rs": "4c9ac85114f9277914cb5973ec6d34743fd67b8735f34ca8247b2277e613cf78",
+    "src/live.rs": "1da476c118a0a0b7e9181e6764897b4d27fbc8efae64a526a36fec33275aacf8",
+    "src/main.rs": "47b5f5f8e308001db3f4e562437d70095306beabc56d20804c5e8bb82277f37d",
+    "src/paths.rs": "b21c4561342ab0997c354f9f7f417127ddf800a9756bc04eb597cc27a5177647",
+    "src/procfs.rs": "1133cde6c5ef022eb815816d2cdc2b08eef8bcc0fe2f30526b6fc99bfe9a18e3",
+    "src/record.rs": "13fffcbb7ef5712eef6661ec3f1b4fb610bfd95c8f6fea53a68dc0b159d4b384",
+    "src/remote.rs": "08f2ea2e292c26a9da2d6a0d10dc576fdfac30890dd8d08afd576f712cc9fe70",
+    "src/remote_agent.rs": "c0535a25701c3025973bbd85206bb0ffb0ee30ce5e5da95eb76c6c2cd4c69caf",
+    "src/remote_backend.rs": "b019017ca16ac353bb40de260f9f13cbff5b8a7fdc625436cada3f5fbe3ca90e",
+    "src/remote_build.rs": "1bfed489c878a34de45b9993575776ad58f8bdb3cca788d9930895509f896861",
+    "src/remote_daemon.rs": "55976b812c960d1dee9ef004e20221d9a3dc890e5ba7e0bdb13a3fa84b3e975a",
+    "src/remote_hosted.rs": "36152a07480331418de3be5de79c87afb8ef3c72a71276016fdb5db904888bd5",
+    "src/remote_proto.rs": "906cf9de4cf859461a46137b11770f7db7b47e43091b37d6c9cdd642b8b3e188",
+    "src/remote_sync.rs": "63302cef7e1d52f297e913f6b658708cd0eaa0d5169de6e9058d90ac15d089c0",
+    "src/remote_watch.rs": "f33c6ad2225e99ac3b89ce553b17fa1df051ee221ed8653c48b8db1d1f257ebc",
+    "src/route.rs": "d7e870f706d4d2604c77893382331a3a44cd1fce0f499bdbc2710da237951812",
+    "src/runs.rs": "8272de3756d2323b05777c851b19c2cc6aec6bdf073af79056da29370daf6bde",
+    "src/sched.rs": "f874189108e56d325d22c8dd5887105bf518a5833d505e0bad4bf096fcc53c6b",
+    "src/shim.rs": "780e620019db87b1b8302031820eb1735b18d49a2a74f89a3a95cad25c03e600",
+    "src/slots.rs": "b9df25c621d0518aa1fe84854bd9f3ba2978c8acc166a08d302d897f84db6033",
+    "src/split.rs": "efe1fa0a35e37e27e116c3ab5a4294367b01a079d61ae25c5e9c0bfe4d14d8c5",
+    "src/split_apply.rs": "212e3390997b698facf7cc71538978cbab356a5460f8a52ef7041aee887badaa",
+    "src/split_index.rs": "215fe3e8edd967a04c62b23c2b6269a177ccc936db368c0412ca5c87eb1277f3",
+    "src/status.rs": "67cf57a756e67891162716be1a16d220bc2b455119ebb5816cea5e8f58562a11",
+    "src/summary.rs": "40a8e4406a5ab5c70ca17b1e753ae76697d61cb5c4ebd7fecb8c8456067f403f",
+    "tests/remote_agent.rs": "8f39486a18862a7cafff974ddad536c6d689c17eaea5fd72012d57cefe71af41"
+  },
+  "original_identity_before_sha256": "4ef2ea1d3bc1fa2c5e1d01cad55f0b822e478aabd71315fa1dbc277a1c16b24a",
+  "original_identity_after_sha256": "4ef2ea1d3bc1fa2c5e1d01cad55f0b822e478aabd71315fa1dbc277a1c16b24a",
+  "source_restoration_all63": {
+    ".github/pull_request_template.md": true,
+    ".github/workflows/ci.yml": true,
+    ".gitignore": true,
+    "AGENTS.md": true,
+    "CHANGELOG.md": true,
+    "CONTRIBUTING.md": true,
+    "Cargo.lock": true,
+    "Cargo.toml": true,
+    "FINDINGS.md": true,
+    "LICENSE": true,
+    "LICENSING.md": true,
+    "NOTICE": true,
+    "README.md": true,
+    "bench/bench_edit.sh": true,
+    "bench/cranelift/bench.sh": true,
+    "bench/cranelift/clif-local-wrapper": true,
+    "bench/depcache-fresh.sh": true,
+    "bench/edit-loop.sh": true,
+    "bench/feature-switch.sh": true,
+    "bench/sched-contention.sh": true,
+    "bench/split-apply-e2e.sh": true,
+    "bench/split-before-after.sh": true,
+    "bench/split-fixture.sh": true,
+    "docs/AGENTS-snippet.md": true,
+    "docs/legal-review.md": true,
+    "docs/remote-strategy.md": true,
+    "docs/remote.md": true,
+    "docs/toolchain.md": true,
+    "server/LICENSE": true,
+    "server/README.md": true,
+    "src/agent_output.rs": true,
+    "src/buildscript.rs": true,
+    "src/depcache.rs": true,
+    "src/depcache_gc.rs": true,
+    "src/findings.rs": true,
+    "src/history.rs": true,
+    "src/install.rs": true,
+    "src/lib.rs": true,
+    "src/live.rs": true,
+    "src/main.rs": true,
+    "src/paths.rs": true,
+    "src/procfs.rs": true,
+    "src/record.rs": true,
+    "src/remote.rs": true,
+    "src/remote_agent.rs": true,
+    "src/remote_backend.rs": true,
+    "src/remote_build.rs": true,
+    "src/remote_daemon.rs": true,
+    "src/remote_hosted.rs": true,
+    "src/remote_proto.rs": true,
+    "src/remote_sync.rs": true,
+    "src/remote_watch.rs": true,
+    "src/route.rs": true,
+    "src/runs.rs": true,
+    "src/sched.rs": true,
+    "src/shim.rs": true,
+    "src/slots.rs": true,
+    "src/split.rs": true,
+    "src/split_apply.rs": true,
+    "src/split_index.rs": true,
+    "src/status.rs": true,
+    "src/summary.rs": true,
+    "tests/remote_agent.rs": true
+  },
+  "original_complete_unchanged": true,
+  "measured_recordings": 42,
+  "background_prebuild_recordings": 46,
+  "total_recordings": 88,
+  "recordings": [
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122012555-3332970",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "f69e09dd887f81ef4d00c7b45d4c35cc9eab4f8ac06382db02c734a7115bb8d1",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "ead1584a05b3db8f0c35e1c1afbbdcd13b434cc0f6377f141d96b82ca296e7e7",
+      "original_output_bytes": 79026,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122024217-3335650",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "bff26ae829d4559baceffc1649dd2c80debf8768c391d4d31754775152854b2f",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "21a76a211b9e803c5e0fc3488e8a283fb8f1261f0bd726a19f3153525cd76345",
+      "original_output_bytes": 4454,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122024680-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "22aced75502f11b925006b05eddfca7ca2406dfd52b56ff0c2381326dd851789",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "4c773bd77c429695ec71009c86866d62baf4b681b06c059d2aed6ae047049807",
+      "original_output_bytes": 10290,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122025737-3336116",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "b9441c2f036eeff53537e4d41aa802e677e45e289c847ba57955813881a92c8d",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "cf8c4b323491dfee91b881440625c63173638780a21ad233012b840e29172877",
+      "original_output_bytes": 4530,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122026203-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "304adacbc4682ea375041a9100add162b39df63bd66603f442bb1bf2c9aa99cd",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "cd634b081b7aadaec243ed122b34d3d33bac981c051be1376c2c18865cf65eb7",
+      "original_output_bytes": 17008,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122026859-3336246",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "add82f04e9d99289e599c2f3849477cb71f931c492f6d5fe17c9bbb0441ec689",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "4a0eb5475c1949ee74a532692ae68ee24e06e7f992fa21d8b97ebe552e5f6365",
+      "original_output_bytes": 17013,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122027905-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "36ed003ca94a87afe63c798c0ca85f28eabf744b7ceea4638289d7b31f0337b2",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "c156aaeb12877ef31da31743e0eb51af73104ccff427f366dda4dda9c11864d9",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122028852-3336781",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "db93850b9e1da6346cdcbe91d844a68a6b2267cd301c64fc90b4ae9c118af228",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "ce5952e86476d722496d7bcb53d07e1e121953a769735829aeb1261fb0ab3547",
+      "original_output_bytes": 4526,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122029307-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d8cffd9841eebdc4fe30a3dcbbe07c88dfe917c012ab2c7e06b5ccd7c7b0009b",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "f977ef3b2759fffdeac90a920b45778db7107258ee9c05141356dd37763ef3fc",
+      "original_output_bytes": 10284,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122030452-3337266",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "b49070cecad9267ae4102914145b61dd4dc6c6528fb77670fe4b8ace6407f147",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "597ee8892fb65818a49449ebf2e7dc37d1f346724105f8c49825bb178a380f9e",
+      "original_output_bytes": 5166,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122030911-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "3fed306c47e0171edf0ef78fa3bcf7a7f0f00af364db7117ce83840ae0f21829",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "b25adeae17571c09d061f674d468758cc032bef8c120a2632e1c8eb5ba6240e9",
+      "original_output_bytes": 10287,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122031931-3337666",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "fb2a0b9000b780aa2e41b837db08ff28183f90ea63019cd4d31f99b04c12cc0f",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "841e92333b08ea5a387b04150379f79e876d88892e32301cf85eb4ad32153567",
+      "original_output_bytes": 4528,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122032394-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "47302e2ad7ab9d562ea79922673fdf576ef155772591a277d59baf08e49ed323",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "f5f133632f6a5923b388224030480b8edc2a2a3868744c8f80c4a30a90ca475b",
+      "original_output_bytes": 10279,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122101348-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "e21fb4869cf032881a37905ec79945a1296b6d37a1b90da186713ab12691abe0",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "c6e886b546cf053aa01cb4887d6d7ab5c5948b7f2238f789279268d90c0ff10a",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 0,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122102975-3332965-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "e5090efd67efe8ea1462d30d7c99c4689694abfa161697115f465cd8556fc3b9",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "d4b2f1eac2cdd05503e2b8f8a14f71ce313dae227c545476082210be464814f8",
+      "original_output_bytes": 17009,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122109450-3346397",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "aecfb3664b97284dd63bca8a07d991e6620f82bcf7fde739943de5366c24ad47",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "ebe343f8b1c7b4548d0f4f871c351407436843ea8a575568a385d99abf237a0a",
+      "original_output_bytes": 79037,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122122111-3349239",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d5cc7541c38a518218d054dbeaf010e4f5622aa11aef62fdbc66a709ce4a29a9",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "92bac8acdcf27238d7fed92a4601571b80d822f615019de55898a7d5ee7a8f38",
+      "original_output_bytes": 4449,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122122574-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "4ef6e93f308a9a7f62b6f8ab7306296d0149bfdc5c1a18aa53da9ef0a904399f",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "7921a03ef056bac82cdad2cb67d277cade1bd4f1ef52a26d277b1711bc138cbb",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122123686-3349707",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "e4608381f9eee9afe3ca13d4b56b81fb12aa88efc5b1de14b7032c104c694bf6",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "8bbfcd3e2d877ef3ff79ccc5564e44456fc64c361a17a9547d1e05f7b1423b05",
+      "original_output_bytes": 4532,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122124144-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "7b932118a4a6a176e13f0678d0b0775450ca318eee82116f66bd67d3e9108bed",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "01478a4aaec82f47be5764aa6b4bc274caf237456cde0e9271c7858cc12a5832",
+      "original_output_bytes": 17003,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122124829-3349936",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "aed817a426f8664808bdc0c4c2b223c4e35774f477c9dbc1181fb398433a8fd6",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "eedb6d1e6ca415208b5126b1283aa93346ae799d4ec70d11674f2f8e9e1f4e70",
+      "original_output_bytes": 17009,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122125878-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "9c55906cd469fcb53e9cbbb65b8016b54924936f044fe1e8e580ec2bb763ee8b",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "579d03904552818a751bc3e1868d8c0af7752923f8a6b4bbaa483c94361fa9a2",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122126742-3350411",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "c8de8fe81b48348eae3da8f7adb42915dc9398fdc64a299a36270c2cd3c0a82c",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "9aa12dc70e0e0e5d6eeb6742b00f059b03132890f1478d6a9963004a88ad5bdc",
+      "original_output_bytes": 4529,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122127200-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "59abb7d033e37f647981febf02943a70d5b8012f588fe9f8e93f18cbee909370",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "b9c1bbbbde66bf969c3a8e62eb2929c17ceb4461ab072a067c62c9220186964b",
+      "original_output_bytes": 10289,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122128279-3350846",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "b8e1d83a11f1803d8aafe0947b548a294d238c5788868793106020ca9622f1b7",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "e78dd1ce9a6951f71a6fa6ae3f7e79ae17415f1e25a31b8f98b53ae13d1086be",
+      "original_output_bytes": 5158,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122128737-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "1b5fa0a7a8e74250abdd3cc7672e0640854cf167b57f9b018fbef83b851f8d90",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "9bbd7716162759121b2b84db5694d82a53f519b5186b827654243b9d95d22d02",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122129660-3351296",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "4bab644ca0d7fe3ca6084fed2b589daa91fdf91bad159a6c4d2d3f8636513012",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "53e81f3cb9ad23b9750cf8990142ab3be7060ddff6cbb6bd06ce6ef81ecddba5",
+      "original_output_bytes": 4534,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122130116-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "2318094930f1017b218ab4d2c0b607adb83f044673c59a0441e3f70bd0642732",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "06c89926b984eb23d9ea5fc16e4c131bfa0d4c71e597207b7ce4ebc457ad9535",
+      "original_output_bytes": 10290,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122158859-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "59cc7648f785c5125d51eae11286d58ee47457327d87d97f4c80a6aad847b09b",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "fa24fe1ae2950c08896bfb244d4ce66e5f52e91030f311b02ad9bbf5c1891afe",
+      "original_output_bytes": 10289,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 1,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122200214-3346392-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "6dd9baa77b5a6009fb17b4e5c27674f084eb3bccdd978482a5d6a7a02728acc6",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "b9a73e0d0080c586c6f454ba39e538513bb06347e613d9be21fdb93f08d892e4",
+      "original_output_bytes": 17009,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122329317-3376277",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "890dce146a239f72887faef6c9be61a743ef9dd070ac34a17ffc5f428ea00460",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "60aabe3c966efe3ed8d09fa900775c740b08118deac62cd5bebe1fb79e6a9b7a",
+      "original_output_bytes": 79032,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122341400-3379017",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "39fd6fa33162fe230a44e872e767e4e62f428d37631289c5b9755f02aeb076d2",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "da7b540e2267de8870a62b0d621fdaa4c1d62b7733150f6e34785c67f68650ec",
+      "original_output_bytes": 4456,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122341856-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "bffac03841aa524a279bba8752b360b4309e5ededfe19a4c5ccab66919de0411",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "a5755894bfe3d0a0cad702b91f474687b96e0f7d717ef9e10610f1ca99589345",
+      "original_output_bytes": 10282,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122342990-3379426",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "48ed996510e3ed1fd1031af2fef8e15ee729eb95bf2cb0ee5792d7b4ceb07eff",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "7270800383a4fd676b288f3bf30a346d7b25bd9d5efeade432dab6305fcecfcf",
+      "original_output_bytes": 4535,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122343454-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "eb3486a115684acf3f4acce2dd7d894f30ed9c1dd5cb05db7730d57f565f89d5",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "ae6a4880b0c4771f134e547c527f7bde0d1c84288f86a2e522aeb412eef42c46",
+      "original_output_bytes": 17006,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122344087-3379559",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "0eecd437bf4b631c3ddc1c826ea817055c7bb8067f5a5c18e7c3ece11658f775",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "d962d4e01054a7994d651e001ce3600a07f829b3a8bfe093c886d5eb0cd6b429",
+      "original_output_bytes": 17008,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122345180-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "fce7b5c6b6f80ea34e4782643393f9f528d37557ef7da98a1584225d76422ee7",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "e3476772a6daecbbdb70b7efc38e214b0737d84ed9dcd305442a438d01d391c9",
+      "original_output_bytes": 10289,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122346370-3380123",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "cdf9ae509819a4c2d8549464754e258b433dc01be776ba573ccb5186b7a3eefd",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "5bd77e7628c5ed060e3c66fe2a5acc27193b3926f8f4ad2c5b7048e83d73c607",
+      "original_output_bytes": 4534,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122346834-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "0b028a1c86b98dfc3d36e6fdd50b6f343bd6eb2880c04876166af7708b6ef5fd",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "8da8e6b19f193e4d22c9a064caf5b8e3f3db5e689ef5bf36238a2dce3b61c6e8",
+      "original_output_bytes": 10289,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122347901-3380553",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "73fcb0f01607fbb4c43f8e9fd1438351741e948417488f7fd6d7df7ce4eed96f",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "fa81a7aacdd12efe90809319f4f6a3411770bfd9a3381407a22585008d82b9db",
+      "original_output_bytes": 5164,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122348365-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d80d72bdff9a4cca045180727a634381485183492f92f197a82c9afcf1dcba02",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "7be2a04ef7a7d58ddb83a13bd207f80fb1130e43073dccfb2731e93fee4d895d",
+      "original_output_bytes": 10287,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122349542-3381055",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d62b9b18ade0e13ed1b0503ec37349c742abee5c376800372cadd020d5911f74",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "b47a47d929c9f2e32eaccbb18226be8cb231ac505a449f2f847f889997945bfa",
+      "original_output_bytes": 4534,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122350003-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "059211a9c6070e7aa41f6b7fa33a51b98e45ddae146178eefebb83ad0ca55215",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "1b929811d08ece92a63411135ff4df6909058141203fd9729ca593bfd31ff655",
+      "original_output_bytes": 10287,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122419058-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "675c38275ac2d475423d14ef224ec34fa5b6e1505592a750a7b3a60546aba86d",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "84516aef7e9e7c96f9da0aeac35a263fc252ceae8a49e1a4651244f34aaa5296",
+      "original_output_bytes": 9941,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 2,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122420364-3376268-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "9a71aa13b4088d02c3245fc4ff066a2d99f14fda4eaaf7ac463d31630aad9003",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "f3c9ed28d69105c03a7be05a5a8b0e31a959c1246364939b0ac89a7544aee2a0",
+      "original_output_bytes": 17005,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122426886-3389600",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "617512be5c760c1e4439f81fe5e204e32a8e207329cbd030d6decb06fc78d8a8",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "ef44114a1e3bedd325f01a852acf571a0d6d0ebe1f7b27ff0e66fc9b3f7c0509",
+      "original_output_bytes": 79038,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122439335-3392347",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "935418f2108dde2dd452e064481a2f67595a281445a9ba640c63c88289e37b2d",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "d3ac609ec0d04b58efa9993f6af8c883afdce721190458b19f6e6efaffda3b2a",
+      "original_output_bytes": 4451,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122439788-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "7cc56d63bcbc3b8db67af20335ac946089408b38141809916a9c8b87fe00ecf8",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "b6b9d1030af345105b58f7081d0e767934b3adfd119dd9bb36af6b4336f9d717",
+      "original_output_bytes": 10288,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122441023-3392824",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "805339877dcf803677b0bd03331c413ea14c40e018558367b461868bda533030",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "7ebf7cfdf129c0714b7cf46a5d83302a49bb80645545a7431fb51a99b8e878ba",
+      "original_output_bytes": 4536,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122441486-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "2ca87fdaa4d4f9bdb1120d72a48c0a421317e06a9458b1ae7568e817efcd1c8a",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "2b98715cab2313fe5a3569e39d6718d244504a465c7655b413829e663ec57b70",
+      "original_output_bytes": 17006,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122442201-3392963",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "8908004bac7d23bdccd0b50a6f46ff3f78e5f5ae075bbbff622da2550e1bd5dd",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "552a13552f56c9d221d419dd7a34a28b015e1f0fce8dcab346bff8ccc213350f",
+      "original_output_bytes": 17006,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122443159-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "66f0824b95a8afc12ef9a36eb9a1f98ed9c6764f6fc0d90d0b42114563f40442",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "d929e83993753a843cc96767b5f51910e622a0d8e9e8ac4958cabc9d35c6bcb2",
+      "original_output_bytes": 10284,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122444216-3393417",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "c4d8901207ea05008a28a7b3d1c7c9926fc0f2b4b78a76214489c2a623f74dff",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "c69407ac5154fd2160b94777d987e9e4358209991303ff3d8d9aaef0adb37da7",
+      "original_output_bytes": 4529,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122444674-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "6f6ec3049e57b0a2ed6d4a0c4b843ea27bbc8d0851b268d209e054d70a5b74d1",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "64ece91ed96bcf955fcb09353b8f6b75434db03d6d19d42903e28af4f314b6d5",
+      "original_output_bytes": 10285,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122445778-3393895",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "c3861bce24a666abad5bac91655a04ff5cd8ed4bdc90d5495dff758e19b8b381",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "22e68a287ebcb5df0b8de364c45ade5efc0d840ffaa496ad40066b058fd1bfb3",
+      "original_output_bytes": 5160,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122446244-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "fdc28125e53f7f784e8cb55ea9694280a5aa375baaf4b33f6fd1d7ab887442e1",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "b824dc482e4d63cd1f0c662eb6585b036ad670a16d5d41d5e4003ee5fe9fd3f3",
+      "original_output_bytes": 10288,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122447285-3394364",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "493b075eba12183b9897fa1d3f8d01fb85963cc426c5c9a55abf5d4b5131b1e9",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "ec2c308e6f845e53f89d24270d1764c7d3e3257bd91425f95c964fea2c5d7234",
+      "original_output_bytes": 4540,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122447755-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "bbd2605b9c868874c73f09d4a14d535e311ac813804958246d96fe3f0e7d5d44",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "bc98d61049b1f9d706f40a5e893fa0bc21aca8ab1f3f0cd6d97f163f134d7296",
+      "original_output_bytes": 10284,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122502035-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "9ec303afaf7fef3e103f50b94a2b1f277d55dcfb7e1007f8e6dd088f2211aeb9",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "accda22457e4a30a29f89f8dde4fe8368629110eb6447ebb0963b7fc7b699f7d",
+      "original_output_bytes": 10290,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 3,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122504296-3389595-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "9abc7595aec128dd901ca2362d1ce0fd7c993a7e709cedd73cb888af64748a1e",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "db06e555b2f3796512b276c72c22f2814d830ec62fa4f66a8ed7e5e7ccab2923",
+      "original_output_bytes": 17014,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122514339-3399225",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "6176ae98e633bf2a5896bf7b6d4a8e83c6512c1641670c29369ee80276e8ecf8",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "483129f962ab0b33d7c0c16acbdf3b35eef609c5124615dda0ea38c2051864be",
+      "original_output_bytes": 79043,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122526900-3401885",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "fe5d3c3ef09306b44e263b4c439dbe28f94c77ea86f508e298ee7ec1f710d0fc",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "159bdd585e3e3a98b532288f0536d85be3ec26ae3afa705c088d57d38a2a7f55",
+      "original_output_bytes": 4457,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122527356-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "4104582c250d1e6b2e40e4f91066f1185e5019d4666dbe34853f56d8ad4df6e7",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "c5d4e0540cba9556633a28de24ee83580e407d569a4ae88b38e16d5f651ee43a",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122528503-3402330",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "240246fa27dd700bcaf9e0bc4474449b08bba663f8260ddae488c73a8310fa1b",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "fda97e22fd73f41798de49a38bb611ee0aee853326e9497c80c53f44e9610823",
+      "original_output_bytes": 4527,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122528958-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "ca8a8943a6922f63efa94a9d41ff43bf8778164992b94167799f62917a909629",
+      "original_meta_bytes": 741,
+      "original_output_sha256": "c436394e9da9c5e082228bd5a8ec229c736ea7335256e39c569cad762e3b70c8",
+      "original_output_bytes": 17009,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122529610-3402454",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "ec14c46894e84d43c4c5a1017f350d7941d871970207986aa1164e6164217309",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "bc3a547129fe2f85328d63c81ea5f93dbeb9350cf3f63ff3e5f0202cbbecafce",
+      "original_output_bytes": 17008,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122530710-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "72c10b356d45a8623fb434fc266a303e36c43a74c4a0acb859045e8f540ba907",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "cf79cb4595815f314141ee698d115264720bde1def2d36aab4151ccf93dfb56b",
+      "original_output_bytes": 10288,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122531875-3403017",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d40ff37a900c86daa1e627087bc802cf53c3742fd93cd85638752a9c09f0ec5c",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "b5246c93c4102c02986da87559ef9ae3902ec8850a3314e6e3de7b2c33c0fe64",
+      "original_output_bytes": 4534,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122532332-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "1afd194a0bfca5fdbeca5180282a04594273500942874b489500e27fd719f0f7",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "18a8c57cc8a6cc0c8604b31c20feda5b0f6f6ee65bb009efe47761668afd0c18",
+      "original_output_bytes": 10292,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122533509-3403460",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d1d76ea5bb201a5735b58b9aed6103d85ec759e402045047ee892c6b73d6c82c",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "15cc7d003b63b692306496d9b85181ca9acfb45271f45e3f9e4bcd14d13c2665",
+      "original_output_bytes": 5158,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122533964-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "7a00574837323b63ef630c24d53e85dc7e946152726766e804eb499b47f89795",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "6a062796efe60fef391064de0cdd30415e65836a0f9d363f53b8c945e60c294c",
+      "original_output_bytes": 10286,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122534989-3403962",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "4a6bb3e4cc57a4517b97ebc8c05381dd0d1c016cf96d36bec9caac60b58cf3af",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "7c53729c01aace1f638b9a13ac64789e2a3ab941f168fb0f9bae6722fc806914",
+      "original_output_bytes": 4537,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122535451-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "83788b3840d6c12b9d220d109f8ed58cff42b4c8d1d21adc856453e53943fc3b",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "23a8294b4fe5bc26333894ef0c99d786669369f125888ca8cb3981a85606b6d2",
+      "original_output_bytes": 10281,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122550412-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "1f7c517e1ba5349a853cbf4c18c3e66f1d1c3a23894cf11a74169eabaf57d8d1",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "daef3272df12e7ce75427bdc4da8d21adf26ac5896fab15e3fcc554f58b3b781",
+      "original_output_bytes": 10289,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 4,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122552364-3399220-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "cc497e052efcf206d6c34e1b2f37c5474b1024a67d560ec09216139b52d68adf",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "6860c7d51dbb7b177428d483c829b3efbaeb6dbb7debffaab67fe0840950291a",
+      "original_output_bytes": 17004,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122739326-3429523",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "0576ab4b9e2e65cc0ff2401ab0713189aee5c7399c694571ca9e0784c735c1b0",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "a07c666ab49b0124b29539137613b06e28b6a674ac9ab6d68ef084af4c21bcb9",
+      "original_output_bytes": 79046,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122752356-3432448",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "fcffd79e6e60dde903bf177e91fbdb2f6dcfc2478769d3055159fa8f69b52e85",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "ca03ffe218e42086ee80564d9cfd8969447c8784592cb47161bbdf70299deb14",
+      "original_output_bytes": 4457,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122752816-3429518-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "fb7c16c63d1354b69445b11590f01f94fdad5a760e68e2ce8b70a0d3a401d386",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "e35bd0c87f3ac2b5b327269ea731321cb290ff3502a47dff9cc9a873d1971227",
+      "original_output_bytes": 10283,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122753880-3432847",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "5eca9187fa0c8796c53701a21dc16b0bfaf66b9c0a5142457e2a04296e424f86",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "e0a199587361467979c35cd30449cc24ffcc88a42174e2c11200396f7968258e",
+      "original_output_bytes": 4532,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122754341-3429518-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "d4e0e9da0154d74de643ea1a5e5f942f7268960a461aa0c0e9ad9eb2a09b34af",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "d657fa45326e14f82d0760d88fd1ecff3e9de8a7ad401c442831f07fa37a564c",
+      "original_output_bytes": 17013,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122755083-3432983",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "32af14a66566d03c85e309b0890e81a94019a3fe57bc4e0c983d1ff286d07c31",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "f978ad8f7ad75964f6ecaa5f368b136a8a7b8ea3d325e1a94688ed18e9b0ce61",
+      "original_output_bytes": 17005,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122756194-3429518-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "16e67437bf2bbb6817e51cb6b38b050a46874c04323298030359164164ca201d",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "33fd69299b9cbe105bbfcc387c42d1bfdd8cb7677a999ffcaf0ccf458657f732",
+      "original_output_bytes": 10282,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122757376-3433547",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "be6aa1d20ac9f52facf48684d1e37da021c1243e892f00e37e2482b5ea187819",
+      "original_meta_bytes": 832,
+      "original_output_sha256": "4fefc26b2ef64db831b007a9843554261a32194accebdee5965d2ea500ece3bc",
+      "original_output_bytes": 4532,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122757837-3429518-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "264955d0c405907ac7b67ed351239d266853a9ce27e699018fb854a02c0237ea",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "37c9abf2f2c5d99909bb77811f1773834af580e47fabc8db87a99ff671496b47",
+      "original_output_bytes": 10288,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122758954-3433994",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "c995ca167f68f53e8b6481b18946703bae0640257edfc835befd7927273892a0",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "4f1973b9e987e2965cb785b58d73481911f8856f7fa75698df0b02962f4e0bc3",
+      "original_output_bytes": 5164,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122759418-3429518-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "b92ab1acfd7bb83381b47df019db0abe4045ec902231d7184820ce04975194a3",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "344666dbedb64fd2c70279068adb7571d41cb69522cb6b63ecae396742869ad7",
+      "original_output_bytes": 10287,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "measured",
+      "metadata": {
+        "id": "20261101-122800806-3434480",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--",
+          "summary::tests::",
+          "--test-threads=1",
+          "--nocapture"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "route": "JUSTRUST_REMOTE=off",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "f0ce417a65e784191393bff0eb0ffbdac3f05fa2bfa35149effb41a828a537ea",
+      "original_meta_bytes": 833,
+      "original_output_sha256": "cbbf7ab9dd166ccc0dd0148eff44585adbf31ab1e565f6e99fc2801bb3e1cf11",
+      "original_output_bytes": 4530,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    },
+    {
+      "sample": 5,
+      "kind": "background-prebuild",
+      "metadata": {
+        "id": "20261101-122801335-3429518-pre",
+        "args": [
+          "test",
+          "--locked",
+          "--offline",
+          "--lib",
+          "--no-run"
+        ],
+        "subcommand": "test",
+        "place": "local",
+        "real_cargo": "/TOOLCHAIN/bin/cargo",
+        "real_rustc": "/TOOLCHAIN/bin/rustc"
+      },
+      "original_meta_sha256": "b15fc908a55e58d79a6232b5554dc9df96342a71d01f57ad420f9b3cc0ec7f2d",
+      "original_meta_bytes": 742,
+      "original_output_sha256": "c9a0943f2ca0075a0654eb2144c5b27b4c20cd0d0de77185c5f42ae8492d6dd6",
+      "original_output_bytes": 3785,
+      "transformation": "allowlist metadata fields, no env or private path values, background output retained privately with hash/size only"
+    }
+  ],
+  "scope": "post-run read-only inventory and original before/after identity check, not independent host attestation; no native workload invoked"
+}

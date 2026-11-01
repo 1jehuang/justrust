@@ -1,0 +1,16 @@
+{
+  "observed_at_utc": "2026-11-01T12:37:56Z",
+  "initial_run": "ts88a",
+  "disposition": "correctness passed, timing confounded by unaccounted speculative background work",
+  "measured_justrust_calls": 42,
+  "total_justrust_recordings_at_export": 88,
+  "additional_prebuild_recordings": 46,
+  "background_prebuild_args": ["test", "--locked", "--offline", "--lib", "--no-run"],
+  "shutdown": "private-home justrust daemon stop for all six measured homes and the separate pilot home, no caches deleted",
+  "stopped_pids": [3332965, 3346392, 3376268, 3389595, 3399220, 3429518, 3308631],
+  "post_shutdown_ps_exit": 1,
+  "post_shutdown_ps_stdout": "",
+  "corrected_run": "ts91a",
+  "correction": ["JUSTRUST_BUILDD=0", "JUSTRUST_BUILDD_PREBUILD=0", "expensive tool and seed verification before source mutation", "fresh per-stack per-round namespaces"],
+  "attribution": "coordinator-observed actual recording inventory and private shutdown tool calls; not a contemporaneous worker receipt"
+}
