@@ -2,6 +2,67 @@
 use super::*;
 
 #[test]
+fn local_lazy_frontier_retains_delayed_result_while_selecting_independent_input() {
+    let prepared = crate::compiler::source::prepare_text_with_prelude(
+        "independent-lazy-input.rs",
+        "fn main(){}",
+        &crate::compiler::source::SourceOptions::default(),
+    )
+    .unwrap();
+    let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+    let signatures = signature_table(&program).unwrap();
+    let function = &program.functions[0];
+    let checker = Checker::new(&signatures, ir::Ty::Unit, function.module);
+    let absent_schema = |_| Ok(None);
+    let missing = |_: &Demand| Ok(None);
+    let inputs = Inputs::new(&absent_schema, &primitive_source, &missing);
+    let mut solver = solve_body(&checker, &function.body, None, Some(&inputs)).unwrap();
+    let leaf = solver.fixed(ir::Ty::Int(ir::IntTy::I32)).unwrap();
+    let actual = solver.node(Domain::Ref(ir::BorrowKind::Mut, leaf)).unwrap();
+    let independent = solver.fresh().unwrap();
+    let delayed = solver.fresh().unwrap();
+    solver.delayed_results.push(delayed);
+    solver.lazy_coercions.push((actual, independent));
+    solver.lazy_coercions.push((actual, delayed));
+    let mut ready = Vec::new();
+    assert!(
+        solver
+            .local_lazy_inputs_ready(&[], &[], &mut ready)
+            .unwrap()
+    );
+    assert_eq!(ready, vec![(actual, independent)]);
+    assert!(matches!(solver.domain(independent), Domain::Unknown));
+    assert!(matches!(solver.domain(delayed), Domain::Unknown));
+    solver.unify(actual, independent).unwrap();
+    assert!(matches!(
+        solver.domain(independent),
+        Domain::Ref(ir::BorrowKind::Mut, _)
+    ));
+    assert!(matches!(solver.domain(delayed), Domain::Unknown));
+    solver.lazy_coercions = vec![(actual, delayed)];
+    ready.clear();
+    assert!(
+        !solver
+            .local_lazy_inputs_ready(&[], &[], &mut ready)
+            .unwrap()
+    );
+    assert!(
+        ready.is_empty(),
+        "a delayed result alone cannot seed itself"
+    );
+    let another = solver.fresh().unwrap();
+    solver.lazy_coercions.push((actual, another));
+    solver.missing_source_schemas.set(true);
+    ready.clear();
+    assert!(
+        !solver
+            .local_lazy_inputs_ready(&[], &[], &mut ready)
+            .unwrap()
+    );
+    assert!(ready.is_empty(), "missing graph inputs retain the barrier");
+}
+
+#[test]
 fn nominal_comparison_constructor_equations_require_unique_canonical_impl() {
     for (source, inferred, op) in [
         (
@@ -557,7 +618,7 @@ fn constructor_closure_equations_preserve_source_and_missing_graph_authority() {
             assert!(matches!(solver.domain(expected), Domain::Unknown));
             assert!(
                 solver
-                    .local_lazy_inputs_ready(&methods, &projections)
+                    .local_lazy_inputs_ready(&methods, &projections, &mut Vec::new())
                     .unwrap()
             );
             // The readiness closure describes dependencies, never equations.
@@ -568,7 +629,7 @@ fn constructor_closure_equations_preserve_source_and_missing_graph_authority() {
             solver.coercions = vec![(intermediate, expected), (actual, intermediate)];
             assert!(
                 solver
-                    .local_lazy_inputs_ready(&methods, &projections)
+                    .local_lazy_inputs_ready(&methods, &projections, &mut Vec::new())
                     .unwrap()
             );
             assert!(matches!(solver.domain(intermediate), Domain::Unknown));
@@ -578,14 +639,14 @@ fn constructor_closure_equations_preserve_source_and_missing_graph_authority() {
             solver.delayed_results.push(intermediate);
             assert!(
                 !solver
-                    .local_lazy_inputs_ready(&methods, &projections)
+                    .local_lazy_inputs_ready(&methods, &projections, &mut Vec::new())
                     .unwrap()
             );
             solver.delayed_results.pop();
             solver.constructor_coercions.clear();
             assert!(
                 !solver
-                    .local_lazy_inputs_ready(&methods, &projections)
+                    .local_lazy_inputs_ready(&methods, &projections, &mut Vec::new())
                     .unwrap()
             );
             assert!(checker.exprs.is_empty());

@@ -1437,6 +1437,7 @@ impl<'s> Solver<'_, '_, 's> {
         &self,
         methods: &[Method],
         projections: &[Projection],
+        ready: &mut Vec<(Term, Term)>,
     ) -> Result<bool, String> {
         if self.lazy_coercions.is_empty()
             || self.trait_application_pending
@@ -1454,6 +1455,7 @@ impl<'s> Solver<'_, '_, 's> {
         {
             return Ok(false);
         }
+        self.checker.infer_storage(self.lazy_coercions.len())?;
         self.checker.infer_storage(self.lazy_coercions.len())?;
         let mut targets = Vec::new();
         for (actual, expected) in &self.lazy_coercions {
@@ -1477,8 +1479,13 @@ impl<'s> Solver<'_, '_, 's> {
                     }
                 }
             }
+            // A pending operator owns its result type. Its coercion must wait,
+            // but must not prevent an independent local input from revealing
+            // that operator's receiver type. Retain this edge for replay.
+            if self.deferred_coercion(*expected)? && !constructor_parameter {
+                continue;
+            }
             if !matches!(self.domain(*expected), Domain::Unknown)
-                || (self.deferred_coercion(*expected)? && !constructor_parameter)
                 // A closure's source-directed constructor input must already
                 // have its exact canonical type, not a numeric-default guess.
                 || (constructor_parameter
@@ -1491,6 +1498,10 @@ impl<'s> Solver<'_, '_, 's> {
                 return Ok(false);
             }
             targets.push(*expected);
+            ready.push((*actual, *expected));
+        }
+        if ready.is_empty() {
+            return Ok(false);
         }
         targets.extend(self.operators.iter().filter_map(|o| o.index_result()));
         // A receiver that is itself the unresolved result of another pending
@@ -2051,14 +2062,23 @@ impl<'s> Solver<'_, '_, 's> {
                     progress = true;
                 }
             }
-            if !progress
-                && self.preparation.is_some()
-                && self.local_lazy_inputs_ready(&methods, &projections)?
-            {
-                for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
-                    self.unify(actual, expected)?;
+            if !progress && self.preparation.is_some() {
+                let mut ready = Vec::new();
+                if self.local_lazy_inputs_ready(&methods, &projections, &mut ready)? {
+                    for (actual, expected) in std::mem::take(&mut self.lazy_coercions) {
+                        let mut selected = false;
+                        for candidate in &ready {
+                            self.checker.infer_work(0)?;
+                            selected |= *candidate == (actual, expected);
+                        }
+                        if selected {
+                            self.unify(actual, expected)?;
+                        } else {
+                            self.lazy_coercions.push((actual, expected));
+                        }
+                    }
+                    continue;
                 }
-                continue;
             }
             // Missing graph inputs are not inference quiescence. A pending
             // method producer may still reveal a nominal owner, so neither
