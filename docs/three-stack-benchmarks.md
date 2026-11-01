@@ -93,6 +93,16 @@ The initial test-edit medians were Cargo 1.125 seconds, justrust 0.601 seconds, 
 
 A future default-prebuild experiment must measure from the edit itself, account for work between commands, and keep background workers isolated between arms. Disabling the feature here does not show that its genuine agent-session benefit is zero.
 
+## Portable evidence
+
+The [retained evidence archive](../bench/results/three-stack-20261101/README.md) contains the corrected primary run and the separately labeled, confounded initial run. It preserves every sample, correctness receipts, identities, cleanup records and privacy-projected raw output. Independent offline replay and all 30 negative/isolation tests passed. Replay requires only Python, not installed compilers or the original private directories:
+
+```sh
+python3 -I -B bench/results/three-stack-20261101/validate.py
+python3 -I -B bench/results/three-stack-20261101/validate.py --run initial
+python3 -B bench/results/three-stack-20261101/test_archive.py
+```
+
 ## What is still not established
 
 This pinned common subset does **not** replace the session-weighted synthetic benchmark. In particular it does not measure:
