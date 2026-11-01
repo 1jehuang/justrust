@@ -681,11 +681,53 @@ fn new_file(path: &Path) -> fs::File {
         .open(path)
         .unwrap()
 }
-struct Running(Child);
+struct Running(Option<Child>);
+impl Running {
+    fn stop(&mut self) -> std::io::Result<ExitStatus> {
+        let child = self.0.as_mut().expect("owned child");
+        if let Some(status) = child.try_wait()? {
+            self.0.take();
+            return Ok(status);
+        }
+        child.kill()?;
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            if let Some(status) = child.try_wait()? {
+                self.0.take();
+                return Ok(status);
+            }
+            if Instant::now() >= deadline {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "child did not become reapable after SIGKILL",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+}
 impl Drop for Running {
     fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
+        if self.0.is_none() {
+            return;
+        }
+        if let Err(error) = self.stop() {
+            let _ = writeln!(std::io::stderr(), "equality child cleanup: {error}");
+            // A kernel-stalled child must not hang the test thread's unwind.
+            // Keep wait ownership in a reaper, rather than blocking in Drop.
+            if let Some(mut child) = self.0.take() {
+                let id = child.id();
+                let spawned = std::thread::Builder::new()
+                    .name(format!("equality-reaper-{id}"))
+                    .spawn(move || child.wait());
+                if let Err(error) = spawned {
+                    let _ = writeln!(
+                        std::io::stderr(),
+                        "cannot reap equality child {id}: {error}"
+                    );
+                }
+            }
+        }
     }
 }
 #[derive(Debug)]
@@ -703,19 +745,27 @@ struct Rlimit {
 }
 unsafe extern "C" {
     fn setrlimit(resource: std::ffi::c_int, limit: *const Rlimit) -> std::ffi::c_int;
-    fn prctl(option: std::ffi::c_int, ...) -> std::ffi::c_int;
+    fn getrlimit(resource: std::ffi::c_int, limit: *mut Rlimit) -> std::ffi::c_int;
+    fn waitpid(
+        pid: std::ffi::c_int,
+        status: *mut std::ffi::c_int,
+        options: std::ffi::c_int,
+    ) -> std::ffi::c_int;
 }
 fn disable_core(command: &mut Command) {
     // SAFETY: the closure only uses stack data, a libc syscall and last_os_error.
     unsafe {
         command.pre_exec(|| {
+            // Linux fs/coredump.c::coredump_pipe treats 1 as its no-recursive-
+            // dump sentinel. Zero is ignored for piped core_pattern handlers,
+            // and PR_SET_DUMPABLE before exec is reset by the executable load.
+            // One byte is also below the ELF file-core minimum. Set both limits
+            // only in this child; inability to install the policy fails spawn.
             let limit = Rlimit {
-                current: 0,
-                maximum: 0,
+                current: 1,
+                maximum: 1,
             };
-            // A piped core_pattern can invoke an external dumper even with
-            // RLIMIT_CORE=0. Keep abort observations independent of that service.
-            if setrlimit(4, &limit) == 0 && prctl(4, 0usize, 0usize, 0usize, 0usize) == 0 {
+            if setrlimit(4, &limit) == 0 {
                 Ok(())
             } else {
                 Err(std::io::Error::last_os_error())
@@ -746,7 +796,7 @@ fn capture_bounded(command: &mut Command, scratch: &Scratch, seconds: u64, limit
             Err(error) => panic!("spawn {command:?}: {error}"),
         }
     };
-    let mut child = Running(child);
+    let mut child = Running(Some(child));
     let start = Instant::now();
     let status = loop {
         for path in [&out, &err] {
@@ -755,13 +805,18 @@ fn capture_bounded(command: &mut Command, scratch: &Scratch, seconds: u64, limit
                 "output bound: {command:?}"
             );
         }
-        if let Some(status) = child.0.try_wait().unwrap() {
+        if let Some(status) = child.0.as_mut().unwrap().try_wait().unwrap() {
+            child.0.take();
             break status;
         }
-        assert!(
-            start.elapsed() < Duration::from_secs(seconds),
-            "timeout: {command:?}"
-        );
+        if start.elapsed() >= Duration::from_secs(seconds) {
+            let cleanup = child.stop();
+            panic!(
+                "timeout: {command:?}; cleanup: {cleanup:?}; stdout: {:?}; stderr: {:?}",
+                fs::read(&out),
+                fs::read(&err),
+            );
+        }
         std::thread::sleep(Duration::from_millis(5));
     };
     for path in [&out, &err] {
@@ -773,6 +828,113 @@ fn capture_bounded(command: &mut Command, scratch: &Scratch, seconds: u64, limit
         stderr: fs::read(err).unwrap(),
     }
 }
+// This helper executes only in a filtered copy of this test binary. It tests
+// policy across exec without compiling or changing any frozen Rust source.
+#[test]
+fn equality_capture_child_probe() {
+    let Ok(action) = std::env::var("JR_EQUALITY_CAPTURE_PROBE") else {
+        return;
+    };
+    let mut limit = Rlimit {
+        current: 0,
+        maximum: 0,
+    };
+    // SAFETY: getrlimit writes one initialized, correctly sized Linux rlimit.
+    assert_eq!(unsafe { getrlimit(4, &mut limit) }, 0);
+    assert_eq!((limit.current, limit.maximum), (1, 1));
+    fs::write(
+        std::env::var_os("JR_EQUALITY_CAPTURE_PID").unwrap(),
+        std::process::id().to_string(),
+    )
+    .unwrap();
+    println!("equality child stdout, core=1/1");
+    eprintln!("equality child stderr");
+    std::io::stdout().flush().unwrap();
+    std::io::stderr().flush().unwrap();
+    match action.as_str() {
+        "abort" => std::process::abort(),
+        "exit" => std::process::exit(23),
+        "hang" => loop {
+            std::thread::park();
+        },
+        _ => panic!("unknown equality capture probe action"),
+    }
+}
+
+fn equality_probe_command(action: &str, scratch: &Scratch) -> Command {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .current_dir(&scratch.0)
+        .args([
+            "--exact",
+            "equality_capture_child_probe",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("JR_EQUALITY_CAPTURE_PROBE", action)
+        .env("JR_EQUALITY_CAPTURE_PID", scratch.path("probe.pid"));
+    command
+}
+
+#[test]
+fn equality_capture_policy_survives_exec_and_preserves_sigabrt() {
+    let scratch = Scratch::new();
+    let result = capture(&mut equality_probe_command("abort", &scratch), &scratch, 5);
+    assert_eq!(result.status.signal(), Some(6), "{result:?}");
+    assert_eq!(result.status.code(), None, "{result:?}");
+    assert!(!result.status.core_dumped(), "{result:?}");
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("equality child stdout, core=1/1"),
+        "{result:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("equality child stderr"),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn equality_capture_policy_preserves_ordinary_exit_and_stderr() {
+    let scratch = Scratch::new();
+    let result = capture(&mut equality_probe_command("exit", &scratch), &scratch, 5);
+    ordinary_exit(&result, 23);
+    assert!(
+        String::from_utf8_lossy(&result.stdout).contains("equality child stdout, core=1/1"),
+        "{result:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("equality child stderr"),
+        "{result:?}"
+    );
+}
+
+#[test]
+fn equality_capture_timeout_is_failure_and_reaps_child() {
+    let scratch = Scratch::new();
+    let outcome = std::panic::catch_unwind(|| {
+        capture(&mut equality_probe_command("hang", &scratch), &scratch, 1)
+    });
+    let error = outcome.expect_err("a runtime timeout must not become an accepted abort");
+    let text = error
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| error.downcast_ref::<&str>().copied())
+        .unwrap_or("non-string panic");
+    assert!(
+        text.contains("timeout:") && text.contains("cleanup: Ok("),
+        "{text}"
+    );
+    let pid: i32 = fs::read_to_string(scratch.path("probe.pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    let mut status = 0;
+    // SAFETY: this is the exact child PID recorded by the probe, never a group
+    // or wildcard. WNOHANG (1) cannot block; ECHILD proves our guard reaped it.
+    assert_eq!(unsafe { waitpid(pid, &mut status, 1) }, -1);
+    assert_eq!(std::io::Error::last_os_error().raw_os_error(), Some(10));
+}
+
 fn ordinary_exit(result: &Captured, code: i32) {
     assert_eq!(result.status.signal(), None, "{result:?}");
     assert_eq!(result.status.code(), Some(code), "{result:?}");
