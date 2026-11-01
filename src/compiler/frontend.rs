@@ -259,6 +259,58 @@ mod canonical_source_replay_tests {
         }
     }
     #[test]
+    fn authored_receiver_context_keeps_exact_checked_correspondence() {
+        let (_, _, budget, publication) = published(
+            "struct Wrap<T>{value:T}impl<T> Wrap<T>{fn take(self)->T{self.value}}fn wrap<T>(x:T)->Wrap<T>{Wrap{value:x}}fn main(){let x:u8=wrap(7).take();}",
+            1,
+        );
+        let original = publication.original().source_for_test();
+        let mut signatures = original
+            .plan
+            .environment(Some(original.declaration))
+            .unwrap();
+        signatures.facts = Some(publication.facts().clone());
+        let (index, call, _) = original
+            .call_mapping
+            .iter()
+            .find(|(index, _, _)| original.calls[*index].ordinary.is_some())
+            .unwrap();
+        let site = &original.calls[*index];
+        assert!(
+            source_result_context(
+                &original,
+                site,
+                *call,
+                publication.source(),
+                &signatures,
+                &budget,
+            )
+            .unwrap()
+            .is_some()
+        );
+        let (_, parent_id, _) = original
+            .call_mapping
+            .iter()
+            .find(|(index, _, _)| original.calls[*index].ordinary.is_none())
+            .unwrap();
+        let mut forged = publication.source().as_ref().clone();
+        let ir::ExprKind::Call { args, .. } = &mut forged.exprs[parent_id.0].kind else {
+            panic!("expected method call")
+        };
+        args[0] = *parent_id;
+        assert_eq!(
+            kind_error(source_result_context(
+                &original,
+                site,
+                *call,
+                &forged,
+                &signatures,
+                &budget,
+            )),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+    #[test]
     fn replay_nominal_identity_matches_canonical_slot_and_is_metered() {
         let (_, plan, _, _) = published("fn main(){}", 0);
         let declaration = plan.function_decl(0).unwrap();
@@ -7189,18 +7241,21 @@ fn source_result_context(
             return Ok(None);
         };
         validate_original_callee(original_target, target, budget)?;
+        let Some(expected) = authored_source_result_context(
+            original, parent, *parent_id, checked, signatures, budget,
+        )?
+        else {
+            // With no authored parent context there is nothing to transfer.
+            // Its checked receiver may legitimately include an autoref or
+            // temporary, neither of which grants result inference authority.
+            return Ok(None);
+        };
         if args.first() != Some(&call) {
             return Err(FactsError::invalid(
                 budget,
                 "source context receiver correspondence changed",
             ));
         }
-        let Some(expected) = authored_source_result_context(
-            original, parent, *parent_id, checked, signatures, budget,
-        )?
-        else {
-            return Ok(None);
-        };
         let ir::Callee::Direct(original_target) = original_target else {
             return Ok(None);
         };
