@@ -228,8 +228,18 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
     sr::depth(budget, depth)?;
     sr::work(budget, 1)?;
     let children: Vec<&Expr> = match source {
+        Expr::AssociatedCall {
+            type_args, args, ..
+        } if type_args.is_empty() => {
+            source_clone::clone_vector(args, budget).map_err(|e| source_error(budget, &e))?;
+            args.iter().collect()
+        }
         Expr::Var(path) => return Ok(is_local_shaped_path(path)),
         Expr::Borrow { .. } | Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => return Ok(true),
+        Expr::Str(text) => {
+            source_clone::clone_text(text, budget).map_err(|e| source_error(budget, &e))?;
+            return Ok(true);
+        }
         Expr::Tuple(values)
         | Expr::Array(values)
         | Expr::TupleStruct { fields: values, .. }
@@ -455,6 +465,24 @@ pub(super) fn supported(
             }
             Ok(true)
         }
+        Expr::AssociatedCall {
+            type_args, args, ..
+        } if type_args.is_empty() => {
+            for (index, argument) in args.iter().enumerate() {
+                if !supported(
+                    argument,
+                    &node.child(9, index, budget)?,
+                    function,
+                    inventory,
+                    original,
+                    budget,
+                    depth + 1,
+                )? {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        }
         Expr::MethodCall {
             receiver,
             type_args,
@@ -552,7 +580,7 @@ pub(super) fn supported(
             let receiver = node.child(10, 0, budget)?;
             Ok(inventory.operand_nodes.contains_key(&receiver.path))
         }
-        Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) => Ok(true),
+        Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Str(_) => Ok(true),
         _ => Ok(false),
     }
 }
@@ -1307,6 +1335,189 @@ impl Replay<'_> {
         Ok(declared.result.clone())
     }
 
+    /// Closed static inherent calls are producers, not inference binders. Their
+    /// authored owner/member, declaration header and original call receipt must
+    /// all agree before their recursively authenticated arguments are consumed.
+    #[allow(clippy::too_many_arguments)]
+    fn closed_static_result(
+        &self,
+        source: &Expr,
+        node: &sr::SourceNode,
+        id: ir::ExprId,
+        target: &ir::Callee,
+        signature: &ir::Signature,
+        arguments: &[ir::ExprId],
+        depth: usize,
+    ) -> Result<ir::Ty, FactsError> {
+        let Expr::AssociatedCall {
+            owner,
+            name,
+            type_args,
+            args,
+        } = source
+        else {
+            return Err(FactsError::invalid(
+                self.budget,
+                "static producer lost source syntax",
+            ));
+        };
+        let ir::Callee::Direct(direct) = target else {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "static input producer requires direct source declaration",
+            ));
+        };
+        if !type_args.is_empty() || !direct.type_args.is_empty() {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "static input producer requires a closed source header",
+            ));
+        }
+        validate_original_occurrence(self.original, node, self.budget)?;
+        sr::work(self.budget, self.inventory.calls.len())?;
+        let source_index = self
+            .inventory
+            .calls
+            .iter()
+            .position(|site| site.node == *node)
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "static producer source occurrence missing")
+            })?;
+        sr::work(self.budget, self.original.call_mapping.len())?;
+        let (position, (_, expression, original_target)) = self
+            .original
+            .call_mapping
+            .iter()
+            .enumerate()
+            .find(|(_, (index, _, _))| *index == source_index)
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "static producer original receipt missing")
+            })?;
+        if *expression != id {
+            return Err(FactsError::invalid(
+                self.budget,
+                "static producer expression identity changed",
+            ));
+        }
+        validate_original_callee(original_target, target, self.budget)?;
+        let view = self
+            .original
+            .facts
+            .original_callable_schema(tr::OriginalCallableSubject::Direct(direct.declaration))?;
+        view.validate_for(&self.original.facts)?;
+        let info = self
+            .original
+            .plan
+            .registry
+            .declaration(direct.declaration)
+            .map_err(|e| source_error(self.budget, &e))?;
+        let associated = info.path.associated.as_ref().ok_or_else(|| {
+            FactsError::invalid(self.budget, "static producer lacks associated source owner")
+        })?;
+        if info.kind != ir::DeclKind::AssociatedFunction
+            || !matches!(info.receiver, ReceiverKind::None)
+            || associated.trait_decl.is_some()
+            || view.generic_env().total_arity() != 0
+            || !self.original.facts.is_source_callable(direct.declaration)?
+            || contains_source_ref(&view.signature().result, self.budget, depth + 1)?
+        {
+            return Err(FactsError::unsupported(
+                self.budget,
+                "static input producer requires a closed inherent value result",
+            ));
+        }
+        let owner =
+            checked_local_ty(owner, self.signatures).map_err(|e| source_error(self.budget, &e))?;
+        if !self
+            .original
+            .plan
+            .registry
+            .source_member_equal(info.path.item, *name)
+            .map_err(|e| source_error(self.budget, &e))?
+            || !self.equal(&owner, &associated.self_pattern)?
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "static producer changed original source owner or member",
+            ));
+        }
+        let canonical = nominal_call_receipts::original_call_signature(
+            self.original,
+            position,
+            id,
+            target,
+            signature,
+            &self.original.facts,
+            self.budget,
+            &mut tr::TraitScratch::default(),
+        )?;
+        let declared = view.signature();
+        if args.len() != arguments.len()
+            || args.len() != declared.params.len()
+            || args.len() != canonical.params.len()
+            || args.len() != signature.params.len()
+            || !self.equal(&declared.result, &canonical.result)?
+            || declared.ref_contract != canonical.ref_contract
+        {
+            return Err(FactsError::invalid(
+                self.budget,
+                "static producer declaration signature changed",
+            ));
+        }
+        sr::work(self.budget, self.checked.call_evidence.len())?;
+        let evidence = self
+            .checked
+            .call_evidence
+            .iter()
+            .find(|row| row.call == id)
+            .ok_or_else(|| {
+                FactsError::invalid(self.budget, "static producer argument trace missing")
+            })?;
+        if evidence.arguments.len() != arguments.len() || !evidence.type_actual_regions.is_empty() {
+            return Err(FactsError::invalid(
+                self.budget,
+                "static producer changed closed argument evidence",
+            ));
+        }
+        for (index, (source, argument)) in args.iter().zip(arguments).enumerate() {
+            let parameter = &declared.params[index];
+            let expectation = match parameter {
+                ir::Ty::Ref { kind, .. } => ir::CallExpectation::FirmReference { kind: *kind },
+                _ => ir::CallExpectation::NoFirmReference,
+            };
+            let input = self.argument(
+                source,
+                &node.child(9, index, self.budget)?,
+                *argument,
+                id,
+                index,
+                expectation,
+                Some(parameter),
+                depth + 1,
+            )?;
+            let row = &evidence.arguments[index];
+            if !self.equal(&input, parameter)?
+                || !self.equal(parameter, &canonical.params[index])?
+                || !self.equal(parameter, &signature.params[index])?
+                || row.argument != index
+                || row.value != *argument
+                || row.expectation != expectation
+            {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "static producer changed original argument or parameter",
+                ));
+            }
+        }
+        ir::validate_callee(
+            target,
+            signature,
+            ir::FactsCtx::Validated(&self.original.facts),
+        )
+        .map_err(|e| source_error(self.budget, &e))?;
+        Ok(declared.result.clone())
+    }
+
     /// The result is the builtin's fixed usize, never a checked inference seed.
     /// This deliberately supports only an unadjusted shared descriptor local.
     /// Other len receiver shapes stay on their existing canonical proof path.
@@ -1606,6 +1817,15 @@ impl Replay<'_> {
                 }
             }
             (
+                source @ Expr::AssociatedCall { .. },
+                ir::ExprKind::Call {
+                    target,
+                    signature,
+                    args,
+                    ..
+                },
+            ) => self.closed_static_result(source, node, id, target, signature, args, depth)?,
+            (
                 Expr::MethodCall {
                     receiver,
                     type_args,
@@ -1694,6 +1914,19 @@ impl Replay<'_> {
                     return Err(FactsError::invalid(self.budget, "input integer changed"));
                 }
                 ir::Ty::Int(resolved.ty)
+            }
+            (Expr::Str(source), ir::ExprKind::Str(value)) => {
+                // Static string syntax fixes both the descriptor type and its
+                // bytes. In particular, a checked call result or inferred
+                // nominal field cannot supply this recursive inference leaf.
+                sr::work(self.budget, source.len().max(value.len()))?;
+                if source != value {
+                    return Err(FactsError::invalid(
+                        self.budget,
+                        "input string changed original source bytes",
+                    ));
+                }
+                self.reference(ir::BorrowKind::Shared, ir::Ty::Str)?
             }
             (Expr::Bool(a), ir::ExprKind::Bool(b)) if a == b => ir::Ty::Bool,
             (Expr::Char(a), ir::ExprKind::Char(b)) if u32::from(*a) == b.value => ir::Ty::Char,

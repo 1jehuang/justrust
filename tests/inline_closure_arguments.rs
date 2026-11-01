@@ -27,6 +27,16 @@ fn closure_shared_argument_results_match_stock() {
                 expect: Expect::Invalid("E0515"),
             },
             Case {
+                name: "string_constructor_leaf_does_not_make_owned_field_static",
+                source: "struct Item{name:String}fn main(){let names:Vec<&str>;{let item=Item{name:String::from(\"apple\")};let items=vec![&item];names=items.iter().map(|i|i.name.as_str()).collect();}println!(\"{}\",names[0]);}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "unused_static_string_constructor_keeps_declared_input_type",
+                source: "struct Item{name:String}fn unused(){let item=Item{name:String::from(7i32)};let items=vec![&item];let names:Vec<&str>=items.iter().map(|i|i.name.as_str()).collect();}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
                 name: "argument_origin_cannot_be_replaced_with_local_temporary",
                 source: "struct Item{name:String}fn main(){let item=Item{name:String::from(\"apple\")};let items=vec![&item];let names:Vec<&str>=items.iter().map(|i|{let local=String::from(\"pear\");local.as_str()}).collect();println!(\"{}\",names[0]);}",
                 expect: Expect::Invalid("E0515"),

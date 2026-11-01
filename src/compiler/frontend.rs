@@ -415,6 +415,108 @@ mod canonical_source_replay_tests {
         }
     }
     #[test]
+    fn recursive_string_producers_reject_forged_leaf_evidence() {
+        for source in [
+            "struct Item{value:i32}fn make(s:&str)->Item{Item{value:1i32}}fn first<T>(x:T,n:usize)->T{x}fn main(){let a=make(\"apple\");first(&a,2usize);}",
+            "struct Item{value:i32}fn make(s:&str)->Item{Item{value:1i32}}fn first<T>(x:T,n:usize)->T{x}fn main(){{let a=(make(\"apple\"),make(\"pear\"));first(&a,2usize);}}",
+            "struct Item{value:i32}impl Item{fn make(s:&str)->Item{Item{value:1i32}}}fn first<T>(x:T,n:usize)->T{x}fn main(){let a=Item::make(\"apple\");first(&a,2usize);}",
+            "struct Item{value:i32}impl Item{fn make(s:&str)->Item{Item{value:1i32}}}fn first<T>(x:T,n:usize)->T{x}fn main(){{let a=(Item::make(\"apple\"),Item::make(\"pear\"));first(&a,2usize);}}",
+        ] {
+            let main = fixture_program(source).functions.len() - 1;
+            let (_, _, budget, publication) = published(source, main);
+            let original = publication.original().source_for_test();
+            replay_source_body(
+                &original,
+                publication.source(),
+                publication.facts(),
+                &budget,
+            )
+            .unwrap();
+            for mode in 0..4 {
+                let mut forged = publication.source().as_ref().clone();
+                let leaf = forged
+                    .exprs
+                    .iter_mut()
+                    .find(|value| matches!(value.kind, ir::ExprKind::Str(_)))
+                    .unwrap();
+                match mode {
+                    0 => leaf.kind = ir::ExprKind::Str("forged".into()),
+                    1 => leaf.ty = ir::Ty::Bool,
+                    2 => leaf.kind = ir::ExprKind::Bool(true),
+                    _ => leaf.completion = ir::Completion::Never,
+                }
+                assert_eq!(
+                    kind_error(replay_source_body(
+                        &original,
+                        &Arc::new(forged),
+                        publication.facts(),
+                        &budget,
+                    )),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "recursive string source forgery {mode}: {source}"
+                );
+            }
+        }
+    }
+    #[test]
+    fn closed_static_producers_reject_forged_call_evidence() {
+        let source = "struct Item{value:i32}impl Item{fn make(s:&str)->Item{Item{value:1i32}}}fn first<T>(x:T,n:usize)->T{x}fn main(){let a=Item::make(\"apple\");first(&a,2usize);}";
+        let (_, _, budget, publication) = published(source, 1);
+        let original = publication.original().source_for_test();
+        let call = publication
+            .source()
+            .exprs
+            .iter()
+            .position(|value| {
+                matches!(&value.kind,
+            ir::ExprKind::Call { target: ir::Callee::Direct(target), args, .. }
+                if target.type_args.is_empty() && args.len() == 1)
+            })
+            .unwrap();
+        for mode in 0..5 {
+            let mut forged = publication.source().as_ref().clone();
+            let ir::ExprKind::Call {
+                target: ir::Callee::Direct(target),
+                signature,
+                args,
+                ..
+            } = &mut forged.exprs[call].kind
+            else {
+                unreachable!()
+            };
+            match mode {
+                0 => target.type_args = Arc::from([ir::Ty::Bool]),
+                1 => signature.result = ir::Ty::Bool,
+                2 => args[0] = ir::ExprId(usize::MAX),
+                3 => {
+                    let evidence = Arc::make_mut(&mut forged.call_evidence)
+                        .iter_mut()
+                        .find(|row| row.call == ir::ExprId(call))
+                        .unwrap();
+                    Arc::make_mut(&mut evidence.arguments)[0].expectation =
+                        ir::CallExpectation::NoFirmReference;
+                }
+                _ => {
+                    let evidence = Arc::make_mut(&mut forged.call_evidence)
+                        .iter_mut()
+                        .find(|row| row.call == ir::ExprId(call))
+                        .unwrap();
+                    Arc::make_mut(&mut evidence.arguments)[0].value = ir::ExprId(usize::MAX);
+                }
+            }
+            assert_eq!(
+                kind_error(replay_source_body(
+                    &original,
+                    &Arc::new(forged),
+                    publication.facts(),
+                    &budget
+                )),
+                tr::FactsErrorKind::InvalidMetadata,
+                "closed static producer forgery {mode}"
+            );
+        }
+    }
+    #[test]
     fn source_array_constraints_reject_conflicts_and_forged_values() {
         for elements in ["3u8,4u16", "3u16,4u8"] {
             let source = format!(
