@@ -17,6 +17,31 @@ const COMMIT: &str = "commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985";
 const HOST: &str = "host: x86_64-unknown-linux-gnu";
 const LLVM: &str = "LLVM version: 22.1.8";
 
+pub fn verify_version_output(success: bool, text: &str) -> Result<(), String> {
+    let lines: Vec<&str> = text.lines().map(str::trim).collect();
+    match [RELEASE, COMMIT, HOST, LLVM]
+        .into_iter()
+        .find(|required| !(success && lines.contains(required)))
+    {
+        None => Ok(()),
+        Some(required) => Err(format!(
+            "not the pinned rustc ({required} missing):\n{text}"
+        )),
+    }
+}
+
+pub fn verify_compiler(path: &std::path::Path) -> Result<(), String> {
+    let output = Command::new(path)
+        .env_remove("RUSTC_BOOTSTRAP")
+        .arg("-vV")
+        .output()
+        .map_err(|error| format!("{}: {error}", path.display()))?;
+    verify_version_output(
+        output.status.success(),
+        &String::from_utf8_lossy(&output.stdout),
+    )
+}
+
 pub fn stock_rustc() -> String {
     static VERIFIED: OnceLock<String> = OnceLock::new();
     VERIFIED
@@ -52,15 +77,9 @@ pub fn stock_rustc() -> String {
                     }
                 };
                 let text = String::from_utf8_lossy(&output.stdout);
-                let lines: Vec<&str> = text.lines().map(str::trim).collect();
-                match [RELEASE, COMMIT, HOST, LLVM]
-                    .into_iter()
-                    .find(|required| !(output.status.success() && lines.contains(required)))
-                {
-                    None => return path,
-                    Some(required) => rejected.push(format!(
-                        "{path} is not the pinned rustc ({required} missing):\n{text}"
-                    )),
+                match verify_version_output(output.status.success(), &text) {
+                    Ok(()) => return path,
+                    Err(error) => rejected.push(format!("{path} {error}")),
                 }
             }
             panic!(

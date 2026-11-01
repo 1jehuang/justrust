@@ -6,8 +6,7 @@
 #[allow(dead_code)] // This target uses the pinned-compiler entry point only.
 #[path = "support/closure_oracle.rs"]
 mod pointer_coercion_oracle;
-#[path = "support/stock_rustc.rs"]
-mod pointer_coercion_stock;
+use pointer_coercion_oracle::pinned_stock as pointer_coercion_stock;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;

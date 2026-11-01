@@ -8,8 +8,7 @@ use oracle::{Case, Expect};
 #[allow(dead_code)]
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
-#[path = "support/stock_rustc.rs"]
-mod stock_rustc;
+use closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
 fn scalar_cell_shared_storage_effects_match_stock() {

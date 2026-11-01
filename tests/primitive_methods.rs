@@ -2,8 +2,7 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/oracle.rs"]
 mod oracle;
-#[path = "support/stock_rustc.rs"]
-mod stock_rustc;
+use closure_oracle::pinned_stock as stock_rustc;
 use oracle::{Case, Expect};
 
 #[allow(dead_code)]

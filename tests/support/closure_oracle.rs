@@ -6,6 +6,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[path = "stock_rustc.rs"]
+pub mod pinned_stock;
+
 #[derive(Clone, Copy, Debug)]
 #[allow(dead_code)] // Individual test targets may exercise only one outcome.
 pub enum Expect {
@@ -26,13 +29,15 @@ impl Drop for Scratch {
 }
 
 pub fn check(tag: &str, cases: &[Case]) {
-    let compiler = std::env::var_os("JUSTRUST_REAL_RUSTC")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("rustc"));
+    // The hosted bootstrap compiler is not the language oracle. Only the
+    // independently pinned stock lookup (JR_STOCK_RUSTC) selects this binary.
+    let compiler = PathBuf::from(pinned_stock::stock_rustc());
     check_with_compiler(tag, cases, &compiler);
 }
 
 pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
+    pinned_stock::verify_compiler(compiler)
+        .unwrap_or_else(|error| panic!("{tag}: differential oracle identity: {error}"));
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
