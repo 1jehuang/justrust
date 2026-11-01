@@ -3,6 +3,82 @@ use super::*;
 use crate::compiler::frontend;
 
 #[test]
+fn declared_struct_slice_fields_keep_original_carrier_and_region_authority() {
+    let program = frontend::parse(
+        "struct Item<'a>{value:&'a i32,tag:i32}fn inspect<'a>(values:&[Item<'a>]){}fn main(){}",
+    )
+    .unwrap();
+    let budget = PlanBudget::default();
+    let plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+    let declaration = plan.function_decl(0).unwrap();
+    let frontend::PublishedCallableBody::Source(publication) =
+        plan.publish_callable_body(declaration, &budget).unwrap()
+    else {
+        panic!("source body")
+    };
+    let function = publication.source();
+    let facts = publication.facts();
+    let descriptor = &function.locals[function.params[0].0].ty;
+    let element = descriptor.shared_slice_element().unwrap();
+    validate_shared_slice_element(element, FactsCtx::from_validated(facts), &budget).unwrap();
+    let component = CarrierLocation {
+        path: CarrierPath(Arc::from([
+            CarrierStep::Referent,
+            CarrierStep::SliceElement,
+            CarrierStep::Field(0),
+        ])),
+        channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+    };
+    let locations = carrier_locations(descriptor, &budget).unwrap();
+    assert_eq!(locations.len(), 2);
+    assert!(locations.contains(&component));
+    assert_eq!(
+        carrier_at(descriptor, &component, &budget).unwrap(),
+        shared(Ty::Int(IntTy::I32))
+    );
+    let regions = facts.source_region_env(declaration).unwrap();
+    let rows = regions
+        .carriers
+        .iter()
+        .filter(|row| row.parameter == Some(0) && row.location == component)
+        .collect::<Vec<_>>();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].region,
+        CarrierRegionTerm::Named(SourceRegionId {
+            declaration,
+            index: 0,
+        })
+    );
+    let forged_paths: [Arc<[CarrierStep]>; 2] = [
+        Arc::from([
+            CarrierStep::Referent,
+            CarrierStep::SliceElement,
+            CarrierStep::Field(1),
+        ]),
+        Arc::from([CarrierStep::Referent, CarrierStep::Field(0)]),
+    ];
+    for path in forged_paths {
+        let mut forged = component.clone();
+        forged.path = CarrierPath(path);
+        assert!(carrier_at(descriptor, &forged, &budget).is_err());
+    }
+    let mut forged = component;
+    forged.channel = CarrierChannel::Fixed(ReferencePosition { depth: 1 });
+    assert!(carrier_at(descriptor, &forged, &budget).is_err());
+    let mut forged = function.as_ref().clone();
+    forged.locals[function.params[0].0].ty = shared(Ty::Slice {
+        element: Arc::new(shared(Ty::Int(IntTy::I32))),
+    });
+    assert!(
+        publication
+            .validate_source(&Arc::new(forged), facts, facts.budget())
+            .is_err()
+    );
+    assert!(!budget.has_resource_failure());
+}
+
+#[test]
 fn generic_slice_family_keeps_exact_path_and_bounded_substitution() {
     let program = frontend::parse("fn read<T:Copy>(s:&[T])->T{s[0]}fn main(){}").unwrap();
     let budget = PlanBudget::default();
@@ -293,6 +369,65 @@ fn typed_shapes_preserve_exact_element_and_byte_only_helpers() {
         }),
     };
     assert!(mutable.shared_slice_element().is_none());
+}
+
+#[test]
+fn nested_mutable_slice_observers_keep_exact_carrier_depth_and_affine_exclusions() {
+    let budget = PlanBudget::default();
+    let mutable_slice = |element| Ty::Ref {
+        kind: BorrowKind::Mut,
+        referent: Arc::new(Ty::Slice {
+            element: Arc::new(element),
+        }),
+    };
+    let leaf = shared(Ty::Str);
+    let descriptor = mutable_slice(leaf.clone());
+    let observer = shared(descriptor.clone());
+    assert!(validate_slice_carrier_with_facts(&observer, FactsCtx::Concrete).is_err());
+    let locations = carrier_locations(&observer, &budget).unwrap();
+    assert_eq!(locations.len(), 3);
+    let element = CarrierLocation {
+        path: CarrierPath(Arc::from([
+            CarrierStep::Referent,
+            CarrierStep::Referent,
+            CarrierStep::SliceElement,
+        ])),
+        channel: CarrierChannel::Fixed(ReferencePosition { depth: 0 }),
+    };
+    assert!(locations.contains(&element));
+    assert_eq!(carrier_at(&observer, &element, &budget).unwrap(), leaf);
+    let mut forged = element.clone();
+    forged.path = CarrierPath(Arc::from([
+        CarrierStep::Referent,
+        CarrierStep::SliceElement,
+    ]));
+    assert!(carrier_at(&observer, &forged, &budget).is_err());
+    forged = element;
+    forged.channel = CarrierChannel::Fixed(ReferencePosition { depth: 1 });
+    assert!(carrier_at(&observer, &forged, &budget).is_err());
+    for excluded in [
+        Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(descriptor.clone()),
+        },
+        shared(observer.clone()),
+        Ty::Tuple(Arc::from([observer.clone()])),
+        Ty::Array {
+            element: Arc::new(observer),
+            len: 1,
+        },
+        shared(mutable_slice(Ty::Ref {
+            kind: BorrowKind::Mut,
+            referent: Arc::new(Ty::Bool),
+        })),
+        shared(mutable_slice(shared(shared(Ty::Bool)))),
+        shared(mutable_slice(Ty::Tuple(Arc::from([shared(Ty::Bool)])))),
+        shared(mutable_slice(shared(Ty::Slice {
+            element: Arc::new(Ty::Bool),
+        }))),
+    ] {
+        assert!(validate_slice_carrier_with_facts(&excluded, FactsCtx::Concrete).is_err());
+    }
 }
 
 #[test]

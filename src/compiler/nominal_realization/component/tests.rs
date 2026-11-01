@@ -635,19 +635,84 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
             ])),
             channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
         };
-        for kind in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+        for (kind, slot_writable) in [(ir::BorrowKind::Shared, false), (ir::BorrowKind::Mut, true)]
+        {
             let owner = ir::Ty::Ref {
                 kind,
                 referent: Arc::new(root.clone()),
             };
-            assert!(
-                !facts
+            // Fixed0 stops at the stored &str slot. Exclusive access to the
+            // graph-issued Vec permits replacement, not a write through &str.
+            assert_eq!(
+                ir::carrier_at(&owner, &summary, facts.budget()).unwrap(),
+                leaf,
+            );
+            assert_eq!(
+                facts
                     .world()
                     .carrier_writable_for_tests(&owner, &summary)
                     .unwrap(),
-                "shared heap element summary grants no write even through {kind:?} owner"
+                slot_writable,
+                "slot replacement follows the original {kind:?} owner"
+            );
+            let mut shared_pointee = summary.clone();
+            shared_pointee.channel = ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 1 });
+            assert!(
+                ir::carrier_at(&owner, &shared_pointee, facts.budget()).is_err(),
+                "the str pointee is not the original stored reference carrier"
+            );
+            assert!(
+                !facts
+                    .world()
+                    .carrier_writable_for_tests(&owner, &shared_pointee)
+                    .unwrap(),
+                "a shared element never grants pointee writes through {kind:?} owner"
+            );
+            let explicit_pointee = ir::CarrierLocation {
+                path: ir::CarrierPath(Arc::from([
+                    ir::CarrierStep::Referent,
+                    ir::CarrierStep::SliceElement,
+                    ir::CarrierStep::Referent,
+                ])),
+                channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+            };
+            assert!(
+                !facts
+                    .world()
+                    .carrier_writable_for_tests(&owner, &explicit_pointee)
+                    .unwrap(),
+                "an explicit shared-element dereference also clears pointee permission"
+            );
+            assert!(
+                facts
+                    .world()
+                    .carrier_writable_for_tests(&owner, &location)
+                    .is_err(),
+                "a slot lens cannot omit the original owner dereference"
             );
         }
+        let shared_barrier = ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(ir::Ty::Ref {
+                kind: ir::BorrowKind::Shared,
+                referent: Arc::new(root.clone()),
+            }),
+        };
+        let nested_slot = ir::CarrierLocation {
+            path: ir::CarrierPath(Arc::from([
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::Referent,
+                ir::CarrierStep::SliceElement,
+            ])),
+            channel: ir::CarrierChannel::Fixed(ir::ReferencePosition { depth: 0 }),
+        };
+        assert!(
+            !facts
+                .world()
+                .carrier_writable_for_tests(&shared_barrier, &nested_slot)
+                .unwrap(),
+            "a mutable outer reference cannot bypass a shared owner"
+        );
         let mutable_leaf = ir::Ty::Ref {
             kind: ir::BorrowKind::Mut,
             referent: Arc::new(ir::Ty::Int(ir::IntTy::I32)),
@@ -683,6 +748,17 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
         assert!(
             unread.owned_sequence_element().is_none(),
             "closed actuals require an issued graph read"
+        );
+        let unread_owner = ir::Ty::Ref {
+            kind: ir::BorrowKind::Mut,
+            referent: Arc::new(unread),
+        };
+        assert!(
+            facts
+                .world()
+                .carrier_writable_for_tests(&unread_owner, &summary)
+                .is_err(),
+            "exclusive syntax cannot replace the missing original graph-issued heap authority"
         );
         let original = plan
             .nominal_realization_template(nominal.def().source_decl)
@@ -761,12 +837,31 @@ fn native_heap_carrier_coordinate_uses_exact_nominal_read() {
                     kind: ir::BorrowKind::Mut,
                     referent: Arc::new(owner),
                 };
+                assert_eq!(
+                    ir::carrier_at(&receiver, &row.storage.location, callable.budget()).unwrap(),
+                    ir::Ty::Param(parameter),
+                    "the writable family is the exact declaration-owned stored value"
+                );
                 assert!(
-                    !callable
+                    callable
                         .world()
                         .carrier_writable_for_tests(&receiver, &row.storage.location)
                         .unwrap(),
-                    "lifetime relation never grants shared-summary writes"
+                    "original mutable ownership grants only a deferred slot envelope, rechecked after substitution"
+                );
+                let ir::Ty::Ref { referent, .. } = receiver else {
+                    unreachable!()
+                };
+                let shared_receiver = ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    referent,
+                };
+                assert!(
+                    !callable
+                        .world()
+                        .carrier_writable_for_tests(&shared_receiver, &row.storage.location)
+                        .unwrap(),
+                    "the identical lifetime relation cannot grant a write through shared ownership"
                 );
             }
         }

@@ -1,6 +1,182 @@
 use super::*;
 use crate::compiler::{source, traits as tr};
 
+#[test]
+fn native_singleton_element_roles_require_original_recipes_and_issuer() {
+    let plan = genuine_plan();
+    let seed = declaration(&plan, "__jr_vec_seed");
+    let _source = native_sequence::issue_element(&plan.registry, seed, &plan.budget)
+        .unwrap()
+        .expect("original single-element seed recipe");
+    for expected in ["index_mut", "index", "get_ref"] {
+        let mut issued = 0;
+        for id in &plan.registry.function_ids {
+            let Some(function) = plan.registry.source_callable(*id) else {
+                continue;
+            };
+            let Some(name) = function.name.segments().last() else {
+                continue;
+            };
+            if plan.program.names.spelling(*name).unwrap() == expected
+                && native_sequence::issue_element(&plan.registry, *id, &plan.budget)
+                    .unwrap()
+                    .is_some()
+            {
+                issued += 1;
+            }
+        }
+        assert_eq!(issued, 1, "exact native {expected} role");
+    }
+    let seed_function = &plan.program.functions[named(&plan.program, "__jr_vec_seed")];
+    let Stmt::Let {
+        value:
+            Expr::AssociatedCall {
+                owner: Type::Apply(owner),
+                ..
+            },
+        ..
+    } = &seed_function.body.statements[0]
+    else {
+        panic!("original resolved seed constructor")
+    };
+    assert!(matches!(owner.application().unwrap().1, [Type::Infer]));
+    let owner = plan.registry.nominals[&name_scope::path_key(
+        plan.program.names.as_ref(),
+        &owner.path(plan.program.names.as_ref()).unwrap(),
+        Namespace::Type,
+    )
+    .unwrap()];
+    let position = |name: &str| {
+        let declaration = plan.registry.inherent_peers[&owner]
+            .iter()
+            .find(|id| {
+                plan.registry
+                    .source_callable(**id)
+                    .unwrap()
+                    .name
+                    .segments()
+                    .last()
+                    .is_some_and(|member| plan.program.names.spelling(*member).unwrap() == name)
+            })
+            .copied()
+            .unwrap();
+        let CallableSource::Associated {
+            implementation,
+            item,
+        } = plan.registry.callable_sources[plan.registry.function_position(declaration).unwrap()]
+        else {
+            panic!("original associated source")
+        };
+        (implementation, item)
+    };
+    let constructor_position = position("with_capacity");
+    let append_position = position("push");
+    let reserve_position = position("reserve");
+    let length =
+        plan.program.structs[plan.registry.declaration(owner).unwrap().source_index].fields[1].name;
+    for mutation in 0..8 {
+        let mut program = plan.program.as_ref().clone();
+        match mutation {
+            0 => program.embedded_issuers = Arc::from([]),
+            1 => {
+                program.functions[named(&plan.program, "__jr_vec_seed")]
+                    .body
+                    .tail = Some(Box::new(Expr::Integer(IntegerLiteral {
+                    magnitude: 0,
+                    suffix: Some(ir::IntTy::Usize),
+                })))
+            }
+            2 => program.functions[named(&plan.program, "__jr_vec_seed")].result = Type::Bool,
+            3 => {
+                let function = &mut program.impls[constructor_position.0].items
+                    [constructor_position.1]
+                    .function;
+                let Stmt::Let {
+                    value: Expr::Struct { fields, .. },
+                    ..
+                } = &mut function.body.statements[0]
+                else {
+                    panic!("original zero initialization")
+                };
+                fields[1].1 = Expr::Integer(IntegerLiteral {
+                    magnitude: 1,
+                    suffix: Some(ir::IntTy::Usize),
+                });
+            }
+            4 => {
+                let function =
+                    &mut program.impls[append_position.0].items[append_position.1].function;
+                let Stmt::ImplicitExpr(Expr::Unsafe(block)) = &mut function.body.statements[2]
+                else {
+                    panic!("original initialized element store")
+                };
+                let Stmt::AssignPlace { value, .. } = &mut block.statements[0] else {
+                    panic!("original first value")
+                };
+                *value = Expr::Integer(IntegerLiteral {
+                    magnitude: 0,
+                    suffix: Some(ir::IntTy::Usize),
+                });
+            }
+            5 => {
+                let function =
+                    &mut program.impls[reserve_position.0].items[reserve_position.1].function;
+                let mut altered = function.body.statements.last().unwrap().clone();
+                let Stmt::AssignPlace { place, .. } = &mut altered else {
+                    panic!("original capacity store")
+                };
+                let FieldName::Named(length) = length else {
+                    panic!("original length field")
+                };
+                place.fields = vec![FieldSelector::Named(length)];
+                function.body.statements.push(altered);
+            }
+            6 => {
+                let function =
+                    &mut program.impls[append_position.0].items[append_position.1].function;
+                let Stmt::AssignOp { value, .. } = &mut function.body.statements[3] else {
+                    panic!("original increment")
+                };
+                *value = Expr::Integer(IntegerLiteral {
+                    magnitude: 2,
+                    suffix: Some(ir::IntTy::Usize),
+                });
+            }
+            7 => {
+                let function = &mut program.functions[named(&plan.program, "__jr_vec_seed")];
+                let Stmt::Let {
+                    value:
+                        Expr::AssociatedCall {
+                            owner: Type::Apply(owner),
+                            ..
+                        },
+                    ..
+                } = &mut function.body.statements[0]
+                else {
+                    panic!("original inferred constructor owner")
+                };
+                owner.segments.last_mut().unwrap().args[0] = Type::Bool;
+            }
+            _ => unreachable!(),
+        }
+        let mut registry = plan.registry.empty_like();
+        registry.declarations = plan.registry.declarations.clone();
+        registry.slots = plan.registry.slots.clone();
+        registry.functions = plan.registry.functions.clone();
+        registry.nominals = plan.registry.nominals.clone();
+        registry.function_ids = plan.registry.function_ids.clone();
+        registry.callable_sources = plan.registry.callable_sources.clone();
+        registry.inherent_peers = plan.registry.inherent_peers.clone();
+        registry.program = Arc::new(program);
+        assert!(
+            native_sequence::issue_element(&registry, seed, &plan.budget)
+                .unwrap()
+                .is_none(),
+            "forged seed mutation={mutation}"
+        );
+    }
+}
+
 fn genuine_plan() -> PlanCtx {
     let options = source::SourceOptions::default();
     let budget = crate::compiler::expansion_budget::ExpansionBudget::default();
@@ -300,6 +476,17 @@ fn packed_query_authority_alternate_schema_default_denies() {
     );
     assert!(
         tr::SchemaCx::native_sequence_slot(&DenyPacked(&adapter), slot)
+            .unwrap()
+            .is_none()
+    );
+    let seed = declaration(&plan, "__jr_vec_seed");
+    assert!(
+        tr::SchemaCx::native_sequence_element(&adapter, seed)
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        tr::SchemaCx::native_sequence_element(&DenyPacked(&adapter), seed)
             .unwrap()
             .is_none()
     );

@@ -8011,23 +8011,16 @@ fn slice_boundary_walk_inner(
                 pending.push(Frame::Finish(key, at, 0), budget)?;
                 let next = at.checked_add(1).ok_or("slice type depth overflow")?;
                 let mut count = 0usize;
-                let mut child = |ty: &Ty| -> Result<(), String> {
+                let mut child = |ty: &Ty, shared_components: bool| -> Result<(), String> {
                     charge(budget, work)?;
                     count = count.checked_add(1).ok_or("slice DAG edge overflow")?;
-                    pending.push(
-                        Frame::Enter(
-                            ty.clone(),
-                            next,
-                            tuple_components && matches!(node, Ty::Tuple(_)),
-                        ),
-                        budget,
-                    )
+                    pending.push(Frame::Enter(ty.clone(), next, shared_components), budget)
                 };
                 match node {
                     Ty::Ref { referent, .. }
                     | Ty::Array {
                         element: referent, ..
-                    } => child(referent)?,
+                    } => child(referent, false)?,
                     Ty::AssociatedType(_) => {
                         return Err(
                             "unsupported: residual associated type projection in carrier".into(),
@@ -8035,24 +8028,27 @@ fn slice_boundary_walk_inner(
                     }
                     Ty::Tuple(fields) => {
                         for field in fields.iter() {
-                            child(field)?;
+                            child(field, tuple_components)?;
                         }
                     }
                     Ty::Struct(value) => {
                         for argument in value.def().type_args.iter() {
-                            child(argument)?;
+                            // Actuals do not acquire permission from their
+                            // substituted shape. Only declared physical fields
+                            // retain the bounded shared-leaf carrier policy.
+                            child(argument, false)?;
                         }
                         for field in value.def().fields.read_optional(budget)?.iter() {
-                            child(&field.ty)?;
+                            child(&field.ty, tuple_components)?;
                         }
                     }
                     Ty::Enum(value) => {
                         for argument in value.def().type_args.iter() {
-                            child(argument)?;
+                            child(argument, false)?;
                         }
                         for variant in value.def().variants.iter() {
                             for field in variant.fields.read_optional(budget)?.iter() {
-                                child(&field.ty)?;
+                                child(&field.ty, false)?;
                             }
                         }
                     }
@@ -8068,10 +8064,11 @@ fn slice_boundary_walk_inner(
     Ok(heights.values[0])
 }
 
-/// Expand a shared slice element through ordered tuple components only. Each
+/// Expand a shared slice element through ordered tuple and struct fields. Each
 /// shared leaf still uses the reference-free boundary validator for its referent.
 /// This mirrors SliceElement/Field carrier expansion without accepting mutable
-/// references, nested reference leaves, or reference-bearing nominal storage.
+/// references, nested reference leaves, enum payloads or substituted reference
+/// arguments. Recursive nominal components retain their separate finite policy.
 fn shared_slice_tuple_walk(
     element: &Ty,
     allow_universal_projections: bool,
@@ -8115,9 +8112,10 @@ fn validate_shared_slice_element_inner(
 }
 
 /// Validate exact element metadata and Sized obligations. Admit reference-free
-/// values, shared references to reference-free values (including str), or tuples
-/// of those elements. Nested reference leaves and reference-bearing nominal
-/// aggregates remain unsupported. Tuple loans retain SliceElement/Field paths.
+/// values, shared references to reference-free values (including str), or tuple
+/// and struct fields of those elements. Nested reference leaves, enum payloads
+/// and substituted reference arguments remain unsupported. Physical loans retain
+/// the original SliceElement/Field paths and declaration-owned source regions.
 /// Re-run after every concrete substitution.
 pub fn validate_shared_slice_element(
     element: &Ty,

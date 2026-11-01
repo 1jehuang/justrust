@@ -659,6 +659,26 @@ pub trait NominalValidationSession: Send {
 }
 
 pub trait SchemaCx {
+    /// Default deny. Only original zero constructor/delegate source can issue absence of element provenance.
+    fn native_sequence_empty(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeEmptySource>>> {
+        let _ = declaration;
+        self.budget()
+            .charge_work(1)
+            .map_err(|message| FactsError::from_message(self.budget(), &message))?;
+        Ok(None)
+    }
+    /// An indexed element role is issued only over canonical embedded source.
+    fn native_sequence_element(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeElementSource>>> {
+        let _ = declaration;
+        charged(self.budget(), self.budget().charge_work(1))?;
+        Ok(None)
+    }
     fn nominal_validation_session(&self) -> Result<Option<Box<dyn NominalValidationSession>>> {
         Ok(None)
     }
@@ -1041,6 +1061,28 @@ impl OriginalCallableView {
     }
 }
 impl ValidatedFacts {
+    pub(in crate::compiler) fn native_sequence_empty(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeEmptySource>>> {
+        self.world.check_original_context(self)?;
+        if self.phase() == FactsPhase::Schema {
+            return Ok(None);
+        }
+        self.world.schema.native_sequence_empty(declaration)
+    }
+
+    pub(in crate::compiler) fn native_sequence_element(
+        &self,
+        declaration: DeclId,
+    ) -> Result<Option<Arc<super::frontend::NativeElementSource>>> {
+        self.world.check_original_context(self)?;
+        if self.phase() == FactsPhase::Schema {
+            return Ok(None);
+        }
+        self.world.schema.native_sequence_element(declaration)
+    }
+
     pub(in crate::compiler) fn native_sequence_swap(
         &self,
         declaration: DeclId,
@@ -7343,9 +7385,9 @@ impl ValidatedTraitWorld {
                     element.as_ref().clone()
                 }
                 (ir::CarrierStep::SliceElement, _) if ty.owned_sequence_element().is_some() => {
-                    // A heap summary, like a slice summary, never grants write
-                    // authority to its potentially shared element family.
-                    all_mutable = false;
+                    // The authenticated owned sequence preserves enclosing access,
+                    // just like an array or slice. A shared referent anywhere on
+                    // the path still clears authority, including inside elements.
                     ty.owned_sequence_element().unwrap().clone()
                 }
                 (ir::CarrierStep::SliceElement, Ty::Slice { element }) => {

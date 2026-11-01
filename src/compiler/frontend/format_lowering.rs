@@ -226,6 +226,20 @@ impl Checker<'_> {
             } else {
                 self.expr_expected(argument, None)?
             };
+            // Borrow the original mutable slice place through its descriptor,
+            // rather than creating &&mut [T] and subsequently moving the inner
+            // affine reference while peeling formatting reference layers.
+            let shared_slice_operand = if matches!(
+                self.exprs[id.0].ty.mut_slice_element(),
+                Some(ir::Ty::Ref {
+                    kind: ir::BorrowKind::Shared,
+                    ..
+                })
+            ) {
+                self.shared_slice_view(argument)?
+            } else {
+                None
+            };
             // `{}` of a `&mut T` scalar prints the referent, exactly like `&T`:
             // read through the mutable reference instead of coercing it.
             let mut_scalar_referent = match &self.exprs[id.0].ty {
@@ -312,7 +326,9 @@ impl Checker<'_> {
                     None
                 }
             });
-            let operand = if mut_scalar_referent.is_some() {
+            let operand = if let Some(reference) = shared_slice_operand {
+                reference
+            } else if mut_scalar_referent.is_some() {
                 // The scalar was already read through the `&mut`.
                 id
             } else if let Some(reference) = indexed_reference {

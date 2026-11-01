@@ -332,7 +332,10 @@ impl Collector<'_> {
                     (Type::Slice(field), ir::Ty::Slice { element })
                         if matches!(
                             element.as_ref(),
-                            ir::Ty::Ref { .. } | ir::Ty::Param(_) | ir::Ty::Tuple(_)
+                            ir::Ty::Ref { .. }
+                                | ir::Ty::Param(_)
+                                | ir::Ty::Tuple(_)
+                                | ir::Ty::Struct(_)
                         ) =>
                     {
                         path.push(ir::CarrierStep::SliceElement);

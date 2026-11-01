@@ -1444,6 +1444,15 @@ pub struct TemplateCfg {
     budget: ir::PlanBudget,
 }
 impl TemplateCfg {
+    pub(super) fn source_publication(
+        &self,
+    ) -> Option<&std::sync::Arc<super::source_replay::CanonicalSourcePublication>> {
+        self.function
+            .lowering_proof
+            .as_ref()?
+            .original_publication
+            .as_ref()
+    }
     pub fn call_evidence(&self) -> &[std::sync::Arc<ir::ValidatedCallEvidence>] {
         &self.function.call_evidence
     }

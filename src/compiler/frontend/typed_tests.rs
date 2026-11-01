@@ -99,6 +99,105 @@ fn original_native_sequence_return_mismatch_precedes_origin_contract() {
     .unwrap();
 }
 
+#[test]
+fn mutable_shared_leaf_slice_formatting_reborrows_exact_original_place() {
+    let program = native_box_source_program_text(
+        r#"fn main(){let mut first=vec!["first"];let mut second=vec!["second"];let view=first.as_mut_slice();let other=second.as_mut_slice();println!("{:?}",view);println!("{:?}",view);println!("{:?}",other);}"#,
+    );
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let main = plan
+        .registry
+        .function_ids
+        .iter()
+        .copied()
+        .find(|id| {
+            let info = plan.registry.declaration(*id).unwrap();
+            plan.program.functions[info.source_index]
+                .name
+                .segments()
+                .last()
+                .is_some_and(|name| plan.program.names.spelling(*name).unwrap() == "main")
+        })
+        .unwrap();
+    let PublishedCallableBody::Source(publication) =
+        plan.publish_callable_body(main, &budget).unwrap()
+    else {
+        panic!("expected original source publication");
+    };
+    let source = publication.source();
+    let facts = publication.facts();
+    publication.validate_source(source, facts, &budget).unwrap();
+    let view = ir::LocalId(
+        source
+            .locals
+            .iter()
+            .position(|local| local.name == "view")
+            .unwrap(),
+    );
+    let other = ir::LocalId(
+        source
+            .locals
+            .iter()
+            .position(|local| local.name == "other")
+            .unwrap(),
+    );
+    assert_eq!(source.locals[view.0].ty, source.locals[other.0].ty);
+    let borrowed: Vec<_> = source
+        .exprs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expression)| match &expression.kind {
+            ir::ExprKind::Borrow {
+                kind: ir::BorrowKind::Shared,
+                place,
+                ..
+            } if place.local == view && place.projection.as_slice() == [ir::Projection::Deref] => {
+                assert!(expression.ty.shared_slice_element().is_some());
+                Some(ir::ExprId(index))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        borrowed.len(),
+        2,
+        "each original formatting occurrence reborrows without moving view"
+    );
+    let lowered = crate::compiler::cfg::lower_source_closed(&publication, &budget).unwrap();
+    lowered.validate_provenance(facts, &budget).unwrap();
+    for origin in borrowed {
+        for mutation in 0..3 {
+            let mut forged = source.as_ref().clone();
+            let ir::ExprKind::Borrow { kind, place, .. } = &mut forged.exprs[origin.0].kind else {
+                unreachable!()
+            };
+            match mutation {
+                0 => place.local = other,
+                1 => place.projection.clear(),
+                _ => *kind = ir::BorrowKind::Mut,
+            }
+            assert!(
+                publication
+                    .validate_source(&Arc::new(forged), facts, &budget)
+                    .is_err()
+            );
+            let mut forged = lowered.clone();
+            let site = forged
+                .loan_sites
+                .iter_mut()
+                .find(|site| site.origin == Some(origin))
+                .unwrap();
+            match mutation {
+                0 => site.place.local = other,
+                1 => site.place.projection.clear(),
+                _ => site.kind = ir::BorrowKind::Mut,
+            }
+            assert!(forged.validate_provenance(facts, &budget).is_err());
+        }
+    }
+}
+
 fn native_box_application_fixture() -> (PlanCtx, Arc<tr::ValidatedFacts>) {
     let program = native_box_source_program_text(
         "struct UserRecursive{next:*mut UserRecursive}fn deferred<T>(value:Box<T>){}fn main(){}",
@@ -487,6 +586,182 @@ fn native_box_application_preserves_typed_resource_and_first_failure() {
         tr::FactsErrorKind::Resource
     );
     assert_eq!(budget.first_resource_failure(), Some(first));
+}
+
+#[test]
+fn native_empty_sequence_source_requires_original_recipe_and_issuer() {
+    let genuine = native_box_source_program();
+    let foreign = native_box_source_program();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&genuine, &budget).unwrap();
+    let adapter = native_box_source_adapter(&plan, &budget);
+    let owner = plan
+        .registry
+        .declarations
+        .iter()
+        .find(|info| {
+            info.kind == ir::DeclKind::Struct
+                && plan
+                    .program
+                    .structs
+                    .get(info.source_index)
+                    .is_some_and(|source| {
+                        source.name.segments().last().is_some_and(|name| {
+                            plan.program.names.spelling(*name).unwrap() == "Vec"
+                        })
+                    })
+        })
+        .unwrap()
+        .id;
+    let method = |name: &str, trait_method: bool| {
+        plan.registry
+            .declarations
+            .iter()
+            .find(|info| {
+                info.path.associated.as_ref().is_some_and(|associated| {
+                    associated.nominal == owner && associated.trait_decl.is_some() == trait_method
+                }) && plan
+                    .registry
+                    .source_callable(info.id)
+                    .and_then(|source| source.name.segments().last())
+                    .is_some_and(|member| plan.program.names.spelling(*member).unwrap() == name)
+            })
+            .unwrap()
+            .id
+    };
+    let new = method("new", false);
+    let default = method("default", true);
+    let direct = tr::SchemaCx::native_sequence_empty(&adapter, new)
+        .unwrap()
+        .expect("genuine original Vec::new zero recipe");
+    let delegate = tr::SchemaCx::native_sequence_empty(&adapter, default)
+        .unwrap()
+        .expect("genuine selected Default<Vec> delegate");
+    assert_eq!(direct.constructor(), new);
+    assert_eq!(delegate.constructor(), new);
+    let application = plan
+        .intern_nominal(
+            owner,
+            &[ir::Ty::Int(ir::IntTy::I32)],
+            ir::FactsCtx::Concrete,
+            &budget,
+        )
+        .unwrap();
+    let ir::Ty::Struct(application) = application else {
+        panic!("native Vec application")
+    };
+    assert!(direct.matches_owner(new, &application));
+    assert!(delegate.matches_owner(default, &application));
+    assert!(!delegate.matches_owner(new, &application));
+    let mut changed = application.def().clone();
+    changed.source_decl = plan.registry.function_ids[0];
+    let changed = ir::StructTy::from_ref(ir::NominalRef::Strong(Arc::new(changed)));
+    assert!(!direct.matches_owner(new, &changed));
+    assert!(
+        tr::SchemaCx::native_sequence_empty(&adapter, plan.registry.function_ids[0])
+            .unwrap()
+            .is_none()
+    );
+    for issuers in [Arc::from([]), foreign.embedded_issuers.clone()] {
+        let budget = ir::PlanBudget::default();
+        let fresh = PlanCtx::from_program(&genuine, &budget).unwrap();
+        let mut adapter = native_box_source_adapter(&fresh, &budget);
+        drop(fresh);
+        let registry = Arc::get_mut(&mut adapter.registry).unwrap();
+        let mut program = genuine.clone();
+        program.embedded_issuers = issuers;
+        registry.program = Arc::new(program);
+        for declaration in [new, default] {
+            match native_sequence::issue_empty(registry, declaration, &budget) {
+                Ok(None) => {}
+                Err(error) => assert_eq!(error, "foreign generic declaration identity"),
+                Ok(Some(_)) => panic!("foreign or missing issuer admitted empty recipe"),
+            }
+        }
+    }
+    // The omitted owner marker is accepted only together with the original
+    // generic implementation/result replay, never as concrete shape authority.
+    for (arguments, forged_result) in [
+        (vec![Type::Int(ir::IntTy::I32)], false),
+        (vec![], false),
+        (vec![Type::Infer, Type::Infer], false),
+        (vec![Type::Infer], true),
+    ] {
+        let budget = ir::PlanBudget::default();
+        let fresh = PlanCtx::from_program(&genuine, &budget).unwrap();
+        let mut adapter = native_box_source_adapter(&fresh, &budget);
+        drop(fresh);
+        let registry = Arc::get_mut(&mut adapter.registry).unwrap();
+        let mut program = genuine.clone();
+        let position = registry.function_position(default).unwrap();
+        let CallableSource::Associated {
+            implementation,
+            item,
+        } = registry.callable_sources[position]
+        else {
+            panic!("original default delegate")
+        };
+        let function = &mut program.impls[implementation].items[item].function;
+        let Some(Expr::AssociatedCall {
+            owner: Type::Apply(path),
+            ..
+        }) = function.body.tail.as_deref_mut()
+        else {
+            panic!("resolved omitted Vec owner")
+        };
+        path.segments.last_mut().unwrap().args = arguments;
+        if forged_result {
+            function.result = Type::Bool;
+        }
+        registry.program = Arc::new(program);
+        assert!(
+            native_sequence::issue_empty(registry, default, &budget)
+                .unwrap()
+                .is_none()
+        );
+    }
+    let budget = ir::PlanBudget::default();
+    let fresh = PlanCtx::from_program(&genuine, &budget).unwrap();
+    let mut changed_adapter = native_box_source_adapter(&fresh, &budget);
+    drop(fresh);
+    let registry = Arc::get_mut(&mut changed_adapter.registry).unwrap();
+    let mut program = genuine.clone();
+    let position = registry.function_position(new).unwrap();
+    let CallableSource::Associated {
+        implementation,
+        item,
+    } = registry.callable_sources[position]
+    else {
+        panic!("original associated constructor")
+    };
+    let Some(Expr::Struct { fields, .. }) = program.impls[implementation].items[item]
+        .function
+        .body
+        .tail
+        .as_deref_mut()
+    else {
+        panic!("original zero constructor")
+    };
+    let Expr::Integer(length) = &mut fields[1].1 else {
+        panic!("original length literal")
+    };
+    length.magnitude = 1;
+    registry.program = Arc::new(program);
+    assert!(
+        native_sequence::issue_empty(registry, new, &budget)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        native_sequence::issue_empty(registry, default, &budget)
+            .unwrap()
+            .is_none()
+    );
+    let exhausted = ir::PlanBudget::new(ir::PlanLimits {
+        work: 0,
+        ..ir::PlanLimits::default()
+    });
+    assert!(native_sequence::issue_empty(&plan.registry, new, &exhausted).is_err());
 }
 
 fn native_box_source_program() -> Program {

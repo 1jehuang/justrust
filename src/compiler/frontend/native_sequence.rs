@@ -2,8 +2,15 @@
 //! A path selects a role only after an embedded original-file issuer matches.
 use super::*;
 
+mod element;
+mod empty;
+pub use empty::NativeEmptySource;
+pub(super) use empty::issue as issue_empty;
 mod slot;
 mod swap;
+pub(in crate::compiler) use element::NativeElementRole;
+pub use element::NativeElementSource;
+pub(super) use element::issue as issue_element;
 pub use slot::NativeSequenceSlot;
 pub(super) use slot::issue_slot;
 pub use swap::NativeSequenceSwap;

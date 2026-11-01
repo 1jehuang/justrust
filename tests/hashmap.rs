@@ -7,6 +7,59 @@ mod closure_oracle;
 use closure_oracle::{Case, Expect};
 
 #[test]
+fn hashmap_entry_copy_effects_preserve_origin_and_alias_checks() {
+    closure_oracle::check(
+        "hashmap-copy-entry-effects",
+        &[
+            Case {
+                name: "local_copy_key_entry_roundtrip",
+                source: r#"use std::collections::HashMap;fn main(){let text=String::from("key");let mut map:HashMap<&str,usize>=HashMap::new();*map.entry(text.as_str()).or_insert(0)+=1;*map.entry(text.as_str()).or_insert(0)+=1;println!("{}",map.get(text.as_str()).unwrap());}"#,
+                expect: Expect::Run("2\n"),
+            },
+            Case {
+                name: "copy_entry_mutable_slot_keeps_map_borrowed",
+                source: r#"use std::collections::HashMap;fn main(){let mut map:HashMap<&str,usize>=HashMap::new();let slot=map.entry("key").or_insert(0);map.insert("other",1);println!("{}",slot);}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+            Case {
+                name: "copy_entry_key_cannot_outlive_original_owner",
+                source: r#"use std::collections::HashMap;fn main(){let mut map:HashMap<&str,usize>=HashMap::new();{let owner=String::from("local");*map.entry(owner.as_str()).or_insert(0)+=1;}println!("{}",map.len());}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "copy_entry_return_cannot_escape_local_map_in_unused_function",
+                source: r#"use std::collections::HashMap;fn unused()->&'static mut usize{let mut map:HashMap<&str,usize>=HashMap::new();map.entry("key").or_insert(0)}fn main(){}"#,
+                expect: Expect::Invalid("E0515"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn btree_entry_identity_value_keeps_nested_origin_and_alias_checks() {
+    closure_oracle::check(
+        "btree-identity-entry-effects",
+        &[
+            Case {
+                name: "entry_keeps_noncopy_vector_shared_carriers",
+                source: r#"use std::collections::BTreeMap;fn main(){let owner=String::from("value");let mut map:BTreeMap<usize,Vec<&str>>=BTreeMap::new();map.entry(0).or_default().push(owner.as_str());println!("{}",map.get(&0).unwrap().len());}"#,
+                expect: Expect::Run("1\n"),
+            },
+            Case {
+                name: "identity_value_cannot_escape_nested_original_owner",
+                source: r#"use std::collections::BTreeMap;fn main(){let mut map:BTreeMap<usize,Vec<&str>>=BTreeMap::new();{let owner=String::from("value");map.entry(0).or_default().push(owner.as_str());}println!("{}",map.len());}"#,
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "identity_value_keeps_map_exclusively_borrowed",
+                source: r#"use std::collections::BTreeMap;fn main(){let mut map:BTreeMap<usize,Vec<&str>>=BTreeMap::new();let value=map.entry(0).or_default();map.insert(1,Vec::new());println!("{}",value.len());}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn hashmap_matches_stock() {
     closure_oracle::check(
         "hashmap",

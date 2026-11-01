@@ -43,7 +43,10 @@ fn native_heap_reference_carriers_preserve_initialized_origins() {
         r#"fn observed<'a>(value:&'a str)->&'a str{println!("push {}",value);value}fn main(){let mut values:Vec<&str>=Vec::new();values.push(observed("first"));values.push(observed("second"));println!("{:?}",values);}"#,
         r#"fn append<'a>(values:&mut Vec<&'a str>,value:&'a str){values.push(value);}fn main(){let mut values:Vec<&str>=Vec::new();append(&mut values,"first");append(&mut values,"second");println!("{:?}",values);}"#,
         r#"fn observe(values:&mut[&'static str]){println!("{}",values[0usize]);}fn main(){let mut values=vec!["first","second"];observe(&mut values);println!("{}",values[1usize]);}"#,
+        r#"fn main(){let mut values=vec!["first","second"];let view=values.as_mut_slice();println!("{:?}",view);}"#,
         r#"fn head_mut<'a>(values:&'a mut Vec<&'static str>)->&'a mut &'static str{&mut values[0usize]}fn main(){let mut values=vec!["first"];*head_mut(&mut values)="second";println!("{}",values[0usize]);}"#,
+        r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn main(){let owner=String::from("local");let mut values=vec![owner.as_str(),"tail"];*head_mut(&mut values)="second";println!("{} {}",values[0usize],values[1usize]);}"#,
+        r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn replace<'b>(values:&mut Vec<&'b str>,text:&'b str){*head_mut(values)=text;}fn main(){let owner=String::from("local");let mut values=vec![owner.as_str(),"tail"];replace(&mut values,owner.as_str());println!("{} {}",values[0usize],values[1usize]);}"#,
         r#"fn head<'a>(values:&'a Vec<&'static str>)->&'a &'static str{&values[0usize]}fn main(){let values=vec!["first","second"];println!("{}",*head(&values));}"#,
         r#"fn main(){let values=vec!["first","second"];for value in &values{println!("{}",value);}}"#,
         r#"fn main(){let owned=String::from("local");let mut values:Vec<&str>=Vec::new();values.push(owned.as_str());println!("{:?}",values);}"#,
@@ -95,7 +98,12 @@ fn native_heap_reference_carriers_preserve_initialized_origins() {
 fn native_heap_reference_carrier_writes_reject_invalid_lifetimes() {
     // Run these write controls independently of unrelated slice rejections.
     for source in [
+        r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn overwrite<'b>(values:&mut Vec<&'b str>,text:&str){*head_mut(values)=text;}fn main(){}"#,
+        r#"fn head_mut<'a>(values:&'a mut Vec<&'static str>)->&'a mut &'static str{&mut values[0usize]}fn main(){let values=vec!["first"];*head_mut(&mut values)="second";}"#,
+        r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn overwrite<'b>(values:&Vec<&'b str>,text:&'b str){*head_mut(values)=text;}fn main(){}"#,
         r#"fn head_mut<'a>(values:&'a mut Vec<&'static str>)->&'a mut &'static str{&mut values[0usize]}fn main(){let mut values=vec!["first"];let owner=String::from("local");*head_mut(&mut values)=owner.as_str();println!("{}",values[0usize]);}"#,
+        r#"fn head_mut<'a>(values:&'a mut Vec<&'static str>)->&'a mut &'static str{&mut values[0usize]}fn main(){let mut values=vec!["first"];let owner=String::from("local");let slot=head_mut(&mut values);let again=&mut *slot;*again=owner.as_str();println!("{}",values[0usize]);}"#,
+        r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn overwrite<'b>(values:&mut Vec<&'b str>){let owner=String::from("short");*head_mut(values)=owner.as_str();}fn main(){}"#,
         r#"fn head_mut<'a,'b>(values:&'a mut Vec<&'b str>)->&'a mut &'b str{&mut values[0usize]}fn main(){let escaped;{let owner=String::from("local");let mut values=vec![owner.as_str(),"tail"];*head_mut(&mut values)="second";escaped=values;}println!("{:?}",escaped);}"#,
     ] {
         iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
@@ -105,7 +113,11 @@ fn native_heap_reference_carrier_writes_reject_invalid_lifetimes() {
                 failure.error
             );
             assert!(
-                !failure.error.to_string().contains("unsupported"),
+                !failure
+                    .error
+                    .to_string()
+                    .to_ascii_lowercase()
+                    .contains("unsupported"),
                 "workers={workers} check={check}: {}\n{source}",
                 failure.error
             );
@@ -147,6 +159,35 @@ fn native_heap_lifetime_constraints_are_checked_without_codegen() {
             failure.error
         );
     }
+}
+
+#[test]
+fn native_heap_nested_affine_reborrow_preserves_aliases_moves_and_lifetimes() {
+    for source in [
+        r#"fn main(){let mut a=1i32;let mut v=vec![&mut a];let first=&mut v[0usize];let second=&mut v[0usize];**first=2i32;**second=3i32;}"#,
+        r#"fn main(){let mut a=1i32;let mut v=vec![&mut a];let moved=v[0usize];*moved=2i32;println!("{}",v[0usize]);}"#,
+        r#"fn main(){let mut outer=1i32;let mut v=vec![&mut outer];{let mut short=2i32;v[0usize]=&mut short;}println!("{}",v[0usize]);}"#,
+        r#"fn main(){let mut a=1i32;let first=&mut a;let values=vec![first,first];println!("{}",values[0usize]);}"#,
+    ] {
+        iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
+            assert!(
+                failure.resource_usage.first_failure.is_none(),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+            assert!(
+                !failure.error.to_string().contains("unsupported"),
+                "workers={workers} check={check}: {}",
+                failure.error
+            );
+        });
+    }
+    iterator_oracle::stock_native(
+        r#"fn main(){let mut a=1i32;let mut b=5i32;let mut v:Vec<&mut i32>=vec![&mut a,&mut b];*v[0]+=10;*v[1]=7;println!("{} {}",v[0],v[1]);}"#,
+    );
+    iterator_oracle::stock_native(
+        r#"fn main(){let mut outer=1i32;let mut replacement=2i32;let mut v=vec![&mut outer];v[0usize]=&mut replacement;println!("{}",v[0usize]);}"#,
+    );
 }
 
 #[test]
@@ -297,6 +338,31 @@ fn cloned_iterator_for_loop_matches_stock() {
     ] {
         iterator_oracle::stock_native(source);
     }
+}
+
+#[test]
+fn cloned_struct_slice_elements_preserve_original_field_lifetimes() {
+    use iterator_oracle::closure_oracle::{self, Case, Expect};
+    closure_oracle::check(
+        "cloned-struct-slice-carriers",
+        &[
+            Case {
+                name: "cloned_field_survives_descriptor_and_vec",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let value=1i32;let escaped;{let values=vec![Item{value:&value}];let mut result=None;for item in values.iter().cloned(){result=Some(item);}escaped=result.unwrap();}println!(\"{}\",escaped.value);}",
+                expect: Expect::Run("1\n"),
+            },
+            Case {
+                name: "original_cloned_field_cannot_escape_referent",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let escaped;{let value=1i32;let values=vec![Item{value:&value}];let mut result=None;for item in values.iter().cloned(){result=Some(item);}escaped=result.unwrap();}println!(\"{}\",escaped.value);}",
+                expect: Expect::Invalid("E0597"),
+            },
+            Case {
+                name: "cloned_field_keeps_original_referent_loan",
+                source: "#[derive(Clone)]struct Item<'a>{value:&'a i32}fn main(){let mut value=1i32;let values=vec![Item{value:&value}];let mut result=None;for item in values.iter().cloned(){result=Some(item);}let escaped=result.unwrap();value=2i32;println!(\"{}\",escaped.value);}",
+                expect: Expect::Invalid("E0506"),
+            },
+        ],
+    );
 }
 
 #[test]

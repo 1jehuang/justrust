@@ -25818,6 +25818,28 @@ impl tr::SchemaCx for SchemaAdapter {
             _storage: storage,
         })))
     }
+    fn native_sequence_empty(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<Arc<native_sequence::NativeEmptySource>>, tr::FactsError> {
+        self.budget
+            .charge_work(1)
+            .map_err(|error| self.error(error))?;
+        if !Arc::ptr_eq(&self.program, &self.registry.program) {
+            return Err(self.error("native empty source adapter changed original program".into()));
+        }
+        native_sequence::issue_empty(&self.registry, declaration, &self.budget)
+            .map_err(|error| self.error(error))
+    }
+
+    fn native_sequence_element(
+        &self,
+        declaration: ir::DeclId,
+    ) -> Result<Option<Arc<native_sequence::NativeElementSource>>, tr::FactsError> {
+        native_sequence::issue_element(&self.registry, declaration, &self.budget)
+            .map_err(|error| self.error(error))
+    }
+
     fn native_sequence_swap(
         &self,
         declaration: ir::DeclId,
@@ -27872,7 +27894,10 @@ fn collect_source_params(
 mod dynamic_objects;
 pub mod native_box;
 mod native_sequence;
-pub use native_sequence::{NativeSequenceSlot, NativeSequenceSwap};
+pub(in crate::compiler) use native_sequence::NativeElementRole;
+pub use native_sequence::{
+    NativeElementSource, NativeEmptySource, NativeSequenceSlot, NativeSequenceSwap,
+};
 mod nominal_declarations;
 mod nominal_realization;
 mod nominal_schema;

@@ -136,6 +136,89 @@ pub(super) struct CarrierEffectProof {
     facts: Arc<ValidatedFacts>,
     analysis: Arc<Analysis>,
     effects: Arc<borrow::CarrierEffects>,
+    empty_result: Option<NativeEmptyResult>,
+}
+
+/// This capsule denotes absence of stored element provenance only. It cannot
+/// supply a reference, an initialized element, a static origin or a place target.
+#[derive(Clone, Debug)]
+struct NativeEmptyResult {
+    source: Arc<CheckedFunction>,
+    function: Arc<cfg::Function>,
+    facts: Arc<ValidatedFacts>,
+    role: Arc<super::frontend::NativeEmptySource>,
+}
+impl NativeEmptyResult {
+    fn issue(template: &cfg::TemplateCfg) -> Result<Option<Self>, FactsError> {
+        let facts = template.facts();
+        let budget = template.budget();
+        let Some(role) = facts.native_sequence_empty(facts.declaration())? else {
+            return Ok(None);
+        };
+        // Raw typed fixtures and legacy lowerings have no canonical source token.
+        let Some(publication) = template.source_publication() else {
+            return Ok(None);
+        };
+        publication.validate_source(template.source(), facts, budget)?;
+        template
+            .function()
+            .validate_source_publication(publication, budget)?;
+        let Ty::Struct(owner) = &template.source().result else {
+            return Ok(None);
+        };
+        if !template.source().params.is_empty()
+            || !template.function().params.is_empty()
+            || !role.matches_owner(facts.declaration(), owner)
+        {
+            return Ok(None);
+        }
+        let mut calls = 0usize;
+        for expression in &template.source().exprs {
+            budget
+                .charge_work(1)
+                .map_err(|message| FactsError::resource(budget, &message))?;
+            if let super::ir::ExprKind::Call { target, args, .. } = &expression.kind {
+                calls += 1;
+                if role.constructor() == facts.declaration()
+                    || !args.is_empty()
+                    || !matches!(target, super::ir::Callee::Direct(target) if target.declaration == role.constructor())
+                {
+                    return Err(FactsError::invalid(
+                        budget,
+                        "native empty delegate changed its original selected constructor",
+                    ));
+                }
+            }
+        }
+        if calls != usize::from(role.constructor() != facts.declaration()) {
+            return Err(FactsError::invalid(
+                budget,
+                "native empty source changed its exact constructor call count",
+            ));
+        }
+        Ok(Some(Self {
+            source: template.source().clone(),
+            function: template.function().clone(),
+            facts: facts.clone(),
+            role,
+        }))
+    }
+    fn validate_inputs(
+        &self,
+        proof: &CarrierEffectProof,
+        budget: &super::ir::PlanBudget,
+    ) -> Result<(), FactsError> {
+        if !Arc::ptr_eq(&self.source, &proof.source)
+            || !Arc::ptr_eq(&self.function, &proof.function)
+            || !Arc::ptr_eq(&self.facts, &proof.facts)
+        {
+            return Err(FactsError::invalid(
+                budget,
+                "native empty result changed its original checked source, CFG or facts",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// Published only by exact universal proof readers. Absence is conservative
@@ -246,6 +329,82 @@ impl CarrierEffectTable {
         view: &super::traits::CarrierContractView,
         caller_validated: bool,
     ) -> Result<Option<Arc<borrow::CarrierEffects>>, super::traits::FactsError> {
+        Ok(self
+            .lookup_proof(target, caller, facts, view, caller_validated)?
+            .map(|proof| proof.effects.clone()))
+    }
+    /// Reuse the exact universal-body ingress. An unproved empty-looking value
+    /// never reaches this path, and only an owned stored-element row can vanish.
+    pub(super) fn empty_result(
+        &self,
+        target: &super::ir::Callee,
+        caller: &cfg::Function,
+        facts: &ValidatedFacts,
+        view: &super::traits::CarrierContractView,
+        signature: &super::ir::Signature,
+        location: &super::ir::CarrierLocation,
+    ) -> Result<bool, FactsError> {
+        let Some(proof) = self.lookup_proof(target, caller, facts, view, false)? else {
+            return Ok(false);
+        };
+        let Some(empty) = &proof.empty_result else {
+            return Ok(false);
+        };
+        let budget = facts.budget();
+        empty.validate_inputs(proof, budget)?;
+        let mut validated = false;
+        view.validate_result_flow_with(
+            facts,
+            super::ir::SignatureSubject::Call(target),
+            signature,
+            location,
+            &mut validated,
+        )?;
+        let super::ir::Callee::Direct(target) = target else {
+            return Ok(false);
+        };
+        let Ty::Struct(owner) = &signature.result else {
+            return Ok(false);
+        };
+        if !empty.role.matches_owner(target.declaration, owner) {
+            return Err(FactsError::invalid(
+                budget,
+                "native empty result changed its actual native owner",
+            ));
+        }
+        let Some((super::ir::CarrierStep::SliceElement, suffix)) = location.path.0.split_first()
+        else {
+            return Ok(false);
+        };
+        let [element] = owner.def().type_args.as_ref() else {
+            return Ok(false);
+        };
+        let bytes = suffix
+            .len()
+            .checked_mul(std::mem::size_of::<super::ir::CarrierStep>())
+            .and_then(|bytes| bytes.checked_add(2 * std::mem::size_of::<usize>()))
+            .ok_or_else(|| {
+                FactsError::resource(budget, "native empty element coordinate overflow")
+            })?;
+        let _storage = budget
+            .reserve_bytes(bytes)
+            .map_err(|message| FactsError::resource(budget, &message))?;
+        let element_location = super::ir::CarrierLocation {
+            path: super::ir::CarrierPath(Arc::from(suffix)),
+            channel: location.channel.clone(),
+        };
+        let carrier = super::ir::carrier_at(element, &element_location, budget)
+            .map_err(|message| FactsError::from_message(budget, &message))?;
+        Ok(matches!(carrier, Ty::Ref { .. }))
+    }
+    fn lookup_proof(
+        &self,
+        target: &super::ir::Callee,
+        caller: &cfg::Function,
+        facts: &ValidatedFacts,
+        view: &super::traits::CarrierContractView,
+        caller_validated: bool,
+    ) -> Result<Option<&Arc<CarrierEffectProof>>, super::traits::FactsError> {
         let budget = facts.budget();
         if !budget.same_authority(&self.budget) || facts.phase() != FactsPhase::Closed {
             return Err(super::traits::FactsError::invalid(
@@ -323,7 +482,7 @@ impl CarrierEffectTable {
                     "effect lookup lost exact universal body proof",
                 ));
             }
-            return Ok(Some(proof.effects.clone()));
+            return Ok(Some(proof));
         }
         Ok(None)
     }
@@ -576,6 +735,12 @@ pub fn verify_template_in_const_context(
         }
         _ => {}
     }
+    let empty_result = if candidate_effects.is_some() {
+        NativeEmptyResult::issue(&template)
+            .map_err(|error| facts_error_analysis(template.function(), error, template.budget()))?
+    } else {
+        None
+    };
     if candidate_effects.is_some() {
         let proof_storage =
             std::mem::size_of::<CarrierEffectProof>() + 2 * std::mem::size_of::<usize>();
@@ -607,6 +772,7 @@ pub fn verify_template_in_const_context(
             facts: template.facts().clone(),
             analysis: analysis.clone(),
             effects,
+            empty_result,
         })
     });
     Ok(VerifiedTemplateCfg {
@@ -5189,6 +5355,242 @@ mod tests {
                 .any(|diagnostic| diagnostic.kind == ErrorKind::ReadNotDefinitelyInitialized),
             "{:?}",
             result.diagnostics
+        );
+    }
+
+    #[test]
+    fn native_empty_sequence_effect_capsule_binds_source_cfg_and_actual() {
+        use crate::compiler::{CompilerProvider, Input, Snapshot, keys};
+        struct ActualDefaultBody(CompilerProvider);
+        impl crate::engine::Provider for ActualDefaultBody {
+            fn outputs(&self, key: &crate::engine::Key) -> usize {
+                if key.kind == u32::MAX {
+                    2
+                } else {
+                    crate::engine::Provider::outputs(&self.0, key)
+                }
+            }
+            fn start(
+                &self,
+                cx: crate::engine::Context,
+                key: crate::engine::Key,
+            ) -> crate::engine::TaskFuture {
+                if key.kind != u32::MAX {
+                    return crate::engine::Provider::start(&self.0, cx, key);
+                }
+                let budget = self.0.0.budget.clone();
+                Box::pin(async move {
+                    let plan = cx.request(keys::SignaturesDebtRoot.key()).get(0);
+                    let main = cx
+                        .request(keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key())
+                        .get(0);
+                    let plan: Arc<crate::compiler::frontend::PlanCtx> = cx.read_fact(plan).await?;
+                    let main: Arc<crate::compiler::TemplateBodyFact> = cx.read_fact(main).await?;
+                    let callee = main
+                        .checked
+                        .exprs
+                        .iter()
+                        .find_map(|expression| {
+                            let super::super::ir::ExprKind::Call { target, name, .. } =
+                                &expression.kind
+                            else {
+                                return None;
+                            };
+                            name.ends_with("or_default").then_some(target.clone())
+                        })
+                        .expect("unchanged original or_default call");
+                    let main_facts = plan
+                        .instance_facts(&super::super::ir::CallTarget {
+                            declaration: plan.function_decl(0).unwrap(),
+                            type_args: Arc::from([]),
+                        })
+                        .unwrap();
+                    let resolve =
+                        |callee: &super::super::ir::Callee, facts: &ValidatedFacts| match callee {
+                            super::super::ir::Callee::Direct(target) => target.clone(),
+                            super::super::ir::Callee::TraitItem(call) => {
+                                let selected = super::super::ir::TraitCx::resolve_trait_call(
+                                    facts.world().as_ref(),
+                                    call,
+                                    facts,
+                                )
+                                .unwrap();
+                                let super::super::ir::Callee::Direct(target) = selected.callee()
+                                else {
+                                    panic!("original selected body")
+                                };
+                                target.clone()
+                            }
+                            _ => panic!("unexpected original callee"),
+                        };
+                    let target = resolve(&callee, &main_facts);
+                    let parent = cx
+                        .request(
+                            keys::words(
+                                crate::compiler::CANONICAL_BODY,
+                                crate::compiler::instances::graph_key::encode(&target, &budget)
+                                    .unwrap(),
+                            )
+                            .unwrap(),
+                        )
+                        .get(0);
+                    let parent: Arc<crate::compiler::InstanceBodyFact> =
+                        cx.read_fact(parent).await?;
+                    let callee = parent
+                        .checked
+                        .exprs
+                        .iter()
+                        .find_map(|expression| {
+                            let super::super::ir::ExprKind::Call { target, name, .. } =
+                                &expression.kind
+                            else {
+                                return None;
+                            };
+                            name.ends_with("default").then_some(target.clone())
+                        })
+                        .expect("original selected Default::default");
+                    let target = resolve(&callee, &parent.facts);
+                    let template = cx
+                        .request(
+                            keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(
+                                plan.callable_index(target.declaration).unwrap(),
+                            )
+                            .key(),
+                        )
+                        .get(0);
+                    let template: Arc<crate::compiler::TemplateBodyFact> =
+                        cx.read_fact(template).await?;
+                    cx.publish_fact(
+                        0,
+                        crate::compiler::TemplateBodyFact {
+                            checked: template.checked.clone(),
+                            closure: None,
+                            closure_mode: None,
+                            publication: template.publication.clone(),
+                        },
+                    )?;
+                    cx.publish_fact(
+                        1,
+                        crate::compiler::InstanceBodyFact {
+                            checked: parent.checked.clone(),
+                            facts: parent.facts.clone(),
+                        },
+                    )
+                })
+            }
+        }
+        // This exact source is the existing positive strict BTreeMap fixture.
+        let source = r#"use std::collections::BTreeMap;fn main(){let owner=String::from("value");let mut map:BTreeMap<usize,Vec<&str>>=BTreeMap::new();map.entry(0).or_default().push(owner.as_str());println!("{}",map.get(&0).unwrap().len());}"#;
+        let snapshot = Arc::new(Snapshot {
+            input: Input::Text(source.into()),
+            source_options: crate::compiler::source::SourceOptions::default(),
+            budget: super::super::ir::PlanBudget::default(),
+        });
+        let budget = snapshot.budget.clone();
+        let engine = crate::engine::Engine::new(ActualDefaultBody(CompilerProvider(snapshot)));
+        let requested = engine.request(keys::test_key(u32::MAX, vec![0]));
+        engine.run(1).unwrap();
+        requested.completion().unwrap();
+        let body = requested
+            .fact::<crate::compiler::TemplateBodyFact>(0)
+            .unwrap();
+        let publication = body
+            .publication
+            .as_ref()
+            .expect("original canonical source publication");
+        let template = cfg::lower_source_template(publication, &budget).unwrap();
+        let original_empty = NativeEmptyResult::issue(&template)
+            .unwrap()
+            .expect("original empty source/CFG capsule");
+        let verified = verify_template(template.clone())
+            .unwrap_or_else(|analysis| panic!("{:?}", analysis.diagnostics));
+        let proof = verified
+            .carrier_effects()
+            .expect("successful universal proof");
+        assert!(proof.empty_result.is_some());
+        original_empty.validate_inputs(proof, &budget).unwrap();
+        let mut changed = original_empty.clone();
+        changed.source = Arc::new(changed.source.as_ref().clone());
+        assert!(changed.validate_inputs(proof, &budget).is_err());
+        let mut changed = original_empty.clone();
+        changed.function = Arc::new(changed.function.as_ref().clone());
+        assert!(changed.validate_inputs(proof, &budget).is_err());
+        let mut changed = original_empty;
+        changed.facts = Arc::new(changed.facts.as_ref().clone());
+        assert!(changed.validate_inputs(proof, &budget).is_err());
+        let raw = cfg::lower_template(template.source().clone(), template.facts().clone(), &budget)
+            .unwrap();
+        assert!(NativeEmptyResult::issue(&raw).unwrap().is_none());
+        let parent = requested
+            .fact::<crate::compiler::InstanceBodyFact>(1)
+            .unwrap();
+        let caller = cfg::lower_with_facts(&parent.checked, &parent.facts, &budget).unwrap();
+        let (callee, signature) = caller.blocks.iter().find_map(|block| {
+            let cfg::Terminator::Call { target, signature, .. } = &block.terminator.value else { return None };
+            matches!(target, super::super::ir::Callee::Direct(target) if target.declaration == template.facts().declaration())
+                .then_some((target.clone(),signature.clone()))
+        }).expect("exact selected canonical DefaultVec CFG call");
+        let view = parent
+            .facts
+            .carrier_contract(super::super::ir::SignatureSubject::Call(&callee))
+            .unwrap();
+        let location = super::super::ir::carrier_locations(&signature.result, &budget)
+            .unwrap()
+            .iter()
+            .find(|location| {
+                matches!(location.channel, super::super::ir::CarrierChannel::Fixed(_))
+                    && matches!(
+                        location.path.0.first(),
+                        Some(super::super::ir::CarrierStep::SliceElement)
+                    )
+            })
+            .cloned()
+            .expect("stored actual reference carrier");
+        let table = CarrierEffectTable::for_callees(&[verified], &budget).unwrap();
+        assert!(
+            table
+                .empty_result(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &view,
+                    &signature,
+                    &location
+                )
+                .unwrap()
+        );
+        let mut wrong = signature.clone();
+        wrong.result = Ty::Bool;
+        assert!(
+            table
+                .empty_result(&callee, &caller, &parent.facts, &view, &wrong, &location)
+                .is_err()
+        );
+        let mut wrong = location.clone();
+        wrong.path = super::super::ir::CarrierPath(Arc::from([
+            super::super::ir::CarrierStep::SliceElement,
+            super::super::ir::CarrierStep::Field(99),
+        ]));
+        assert!(
+            table
+                .empty_result(&callee, &caller, &parent.facts, &view, &signature, &wrong)
+                .is_err()
+        );
+        budget
+            .charge_work(budget.limits().work - budget.usage_snapshot().work)
+            .unwrap();
+        assert!(
+            table
+                .empty_result(
+                    &callee,
+                    &caller,
+                    &parent.facts,
+                    &view,
+                    &signature,
+                    &location
+                )
+                .unwrap_err()
+                .is_resource()
         );
     }
 
