@@ -64,6 +64,43 @@ fn unchanged_trait_objects_actual_program() {
 }
 
 #[test]
+fn unchanged_inventory_actual_program() {
+    use std::os::unix::fs::PermissionsExt;
+    let scratch = Scratch::new();
+    let source = include_str!("fixtures/full_programs/20_inventory_system.rs");
+    let expected = include_bytes!("fixtures/full_programs/20_inventory_system.stdout");
+    for workers in [1, 8] {
+        let checked = justrust_engine::compiler::compile(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers} original inventory CHECK: {error}"));
+        assert!(checked.executable.is_none());
+        assert!(!checked.report.published_kind(103));
+        assert!(checked.analyses.iter().all(|analysis| analysis.passed()));
+        let built = justrust_engine::compiler::compile(source.into(), workers, false)
+            .unwrap_or_else(|error| panic!("workers={workers} original inventory BUILD: {error}"));
+        assert!(built.analyses.iter().all(|analysis| analysis.passed()));
+        let output = scratch.path(&format!("original-inventory-{workers}"));
+        fs::write(
+            &output,
+            built.executable.expect("successful BUILD executable"),
+        )
+        .unwrap();
+        fs::set_permissions(&output, fs::Permissions::from_mode(0o700)).unwrap();
+        let ran = capture(&mut Command::new(output), &scratch, Duration::from_secs(20));
+        assert!(
+            ran.success,
+            "workers={workers}: {}",
+            String::from_utf8_lossy(&ran.stderr)
+        );
+        assert_eq!(
+            ran.stdout.as_slice(),
+            expected.as_slice(),
+            "workers={workers} stock stdout"
+        );
+        assert!(ran.stderr.is_empty());
+    }
+}
+
+#[test]
 fn unchanged_hashmap_actual_program() {
     let scratch = Scratch::new();
     let source = include_str!("fixtures/full_programs/17_hashmap_word_count.rs");

@@ -7919,61 +7919,86 @@ impl ValidatedTraitWorld {
                 "implementation well-formedness changed trait identity or argument arity",
             ));
         }
-        self.validate_predicate_substitution(
-            &Predicate::Implements(h.trait_ref.clone()),
-            &Predicate::Implements(goal.clone()),
-            &h.schema_env,
-            arguments,
-        )?;
-        let actual = &goal.self_ty;
-        let mut predicates = self.supertrait_predicates_for(&h.trait_ref, &h.schema_env)?;
-        if !predicates.is_empty() {
-            let owner = self.owner_context(h)?;
-            for predicate in &mut predicates {
-                let Predicate::Implements(bound) = predicate else {
-                    continue;
-                };
-                if bound.declaration != self.catalog.id(CatalogItem::Copy)
-                    && bound.declaration != self.catalog.id(CatalogItem::Sized)
-                {
-                    continue;
-                }
-                let Ty::AssociatedType(projection) = &bound.self_ty else {
-                    continue;
-                };
-                if !bound.args.is_empty()
-                    || self.associated_header(projection.item)?.trait_decl
-                        != h.trait_ref.declaration
-                    || !self.eq_predicate(
-                        &Predicate::Implements(projection.trait_ref.clone()),
-                        &Predicate::Implements(h.trait_ref.clone()),
-                    )?
-                {
-                    continue;
-                }
-                // A candidate must prove its own projected marker bound from
-                // its authenticated assignment, not by selecting itself again.
-                // Reduction happens in the original impl environment first.
-                // Non-own projections retain their independent membership need.
-                bound.self_ty =
-                    self.normalize_owner_type(&bound.self_ty, &owner, &mut Vec::new(), 0)?;
-            }
-            retain::<ir::RefContract>(&self.budget, 1)?;
-            let schema = GenericSchema {
-                env: h.schema_env.clone(),
-                signature: Signature {
-                    params: Vec::new(),
-                    result: Ty::Unit,
-                    ref_contract: Arc::new(ir::RefContract::default()),
-                },
-                predicates: parameter_equality::result_slice(&self.budget, predicates)?,
-            };
-            let instantiated =
-                self.substitute_projected_schema_with(&schema, arguments, context, active)?;
-            for predicate in instantiated.predicates.iter() {
-                self.require_in(predicate, context, active)?;
+        // Only original projected marker obligations need an owner-binder
+        // reduction. Other traits keep their direct instantiated-goal proof
+        // path, without replaying an unrelated implementation schema.
+        let mut projected_marker = false;
+        for bound in self
+            .trait_header(h.trait_ref.declaration)?
+            .supertraits
+            .iter()
+        {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if (bound.declaration == self.catalog.id(CatalogItem::Copy)
+                || bound.declaration == self.catalog.id(CatalogItem::Sized))
+                && bound.args.is_empty()
+                && matches!(bound.self_ty, Ty::AssociatedType(_))
+            {
+                projected_marker = true;
+                break;
             }
         }
+        if projected_marker {
+            self.validate_predicate_substitution(
+                &Predicate::Implements(h.trait_ref.clone()),
+                &Predicate::Implements(goal.clone()),
+                &h.schema_env,
+                arguments,
+            )?;
+            let mut predicates = self.supertrait_predicates_for(&h.trait_ref, &h.schema_env)?;
+            if !predicates.is_empty() {
+                let owner = self.owner_context(h)?;
+                for predicate in &mut predicates {
+                    let Predicate::Implements(bound) = predicate else {
+                        continue;
+                    };
+                    if bound.declaration != self.catalog.id(CatalogItem::Copy)
+                        && bound.declaration != self.catalog.id(CatalogItem::Sized)
+                    {
+                        continue;
+                    }
+                    let Ty::AssociatedType(projection) = &bound.self_ty else {
+                        continue;
+                    };
+                    if !bound.args.is_empty()
+                        || self.associated_header(projection.item)?.trait_decl
+                            != h.trait_ref.declaration
+                        || !self.eq_predicate(
+                            &Predicate::Implements(projection.trait_ref.clone()),
+                            &Predicate::Implements(h.trait_ref.clone()),
+                        )?
+                    {
+                        continue;
+                    }
+                    // A candidate must prove its own projected marker bound from
+                    // its authenticated assignment, not by selecting itself again.
+                    // Reduction happens in the original impl environment first.
+                    // Non-own projections retain their independent membership need.
+                    bound.self_ty =
+                        self.normalize_owner_type(&bound.self_ty, &owner, &mut Vec::new(), 0)?;
+                }
+                retain::<ir::RefContract>(&self.budget, 1)?;
+                let schema = GenericSchema {
+                    env: h.schema_env.clone(),
+                    signature: Signature {
+                        params: Vec::new(),
+                        result: Ty::Unit,
+                        ref_contract: Arc::new(ir::RefContract::default()),
+                    },
+                    predicates: parameter_equality::result_slice(&self.budget, predicates)?,
+                };
+                let instantiated =
+                    self.substitute_projected_schema_with(&schema, arguments, context, active)?;
+                for predicate in instantiated.predicates.iter() {
+                    self.require_in(predicate, context, active)?;
+                }
+            }
+        } else {
+            for predicate in self.supertrait_predicates_for(goal, context.env())? {
+                self.require_in(&predicate, context, active)?;
+            }
+        }
+        let actual = &goal.self_ty;
         if goal.declaration != self.catalog.id(CatalogItem::Copy) {
             return Ok(());
         }
@@ -12091,6 +12116,73 @@ pub(crate) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn implementation_without_projected_marker_keeps_direct_wf_proof_cost() {
+        let parsed = crate::compiler::frontend::parse(
+            "struct Wrap<T>{value:T}trait Plain{type Out;fn get(self)->Self::Out;}impl<T> Plain for Wrap<T>{type Out=T;fn get(self)->T{self.value}}fn main(){}",
+        ).unwrap();
+        let world =
+            crate::compiler::frontend::PlanCtx::from_program(&parsed, &PlanBudget::default())
+                .unwrap()
+                .trait_world()
+                .unwrap();
+        let implementation = world
+            .headers
+            .impls
+            .iter()
+            .find(|header| !header.associated_types.is_empty())
+            .unwrap();
+        let owner = world.predicate_env(implementation.declaration).unwrap();
+        let context = ProofContext {
+            original: None,
+            predicates: &owner,
+            phase: FactsPhase::Universal,
+        };
+        let arguments: Vec<_> = implementation
+            .schema_env
+            .ordered_params()
+            .map(Ty::Param)
+            .collect();
+        let before = world.budget.usage_snapshot().work;
+        for predicate in world
+            .supertrait_predicates_for(&implementation.trait_ref, context.env())
+            .unwrap()
+        {
+            world
+                .require_in(&predicate, context, &mut ProofScratch::default())
+                .unwrap();
+        }
+        let direct_work = world.budget.usage_snapshot().work - before;
+        let before = world.budget.usage_snapshot().work;
+        world
+            .require_impl_wf(
+                implementation,
+                &implementation.trait_ref,
+                &arguments,
+                context,
+                &mut ProofScratch::default(),
+            )
+            .unwrap();
+        let actual_work = world.budget.usage_snapshot().work - before;
+        let rows = world
+            .trait_header(implementation.trait_ref.declaration)
+            .unwrap()
+            .supertraits
+            .len();
+        assert!(
+            actual_work <= direct_work + rows + 8,
+            "non-marker implementation replayed unrelated schema: {actual_work} vs {direct_work}"
+        );
+        assert!(matches!(world.require_impl_wf(implementation,
+            &implementation.trait_ref, &[], context, &mut ProofScratch::default()),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata));
+        let remaining = world.budget.limits().work - world.budget.usage_snapshot().work;
+        world.budget.charge_work(remaining).unwrap();
+        assert!(matches!(world.require_impl_wf(implementation,
+            &implementation.trait_ref, &arguments, context, &mut ProofScratch::default()),
+            Err(error) if error.is_resource()));
+    }
+
     #[test]
     fn scratch_row_storage_exact_short_and_growth_peak() {
         let row = scratch_row_bytes::<u64>().unwrap();
