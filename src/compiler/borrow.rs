@@ -1635,6 +1635,101 @@ fn exact_identity_write_rows(
     Ok(true)
 }
 
+/// Compare declaration-owned fixed coordinates after the authenticated nominal
+/// substitution. This is coordinate replay only, never a type/loan permission.
+fn fixed_reborrow_location_matches(
+    original: &CarrierLocation,
+    expanded: &CarrierLocation,
+    nominals: &[ir::NominalCarrierMapping],
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    budget.spend(add(original.path.0.len(), 1)?)?;
+    if original.channel != CarrierChannel::Fixed(ReferencePosition { depth: 0 })
+        || expanded.channel != original.channel
+        || original.path.0.len() != expanded.path.0.len()
+    {
+        return Ok(false);
+    }
+    for (before, after) in original.path.0.iter().zip(expanded.path.0.iter()) {
+        match (before, after) {
+            (CarrierStep::Field(a), CarrierStep::Field(b)) if a == b => {}
+            (
+                CarrierStep::VariantField {
+                    variant: a,
+                    field: af,
+                },
+                CarrierStep::VariantField {
+                    variant: b,
+                    field: bf,
+                },
+            ) => {
+                budget.spend(add(nominals.len(), 1)?)?;
+                let mut owner = a.owner;
+                let mut mapped = false;
+                for mapping in nominals {
+                    if mapping.original == a.owner {
+                        if mapped {
+                            return Ok(false);
+                        }
+                        mapped = true;
+                        owner = mapping.instantiated;
+                    }
+                }
+                if owner != b.owner || a.index != b.index || af != bf {
+                    return Ok(false);
+                }
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(true)
+}
+
+/// The one affine result must replay one exact original fixed source. Other
+/// family sources retain their separate component/Copy checks at the consumer.
+fn copy_family_fixed_result_rows(
+    original: &ir::CarrierContract,
+    expanded: &ir::CarrierReturn,
+    nominals: &[ir::NominalCarrierMapping],
+    budget: &mut Budget,
+) -> Result<bool, Exhausted> {
+    budget.spend(1)?;
+    if expanded.sources.len() != 1 {
+        return Ok(false);
+    }
+    let mut matched = false;
+    for row in original.results.iter() {
+        if !fixed_reborrow_location_matches(&row.location, &expanded.location, nominals, budget)? {
+            continue;
+        }
+        if matched {
+            return Ok(false);
+        }
+        matched = true;
+        budget.spend(add(add(row.sources.len(), original.inputs.len())?, 1)?)?;
+        let mut fixed = row
+            .sources
+            .iter()
+            .filter(|source| matches!(source.location.channel, CarrierChannel::Fixed(_)));
+        let Some(source) = fixed.next() else {
+            return Ok(false);
+        };
+        if fixed.next().is_some()
+            || !original.inputs.contains(source)
+            || source.param != expanded.sources[0].param
+            || !fixed_reborrow_location_matches(
+                &source.location,
+                &expanded.sources[0].location,
+                nominals,
+                budget,
+            )?
+        {
+            return Ok(false);
+        }
+    }
+    Ok(matched)
+}
+
 /// Shape only: every authored write exchanges carriers of one exact original
 /// parameter family. Return only families with a nonidentity authored row:
 /// identity rows retain their exact source without copying the whole value.
@@ -1683,6 +1778,139 @@ fn copy_family_effect_rows(
         }
     }
     Ok(Some(families))
+}
+
+/// Exact original owned input paired with one stored occurrence of the same
+/// rigid family. This shape is not a Copy permission for the owned value.
+fn owned_shared_family_write_source<'a>(
+    contract: &'a ir::CarrierContract,
+    schema: &ir::SignatureOriginSchema,
+    parameter: ir::ParamId,
+    budget: &mut Budget,
+) -> Result<Option<&'a InputCarrier>, Exhausted> {
+    let mut owner = None;
+    for tail in schema.input_tails.iter() {
+        budget.spend(1)?;
+        if tail.parameter == parameter && (tail.prefix != 0 || owner.replace(tail.param).is_some())
+        {
+            return Ok(None);
+        }
+    }
+    let Some(owner) = owner else { return Ok(None) };
+    // The returned borrowed family must reciprocate this exact original
+    // by-value input. Contract rows alone cannot authenticate origin tails.
+    let mut result_tail = false;
+    for tail in schema.result_tails.iter() {
+        budget.spend(tail.inputs.len() + 1)?;
+        if tail.parameter == parameter {
+            if result_tail
+                || tail.prefix != 1
+                || tail.inputs.as_ref()
+                    != [ir::InputCarrierTail {
+                        param: owner,
+                        prefix: 0,
+                        parameter,
+                    }]
+            {
+                return Ok(None);
+            }
+            result_tail = true;
+        }
+    }
+    if !result_tail {
+        return Ok(None);
+    }
+    let channel = CarrierChannel::ParamTail {
+        parameter,
+        prefix: 0,
+    };
+    let mut owned = None;
+    let mut stored = None;
+    for input in contract.inputs.iter() {
+        budget.spend(input.location.path.0.len() + 1)?;
+        if matches!(input.location.channel, CarrierChannel::ParamTail { parameter: p, .. } if p == parameter)
+        {
+            if input.location.channel != channel {
+                return Ok(None);
+            }
+            if input.param == owner && input.location.path.0.is_empty() {
+                if owned.replace(input).is_some() {
+                    return Ok(None);
+                }
+            } else {
+                let path = input.location.path.0.as_ref();
+                if input.param == owner
+                    || path.last() != Some(&CarrierStep::SliceElement)
+                    || path
+                        .iter()
+                        .filter(|step| **step == CarrierStep::Referent)
+                        .count()
+                        != 1
+                    || !path[..path.len() - 1]
+                        .iter()
+                        .all(|step| matches!(step, CarrierStep::Field(_) | CarrierStep::Referent))
+                    || stored.replace(input).is_some()
+                {
+                    return Ok(None);
+                }
+            }
+        }
+    }
+    let (Some(owned), Some(stored)) = (owned, stored) else {
+        return Ok(None);
+    };
+    let mut owned_row = false;
+    let mut stored_row = false;
+    for row in contract.writes.iter() {
+        budget.spend(row.sources.len() + 1)?;
+        if matches!(row.destination.location.channel, CarrierChannel::ParamTail { parameter: p, .. } if p == parameter)
+        {
+            if row.sources.len() != 2
+                || !row.sources.contains(owned)
+                || !row.sources.contains(stored)
+            {
+                return Ok(None);
+            }
+            if row.destination == *owned {
+                if owned_row {
+                    return Ok(None);
+                }
+                owned_row = true;
+            } else if row.destination == *stored {
+                if stored_row {
+                    return Ok(None);
+                }
+                stored_row = true;
+            } else {
+                return Ok(None);
+            }
+        }
+    }
+    if !owned_row || !stored_row {
+        return Ok(None);
+    }
+    let mut borrowed_result = false;
+    for row in contract.results.iter() {
+        budget.spend(row.sources.len() + 1)?;
+        if matches!(row.location.channel, CarrierChannel::ParamTail { parameter: p, .. } if p == parameter)
+        {
+            if borrowed_result
+                || row.location.channel
+                    != (CarrierChannel::ParamTail {
+                        parameter,
+                        prefix: 1,
+                    })
+                || !row.location.path.0.is_empty()
+                || row.sources.len() != 2
+                || !row.sources.contains(owned)
+                || !row.sources.contains(stored)
+            {
+                return Ok(None);
+            }
+            borrowed_result = true;
+        }
+    }
+    Ok(borrowed_result.then_some(owned))
 }
 
 fn body_signature(f: &cfg::Function, budget: &mut Budget) -> Result<ir::Signature, Exhausted> {
@@ -6175,6 +6403,99 @@ impl CarrierBuilder<'_, '_> {
         }
         Ok(false)
     }
+    /// Admit only transport of a nonempty, complete set of Copy shared-reference
+    /// carriers from an exact original by-value input. The owned actual itself
+    /// is never declared Copy, and ordinary move/loan/effect checks still run.
+    fn owned_shared_family_write_admitted(
+        &mut self,
+        params: &[Ty],
+        parameter: ir::ParamId,
+        view: &super::traits::CarrierContractView,
+        authority: Option<&super::traits::ValidatedFacts>,
+    ) -> Result<bool, Exhausted> {
+        if !authority
+            .or(self.authority.as_deref())
+            .or(match self.facts {
+                FactsCtx::Validated(facts) => Some(facts),
+                _ => None,
+            })
+            .is_some_and(|facts| facts.phase() == super::traits::FactsPhase::Closed)
+        {
+            return Ok(false);
+        }
+        let Some(owned) = owned_shared_family_write_source(
+            view.original_contract(),
+            view.origin_schema(),
+            parameter,
+            self.budget,
+        )?
+        else {
+            return Ok(false);
+        };
+        let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
+            return Ok(false);
+        };
+        if params.get(owned.param) != Some(actual) {
+            return Ok(false);
+        }
+        let Some(locations) = self.metadata_value(ir::carrier_locations(actual, &self.ledger))?
+        else {
+            return Ok(false);
+        };
+        if locations.is_empty() {
+            return Ok(false);
+        }
+        let mut mapping_count = 0usize;
+        for mapping in view.component_mappings() {
+            self.budget.spend(1)?;
+            if mapping.original_family == ir::CarrierFamily::Parameter(parameter) {
+                mapping_count = add(mapping_count, 1)?;
+            }
+        }
+        if mapping_count != locations.len() {
+            return Ok(false);
+        }
+        for location in locations.iter() {
+            self.budget.spend(view.component_mappings().len() + 1)?;
+            let Some(semantic) =
+                self.metadata_value(ir::carrier_at(actual, location, &self.ledger))?
+            else {
+                return Ok(false);
+            };
+            if !matches!(
+                semantic,
+                Ty::Ref {
+                    kind: BorrowKind::Shared,
+                    ..
+                }
+            ) || !self.copy_permission_in(&semantic, authority)?
+            {
+                return Ok(false);
+            }
+            let mut matched = false;
+            for mapping in view.component_mappings() {
+                if mapping.original_family == ir::CarrierFamily::Parameter(parameter)
+                    && mapping.substituted == *location
+                    && self.copy_family_component_matches(
+                        parameter,
+                        &owned.location,
+                        location,
+                        mapping,
+                        view,
+                    )?
+                {
+                    if matched {
+                        return Ok(false);
+                    }
+                    matched = true;
+                }
+            }
+            if !matched {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
     /// Copy-only family writes do not transport affine authority. This proof
     /// replays every original write/source and the one returned mutable loan;
     /// it does not alter target, lifetime, alias or callee-envelope checks.
@@ -6201,7 +6522,9 @@ impl CarrierBuilder<'_, '_> {
             let Some((_, actual)) = view.parameter_actual(parameter).map_err(|_| Exhausted)? else {
                 return Ok(false);
             };
-            if !self.copy_permission_in(actual, authority)? {
+            if !self.copy_permission_in(actual, authority)?
+                && !self.owned_shared_family_write_admitted(params, parameter, view, authority)?
+            {
                 return Ok(false);
             }
         }
@@ -6230,12 +6553,12 @@ impl CarrierBuilder<'_, '_> {
                     }
                 )
                 || row.location.channel != CarrierChannel::Fixed(ReferencePosition { depth: 0 })
-                || !row
-                    .location
-                    .path
-                    .0
-                    .iter()
-                    .all(|step| matches!(step, CarrierStep::Field(_)))
+                || !row.location.path.0.iter().all(|step| {
+                    matches!(
+                        step,
+                        CarrierStep::Field(_) | CarrierStep::VariantField { .. }
+                    )
+                })
                 || row.sources.len() != 1
             {
                 return Ok(false);
@@ -6269,19 +6592,12 @@ impl CarrierBuilder<'_, '_> {
             ) {
                 return Ok(false);
             }
-            let Some(original) = view
-                .original_contract()
-                .results
-                .iter()
-                .find(|original| original.location == row.location)
-            else {
-                return Ok(false);
-            };
-            let mut fixed_sources = original
-                .sources
-                .iter()
-                .filter(|source| matches!(source.location.channel, CarrierChannel::Fixed(_)));
-            if fixed_sources.next() != Some(input) || fixed_sources.next().is_some() {
+            if !copy_family_fixed_result_rows(
+                view.original_contract(),
+                row,
+                view.nominal_mappings(),
+                self.budget,
+            )? {
                 return Ok(false);
             }
             affine_result = true;
@@ -10526,8 +10842,277 @@ mod parameter_equality_tests {
     }
 
     #[test]
+    fn owned_shared_family_write_replays_real_or_insert_and_rejects_forgery() {
+        for (text, expected) in [
+            (
+                r#"use std::collections::BTreeMap;fn main(){let owner=String::from("value");let mut map:BTreeMap<usize,Vec<&str>>=BTreeMap::new();let mut values=Vec::new();values.push(owner.as_str());let _entry=map.entry(0).or_insert(values);}"#,
+                true,
+            ),
+            (
+                r#"use std::collections::BTreeMap;fn main(){let mut owner=1;let mut map:BTreeMap<usize,Vec<&mut i32>>=BTreeMap::new();let mut values=Vec::new();values.push(&mut owner);let _entry=map.entry(0).or_insert(values);}"#,
+                false,
+            ),
+            (
+                r#"use std::collections::BTreeMap;fn main(){let mut map:BTreeMap<usize,String>=BTreeMap::new();let _entry=map.entry(0).or_insert(String::new());}"#,
+                false,
+            ),
+        ] {
+            let snapshot = Arc::new(crate::compiler::Snapshot {
+                input: crate::compiler::Input::Text(text.into()),
+                source_options: crate::compiler::source::SourceOptions::default(),
+                budget: ir::PlanBudget::default(),
+            });
+            let ledger = snapshot.budget.clone();
+            let engine = crate::compiler::Engine::new(crate::compiler::CompilerProvider(snapshot));
+            let key = crate::compiler::keys::Item::<{ crate::compiler::TEMPLATE_BODY }>(0).key();
+            let requested = engine.request(key.clone());
+            engine.run(1).unwrap();
+            requested.completion().unwrap();
+            let body = engine
+                .fact_of::<crate::compiler::TemplateBodyFact>(&key, 0)
+                .unwrap();
+            let publication = body
+                .publication
+                .as_ref()
+                .expect("genuine original main publication");
+            let function = Arc::new(cfg::lower_source_closed(publication, &ledger).unwrap());
+            let facts = publication.facts().clone();
+            let mut budget = Budget::new(32_000_000);
+            let mut builder = CarrierBuilder::new(
+                &function,
+                FactsCtx::Validated(&facts),
+                ledger,
+                &mut budget,
+                128 * 1024 * 1024,
+                None,
+            )
+            .unwrap();
+            builder.function = Some(function.clone());
+            builder.authority = Some(facts.clone());
+            let mut witnesses = 0;
+            for (index, block) in function.blocks.iter().enumerate() {
+                let Terminator::Call {
+                    name, signature, ..
+                } = &block.terminator.value
+                else {
+                    continue;
+                };
+                if name != "or_insert" {
+                    continue;
+                }
+                witnesses += 1;
+                let view = builder.calls[index]
+                    .clone()
+                    .expect("canonical or_insert view");
+                let original = view.original_contract();
+                let schema = view.origin_schema();
+                let tail = schema
+                    .input_tails
+                    .iter()
+                    .find(|tail| tail.prefix == 0)
+                    .expect("original owned input tail");
+                let parameter = tail.parameter;
+                let owned = owned_shared_family_write_source(
+                    original,
+                    schema,
+                    parameter,
+                    &mut Budget::new(1_000_000),
+                )
+                .unwrap()
+                .expect("exact original owned/stored family");
+                assert_eq!(
+                    builder
+                        .owned_shared_family_write_admitted(
+                            &signature.params,
+                            parameter,
+                            &view,
+                            Some(&facts),
+                        )
+                        .unwrap(),
+                    expected
+                );
+                if !expected {
+                    continue;
+                }
+                let (_, actual) = view.parameter_actual(parameter).unwrap().unwrap();
+                assert!(
+                    !builder.copy_permission_in(actual, Some(&facts)).unwrap(),
+                    "the owned Vec is not granted whole-value Copy"
+                );
+                assert!(
+                    builder
+                        .copy_family_reborrow_admitted(
+                            &signature.params,
+                            &signature.result,
+                            &view,
+                            Some(&facts),
+                        )
+                        .unwrap()
+                );
+                assert!(
+                    builder
+                        .affine_contract_admitted(
+                            &signature.params,
+                            &signature.result,
+                            &view,
+                            Some(&facts),
+                        )
+                        .unwrap()
+                );
+                let mut changed_params = signature.params.clone();
+                changed_params[owned.param] = Ty::Unit;
+                assert!(
+                    !builder
+                        .owned_shared_family_write_admitted(
+                            &changed_params,
+                            parameter,
+                            &view,
+                            Some(&facts),
+                        )
+                        .unwrap()
+                );
+                for control in 0..19 {
+                    let mut forged = original.clone();
+                    let mut origin = schema.as_ref().clone();
+                    let mut tails = origin.input_tails.to_vec();
+                    let tail_index = tails
+                        .iter()
+                        .position(|tail| tail.parameter == parameter)
+                        .unwrap();
+                    let mut inputs = forged.inputs.to_vec();
+                    let owner_index = inputs.iter().position(|input| input == owned).unwrap();
+                    let stored_index = inputs
+                        .iter()
+                        .position(|input| {
+                            input.location.channel == owned.location.channel && input != owned
+                        })
+                        .unwrap();
+                    let mut writes = forged.writes.to_vec();
+                    let owner_write = writes
+                        .iter()
+                        .position(|row| row.destination == *owned)
+                        .unwrap();
+                    let mut results = forged.results.to_vec();
+                    let result_index = results
+                        .iter()
+                        .position(|row| {
+                            matches!(row.location.channel,
+                        CarrierChannel::ParamTail { parameter: p, .. } if p == parameter)
+                        })
+                        .unwrap();
+                    match control {
+                        0 => tails.clear(),
+                        1 => tails[tail_index].prefix = 1,
+                        2 => tails[tail_index].parameter.index = u16::MAX,
+                        3 => tails[tail_index].param = usize::MAX,
+                        4 => tails.push(tails[tail_index]),
+                        5 => {
+                            inputs.remove(owner_index);
+                        }
+                        6 => {
+                            inputs[stored_index].location.path =
+                                CarrierPath(Arc::from([CarrierStep::SliceElement]))
+                        }
+                        7 => {
+                            writes.remove(owner_write);
+                        }
+                        8 => writes[owner_write].sources = Arc::from([owned.clone()]),
+                        9 => {
+                            results[result_index].location.channel = owned.location.channel.clone()
+                        }
+                        10 => {
+                            inputs[owner_index].location.path =
+                                CarrierPath(Arc::from([CarrierStep::Field(0)]))
+                        }
+                        11 => writes.push(writes[owner_write].clone()),
+                        12 => origin.result_tails = Arc::from([]),
+                        13..=18 => {
+                            let mut result_tails = origin.result_tails.to_vec();
+                            let index = result_tails
+                                .iter()
+                                .position(|tail| tail.parameter == parameter)
+                                .unwrap();
+                            match control {
+                                13 => result_tails[index].prefix = 0,
+                                14 => result_tails[index].parameter.index = u16::MAX,
+                                15 => result_tails[index].inputs = Arc::from([]),
+                                16 => {
+                                    let mut input = result_tails[index].inputs[0];
+                                    input.param = usize::MAX;
+                                    result_tails[index].inputs = Arc::from([input]);
+                                }
+                                17 => {
+                                    let input = result_tails[index].inputs[0];
+                                    result_tails[index].inputs = Arc::from([input, input]);
+                                }
+                                _ => result_tails.push(result_tails[index].clone()),
+                            }
+                            origin.result_tails = result_tails.into();
+                        }
+                        _ => unreachable!(),
+                    }
+                    origin.input_tails = tails.into();
+                    forged.inputs = inputs.into();
+                    forged.writes = writes.into();
+                    forged.results = results.into();
+                    assert!(
+                        owned_shared_family_write_source(
+                            &forged,
+                            &origin,
+                            parameter,
+                            &mut Budget::new(1_000_000)
+                        )
+                        .unwrap()
+                        .is_none(),
+                        "forged owned source {control}"
+                    );
+                }
+                assert!(
+                    owned_shared_family_write_source(
+                        original,
+                        schema,
+                        parameter,
+                        &mut Budget::new(0)
+                    )
+                    .is_err()
+                );
+            }
+            assert_eq!(witnesses, 1, "exact original or_insert call exercised");
+            if expected {
+                let plan = builder.solve().unwrap();
+                assert!(plan.problems.is_empty(), "{:?}", plan.problems);
+            }
+        }
+    }
+
+    #[test]
     fn copy_family_reborrow_replays_real_entry_calls_and_rejects_noncopy_sources() {
         for (text, expected, check_key_carrier_forgeries) in [
+            (
+                r#"fn main(){let mut values:Vec<Vec<&str>>=Vec::new();let _result=values.get_mut(0);}"#,
+                1,
+                false,
+            ),
+            (
+                r#"fn main(){let mut values:Vec<Vec<&mut i32>>=Vec::new();let _result=values.get_mut(0);}"#,
+                0,
+                false,
+            ),
+            (
+                r#"use std::collections::BTreeMap;fn main(){let mut m:BTreeMap<usize,Vec<&str>>=BTreeMap::new();let _result=m.get_mut(&0);}"#,
+                1,
+                false,
+            ),
+            (
+                r#"use std::collections::HashMap;fn main(){let mut m:HashMap<usize,Vec<&str>>=HashMap::new();let _result=m.get_mut(&0);}"#,
+                1,
+                false,
+            ),
+            (
+                r#"use std::collections::BTreeMap;fn main(){let mut m:BTreeMap<usize,Vec<&mut i32>>=BTreeMap::new();let _result=m.get_mut(&0);}"#,
+                0,
+                false,
+            ),
             (
                 r#"use std::collections::HashMap;fn main(){let mut m:HashMap<&str,usize>=HashMap::new();*m.entry("a").or_insert(0)+=1;}"#,
                 2,
@@ -10619,6 +11204,148 @@ mod parameter_equality_tests {
                             .unwrap()
                     );
                     let original = view.original_contract();
+                    for row in view.contract().results.iter() {
+                        if !copy_family_fixed_result_rows(
+                            original,
+                            row,
+                            view.nominal_mappings(),
+                            &mut Budget::new(1_000_000),
+                        )
+                        .unwrap()
+                        {
+                            continue;
+                        }
+                        for (mapping_index, mapping) in view.nominal_mappings().iter().enumerate() {
+                            if mapping.original == mapping.instantiated {
+                                continue;
+                            }
+                            let mut relevant = false;
+                            for before in original.results.iter() {
+                                if fixed_reborrow_location_matches(
+                                    &before.location,
+                                    &row.location,
+                                    view.nominal_mappings(),
+                                    &mut Budget::new(1_000_000),
+                                )
+                                .unwrap()
+                                {
+                                    relevant |= before.location.path.0.iter().any(|step| {
+                                        matches!(step, CarrierStep::VariantField { variant, .. } if variant.owner == mapping.original)
+                                    });
+                                }
+                            }
+                            if !relevant {
+                                continue;
+                            }
+                            for control in 0..3 {
+                                let mut changed = view.nominal_mappings().to_vec();
+                                match control {
+                                    0 => {
+                                        changed.remove(mapping_index);
+                                    }
+                                    1 => changed[mapping_index].instantiated = mapping.original,
+                                    _ => changed.push(mapping.clone()),
+                                }
+                                assert!(
+                                    !copy_family_fixed_result_rows(
+                                        original,
+                                        row,
+                                        &changed,
+                                        &mut Budget::new(1_000_000),
+                                    )
+                                    .unwrap(),
+                                    "forged nominal replay {control}"
+                                );
+                            }
+                        }
+                        for control in 0..8 {
+                            let mut before = original.clone();
+                            let mut after = row.clone();
+                            match control {
+                                0 => after.sources = Arc::from([]),
+                                1 => {
+                                    after.sources = Arc::from([
+                                        after.sources[0].clone(),
+                                        after.sources[0].clone(),
+                                    ])
+                                }
+                                2 => {
+                                    let mut source = after.sources[0].clone();
+                                    source.param = usize::MAX;
+                                    after.sources = Arc::from([source]);
+                                }
+                                3 => {
+                                    after.location.channel =
+                                        CarrierChannel::Fixed(ReferencePosition { depth: 1 })
+                                }
+                                4 => {
+                                    after.location.path =
+                                        CarrierPath(Arc::from([CarrierStep::Referent]))
+                                }
+                                5 => before.inputs = Arc::from([]),
+                                6 => {
+                                    let mut rows = before.results.to_vec();
+                                    rows.extend(before.results.iter().cloned());
+                                    before.results = rows.into();
+                                }
+                                _ => {
+                                    let mut rows = before.results.to_vec();
+                                    for original in &mut rows {
+                                        original.sources = Arc::from([]);
+                                    }
+                                    before.results = rows.into();
+                                }
+                            }
+                            assert!(
+                                !copy_family_fixed_result_rows(
+                                    &before,
+                                    &after,
+                                    view.nominal_mappings(),
+                                    &mut Budget::new(1_000_000),
+                                )
+                                .unwrap(),
+                                "forged fixed result {control}"
+                            );
+                        }
+                        for (index, step) in row.location.path.0.iter().enumerate() {
+                            if !matches!(step, CarrierStep::VariantField { .. }) {
+                                continue;
+                            }
+                            for control in 0..3 {
+                                let mut after = row.clone();
+                                let mut path = after.location.path.0.to_vec();
+                                let CarrierStep::VariantField { variant, field } = &mut path[index]
+                                else {
+                                    unreachable!()
+                                };
+                                match control {
+                                    0 => variant.index = usize::MAX,
+                                    1 => *field = usize::MAX,
+                                    _ => path[index] = CarrierStep::Field(usize::MAX),
+                                }
+                                after.location.path = CarrierPath(path.into());
+                                assert!(
+                                    !copy_family_fixed_result_rows(
+                                        original,
+                                        &after,
+                                        view.nominal_mappings(),
+                                        &mut Budget::new(1_000_000),
+                                    )
+                                    .unwrap(),
+                                    "forged fixed variant {control}"
+                                );
+                            }
+                        }
+                        assert!(
+                            copy_family_fixed_result_rows(
+                                original,
+                                row,
+                                view.nominal_mappings(),
+                                &mut Budget::new(0),
+                            )
+                            .is_err()
+                        );
+                    }
                     let mut mapping_witnesses = 0;
                     for write in original.writes.iter() {
                         let CarrierChannel::ParamTail {
