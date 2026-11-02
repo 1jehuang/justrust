@@ -143,6 +143,28 @@ fn runs(source: &str, expected: &str) {
         );
     }
 }
+fn stock_runs(source: &str, expected: &str) {
+    let scratch = Scratch::new();
+    let input = scratch.source(source);
+    let output = scratch.path("stock-match");
+    let rustc = std::env::var_os("JR_STOCK_RUSTC").unwrap_or_else(|| "rustc".into());
+    let result = capture(
+        Command::new(rustc)
+            .arg("--edition=2024")
+            .arg(&input)
+            .arg("-o")
+            .arg(&output),
+        &scratch,
+        20,
+    );
+    assert!(result.status.success(), "stock match: {result:?}");
+    let runtime = capture(&mut Command::new(output), &scratch, 5);
+    assert!(runtime.status.success(), "stock runtime: {runtime:?}");
+    assert_eq!(runtime.stdout, expected.as_bytes());
+    assert!(runtime.stderr.is_empty());
+    runs(source, expected);
+}
+
 fn rejects(label: &str, source: &str) {
     for workers in [1, 8] {
         let scratch = Scratch::new();
@@ -358,24 +380,22 @@ fn main() { if run() == 3 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_guard() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "guard",
+fn accepts_historical_guard() {
+    stock_runs(
         r#"enum E { A, B, C } fn run()->i32 { match E::A { E::A if true=>1,_=>2 } }
 fn main() { if run() == 1 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 
 #[test]
-fn rejects_legal_unsupported_or_pattern() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "or_pattern",
+fn accepts_historical_or_pattern() {
+    stock_runs(
         r#"enum E { A, B, C } fn run()->i32 { match E::A { E::A|E::B=>1,E::C=>2 } }
 fn main() { if run() == 1 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 
@@ -401,13 +421,12 @@ fn main() { if run() == 1 { println!("match oracle ok"); } }
 }
 
 #[test]
-fn rejects_legal_unsupported_explicit_discriminant() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "explicit_discriminant",
+fn accepts_historical_explicit_discriminant() {
+    stock_runs(
         r#"enum E { A=5,B=9 } fn run()->i32 { match E::B { E::A=>1,E::B=>2 } }
 fn main() { if run() == 2 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 
@@ -654,13 +673,12 @@ fn main() { run(); }
 }
 
 #[test]
-fn rejects_legal_unsupported_empty_enum() {
-    // Stock accepts and runs this fixture, outside this bounded native slice.
-    rejects(
-        "empty_enum",
+fn accepts_historical_empty_enum() {
+    stock_runs(
         r#"enum E{} fn run()->i32{3}
 fn main() { if run() == 3 { println!("match oracle ok"); } }
 "#,
+        "match oracle ok\n",
     );
 }
 
