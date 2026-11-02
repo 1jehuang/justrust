@@ -19,7 +19,7 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = Path("data/compiler-conformance.json")
-KINDS = {"tests", "lib", "all-tests", "clippy", "fmt"}
+KINDS = {"tests", "lib", "all-tests", "clippy", "fmt", "case"}
 STATES = {"open", "partial", "implemented-slice"}
 ENV_KEYS = ("JUSTRUST_REMOTE_REQUIRED", "JUSTRUST_REMOTE", "JUSTRUST_TEST_PARALLEL",
             "JR_STOCK_RUSTC", "JUSTRUST_REAL_RUSTC", "CARGO_PROFILE_DEV_DEBUG",
@@ -90,6 +90,10 @@ def validate(data: dict, root: Path = ROOT) -> dict:
             selected = gate.get("suites")
             if not selected or len(set(selected)) != len(selected) or not set(selected) <= suites:
                 raise InvalidEvidence(f"missing or duplicate integration suites: {gate['id']}")
+        elif gate["kind"] == "case":
+            if (gate.get("suite") not in suites
+                    or not re.fullmatch(r"[a-zA-Z_][a-zA-Z0-9_]*", gate.get("test", ""))):
+                raise InvalidEvidence(f"invalid exact test selector: {gate['id']}")
         elif "suites" in gate:
             raise InvalidEvidence(f"unexpected suite filter on {gate['id']}")
     for requirement in data["requirements"]:
@@ -120,6 +124,9 @@ def command(gate: dict, target_dir: str) -> list[str]:
     if kind == "tests":
         for suite in gate["suites"]:
             args.extend(["--test", suite])
+    elif kind == "case":
+        args.extend(["--test", gate["suite"]])
+        return args + ["--", gate["test"], "--exact", "--include-ignored", "--nocapture", "--test-threads=1"]
     elif kind == "lib":
         args.append("--lib")
     else:
@@ -153,6 +160,7 @@ def source_identity(root: Path = ROOT) -> dict:
     inputs = sorted({os.fsdecode(path) for path in paths.split(b"\0") if path and (
         os.fsdecode(path).startswith(("src/", "libraries/", "tests/", "tools/", ".cargo/", "docs/compiler/"))
         or os.fsdecode(path) in {"Cargo.toml", "Cargo.lock", str(MANIFEST),
+                                "data/compiler-compatibility-scope.json",
                                 ".github/workflows/compiler-conformance.yml"})})
     state = hashlib.sha256()
     for name in inputs:
@@ -229,7 +237,9 @@ def outcome(returncode: int | None, text: str, kind: str, timed_out: bool = Fals
         return "unverified"
     if "0 tests matched" in text:
         return "unverified"
-    if kind in {"tests", "lib", "all-tests"} and test_count(text) == 0:
+    if kind in {"tests", "lib", "all-tests", "case"} and test_count(text) == 0:
+        return "unverified"
+    if kind == "case" and test_count(text) != 1:
         return "unverified"
     return "passed"
 
@@ -318,18 +328,30 @@ def assess(data: dict, report: dict, directory: Path, identity: dict, root: Path
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["validate", "plan", "discover", "run", "assess"])
+    parser.add_argument("action", choices=["validate", "plan", "discover", "run", "assess", "coverage", "track"])
     parser.add_argument("--manifest", type=Path, default=ROOT / MANIFEST)
     parser.add_argument("--profile", choices=["smoke", "full"], default="smoke")
     parser.add_argument("--gate", action="append", default=[])
     parser.add_argument("--target-dir", default=str(ROOT / "target/justrust-slots/0"))
     parser.add_argument("--out", type=Path, help="new output directory for run, existing report directory for assess")
     parser.add_argument("--timeout", type=int, default=3600, help="seconds per gate")
+    parser.add_argument("--scope", type=Path, default=ROOT / "data/compiler-compatibility-scope.json")
+    parser.add_argument("--area", action="append", default=[], help="track only these compatibility areas")
+    parser.add_argument("--case", action="append", default=[], help="track exact mapped suite::test")
+    parser.add_argument("--evidence", type=Path, action="append", default=[], help="coverage: retained track directory")
+    parser.add_argument("--json", action="store_true", help="machine-readable layered coverage")
+    parser.add_argument("--dry-run", action="store_true", help="show exact track invocations without executing")
     args = parser.parse_args(argv)
     try:
         data = validate(load_json(args.manifest))
+        if args.action in {"coverage", "track"}:
+            import compatibility_scope
+            return compatibility_scope.main(args, data, sys.modules[__name__])
         if args.action == "validate":
+            import compatibility_scope
+            scope = compatibility_scope.validate(load_json(args.scope), sys.modules[__name__], ROOT)
             print(json.dumps({"manifest": "valid", "requirements": len(data["requirements"]),
+                              "scope_requirements": sum(len(area["requirements"]) for area in scope["areas"]),
                               "suites": len(integration_suites()), "full_rust_support_established": False}))
         elif args.action == "plan":
             print(encoded({"contract": data["contract"], "gates": plan(data, args.profile, args.gate, args.target_dir),

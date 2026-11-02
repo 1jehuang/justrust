@@ -6,7 +6,7 @@ mod oracle;
 use oracle::{Case, Expect};
 
 const SEED: u64 = 0x6a09_e667_f3bc_c909;
-const VALID_CASES: usize = 12;
+const VALID_CASES: usize = 16;
 const INVALID_CASES: usize = 8;
 
 // Each ID has its own state: adding or reordering tests cannot perturb others.
@@ -21,6 +21,27 @@ fn operands(id: usize) -> (i32, i32) {
 
 fn valid(id: usize) -> (String, String) {
     assert!(id < VALID_CASES);
+    if id >= 12 {
+        return match id {
+            12 => (
+                r#"fn main(){let mut n=3i32;let r=&mut n;let mut f=||{let s=&mut *r;let mut g=||{*s+=2i32;*s};g()};println!("{}",f());println!("{}",n);}"#.into(),
+                "5\n5\n".into(),
+            ),
+            13 => (
+                r#"struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){println!("drop {}",self.n);}}fn main(){let guard=Guard{n:7};let mut n=3i32;let r=&mut n;let mut f=||{*r+=2i32;*r};println!("{}",f());drop(guard);}"#.into(),
+                "5\ndrop 7\n".into(),
+            ),
+            14 => (
+                r#"fn main(){let mut pair=(3i32,4i32);let shared=&pair.0;let mutable=&mut pair.1;let mut f=||{*mutable+=*shared;*mutable};println!("{}",f());println!("{} {}",pair.0,pair.1);}"#.into(),
+                "7\n3 7\n".into(),
+            ),
+            15 => (
+                r#"struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){println!("drop {}",self.n);}}fn main(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};println!("{}",f());println!("{}",pair.1);}"#.into(),
+                "drop 7\n10\n4\n".into(),
+            ),
+            _ => unreachable!(),
+        };
+    }
     let (a, b) = operands(id);
     match id % 4 {
         0 => (
@@ -53,7 +74,8 @@ fn valid(id: usize) -> (String, String) {
 
 fn invalid(id: usize) -> (String, &'static str) {
     assert!(id < INVALID_CASES);
-    let (a, b) = operands(VALID_CASES + id);
+    // Preserve original invalid fixture sources when adding valid probes.
+    let (a, b) = operands(12 + id);
     // Every defect is in an uncalled function. Main alone is deliberately valid.
     let (body, code) = match id {
         0 => (
@@ -153,7 +175,18 @@ probes!(false;
     valid_00 = 0, valid_01 = 1, valid_02 = 2, valid_03 = 3,
     valid_04 = 4, valid_05 = 5, valid_06 = 6, valid_07 = 7,
     valid_08 = 8, valid_09 = 9, valid_10 = 10, valid_11 = 11,
+    valid_12 = 12, valid_13 = 13, valid_14 = 14,
 );
+// This newly added source is stock-valid but native CHECK currently rejects it
+// with "contract: nested index place projection". The progress driver always
+// uses --include-ignored, so this remains a FAILED compatibility obligation,
+// never a passing unsupported-boundary test. Keep the original source unchanged.
+#[test]
+#[ignore = "known native gap: owned move closure with shared tuple-field origin"]
+fn valid_15() {
+    probe(15, false);
+}
+
 probes!(true;
     unused_invalid_00 = 0, unused_invalid_01 = 1,
     unused_invalid_02 = 2, unused_invalid_03 = 3,

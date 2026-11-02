@@ -181,6 +181,26 @@ fn compatibility_manifest_maps_real_acceptance_suites_without_claiming_completen
 }
 
 #[test]
+fn compatibility_progress_comes_from_layered_exact_tests_not_manual_status() {
+    let coverage = python("tools/conformance.py", &["coverage", "--json"]);
+    for marker in [
+        "\"passing_declared_gates_percent\": 0.0",
+        "\"missing_test_gates\"",
+        "\"unmapped_integration_suites\"",
+        "\"interaction_matrix\"",
+        "\"full_rust_support_established\": false",
+    ] {
+        assert!(coverage.contains(marker), "missing {marker}: {coverage}");
+    }
+    let plan = python(
+        "tools/conformance.py",
+        &["track", "--area", "interactions", "--dry-run"],
+    );
+    assert!(plan.contains("--exact"), "{plan}");
+    assert!(plan.contains("conformance_generated"), "{plan}");
+}
+
+#[test]
 fn compatibility_discovery_includes_new_suites_and_unsupported_boundaries() {
     let result = python("tools/conformance.py", &["discover"]);
     for marker in ["conformance_program", "full_programs", "triage_markers"] {
@@ -192,6 +212,7 @@ fn compatibility_discovery_includes_new_suites_and_unsupported_boundaries() {
 #[test]
 fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_conformance.py", &["-v"]);
+    python("tools/test_compatibility_scope.py", &["-v"]);
 }
 
 #[test]

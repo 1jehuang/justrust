@@ -66,6 +66,68 @@ available. Zero matched tests or silent successful test commands cannot pass.
 Hashes detect accidental stale/tampered evidence, not a malicious operator who
 can rewrite both a report and its logs. Reports are not signed attestations.
 
+## Test-suite progress, not a separate status checklist
+
+`data/compiler-compatibility-scope.json` declares scoped test obligations grouped
+by compiler area. Every requirement has four compulsory layers: feature behavior,
+invalid-input rejection, feature interactions, and end-to-end execution. A layer
+contains exact existing integration test identities, or an explicit empty array
+when tests are missing. There are no manually maintained passing/support states.
+An unsupported-valid rejection test must never be mapped as feature acceptance.
+The original broad full-suite gates remain available independently.
+
+```sh
+# Inventory and denominator, with missing and unexecuted tests visible.
+python3 tools/conformance.py coverage
+python3 tools/conformance.py coverage --json
+# Inspect before running. Exact selectors must execute one test, never zero.
+python3 tools/conformance.py track --area interactions --dry-run
+python3 tools/conformance.py track --area memory --dry-run
+# All mapped scenarios, or use --area / --case suite::test for a bounded run.
+python3 tools/conformance.py track --timeout 600 \
+  --out "$JCODE_SCRATCH_DIR/compatibility-current"
+python3 tools/conformance.py coverage \
+  --evidence "$JCODE_SCRATCH_DIR/compatibility-current"
+```
+
+Use a new output directory per run. Run on a stable source state. `track` uses
+the installed stable justrust client, preserves exact commands and full logs,
+and binds results to the manifest, source revision/input digest, client binary
+and relevant environment. `coverage --evidence DIR` recomputes results from
+those logs. Multiple `--evidence` directories combine independently run cases.
+Conflicting current-source outcomes stay conflicting, never silently choose a
+passing rerun. Source, runner, environment or suite changes make results stale.
+Old suite runs without exact case provenance are not silently imported.
+Inventory-only coverage works without Git in hosted source snapshots, but it
+verifies no results. Retained executable evidence always requires provenance.
+Tracked cases use `--include-ignored`: a newly discovered valid-but-rejected
+scenario can be marked as a known gap in the ordinary regression suite while
+remaining an actual failing test in progress runs. Neither ignored nor
+expected-unsupported tests count as feature support.
+
+The displayed percentage is **passing declared test obligations**, not percent
+of all Rust. Missing layers stay in the denominator. A requirement only has all
+declared gates green when every mapped case in all four layers passes. A green
+row proves its precise test scenarios, not every semantic rule implied by its
+title. Unmapped integration suites are listed for further mapping, not treated
+as absent implementation. The scope is explicitly incomplete and expanding it
+can lower the percentage. No completion date follows from this number.
+
+The separate interaction matrix enumerates every pair of its declared bounded
+semantic axes, including pairs without tests. Multi-feature scenarios execute
+as written; pair coverage requires every declared scenario for that pair to
+pass. This is a systematic denominator within those axes, not exhaustive
+coverage of all language-feature pairs, values, orders or higher-order programs.
+Adding an axis automatically exposes all its missing pairs. Keep individual
+feature, rejection, pairwise and whole-project coverage visible separately.
+
+As features advance, add unchanged valid and invalid oracle scenarios, map their
+exact test identities, and add interactions and representative programs. Do not
+shrink the denominator or relabel a valid rejection to inflate progress. Both
+Python adversarial tests and the ordinary `conformance_program` suite validate
+the tracker. CI validates mappings and accounting without claiming an unrun
+compiler acceptance result. Reports are local/CI evidence, not signed proofs.
+
 ## Discovery and development loop
 
 `discover` inventories every integration target and lexical unsupported/ignored/

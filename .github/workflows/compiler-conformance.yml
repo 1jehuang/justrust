@@ -3,9 +3,9 @@ name: Compiler compatibility evidence index
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'libraries/**', 'tests/**', 'tools/**', 'data/compiler-conformance.json', 'Cargo.toml', '.github/workflows/compiler-conformance.yml']
+    paths: ['src/**', 'libraries/**', 'tests/**', 'tools/**', 'data/compiler-conformance.json', 'data/compiler-compatibility-scope.json', 'Cargo.toml', '.github/workflows/compiler-conformance.yml']
   pull_request:
-    paths: ['src/**', 'libraries/**', 'tests/**', 'tools/**', 'data/compiler-conformance.json', 'Cargo.toml', '.github/workflows/compiler-conformance.yml']
+    paths: ['src/**', 'libraries/**', 'tests/**', 'tools/**', 'data/compiler-conformance.json', 'data/compiler-compatibility-scope.json', 'Cargo.toml', '.github/workflows/compiler-conformance.yml']
   workflow_dispatch:
 
 permissions:
@@ -19,7 +19,11 @@ jobs:
       - name: Validate requirement and acceptance mapping
         run: python3 tools/conformance.py validate
       - name: Reject malformed and false-success evidence
-        run: python3 tools/test_conformance.py -v
+        run: |
+          python3 tools/test_conformance.py -v
+          python3 tools/test_compatibility_scope.py -v
+      - name: Report declared test obligations including missing coverage
+        run: python3 tools/conformance.py coverage --json
       - name: Show complete native acceptance plan
         run: python3 tools/conformance.py plan --profile full
       # This cheap job validates the evidence system, not the compiler itself.

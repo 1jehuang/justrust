@@ -1,0 +1,2213 @@
+{
+  "areas": [
+    {
+      "id": "source",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "source-edition",
+          "title": "Edition 2024 semantics without silent edition or target reinterpretation"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "source-lexical",
+          "title": "Complete lexical tokens, identifiers, Unicode and literal syntax"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "modules",
+                  "test": "cross_module_recursion_and_forward_declarations"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "modules",
+                  "test": "nested_inline_modules_paths_and_distinct_canonical_names"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "modules",
+                  "test": "cross_module_recursion_and_forward_declarations"
+                }
+              ]
+            }
+          ],
+          "id": "source-inline-modules",
+          "title": "Inline module recursion and forward declaration scenario"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "source-external-modules",
+          "title": "External modules, path attributes and source-file discovery"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "source-imports",
+          "title": "Grouped/glob imports, reexports and complete namespace resolution including block-local items"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "source-visibility",
+          "title": "Lexically restricted visibility on supported declarations including unused invalid imports"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "source-provenance",
+          "title": "Original UTF-8 source locations and expansion provenance through diagnostics and stable item identity"
+        }
+      ],
+      "title": "Source organization, names, syntax and edition semantics"
+    },
+    {
+      "id": "values",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_i8_bounds_arithmetic_not_transport"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "rejects_invalid_positive_signed_literal_out_of_range"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_i8_bounds_arithmetic_not_transport"
+                }
+              ]
+            }
+          ],
+          "id": "values-integers",
+          "title": "i8 arithmetic bounds and out-of-range signed literal scenario"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-wide-and-casts",
+          "title": "i128/u128 arithmetic, all integer casts, shifts, bitwise operations and assignment evaluation order"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "ieee_zero_nan_infinity_and_subnormal"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "rejects_invalid_float_operators_and_mixed_types"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "aggregates_generic_copy_and_projected_updates"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "ieee_zero_nan_infinity_and_subnormal"
+                }
+              ]
+            }
+          ],
+          "id": "values-floats",
+          "title": "IEEE zero/NaN/infinity/subnormal arithmetic and generic aggregate float scenarios"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-scalar-strings",
+          "title": "Bool, char, byte, str, string and byte-string literal values and coercions"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-aggregates",
+          "title": "Tuples, arrays, slices/DSTs, all struct/enum forms, unions, updates and discriminants"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-patterns",
+          "title": "Destructuring, refutable patterns, nested/or/range/ref/@/slice forms, guards and exhaustiveness"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-control-flow",
+          "title": "Expression typing, divergence, loops, labels, let chains and conditional evaluation order"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-inference",
+          "title": "Bidirectional inference, numeric defaulting, coercion sites, partial annotations and never type"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-integer-semantics",
+          "title": "All signed/unsigned primitive widths, arithmetic, literals and overflow behavior beyond the i8 scenario"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "values-float-semantics",
+          "title": "Full float literal, arithmetic, numeric cast and inference rules beyond the IEEE scenario"
+        }
+      ],
+      "title": "Typed values, expressions, patterns and control flow"
+    },
+    {
+      "id": "memory",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "memory-moves",
+          "title": "Whole and projected moves, Copy, definite initialization and control-flow joins"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "borrowing",
+                  "test": "accepts_shared_nll_last_use"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "borrowing",
+                  "test": "rejects_invalid_two_mutable_loans"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "borrowing",
+                  "test": "accepts_disjoint_struct_fields"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "borrowing",
+                  "test": "accepts_shared_nll_last_use"
+                }
+              ]
+            }
+          ],
+          "id": "memory-local-borrows",
+          "title": "Shared last-use and disjoint struct-field loan scenarios with conflicting mutable loans"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "reference_returns",
+                  "test": "accepts_identity"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "reference_returns",
+                  "test": "rejects_invalid_unused_bad_callee"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "reference_returns",
+                  "test": "shared_call_results_reissued_across_backedges_match_stock"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "reference_returns",
+                  "test": "accepts_identity"
+                }
+              ]
+            }
+          ],
+          "id": "memory-shared-returns",
+          "title": "Shared identity reference result and invalid unused callee-owned result scenarios"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "memory-general-regions",
+          "title": "General regions, higher-ranked lifetimes, elision and reference-containing aggregate escape rules"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "memory-projected-loans",
+          "title": "Mutable/projected reference returns, dynamic indices, slice splitting and loop-carried loan renewal"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "memory-temporaries",
+          "title": "Temporary scopes, lifetime extension, promotion and partial initialization cleanup"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "drop_normal",
+                  "test": "explicit_drop_function_matches_stock"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "drop_normal",
+                  "test": "explicit_drop_function_matches_stock"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "drop_normal",
+                  "test": "explicit_drop_function_matches_stock"
+                }
+              ]
+            }
+          ],
+          "id": "memory-normal-drop",
+          "title": "Explicit normal-path drop of owned values and closure captures"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "memory-unsafe-validity",
+          "title": "Unsafe blocks, raw-pointer provenance/aliasing, validity, drop checking and conditional drop flags"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "memory-drop-elaboration",
+          "title": "General destruction order, drop checking, conditional flags and recursive/partial aggregate cleanup beyond explicit drop"
+        }
+      ],
+      "title": "Ownership, references, regions and destruction"
+    },
+    {
+      "id": "abstraction",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-generic-functions",
+          "title": "Universal generic function templates with concrete instance checking and unused-body rejection"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-trait-methods",
+          "title": "Required source trait methods and exact implementation signature obligations"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-associated-types",
+          "title": "Closed associated-type projections with required-member and type-obligation rejection"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-generic-parameters",
+          "title": "Lifetime/type/const parameters, defaults, associated constants, GATs and where-clause equalities"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-coherence",
+          "title": "Cross-crate coherence/orphan rules, recursive solving, auto traits and negative implementations"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-method-lookup",
+          "title": "Receiver lookup, trait autoderef, overloaded operators/indexing and unsizing/dyn coercions"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "inherent_callable_output_infers_without_result_context"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "inherent_callable_output_infers_without_result_context"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "inherent_callable_output_infers_without_result_context"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "inherent_callable_output_infers_without_result_context"
+                }
+              ]
+            }
+          ],
+          "id": "abstraction-closure-parameters",
+          "title": "Inherent callable output inference with Result map/map_err and unused invalid output scenarios"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "abstraction-suspended-values",
+          "title": "General closure capture/callable traits, function values, impl Trait, async/await and generators"
+        }
+      ],
+      "title": "Generics, traits, methods and suspended computations"
+    },
+    {
+      "id": "expansion",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-token-matching",
+          "title": "Bounded declarative macro token matching, fragment opacity and repetition cardinality"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-source-hygiene",
+          "title": "Source macro invocation hygiene and declaration-order behavior for the native bounded corpus"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-general-hygiene",
+          "title": "General nested/recursive expansion, cross-crate dollar-crate identity and namespace-specific hygiene"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-attributes-cfg",
+          "title": "Attributes, cfg/cfg_attr and disabled-source removal with correct syntax and source observation"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-derives",
+          "title": "Builtin/custom derives and generated-item metadata with authentic source authority"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-proc-macros",
+          "title": "Function/attribute/derive proc macros with token spans and isolated execution"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "expansion-graph-discovery",
+          "title": "Generated declarations and expansion-resolution dependencies as explicit demand-driven graph discoveries"
+        }
+      ],
+      "title": "Macro expansion and dynamically generated source"
+    },
+    {
+      "id": "const",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-scalar-evaluator",
+          "title": "Typed scalar const evaluator arithmetic, short-circuiting and typed evaluation failures"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-source-items",
+          "title": "Source const items and qualified const calls with unused-initializer and effect rejection"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-general-ctfe",
+          "title": "General const-fn legality, aggregate/reference evaluation and observable CTFE diagnostics"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-static-storage",
+          "title": "Immutable/mutable statics, static initialization and address identity"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-generics",
+          "title": "Const generic parameters, substitutions, evaluatability and array-length expressions"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-promotions",
+          "title": "Promoted constants, temporary storage and const pointer/provenance rules"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "const-recursion-limits",
+          "title": "Const dependency cycles and bounded recursive evaluation with resource failures distinct from invalid Rust"
+        }
+      ],
+      "title": "Compile-time execution and static storage"
+    },
+    {
+      "id": "runtime",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "native_c_abi",
+                  "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "native_c_abi",
+                  "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "native_c_abi",
+                  "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
+                }
+              ]
+            }
+          ],
+          "id": "runtime-scalar-c-abi",
+          "title": "Narrow scalar/array C import/export and callback execution scenarios"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-layout",
+          "title": "Platform Rust/C layouts, repr variants, alignment, niches, DST metadata and calling conventions"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-allocation",
+          "title": "Allocation/deallocation/reallocation, allocator failure and zero-sized/overaligned payloads"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-startup-linking",
+          "title": "Startup/termination, object formats, symbols, relocations and native library linking"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-panic",
+          "title": "Panic abort/unwind, cleanup during unwinding, bounds/overflow traps and process exit behavior"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-concurrency",
+          "title": "Thread-local storage, threads, atomics, synchronization and memory ordering"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-intrinsics",
+          "title": "Compiler intrinsics, target features, SIMD, inline assembly and platform feature validation"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "runtime-optimization-debug",
+          "title": "Semantics-preserving SSA optimization/codegen with debug/source information across debug/release"
+        }
+      ],
+      "title": "Runtime, ABI, platform integration and native code generation"
+    },
+    {
+      "id": "library",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "library-source-core",
+          "title": "Pinned native core/no_std sources, language items and authentic executable intrinsic providers"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "library-alloc",
+          "title": "Native alloc with real allocator, Box/Vec ownership, strings and reference-bearing element loans"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "option_map",
+                  "test": "option_lazy_combinators_match_stock"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "option_map",
+                  "test": "option_lazy_combinators_match_stock"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "option_map",
+                  "test": "option_lazy_combinators_match_stock"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "option_map",
+                  "test": "option_lazy_combinators_match_stock"
+                }
+              ]
+            }
+          ],
+          "id": "library-option",
+          "title": "Option lazy branch selection, FnOnce cleanup and invalid callback result scenarios"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "library-results",
+          "title": "Result combinators, question-mark propagation and fallible collection with exact cleanup"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "library-iterators",
+          "title": "Source iterator sum/product/collect and bounded adapters including inferred callable inputs"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "library-collections",
+          "title": "Canonical collections, hashing, ordering, borrowing and non-Copy payload destruction"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "std_io",
+                  "test": "buffered_static_producers_preserve_source_regions"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "std_io",
+                  "test": "buffered_static_producers_preserve_source_regions"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "std_io",
+                  "test": "buffered_static_producers_preserve_source_regions"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "std_io",
+                  "test": "buffered_static_producers_preserve_source_regions"
+                }
+              ]
+            }
+          ],
+          "id": "library-buffered-bytes",
+          "title": "BufReader named input regions through generic BufRead and invalid escape scenarios"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "library-std-platform",
+          "title": "Full std strings/formatting, files, networking, processes, environment and platform services"
+        }
+      ],
+      "title": "Native core, alloc, std and dependency library behavior"
+    },
+    {
+      "id": "project",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "project-manifests",
+          "title": "Existing package/workspace manifests, targets, profiles and configuration precedence"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "project-captured-dependencies",
+          "title": "Captured sibling path and authenticated registry dependencies through native CLI check/build/run"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "project-resolution",
+          "title": "Dependency versions, lockfiles, features, cfg and target-specific dependency resolution"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "project-build-scripts",
+          "title": "Build scripts, generated inputs, directives, rerun rules and native-library dependency ordering"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "project-test-harnesses",
+          "title": "Unit/integration/doc tests, benches, discovery, filtering, isolation and exit status"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "full_programs",
+                  "test": "unchanged_trait_objects_actual_program"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "full_programs",
+                  "test": "unchanged_trait_objects_actual_program"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "full_programs",
+                  "test": "unchanged_trait_objects_actual_program"
+                }
+              ]
+            }
+          ],
+          "id": "project-unchanged-programs",
+          "title": "Unchanged trait-object program CHECK/BUILD/run versus stored stock stdout at workers 1 and 8"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "project-fallback",
+          "title": "Explicit labeled stock fallback isolated from native internals and private artifact formats"
+        }
+      ],
+      "title": "Existing projects and source-to-test workflows"
+    },
+    {
+      "id": "tooling",
+      "requirements": [
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-graph-contract",
+          "title": "Typed immutable demand-driven facts, request-all-before-await and per-node limits without hidden whole-program joins"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-root-gating",
+          "title": "CHECK never demands codegen and executable release waits for all required checks including unused invalid items"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-persistence",
+          "title": "Versioned semantic cache identities, cross-edit reuse, atomic durable persistence and invalidation correctness"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-security",
+          "title": "Authenticated source/artifact provenance, authorization, sandboxing, fairness and bounded resources"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-failure-taxonomy",
+          "title": "Invalid Rust, valid unsupported input, resource exhaustion and infrastructure faults remain distinct without success artifacts"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-conformance",
+          "title": "Pinned stock/source oracles and separate positive, invalid, unsupported, wrong-code, diagnostic and forged-fact corpora"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "valid_00"
+                }
+              ]
+            },
+            {
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_00"
+                }
+              ]
+            },
+            {
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "valid_00"
+                }
+              ]
+            },
+            {
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "valid_00"
+                }
+              ]
+            }
+          ],
+          "id": "tooling-cross-feature",
+          "title": "Fixed-seed generic tuple, nested shared closure and Option combination with unused closure return-type error"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-workflow-performance",
+          "title": "Real packaged CLI/artifacts, useful diagnostics/accounting and reproducible cold/edit/debug/release performance versus stock"
+        },
+        {
+          "gates": [
+            {
+              "layer": "feature",
+              "tests": []
+            },
+            {
+              "layer": "rejection",
+              "tests": []
+            },
+            {
+              "layer": "interaction",
+              "tests": []
+            },
+            {
+              "layer": "end_to_end",
+              "tests": []
+            }
+          ],
+          "id": "tooling-systematic-campaigns",
+          "title": "Sustained cross-feature generation, differential fuzzing and minimization beyond the fixed-seed combination"
+        }
+      ],
+      "title": "Graph integrity, conformance, diagnostics, security and operations"
+    }
+  ],
+  "interaction_matrix": {
+    "axes": [
+      {
+        "id": "generic-identity",
+        "title": "Bounded generic identity<T> applied to an i32 tuple"
+      },
+      {
+        "id": "tuple-values",
+        "title": "Bounded two-i32 tuple construction and field selection"
+      },
+      {
+        "id": "shared-borrow",
+        "title": "Explicit shared reference to a tuple field, read through a closure"
+      },
+      {
+        "id": "mutable-borrow",
+        "title": "Explicit mutable scalar reference read and updated through an FnMut closure"
+      },
+      {
+        "id": "nested-closure",
+        "title": "A closure body creates and invokes a nested scalar closure"
+      },
+      {
+        "id": "option-match",
+        "title": "Some construction and exhaustive Some/None matching around a callable result"
+      },
+      {
+        "id": "owned-drop",
+        "title": "Owned Guard with source Drop and observable normal-scope destruction"
+      }
+    ],
+    "scenarios": [
+      {
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "shared-borrow",
+          "nested-closure",
+          "option-match"
+        ],
+        "id": "generated-valid-00",
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_00"
+          }
+        ]
+      },
+      {
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "mutable-borrow",
+          "option-match"
+        ],
+        "id": "generated-valid-01",
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_01"
+          }
+        ]
+      },
+      {
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "nested-closure",
+          "option-match",
+          "owned-drop"
+        ],
+        "id": "generated-valid-02",
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_02"
+          }
+        ]
+      },
+      {
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "shared-borrow",
+          "nested-closure",
+          "option-match"
+        ],
+        "id": "generated-valid-03",
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_03"
+          }
+        ]
+      },
+      {
+        "id": "generated-valid-12",
+        "features": [
+          "mutable-borrow",
+          "nested-closure"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_12"
+          }
+        ]
+      },
+      {
+        "id": "generated-valid-13",
+        "features": [
+          "mutable-borrow",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_13"
+          }
+        ]
+      },
+      {
+        "id": "generated-valid-14",
+        "features": [
+          "tuple-values",
+          "shared-borrow",
+          "mutable-borrow"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_14"
+          }
+        ]
+      },
+      {
+        "id": "generated-valid-15",
+        "features": [
+          "tuple-values",
+          "shared-borrow",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "valid_15"
+          }
+        ]
+      }
+    ]
+  },
+  "schema_version": 1,
+  "scope": {
+    "claim": "Compatibility obligation inventory for an independent native Rust source-to-test-result implementation. Exact named test cases identify bounded scoped scenarios to execute, not implementation status, complete capability coverage, or passing results. Any reported fraction counts only these scoped test obligations, never specification completeness. Empty test arrays explicitly identify missing evidence. An unsupported-valid rejection is not valid-program conformance. Each requirement needs feature, invalid-input rejection, cross-feature interaction, and native end-to-end evidence before any completion claim. Earlier editions and other targets require separate tested scope. The interaction matrix declares only bounded scenario axes, independently of broader semantic requirements. Every unordered pair of declared axes is an obligation, including pairs with no scenario. Listed higher-order scenarios are executable examples, not exhaustive higher-order coverage.",
+    "edition": "2024",
+    "semantic_inventory": "incomplete",
+    "source_refs": [
+      "docs/compiler/RUST-COMPATIBILITY.md#contract-and-completion-criteria",
+      "docs/compiler/RUST-COMPATIBILITY.md#dependency-driven-milestones",
+      "docs/compiler/IMPLEMENTATION.md#g1-source-organization-syntax-and-edition-behavior",
+      "docs/compiler/IMPLEMENTATION.md#g2-typed-values-patterns-inference-and-control-flow",
+      "docs/compiler/IMPLEMENTATION.md#g3-ownership-regions-destruction-and-memory-validity",
+      "docs/compiler/IMPLEMENTATION.md#g4-traits-generics-methods-and-suspended-computations",
+      "docs/compiler/IMPLEMENTATION.md#g5-expansion-compile-time-evaluation-and-generated-work",
+      "docs/compiler/IMPLEMENTATION.md#g6-runtime-ffi-linking-and-target-expansion",
+      "docs/compiler/IMPLEMENTATION.md#g7-native-core-alloc-and-std-bring-up",
+      "docs/compiler/IMPLEMENTATION.md#g8-existing-cargo-projects-and-source-to-test-workflows",
+      "docs/compiler/IMPLEMENTATION.md#g9-integrated-graph-persistence-security-and-operations",
+      "docs/compiler/IMPLEMENTATION.md#g10-continuous-conformance-soundness-and-diagnostic-evidence",
+      "docs/compiler/IMPLEMENTATION.md#g12-graph-native-optimizer-and-code-generation",
+      "docs/compiler/IMPLEMENTATION.md#g11-representative-performance-and-final-compatibility-audit"
+    ],
+    "target": "x86_64-unknown-linux-gnu"
+  }
+}
