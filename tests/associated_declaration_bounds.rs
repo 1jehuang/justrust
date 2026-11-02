@@ -156,6 +156,13 @@ fn main() { println!("{}", escape()); }
 fn dup<T: Source<Out = U>, U: Copy>(x: T) -> (U, U) { let y = x.get(); (y, y) }
 struct Wrap<T>(T);
 impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
+fn unused_escape() -> &'static i32 { let value = 7; let (first, _) = dup(Wrap(&value)); first }
+fn main() { println!("ok"); }
+"#,
+        r#"trait Source { type Out: Copy; fn get(self) -> Self::Out; }
+fn dup<T: Source<Out = U>, U: Copy>(x: T) -> (U, U) { let y = x.get(); (y, y) }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
 fn main() { let mut value = 7; let (first, second) = dup(Wrap(&mut value)); *first = 1; *second = 2; }
 "#,
     ] {

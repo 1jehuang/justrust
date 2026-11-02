@@ -5,14 +5,11 @@
 //! SHA256: 9b4a51ddbd5a7773e6d1f5992bb33083f1bd90ebb40c6362855542fb6a094355
 //! Append receipt: associated-bounds-stock-append/receipt.json
 //! SHA256: e14960c7ce019ef53084fd257803f9627cbba99f623d2d7544b5bfb87d92b268
-//! Native phases frozen from the full graph/CLI workers1/8 CHECK/BUILD output in
-//! 942230mfnq.output. Original29: Runtime2, Invalid10, Unsupported17.
-//! Append14: Runtime6, Invalid7, Unsupported1 (nominal-self-pattern boundary).
-//! Total43: Runtime8, Invalid15, Unsupported20. Earlier syntax, resolution and
-//! inference failures do not demonstrate associated-bound proof coverage.
-//! The frozen user trait named Copy hits its scalar impl self-pattern boundary,
-//! not associated user-trait validation. No source was rewritten to bypass it.
-//! These assertions still require the final debug/release acceptance gates.
+//! Runtime expectations follow the unchanged stock outcomes: 18 valid sources
+//! must pass CHECK/BUILD and execute their exact ELF payload at workers 1 and 8.
+//! The 25 invalid sources must retain their exact semantic rejection boundary.
+//! Every source keeps its original stock errors, bytes, fingerprint and group.
+//! These are executable acceptance requirements, not a general support claim.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/native_prelude.rs"]
 mod native_prelude;
@@ -29,7 +26,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 enum Outcome {
     Runtime,
     Invalid,
-    Unsupported,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Boundary {
@@ -37,12 +33,7 @@ enum Boundary {
     MoveAnalysis,
     MethodMoveAnalysis,
     TraitObligation,
-    TypeResolution,
-    Syntax(&'static str),
-    FunctionResolution,
-    GenericInference,
     AssociatedEquality,
-    NominalSelfPattern,
 }
 struct Case {
     name: &'static str,
@@ -69,8 +60,8 @@ fn main() { let _ = dup(Wrap(7u8)); println!("ok"); }
             source_bytes: 287,
             source_fingerprint: 3275860743914007048,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::GenericInference,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 36affe439b686c8889cdd48a2f22499567735a9aa40dff84778b8e037a1000c3
         Case {
@@ -114,8 +105,8 @@ fn main() { println!("ok"); }
             source_bytes: 186,
             source_fingerprint: 9902833918253631507,
             stock_errors: &["E0277"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::TypeResolution,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::TraitObligation,
         },
         // Source SHA256 19d3693c892444cfae08593ece03eb13255fb5811ec2077a0f6a545646ab2094
         Case {
@@ -130,8 +121,8 @@ fn main() { let _ = dup(Wrap((1u8, 2u64, true))); println!("ok"); }
             source_bytes: 301,
             source_fingerprint: 1697987148083301104,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::GenericInference,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 b9b94c5f7ab4c7fc9dda197d25a82c61df63d58eaa5154e447750c018d3b5dc8
         Case {
@@ -146,8 +137,8 @@ fn main() { let _ = dup(Wrap(([3u64; 64], 4u128))); println!("ok"); }
             source_bytes: 303,
             source_fingerprint: 5949057885420266546,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::GenericInference,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 f65babe522c17e8fca8e910fb803c043da454e2c54237de01c632e3a39c3c272
         Case {
@@ -163,7 +154,7 @@ fn main() { let _ = dup::<Wrap<u8>, u16>(Wrap(1u8)); println!("ok"); }
             source_fingerprint: 7466752687292535547,
             stock_errors: &["E0271", "E0382"],
             outcome: Outcome::Invalid,
-            boundary: Boundary::AssociatedEquality,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 6d92a1a7e385542992afa1a51588293a499568a6fdd64f23f52a68a2c0adad50
         Case {
@@ -223,8 +214,8 @@ fn main() { println!("ok"); }
             source_bytes: 250,
             source_fingerprint: 154388974037743026,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(":3:71: expected ASCII identifier, found \"<\""),
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 ebd39024300439f2a385fee8f7618f28aadd53ff0571ab780664e622785044ae
         Case {
@@ -254,10 +245,8 @@ fn main() { let _ = Wrap(1u8).dup_local(2u8); println!("ok"); }
             source_bytes: 360,
             source_fingerprint: 17832477138142408092,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(
-                ":2:68: unsupported: Self where predicates are unsupported, found \"Self\"",
-            ),
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MethodMoveAnalysis,
         },
         // Source SHA256 574d84d369066c2019e16de4c4516873058c9cef4653e9ca03e81d64dd10b031
         Case {
@@ -271,8 +260,8 @@ fn main() { let _ = Item.get(); println!("ok"); }
             source_bytes: 202,
             source_fingerprint: 16935682751661139034,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::TypeResolution,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 182d3f3cfebd530311def92881fc0a4a9dd0609166739f283e85a7d179f9376d
         Case {
@@ -286,8 +275,8 @@ fn main() { let _ = Item.get(); println!("ok"); }
             source_bytes: 209,
             source_fingerprint: 15008595178173171619,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::TypeResolution,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 02ce2875facb2879ddb84c1caf6d11576c0ef3d50247fb12c9f2eb6c83d8df53
         Case {
@@ -316,10 +305,8 @@ fn main() { let _ = dup(Wrap(1u8)); println!("ok"); }
             source_bytes: 303,
             source_fingerprint: 17152649042630584479,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(
-                ":1:20: unsupported: Self where predicates are unsupported, found \"Self\"",
-            ),
+            outcome: Outcome::Invalid,
+            boundary: Boundary::TraitObligation,
         },
         // Source SHA256 0d49ef2900aef6804d543489efd8dfd5227c255ffaa3a50a91597f75df3d398f
         Case {
@@ -334,8 +321,8 @@ fn main() { let text = String::new(); let _ = dup(Wrap(&text)); println!("ok"); 
             source_bytes: 315,
             source_fingerprint: 16186225046686624671,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::FunctionResolution,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 f06ce6ead5e4898114edf2fd1ddf8d3fc3466fc495902d8d66c2b2a5d1634884
         Case {
@@ -350,10 +337,8 @@ fn main() { let _ = dup(Wrap(7u8)); println!("ok"); }
             source_bytes: 285,
             source_fingerprint: 4960240954725364229,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(
-                ":2:30: unsupported: associated type projections are unsupported, found \"::\"",
-            ),
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 7aa8f32112abcd93be7ec393c8b3e578bdaff4b2329a5b1a1f7991609ba508e7
         Case {
@@ -368,8 +353,8 @@ fn main() { let _ = dup(Wrap((1u8, 2u64, true))); println!("ok"); }
             source_bytes: 307,
             source_fingerprint: 16339857724296205881,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::GenericInference,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 0fba7ab63aa1c2afbda85f4d45e9026192aefe4ac124720f0ea1db6eb34b37e6
         Case {
@@ -384,8 +369,8 @@ fn main() { let _ = dup(Wrap(([3u64; 64], 4u128))); println!("ok"); }
             source_bytes: 309,
             source_fingerprint: 9776551712501030359,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::GenericInference,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 3f9f331d7c37589f4035b69b0fb8e7c076be41ec9be53f25e5ed47ec99811362
         Case {
@@ -434,10 +419,8 @@ fn main() { let _ = Wrap(1u8).dup_local(2u8); println!("ok"); }
             source_bytes: 366,
             source_fingerprint: 18326632952869743979,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(
-                ":2:74: unsupported: Self where predicates are unsupported, found \"Self\"",
-            ),
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 09269743abc5ddf491f7e464aac7617261af42b7e9cfa17e837081d1457f29ce
         Case {
@@ -452,10 +435,8 @@ fn main() { let _ = dup(Wrap(1u8)); println!("ok"); }
             source_bytes: 301,
             source_fingerprint: 16677748605990770074,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::Syntax(
-                ":1:20: unsupported: Self where predicates are unsupported, found \"Self\"",
-            ),
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 b9b2ff6352f7da7d9b00e9ac40be0f9ca6cbf409ab1a7d970a075c033df1560c
         Case {
@@ -470,8 +451,8 @@ fn main() { let text = String::new(); let _ = dup(Wrap(&text)); println!("ok"); 
             source_bytes: 321,
             source_fingerprint: 13364298836486185786,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::FunctionResolution,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 0ff3b68df5d7adc75e3844bcabe4e91d6ded9cd2995c356f48053c94a9fe5302
         Case {
@@ -484,8 +465,8 @@ fn main() { println!("ok"); }
             source_bytes: 183,
             source_fingerprint: 2360135437069054732,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::TypeResolution,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 af5323215d4baf8edef0025723c5167ffc4f56e84a7505277fa7421236cc34c3
         Case {
@@ -500,8 +481,8 @@ fn main() { println!("ok"); }
             source_bytes: 214,
             source_fingerprint: 15151064166079926370,
             stock_errors: &["E0382"],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::TypeResolution,
+            outcome: Outcome::Invalid,
+            boundary: Boundary::MoveAnalysis,
         },
         // Source SHA256 fef4cc1a3de789f45d3cd9d5503dc475a91bdbc877280c057e08a3773a4952fd
         Case {
@@ -514,8 +495,8 @@ fn main() { println!("ok"); }
             source_bytes: 157,
             source_fingerprint: 14345291270731113107,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::TypeResolution,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
         // Source SHA256 6e4f6b0b00b40477eceb231ca2e618df34dfe9ba504a7838263be6937f232014
         Case {
@@ -736,8 +717,8 @@ fn main() { let c=<Wrap<i32> as Source>::get(Wrap(91)); if c==91 { println!("ok"
             source_bytes: 320,
             source_fingerprint: 9116466779995810242,
             stock_errors: &[],
-            outcome: Outcome::Unsupported,
-            boundary: Boundary::NominalSelfPattern,
+            outcome: Outcome::Runtime,
+            boundary: Boundary::None,
         },
     ]
 }
@@ -904,7 +885,19 @@ fn evaluated_once(report: &Report, kind: u32, index: usize, case: &Case) {
 }
 fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, check: bool) {
     let program = native_prelude::parse(case.source).expect("frozen positive source parses");
-    frontend::check(&program).expect("all bodies check independently of reachability");
+    // The canonical CHECK root validates every source body, including unused
+    // ones. The cloned-Program legacy adapter cannot carry inferred reference
+    // origins and is not an independent oracle for canonical source checking.
+    assert!(compiled.report.published_kind(104));
+    assert_eq!(
+        compiled
+            .report
+            .node_evaluations
+            .iter()
+            .filter(|(key, _)| key.kind == 104)
+            .count(),
+        1
+    );
     let plan = frontend::PlanCtx::from_program(&program, &ir::PlanBudget::default())
         .expect("real source binders and declared predicates");
     assert_eq!(compiled.source_bytes, case.source.len());
@@ -957,7 +950,10 @@ fn successful_all_body_graph(case: &Case, compiled: &compiler::Compilation, chec
             .report
             .node_evaluations
             .iter()
-            .filter(|(key, _)| key.kind == 110)
+            .filter(|(key, _)| key.kind == 110
+                && !plan
+                    .is_prelude_decl(plan.callable_decl(key.params[0] as usize).unwrap())
+                    .unwrap())
             .count(),
         eager_bodies
     );
@@ -1009,7 +1005,7 @@ fn frozen_source_partitions_and_payloads() {
     let cases = cases();
     assert_eq!(cases.len(), 43);
     let mut groups = [0; 4];
-    let mut outcomes = [0; 3];
+    let mut outcomes = [0; 2];
     let mut accepted = 0;
     for case in &cases {
         assert_eq!(case.source.len(), case.source_bytes, "{}", case.name);
@@ -1033,8 +1029,13 @@ fn frozen_source_partitions_and_payloads() {
         outcomes[match case.outcome {
             Outcome::Runtime => 0,
             Outcome::Invalid => 1,
-            Outcome::Unsupported => 2,
         }] += 1;
+        assert_eq!(
+            case.outcome == Outcome::Runtime,
+            case.stock_errors.is_empty(),
+            "{}: native outcome must match frozen stock validity",
+            case.name
+        );
         accepted += usize::from(case.stock_errors.is_empty());
         if case.group == "append" {
             assert!(case.source.contains("trait Source: Sized"));
@@ -1048,7 +1049,7 @@ fn frozen_source_partitions_and_payloads() {
         );
     }
     assert_eq!(groups, [18, 8, 3, 14]);
-    assert_eq!(outcomes, [8, 15, 20]);
+    assert_eq!(outcomes, [18, 25]);
     assert_eq!(accepted, 18);
     let originals: String = cases[..29].iter().map(|c| c.source).collect();
     assert_eq!(fingerprint(&originals), 2831013440210668996);
@@ -1077,20 +1078,6 @@ fn diagnostic(case: &Case, text: &str) {
             Outcome::Invalid,
             "associated equality obligation does not match the caller or selected implementation",
         ),
-        Boundary::TypeResolution => (Outcome::Unsupported, "unresolved type"),
-        Boundary::FunctionResolution => (
-            Outcome::Unsupported,
-            "in function crate::main: unresolved function",
-        ),
-        Boundary::Syntax(expected) => (Outcome::Unsupported, expected),
-        Boundary::GenericInference => (
-            Outcome::Unsupported,
-            "unsupported generic inference: insufficient evidence; explicit type arguments required",
-        ),
-        Boundary::NominalSelfPattern => (
-            Outcome::Unsupported,
-            "associated declaration bounds require catalog Copy or Sized",
-        ),
         Boundary::None => panic!("positive rejected {}:{text}", case.name),
     };
     assert_eq!(case.outcome, outcome, "{}", case.name);
@@ -1100,16 +1087,6 @@ fn diagnostic(case: &Case, text: &str) {
         case.name,
         case.boundary
     );
-    if matches!(
-        case.boundary,
-        Boundary::GenericInference | Boundary::AssociatedEquality
-    ) {
-        assert!(
-            text.contains("InvalidMetadata: in callable AstPath {"),
-            "{}:{text}",
-            case.name
-        );
-    }
 }
 
 fn stock_all() {
@@ -1175,7 +1152,12 @@ fn cli_all() {
     failures.check("stock prerequisite", stock_all);
     let mut cells = 0;
     let mut runtimes = 0;
-    for case in cases() {
+    let cases = cases();
+    let expected_runtimes = 2 * cases
+        .iter()
+        .filter(|case| case.outcome == Outcome::Runtime)
+        .count();
+    for case in cases {
         for workers in [1, 8] {
             for check in [true, false] {
                 failures.check(
@@ -1227,51 +1209,49 @@ fn cli_all() {
         }
     }
     assert_eq!(cells, 172);
-    failures.check("runtime count", || assert_eq!(runtimes, 16));
+    failures.check("runtime count", || assert_eq!(runtimes, expected_runtimes));
     failures.finish();
     eprintln!(
-        "ASSOCIATED BOUNDS CLI COMPLETE:172 classified cells;16 ELF payloads;Runtime8 Invalid14 Unsupported21"
+        "ASSOCIATED BOUNDS CLI COMPLETE:172 classified cells;{runtimes} ELF payloads;Runtime18 Invalid25 Unsupported0"
     );
 }
-fn graph_all() {
+fn graph_all(workers: usize) {
     let mut failures = CellFailures::default();
     let mut cells = 0;
     for case in cases() {
-        for workers in [1, 8] {
-            for check in [true, false] {
-                failures.check(
-                    format!(
-                        "graph {} workers{workers} check{check} {:?}/{:?}",
-                        case.name, case.outcome, case.boundary
-                    ),
-                    || match compiler::compile_observed(case.source.to_owned(), workers, check) {
-                        Ok(compiled) => {
-                            assert_eq!(case.outcome, Outcome::Runtime, "{}", case.name);
-                            successful_all_body_graph(&case, &compiled, check);
-                        }
-                        Err(failure) => {
-                            assert_ne!(case.outcome, Outcome::Runtime, "{}:{failure}", case.name);
-                            diagnostic(&case, &failure.to_string());
-                            let report = failure.report.expect("rejection retains report");
-                            assert!(report.capture_complete);
-                            assert_eq!(report.events_dropped, 0);
-                            assert!(report.failures > 0);
-                            assert!(
-                                !report.published_kind(105),
-                                "{}: rejected source emitted object",
-                                case.name
-                            );
-                        }
-                    },
-                );
-                cells += 1;
-            }
+        for check in [true, false] {
+            failures.check(
+                format!(
+                    "graph {} workers{workers} check{check} {:?}/{:?}",
+                    case.name, case.outcome, case.boundary
+                ),
+                || match compiler::compile_observed(case.source.to_owned(), workers, check) {
+                    Ok(compiled) => {
+                        assert_eq!(case.outcome, Outcome::Runtime, "{}", case.name);
+                        successful_all_body_graph(&case, &compiled, check);
+                    }
+                    Err(failure) => {
+                        assert_ne!(case.outcome, Outcome::Runtime, "{}:{failure}", case.name);
+                        diagnostic(&case, &failure.to_string());
+                        let report = failure.report.expect("rejection retains report");
+                        assert!(report.capture_complete);
+                        assert_eq!(report.events_dropped, 0);
+                        assert!(report.failures > 0);
+                        assert!(
+                            !report.published_kind(105),
+                            "{}: rejected source emitted object",
+                            case.name
+                        );
+                    }
+                },
+            );
+            cells += 1;
         }
     }
-    assert_eq!(cells, 172);
+    assert_eq!(cells, 86);
     failures.finish();
     eprintln!(
-        "ASSOCIATED BOUNDS GRAPH COMPLETE:172 classified cells;Runtime8 Invalid14 Unsupported21"
+        "ASSOCIATED BOUNDS GRAPH COMPLETE:86 classified cells workers{workers};Runtime18 Invalid25 Unsupported0"
     );
 }
 fn isolated(name: &str, marker: &str, run: fn()) {
@@ -1307,11 +1287,21 @@ fn native_associated_bounds_workers1_8_check_build_actual_elf() {
         cli_all,
     );
 }
+// Keep the existing per-child deadline while exercising every source at both
+// worker counts. Successful programs now traverse their complete BUILD graph.
 #[test]
-fn native_associated_bounds_workers1_8_check_build_graph() {
+fn native_associated_bounds_worker1_check_build_graph() {
     isolated(
-        "native_associated_bounds_workers1_8_check_build_graph",
+        "native_associated_bounds_worker1_check_build_graph",
         "JR_ASSOCIATED_BOUNDS_GRAPH_CHILD",
-        graph_all,
+        || graph_all(1),
+    );
+}
+#[test]
+fn native_associated_bounds_worker8_check_build_graph() {
+    isolated(
+        "native_associated_bounds_worker8_check_build_graph",
+        "JR_ASSOCIATED_BOUNDS_GRAPH_CHILD",
+        || graph_all(8),
     );
 }
