@@ -1467,6 +1467,23 @@ impl ValidatedTraitWorld {
             }
             instantiated.signature.ref_contract = adapter.ref_contract;
         }
+        if closed
+            && method_args.is_empty()
+            && matches!(&selection.0.origin, ProofOrigin::Implementation { .. })
+            && charged(
+                &self.budget,
+                ir::root_reference_layers(&instantiated.signature.result),
+            )? > instantiated.signature.ref_contract.results.len()
+            && let Some(contract) = self.projected_implementation_result_contract(
+                item,
+                goal,
+                &selection,
+                &instantiated.signature,
+                context,
+            )?
+        {
+            instantiated.signature.ref_contract = contract;
+        }
         self.complete_projected_contract(&mut instantiated.signature)?;
         self.validate_schema_signature(
             item.declaration,
@@ -1561,6 +1578,339 @@ impl ValidatedTraitWorld {
             Some(application.evidence),
             super::parameter_equality::EqualityResultSubject::Required(call.clone()),
         )
+    }
+
+    // Reconstruct the required declaration in the selected implementation's
+    // original binder. The provided method body/signature supplies no authority.
+    fn projected_implementation_base(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        selection: &ProofEvidence,
+    ) -> Result<ProjectedCarrierBase> {
+        self.validate_projected_required_schema(item)?;
+        if selection.0.world != self.id
+            || selection.0.environment != self.empty.index
+            || selection.0.phase != FactsPhase::Closed
+            || item.trait_decl != goal.declaration
+            || !self.eq_predicate(&selection.0.goal, &Predicate::Implements(goal.clone()))?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected owner changed exact selection context",
+            ));
+        }
+        let ProofOrigin::Implementation {
+            declaration,
+            arguments,
+        } = &selection.0.origin
+        else {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected owner lost implementation selection",
+            ));
+        };
+        let implementation = self
+            .impl_header_index
+            .get(&self.budget, *declaration)?
+            .and_then(|position| self.headers.impls.get(position))
+            .filter(|implementation| implementation.declaration == *declaration)
+            .ok_or_else(|| {
+                FactsError::invalid(&self.budget, "projected owner implementation disappeared")
+            })?;
+        if arguments.len() != implementation.schema_env.total_arity() {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected owner changed ordered actual count",
+            ));
+        }
+        self.validate_predicate_substitution(
+            &Predicate::Implements(implementation.trait_ref.clone()),
+            &Predicate::Implements(goal.clone()),
+            &implementation.schema_env,
+            arguments,
+        )?;
+        let owner = self.predicate_env(*declaration)?;
+        let required = self.instantiate_owner_item(
+            item,
+            implementation,
+            ProofContext {
+                original: None,
+                predicates: &owner,
+                phase: FactsPhase::Universal,
+            },
+        )?;
+        let schema = GenericSchema {
+            env: implementation.schema_env.clone(),
+            signature: required.signature,
+            predicates: required.predicates,
+        };
+        let source_regions = self.validate_source_regions(item.declaration, &schema.signature)?;
+        let origin = charged(
+            &self.budget,
+            ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
+        )?;
+        let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
+        Ok(ProjectedCarrierBase {
+            schema,
+            arguments: arguments.clone(),
+            origin,
+            retained: DeclarationCarriers {
+                declaration: item.declaration,
+                contract,
+                regions,
+                source_regions,
+            },
+        })
+    }
+
+    pub(super) fn specialize_owner_callable_result(
+        &self,
+        target: &CallTarget,
+        schema: &GenericSchema,
+        signature: &Signature,
+        context: ProofContext<'_>,
+    ) -> Result<Option<Signature>> {
+        let info = self.info(target.declaration)?;
+        if info.own_env.arity() != 0
+            || !matches!(schema.signature.result, Ty::Param(_))
+            || charged(&self.budget, ir::root_reference_layers(&signature.result))? == 0
+            || self.signature_contains_projection(&schema.signature)?
+        {
+            return Ok(None);
+        }
+        let Some(owner) = info.owner else {
+            return Ok(None);
+        };
+        let Some(position) = self.impl_header_index.get(&self.budget, owner)? else {
+            return Ok(None);
+        };
+        let implementation = &self.headers.impls[position];
+        if implementation.associated_types.is_empty() {
+            return Ok(None);
+        }
+        // This producer uses the PROVIDED declaration's own source receipt.
+        // It cannot borrow the required item's family or a selected signature.
+        let canonical = self.callable_schema(target.declaration)?;
+        if !self.same_env(&schema.env, &canonical.env)?
+            || !self.eq_signature(&schema.signature, &canonical.signature)?
+            || schema.predicates.len() != canonical.predicates.len()
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "direct result changed canonical callable requirements schema",
+            ));
+        }
+        for (given, required) in schema.predicates.iter().zip(canonical.predicates.iter()) {
+            if !self.eq_predicate(given, required)? {
+                return Err(FactsError::invalid(
+                    &self.budget,
+                    "direct result changed ordered callable requirements",
+                ));
+            }
+        }
+        let original = self
+            .callable_header_index
+            .get(&self.budget, target.declaration)?
+            .and_then(|position| self.headers.callables.get(position))
+            .filter(|header| header.declaration == target.declaration)
+            .ok_or_else(|| {
+                FactsError::invalid(&self.budget, "direct result lost original callable header")
+            })?;
+        self.validate_declaration_schema(target.declaration, &original.schema)?;
+        // Owner normalization may turn an original associated projection into
+        // a parameter. That is not this original bare-parameter receipt. Keep
+        // those calls on their established projection-authorized path.
+        if !matches!(original.schema.signature.result, Ty::Param(_))
+            || self.signature_contains_projection(&original.schema.signature)?
+        {
+            return Ok(None);
+        }
+        if !self.same_env(&original.schema.env, &schema.env)?
+            || !self.eq_signature(&original.schema.signature, &schema.signature)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "direct result changed original provided signature adapter",
+            ));
+        }
+        let schema = &original.schema;
+        if implementation.declaration != owner
+            || !self.method_environment_matches(
+                &schema.env,
+                &implementation.schema_env,
+                &info.own_env,
+            )?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "direct result changed exact implementation owner binder",
+            ));
+        }
+        let retained = self.declaration_carriers(target.declaration)?;
+        let origin = charged(
+            &self.budget,
+            ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
+        )?;
+        let base = ProjectedCarrierBase {
+            schema: clone_schema(schema, &self.budget)?,
+            arguments: target.type_args.clone(),
+            origin,
+            retained: DeclarationCarriers {
+                declaration: retained.declaration,
+                contract: retained.contract.clone(),
+                regions: retained.regions.clone(),
+                source_regions: retained.source_regions.clone(),
+            },
+        };
+        let original = self.specialize_projected_owner_base(&base, context)?;
+        if !self.eq_types(&original.params, &signature.params, 0)?
+            || !self.eq_ty(&original.result, &signature.result, 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "direct result differs from its original provided source signature",
+            ));
+        }
+        Ok(Some(original))
+    }
+
+    fn specialize_projected_owner_base(
+        &self,
+        base: &ProjectedCarrierBase,
+        context: ProofContext<'_>,
+    ) -> Result<Signature> {
+        let mut instantiated = self.instantiate_in(
+            &base.schema,
+            &base.arguments,
+            context,
+            Some(base.retained.declaration),
+        )?;
+        let Ty::Param(parameter) = &base.schema.signature.result else {
+            return Ok(instantiated.signature);
+        };
+        if charged(
+            &self.budget,
+            ir::root_reference_layers(&instantiated.signature.result),
+        )? == 0
+        {
+            return Ok(instantiated.signature);
+        }
+        // The root row is only region topology. The nonempty return authority
+        // is the exact original parameter family, including its owned field
+        // path, transported later by ordinary carrier substitution. Neither an
+        // empty envelope nor coincident concrete reference types issue it.
+        let source =
+            self.validate_source_regions(base.retained.declaration, &base.schema.signature)?;
+        let (contract, regions) = self.derive_carriers(&base.schema.signature, &source)?;
+        let origin = charged(
+            &self.budget,
+            ir::derive_signature_origin_schema(
+                &base.schema.signature,
+                &base.schema.env,
+                &self.budget,
+            ),
+        )?;
+        if !base.schema.env.contains(*parameter)
+            || base.retained.source_regions != source
+            || base.retained.contract != contract
+            || base.retained.regions != regions
+            || base.origin != origin
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected owner changed original family receipt",
+            ));
+        }
+        let mut issued = false;
+        for result in contract.results.iter() {
+            charged(&self.budget, self.budget.charge_work(1))?;
+            if !result.location.path.0.is_empty()
+                || !matches!(result.location.channel, ir::CarrierChannel::ParamTail { parameter: p, prefix: 0 } if p == *parameter)
+                || result.sources.is_empty()
+            {
+                continue;
+            }
+            for input in result.sources.iter() {
+                charged(&self.budget, self.budget.charge_work(1))?;
+                if !matches!(input.location.channel, ir::CarrierChannel::ParamTail { parameter: p, prefix: 0 } if p == *parameter)
+                    || charged(
+                        &self.budget,
+                        ir::carrier_at(
+                            base.schema
+                                .signature
+                                .params
+                                .get(input.param)
+                                .ok_or_else(|| {
+                                    FactsError::invalid(
+                                        &self.budget,
+                                        "projected family source outside original parameters",
+                                    )
+                                })?,
+                            &input.location,
+                            &self.budget,
+                        ),
+                    )? != Ty::Param(*parameter)
+                {
+                    return Err(FactsError::invalid(
+                        &self.budget,
+                        "projected result family crossed original binder or source path",
+                    ));
+                }
+            }
+            issued = true;
+        }
+        if !issued {
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "projected result has no original input family authority",
+            ));
+        }
+        let results = charged(
+            &self.budget,
+            ir::derive_return_contracts(
+                &instantiated.signature.params,
+                &instantiated.signature.result,
+                &instantiated.signature.ref_contract,
+                &self.budget,
+            ),
+        )?;
+        retain::<ir::RefContract>(&self.budget, 1)?;
+        instantiated.signature.ref_contract = Arc::new(ir::RefContract {
+            results,
+            ..(*instantiated.signature.ref_contract).clone()
+        });
+        Ok(instantiated.signature)
+    }
+
+    fn projected_implementation_result_contract(
+        &self,
+        item: &TraitItemHeader,
+        goal: &TraitRef,
+        selection: &ProofEvidence,
+        signature: &Signature,
+        context: ProofContext<'_>,
+    ) -> Result<Option<Arc<ir::RefContract>>> {
+        let base = self.projected_implementation_base(item, goal, selection)?;
+        // Only an exact owner-normalized original schema can expose a latent
+        // result parameter. An unresolved associated family grants no layers.
+        if !matches!(base.schema.signature.result, Ty::Param(_))
+            || self.signature_contains_projection(&base.schema.signature)?
+        {
+            // Existing outer references retain their source-issued root row.
+            // complete_projected_contract expands only their inner layers.
+            return Ok(None);
+        }
+        let original = self.specialize_projected_owner_base(&base, context)?;
+        if !self.eq_types(&original.params, &signature.params, 0)?
+            || !self.eq_ty(&original.result, &signature.result, 0)?
+        {
+            return Err(FactsError::invalid(
+                &self.budget,
+                "projected result differs from exact owner source signature",
+            ));
+        }
+        Ok(Some(original.ref_contract))
     }
 
     fn projected_carrier_base(
@@ -1722,71 +2072,20 @@ impl ValidatedTraitWorld {
                 },
             });
         }
-        let ProofOrigin::Implementation {
-            declaration,
-            arguments,
-        } = &evidence.selection.0.origin
-        else {
-            return Err(FactsError::invalid(
-                &self.budget,
-                "projected carrier lost implementation selection",
-            ));
-        };
-        let mut implementation = None;
-        for candidate in self.headers.impls.iter() {
-            charged(&self.budget, self.budget.charge_work(1))?;
-            if candidate.declaration == *declaration {
-                implementation = Some(candidate);
-                break;
-            }
-        }
-        let implementation = implementation.ok_or_else(|| {
-            FactsError::invalid(&self.budget, "projected carrier implementation disappeared")
-        })?;
-        let owner = self.predicate_env(*declaration)?;
-        let required = self.instantiate_owner_item(
+        let base = self.projected_implementation_base(
             self.item_header(evidence.item)?,
-            implementation,
-            ProofContext {
-                original: None,
-                predicates: &owner,
-                phase: FactsPhase::Universal,
-            },
+            &evidence.goal,
+            &evidence.selection,
         )?;
-        let schema = GenericSchema {
-            env: implementation.schema_env.clone(),
-            signature: required.signature,
-            predicates: required.predicates,
-        };
-        let instantiated = self.instantiate_in(
-            &schema,
-            arguments,
-            ProofContext::from_facts(facts),
-            Some(evidence.item),
-        )?;
-        if !self.eq_signature(&instantiated.signature, &evidence.signature)? {
+        let signature =
+            self.specialize_projected_owner_base(&base, ProofContext::from_facts(facts))?;
+        if !self.eq_signature(&signature, &evidence.signature)? {
             return Err(FactsError::invalid(
                 &self.budget,
                 "closed projected signature disagrees with required owner transport",
             ));
         }
-        let source_regions = self.validate_source_regions(evidence.item, &schema.signature)?;
-        let origin = charged(
-            &self.budget,
-            ir::derive_signature_origin_schema(&schema.signature, &schema.env, &self.budget),
-        )?;
-        let (contract, regions) = self.derive_carriers(&schema.signature, &source_regions)?;
-        Ok(ProjectedCarrierBase {
-            schema,
-            arguments: arguments.clone(),
-            origin,
-            retained: DeclarationCarriers {
-                declaration: evidence.item,
-                contract,
-                regions,
-                source_regions,
-            },
-        })
+        Ok(base)
     }
 
     pub(super) fn validate_projected_carrier(
@@ -2799,6 +3098,243 @@ mod tests {
             forged.validate_for(&facts).unwrap_err().kind(),
             FactsErrorKind::InvalidMetadata
         );
+    }
+
+    #[test]
+    fn projected_owner_reference_result_replays_exact_source_origin() {
+        let world = world(
+            "struct Wrap<T,U>{value:T,other:U}struct Other<T,U>{value:T,other:U}trait Has{type Out:Copy;fn get(self)->Self::Out;}impl<T:Copy,U> Has for Wrap<T,U>{type Out=T;fn get(self)->T{self.value}}impl<T:Copy,U> Has for Other<T,U>{type Out=T;fn get(self)->T{self.value}}fn closed(value:Wrap<&i32,bool>){}fn main(){}",
+        );
+        let implementations = owners(&world);
+        let owner = implementations[0];
+        let target = world
+            .headers
+            .callables
+            .iter()
+            .find(|header| {
+                header.schema.env.total_arity() == 0
+                    && header.schema.signature.params.len() == 1
+                    && matches!(header.schema.signature.params[0], Ty::Struct(_))
+            })
+            .unwrap();
+        let facts = world.callable_facts(target.declaration).unwrap();
+        let call = TraitCall {
+            trait_ref: TraitRef {
+                declaration: owner.trait_ref.declaration,
+                self_ty: target.schema.signature.params[0].clone(),
+                args: Arc::from([]),
+            },
+            item: owner.items[0].0,
+            method_args: Arc::from([]),
+        };
+        let callee = Callee::TraitItem(call.clone());
+        let view = facts
+            .carrier_contract(SignatureSubject::Call(&callee))
+            .unwrap();
+        view.validate_for(&facts).unwrap();
+        assert_eq!(view.fixed.results.len(), 1);
+        let selected = world.resolve_trait_call(&call, &facts).unwrap();
+        let Callee::Direct(provider) = &selected.callee else {
+            panic!("expected exact provided method")
+        };
+        let direct = world.discharge_direct(provider, &facts).unwrap();
+        assert!(
+            world
+                .eq_signature(&selected.signature, &direct.signature)
+                .unwrap()
+        );
+        assert!(
+            world
+                .eq_contract(&view.fixed, &direct.signature.ref_contract)
+                .unwrap()
+        );
+        let direct_callee = Callee::Direct(provider.clone());
+        facts
+            .validate_signature(SignatureSubject::Call(&direct_callee), &direct.signature)
+            .unwrap();
+        let provider_schema = world.callable_schema(provider.declaration).unwrap();
+        let source_schema = world
+            .schema
+            .declaration_schema(provider.declaration)
+            .unwrap();
+        assert!(!provider_schema.predicates.is_empty());
+        assert!(
+            matches!(world.specialize_owner_callable_result(provider, &source_schema,
+            &direct.signature, ProofContext::from_facts(&facts)),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        for change in 0..3 {
+            let mut forged = clone_schema(&provider_schema, &world.budget).unwrap();
+            match change {
+                0 => forged.predicates = Arc::from([]),
+                1 => {
+                    let mut rows = forged.predicates.to_vec();
+                    rows.push(rows[0].clone());
+                    forged.predicates = rows.into();
+                }
+                _ => {
+                    Arc::make_mut(&mut forged.predicates)[0] = Predicate::Implements(TraitRef {
+                        declaration: world.catalog.id(CatalogItem::Copy),
+                        self_ty: Ty::Bool,
+                        args: Arc::from([]),
+                    });
+                }
+            }
+            assert!(
+                matches!(world.specialize_owner_callable_result(provider, &forged,
+                &direct.signature, ProofContext::from_facts(&facts)),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+            );
+        }
+        let raw = world
+            .instantiate_in(
+                &provider_schema,
+                &provider.type_args,
+                ProofContext::from_facts(&facts),
+                Some(provider.declaration),
+            )
+            .unwrap();
+        assert!(
+            !world
+                .eq_contract(&raw.signature.ref_contract, &direct.signature.ref_contract)
+                .unwrap()
+        );
+        assert!(
+            matches!(facts.validate_signature(SignatureSubject::Call(&direct_callee), &raw.signature),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        let mut wrong_actuals = provider.clone();
+        Arc::make_mut(&mut wrong_actuals.type_args).swap(0, 1);
+        assert!(
+            matches!(world.specialize_owner_callable_result(&wrong_actuals, &provider_schema,
+            &direct.signature, ProofContext::from_facts(&facts)),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        assert!(
+            view.original_contract
+                .results
+                .iter()
+                .any(|result| !result.sources.is_empty())
+        );
+        assert!(
+            view.contract
+                .results
+                .iter()
+                .any(|result| !result.sources.is_empty())
+        );
+        let evidence = view.projected.as_ref().unwrap();
+        let item = world.item_header(call.item).unwrap();
+        for change in 0..5 {
+            let mut record = (*evidence.selection.0).clone();
+            match change {
+                0 => {
+                    record.environment = record.environment.wrapping_add(1);
+                    assert_ne!(record.environment, evidence.selection.0.environment);
+                }
+                1 => record.phase = FactsPhase::Universal,
+                _ => {
+                    let ProofOrigin::Implementation {
+                        declaration,
+                        arguments,
+                    } = &mut record.origin
+                    else {
+                        unreachable!()
+                    };
+                    match change {
+                        2 => *declaration = implementations[1].declaration,
+                        3 => Arc::make_mut(arguments).swap(0, 1),
+                        _ => *arguments = Arc::from([]),
+                    }
+                }
+            }
+            match world.projected_implementation_base(
+                item,
+                &call.trait_ref,
+                &ProofEvidence(Arc::new(record)),
+            ) {
+                Err(error) => assert_eq!(
+                    error.kind(),
+                    FactsErrorKind::InvalidMetadata,
+                    "selection mutation {change}"
+                ),
+                Ok(_) => panic!("accepted forged selection mutation {change}"),
+            }
+        }
+        for change in 0..6 {
+            let mut base = world
+                .projected_implementation_base(item, &call.trait_ref, &evidence.selection)
+                .unwrap();
+            match change {
+                0..=2 => {
+                    let result = Arc::make_mut(&mut base.retained.contract.results)
+                        .iter_mut()
+                        .find(|result| !result.sources.is_empty())
+                        .unwrap();
+                    match change {
+                        0 => result.sources = Arc::from([]),
+                        1 => {
+                            let foreign = implementations[1]
+                                .schema_env
+                                .ordered_params()
+                                .next()
+                                .unwrap();
+                            Arc::make_mut(&mut result.sources)[0].location.channel =
+                                ir::CarrierChannel::ParamTail {
+                                    parameter: foreign,
+                                    prefix: 0,
+                                };
+                        }
+                        _ => {
+                            let source = &mut Arc::make_mut(&mut result.sources)[0];
+                            assert!(!source.location.path.0.is_empty());
+                            source.location.path = ir::CarrierPath(Arc::from([]));
+                        }
+                    }
+                }
+                3 => base.retained.contract.inputs = Arc::from([]),
+                4 => {
+                    Arc::make_mut(&mut base.retained.source_regions).declaration = owner.items[0].1
+                }
+                _ => Arc::make_mut(&mut base.origin).result_tails = Arc::from([]),
+            }
+            assert!(
+                matches!(world.specialize_projected_owner_base(&base, ProofContext::from_facts(&facts)),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+            );
+        }
+        let mut wrong_item = item.clone();
+        wrong_item.declaration = owner.items[0].1;
+        assert!(
+            matches!(world.projected_implementation_base(&wrong_item, &call.trait_ref,
+            &evidence.selection), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        for change in 0..4 {
+            let mut forged = view.as_ref().clone();
+            match change {
+                0 => forged.fixed = Arc::new(ir::RefContract::default()),
+                1 => forged.original_contract = ir::CarrierContract::default(),
+                2 => Arc::make_mut(&mut forged.source_regions).declaration = owner.items[0].1,
+                _ => Arc::make_mut(&mut forged.origin).result_tails = Arc::from([]),
+            }
+            assert!(
+                matches!(forged.validate_for(&facts), Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+            );
+        }
+        for ty in [
+            Ty::Bool,
+            Ty::Ref {
+                kind: ir::BorrowKind::Mut,
+                referent: Arc::new(Ty::Int(ir::IntTy::I32)),
+            },
+        ] {
+            let mut signature = evidence.signature.clone();
+            signature.result = ty;
+            assert!(
+                matches!(world.projected_implementation_result_contract(item, &call.trait_ref,
+                &evidence.selection, &signature, ProofContext::from_facts(&facts)),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata)
+            );
+        }
     }
 
     #[test]

@@ -10375,7 +10375,7 @@ impl ValidatedTraitWorld {
         self.ensure_provider(target.declaration)?;
         self.validate_closure_direct(target, context)?;
         let schema = self.callable_schema(target.declaration)?;
-        let instantiated = self.instantiate_scratch_with_facts(
+        let mut instantiated = self.instantiate_scratch_with_facts(
             &schema,
             &target.type_args,
             context,
@@ -10389,6 +10389,14 @@ impl ValidatedTraitWorld {
             context,
             scratch,
         )?;
+        if let Some(signature) = self.specialize_owner_callable_result(
+            target,
+            &schema,
+            &instantiated.signature,
+            context,
+        )? {
+            instantiated.signature = signature;
+        }
         let mut evidence = Vec::new();
         for predicate in instantiated.predicates.iter() {
             push(

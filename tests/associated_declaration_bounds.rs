@@ -119,6 +119,51 @@ fn main() {
 }
 
 #[test]
+fn explicit_copy_equality_infers_shared_reference_to_noncopy_referent() {
+    // Exact controls_18 source, including its non-Copy referent. U is inferred
+    // from Source::Out, not from the Copy bound or the checked call's actuals.
+    oracle::stock_native(
+        r#"trait Source { type Out: Copy; fn get(self) -> Self::Out; }
+fn dup<T: Source<Out = U>, U: Copy>(x: T) -> (U, U) { let y = x.get(); (y, y) }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
+fn main() { let text = String::new(); let _ = dup(Wrap(&text)); println!("ok"); }
+"#,
+    );
+    // Both &String and &i32 are Copy shared references. Equal carrier shape
+    // cannot replace the exact associated RHS required by the annotation.
+    oracle::stock_and_native_reject(
+        r#"trait Source { type Out: Copy; fn get(self) -> Self::Out; }
+fn dup<T: Source<Out = U>, U: Copy>(x: T) -> (U, U) { let y = x.get(); (y, y) }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
+fn main() { let text = String::new(); let _: (&i32, &i32) = dup(Wrap(&text)); println!("ok"); }
+"#,
+    );
+}
+
+#[test]
+fn projected_owner_reference_origins_do_not_escape_or_duplicate_mutable_borrows() {
+    for source in [
+        r#"trait Source { type Out: Copy; fn get(self) -> Self::Out; }
+fn dup<T: Source<Out = U>, U: Copy>(x: T) -> (U, U) { let y = x.get(); (y, y) }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
+fn escape() -> &'static i32 { let value = 7; let (first, _) = dup(Wrap(&value)); first }
+fn main() { println!("{}", escape()); }
+"#,
+        r#"trait Source { type Out: Copy; fn get(self) -> Self::Out; }
+fn dup<T: Source<Out = U>, U: Copy>(x: T) -> (U, U) { let y = x.get(); (y, y) }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
+fn main() { let mut value = 7; let (first, second) = dup(Wrap(&mut value)); *first = 1; *second = 2; }
+"#,
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
 fn trait_where_projection_keeps_original_owner_occurrence() {
     oracle::stock_native(
         r#"trait Source where Self::Out: Copy { type Out; fn get(self) -> Self::Out; }
