@@ -1013,6 +1013,38 @@ impl OriginalCallableView {
     pub(super) fn predicates(&self) -> &Arc<[Predicate]> {
         &self.schema.predicates
     }
+    pub(super) fn inference_predicates(&self, facts: &ValidatedFacts) -> Result<&[Predicate]> {
+        self.validate_for(facts)?;
+        let (env, predicates) = match &self.required {
+            Some((call, _)) => {
+                let (application, _) = facts
+                    .world
+                    .instantiate_universal_required_item(call, facts)?;
+                (facts.env().clone(), application.predicates)
+            }
+            None => {
+                let schema = facts.world.callable_schema(self.declaration)?;
+                (schema.env, schema.predicates)
+            }
+        };
+        if !facts.world.same_env(&self.schema.env, &env)?
+            || self.schema.predicates.len() != predicates.len()
+        {
+            return Err(FactsError::invalid(
+                facts.budget(),
+                "original inference predicate binder changed",
+            ));
+        }
+        for (original, canonical) in self.schema.predicates.iter().zip(predicates.iter()) {
+            if !facts.world.eq_predicate(original, canonical)? {
+                return Err(FactsError::invalid(
+                    facts.budget(),
+                    "original inference predicate changed",
+                ));
+            }
+        }
+        Ok(&self.schema.predicates)
+    }
     #[cfg(test)]
     pub(super) fn source_region_env(&self) -> &Arc<ir::SourceRegionEnv> {
         &self.source_regions
@@ -3207,7 +3239,17 @@ impl ValidatedTraitWorld {
                 predicates: &env,
                 phase: FactsPhase::Universal,
             };
-            world.require_impl_wf(h, &h.trait_ref, context, &mut ProofScratch::default())?;
+            let mut arguments = Vec::new();
+            for parameter in h.schema_env.ordered_params() {
+                push(budget, &mut arguments, Ty::Param(parameter))?;
+            }
+            world.require_impl_wf(
+                h,
+                &h.trait_ref,
+                &arguments,
+                context,
+                &mut ProofScratch::default(),
+            )?;
         }
         world.build_environments()?;
         world.build_constant_environments()?;
@@ -7865,18 +7907,72 @@ impl ValidatedTraitWorld {
         &self,
         h: &ImplHeader,
         goal: &TraitRef,
+        arguments: &[Ty],
         context: ProofContext<'_>,
         active: &mut ProofScratch,
     ) -> Result<()> {
-        if goal.declaration != h.trait_ref.declaration {
+        if goal.declaration != h.trait_ref.declaration
+            || arguments.len() != h.schema_env.total_arity()
+        {
             return Err(FactsError::invalid(
                 &self.budget,
-                "implementation well-formedness changed trait identity",
+                "implementation well-formedness changed trait identity or argument arity",
             ));
         }
+        self.validate_predicate_substitution(
+            &Predicate::Implements(h.trait_ref.clone()),
+            &Predicate::Implements(goal.clone()),
+            &h.schema_env,
+            arguments,
+        )?;
         let actual = &goal.self_ty;
-        for p in self.supertrait_predicates_for(goal, context.env())? {
-            self.require_in(&p, context, active)?;
+        let mut predicates = self.supertrait_predicates_for(&h.trait_ref, &h.schema_env)?;
+        if !predicates.is_empty() {
+            let owner = self.owner_context(h)?;
+            for predicate in &mut predicates {
+                let Predicate::Implements(bound) = predicate else {
+                    continue;
+                };
+                if bound.declaration != self.catalog.id(CatalogItem::Copy)
+                    && bound.declaration != self.catalog.id(CatalogItem::Sized)
+                {
+                    continue;
+                }
+                let Ty::AssociatedType(projection) = &bound.self_ty else {
+                    continue;
+                };
+                if !bound.args.is_empty()
+                    || self.associated_header(projection.item)?.trait_decl
+                        != h.trait_ref.declaration
+                    || !self.eq_predicate(
+                        &Predicate::Implements(projection.trait_ref.clone()),
+                        &Predicate::Implements(h.trait_ref.clone()),
+                    )?
+                {
+                    continue;
+                }
+                // A candidate must prove its own projected marker bound from
+                // its authenticated assignment, not by selecting itself again.
+                // Reduction happens in the original impl environment first.
+                // Non-own projections retain their independent membership need.
+                bound.self_ty =
+                    self.normalize_owner_type(&bound.self_ty, &owner, &mut Vec::new(), 0)?;
+            }
+            retain::<ir::RefContract>(&self.budget, 1)?;
+            let schema = GenericSchema {
+                env: h.schema_env.clone(),
+                signature: Signature {
+                    params: Vec::new(),
+                    result: Ty::Unit,
+                    ref_contract: Arc::new(ir::RefContract::default()),
+                },
+                predicates: parameter_equality::result_slice(&self.budget, predicates)?,
+            };
+            let instantiated =
+                self.substitute_projected_schema_with(&schema, arguments, context, active)?;
+            for predicate in instantiated.predicates.iter() {
+                self.require_in(predicate, context, active)?;
+            }
         }
         if goal.declaration != self.catalog.id(CatalogItem::Copy) {
             return Ok(());
@@ -9950,7 +10046,7 @@ impl ValidatedTraitWorld {
             if !satisfied {
                 continue;
             }
-            self.require_impl_wf(implementation, goal, facts, active)?;
+            self.require_impl_wf(implementation, goal, &args, facts, active)?;
             if selected.is_some() {
                 return Err(FactsError::ambiguous(
                     &self.budget,
@@ -18095,6 +18191,9 @@ mod tests {
             .unwrap();
         assert_eq!(required.declaration(), c.item);
         required.validate_for(&facts).unwrap();
+        required.inference_predicates(&facts).unwrap();
+        assert!(matches!(required.inference_predicates(&rebound), Err(e)
+            if e.kind() == FactsErrorKind::InvalidMetadata));
         assert!(matches!(required.validate_for(&rebound), Err(e)
             if e.kind() == FactsErrorKind::InvalidMetadata));
         let mut forged = (*facts).clone();
@@ -18102,6 +18201,103 @@ mod tests {
         assert!(
             matches!(Arc::new(forged).original_callable_schema(OriginalCallableSubject::Direct(c.caller)), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
         );
+    }
+
+    #[test]
+    fn original_callable_inference_predicates_authenticate_retained_source_schema() {
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "original-inference-predicates.rs",
+            "trait Family<A,B>{type Item;}fn infer<T,C:Family<u8,bool,Item=(T,bool)>>(c:&C){}fn other<X>(x:X){}fn main(){}",
+            &crate::compiler::source::SourceOptions::default(),
+        ).unwrap();
+        let parsed = crate::compiler::frontend::parse_prepared(&prepared).unwrap();
+        let program = crate::compiler::frontend::resolve(&parsed).unwrap();
+        let budget = PlanBudget::default();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.function_decl(0).unwrap();
+        let facts = world.callable_facts(declaration).unwrap();
+        let view = facts
+            .original_callable_schema(OriginalCallableSubject::Direct(declaration))
+            .unwrap();
+        let original = view.inference_predicates(&facts).unwrap();
+        let equality = original
+            .iter()
+            .position(|row| matches!(row, Predicate::ProjectionEq { .. }))
+            .unwrap();
+        assert_eq!(
+            original
+                .iter()
+                .filter(|row| matches!(row, Predicate::ProjectionEq { .. }))
+                .count(),
+            1
+        );
+        let Predicate::ProjectionEq { projection, ty } = &original[equality] else {
+            unreachable!()
+        };
+        assert_eq!(
+            projection.trait_ref.args.as_ref(),
+            &[Ty::Int(IntTy::U8), Ty::Bool]
+        );
+        assert!(
+            matches!(ty, Ty::Tuple(parts) if parts.len() == 2 && matches!(parts[0], Ty::Param(_)))
+        );
+        let other = world
+            .callable_facts(plan.function_decl(1).unwrap())
+            .unwrap();
+        let rebound = Arc::new((*facts).clone());
+        for wrong in [&other, &rebound] {
+            assert!(
+                matches!(view.inference_predicates(wrong), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+            );
+        }
+        let forge = |predicates: Vec<Predicate>| OriginalCallableView {
+            facts: view.facts.clone(),
+            declaration: view.declaration,
+            schema: GenericSchema {
+                env: view.schema.env.clone(),
+                signature: view.schema.signature.clone(),
+                predicates: predicates.into(),
+            },
+            source_regions: view.source_regions.clone(),
+            receiver: view.receiver,
+            required: view.required.clone(),
+        };
+        for change in 0..7 {
+            let mut rows = original.to_vec();
+            match change {
+                0 => {
+                    rows.remove(equality);
+                }
+                1 => rows.push(rows[equality].clone()),
+                _ => {
+                    let Predicate::ProjectionEq { projection, ty } = &mut rows[equality] else {
+                        unreachable!()
+                    };
+                    match change {
+                        2 => projection.trait_ref.declaration = projection.item,
+                        3 => projection.item = declaration,
+                        4 => projection.trait_ref.args = Arc::from([Ty::Bool, Ty::Int(IntTy::U8)]),
+                        5 => *ty = Ty::Bool,
+                        _ => {
+                            projection.trait_ref.self_ty = Ty::Param(ParamId {
+                                owner: other.env().scopes()[0].binder(),
+                                index: 0,
+                            })
+                        }
+                    }
+                }
+            }
+            assert!(
+                matches!(forge(rows).inference_predicates(&facts), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+            );
+        }
+        let mut wrong_binder = forge(original.to_vec());
+        wrong_binder.schema.env = other.env().clone();
+        assert!(
+            matches!(wrong_binder.inference_predicates(&facts), Err(e) if e.kind() == FactsErrorKind::InvalidMetadata)
+        );
+        view.inference_predicates(&facts).unwrap();
     }
 
     #[test]
@@ -18128,6 +18324,7 @@ mod tests {
             matches!(facts.original_callable_schema(OriginalCallableSubject::Direct(header.declaration)), Err(e) if e.is_resource())
         );
         assert!(matches!(first.validate_for(&facts), Err(e) if e.is_resource()));
+        assert!(matches!(first.inference_predicates(&facts), Err(e) if e.is_resource()));
     }
 
     #[test]

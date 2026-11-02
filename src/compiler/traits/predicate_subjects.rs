@@ -40,10 +40,11 @@ impl ValidatedTraitWorld {
             // Other open-subject obligations still require exact contextual facts.
             return Ok(Some(ProofOutcome::NotProven));
         }
-        let (normal, reductions) = self.normalize_closed_projected_type(
+        let (normal, reductions) = self.normalize_closed_projected_type_with(
             &goal.self_ty,
             context,
             !self.owner_normalization_finalized,
+            active,
         )?;
         let normalized = Predicate::Implements(TraitRef {
             declaration: goal.declaration,

@@ -101,25 +101,7 @@ impl ValidatedTraitWorld {
         schema: &GenericSchema,
         receiver: ReceiverMode,
     ) -> Result<()> {
-        for predicate in schema.predicates.iter() {
-            let Predicate::Implements(goal) = predicate else {
-                continue;
-            };
-            if self.type_contains_projection(&goal.self_ty, 0)? {
-                return Err(FactsError::unsupported(
-                    &self.budget,
-                    "unsupported: projected method associated bounds",
-                ));
-            }
-            for argument in goal.args.iter() {
-                if self.type_contains_projection(argument, 0)? {
-                    return Err(FactsError::unsupported(
-                        &self.budget,
-                        "unsupported: projected method associated bounds",
-                    ));
-                }
-            }
-        }
+        self.projected_marker_predicates(schema)?;
         for (index, ty) in schema.signature.params.iter().enumerate() {
             self.validate_ty_metadata_in(ty, &schema.env, 0)?;
             self.validate_projected_parameter_references(ty, index, receiver)?;
@@ -134,6 +116,46 @@ impl ValidatedTraitWorld {
             return Ok(());
         }
         self.reject_projected_references(&schema.signature.result, 0)
+    }
+
+    /// Admit only source-authenticated marker obligations on one exact projection.
+    /// This is a capability check, not evidence that its RHS is Copy or Sized.
+    /// Substituted applications must normalize and prove these predicates below.
+    fn projected_marker_predicates(&self, schema: &GenericSchema) -> Result<bool> {
+        // Inspect all canonical metadata before any capability rejection.
+        // Callers authenticate this schema against the original declaration.
+        for predicate in schema.predicates.iter() {
+            self.validate_predicate_metadata(predicate, &schema.env)?;
+        }
+        let mut projected = false;
+        for predicate in schema.predicates.iter() {
+            let Predicate::Implements(goal) = predicate else {
+                continue;
+            };
+            for argument in goal.args.iter() {
+                if self.type_contains_projection(argument, 0)? {
+                    return Err(FactsError::unsupported(
+                        &self.budget,
+                        "unsupported: projected method associated bounds",
+                    ));
+                }
+            }
+            if !self.type_contains_projection(&goal.self_ty, 0)? {
+                continue;
+            }
+            if !goal.args.is_empty()
+                || !matches!(&goal.self_ty, Ty::AssociatedType(_))
+                || (goal.declaration != self.catalog.id(CatalogItem::Copy)
+                    && goal.declaration != self.catalog.id(CatalogItem::Sized))
+            {
+                return Err(FactsError::unsupported(
+                    &self.budget,
+                    "unsupported: projected method associated bounds",
+                ));
+            }
+            projected = true;
+        }
+        Ok(projected)
     }
 
     fn validate_projected_parameter_references(
@@ -1415,7 +1437,11 @@ impl ValidatedTraitWorld {
         for proof in proofs {
             push(&self.budget, &mut dependencies, proof)?;
         }
-        if !method_args.is_empty() {
+        if !method_args.is_empty() || self.projected_marker_predicates(&item.schema)? {
+            // Even a nongeneric required method may carry an original
+            // `Self::Out: Copy`/`Sized` obligation. Normalize it only after exact
+            // substitution and prove its actual RHS in this caller context.
+            // Carrier replay re-instantiates the same original predicates.
             instantiated.predicates = self.normalize_instantiated_projection_predicates(
                 &instantiated.predicates,
                 context,
@@ -1927,6 +1953,259 @@ mod tests {
         world(
             "struct S;trait Has<A,B>{type Out;fn get(self)->Self::Out;}impl Has<i32,bool> for S{type Out=i128;fn get(self)->Self::Out{7i128}}impl Has<bool,i32> for S{type Out=bool;fn get(self)->Self::Out{true}}fn main(){}",
         )
+    }
+
+    fn projected_marker_paired() -> Arc<ValidatedTraitWorld> {
+        world(
+            "struct S;trait Has<A,B> where Self::Out:Copy+Sized{type Out;fn get(self)->Self::Out;}impl Has<i32,bool> for S{type Out=i128;fn get(self)->i128{7i128}}impl Has<bool,i32> for S{type Out=bool;fn get(self)->bool{true}}fn main(){}",
+        )
+    }
+
+    #[test]
+    fn projected_marker_bounds_normalize_actuals_and_replay_exact_applications() {
+        let world = projected_marker_paired();
+        let implementations = owners(&world);
+        let facts = world.callable_facts(implementations[0].items[0].1).unwrap();
+        let mut views = Vec::new();
+        for owner in &implementations {
+            let call = closed_call(owner);
+            let application = world
+                .instantiate_projected_item(
+                    world.item_header(call.item).unwrap(),
+                    &call.trait_ref,
+                    &call.method_args,
+                    ProofContext::from_facts(&facts),
+                )
+                .unwrap();
+            assert!(
+                world
+                    .projected_marker_predicates(&world.item_header(call.item).unwrap().schema,)
+                    .unwrap()
+            );
+            for predicate in application.instantiated.predicates.iter() {
+                assert!(
+                    !world
+                        .type_contains_projection(&predicate.trait_ref().self_ty, 0,)
+                        .unwrap()
+                );
+                world
+                    .require_in(
+                        predicate,
+                        ProofContext::from_facts(&facts),
+                        &mut ProofScratch::default(),
+                    )
+                    .unwrap();
+            }
+            assert!(
+                world
+                    .eq_ty(
+                        &application.instantiated.signature.result,
+                        &owner.associated_types[0].rhs,
+                        0,
+                    )
+                    .unwrap()
+            );
+            let callee = Callee::TraitItem(call);
+            let view = facts
+                .carrier_contract(SignatureSubject::Call(&callee))
+                .unwrap();
+            view.validate_for(&facts).unwrap();
+            views.push(view);
+        }
+        // Same Self and same associated declaration do not merge ordered args.
+        let mut wrong_arguments = views[0].as_ref().clone();
+        wrong_arguments.projected = views[1].projected.clone();
+        assert_eq!(
+            wrong_arguments.validate_for(&facts).unwrap_err().kind(),
+            FactsErrorKind::InvalidMetadata,
+        );
+        let foreign = projected_marker_paired();
+        let foreign_facts = foreign
+            .callable_facts(owners(&foreign)[0].items[0].1)
+            .unwrap();
+        assert_eq!(
+            views[0].validate_for(&foreign_facts).unwrap_err().kind(),
+            FactsErrorKind::InvalidMetadata,
+        );
+    }
+
+    #[test]
+    fn projected_marker_bounds_do_not_grant_copy_to_noncopy_actuals() {
+        for (bound, succeeds) in [("Copy", false), ("Sized", true)] {
+            let source = format!(
+                "struct S;struct NoCopy;trait Has{{type Out;fn get(self)->Self::Out where Self::Out:{bound};}}impl Has for S{{type Out=NoCopy;fn get(self)->NoCopy{{NoCopy}}}}fn main(){{}}"
+            );
+            let world = world(&source);
+            let owner = owners(&world)[0];
+            let facts = world.callable_facts(owner.items[0].1).unwrap();
+            let call = closed_call(owner);
+            let application = world.instantiate_projected_item(
+                world.item_header(call.item).unwrap(),
+                &call.trait_ref,
+                &call.method_args,
+                ProofContext::from_facts(&facts),
+            );
+            if succeeds {
+                let application = application.unwrap();
+                assert!(
+                    !facts
+                        .must_copy(&application.instantiated.signature.result)
+                        .unwrap()
+                );
+            } else {
+                assert!(
+                    matches!(application, Err(error) if error.kind() == FactsErrorKind::Unproved)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn projected_marker_bounds_reject_forged_original_item_arguments_and_identity() {
+        let world = projected_marker_paired();
+        let item = world.item_header(owners(&world)[0].items[0].0).unwrap();
+        for mutation in 0..3 {
+            let mut forged = item.clone();
+            let row = Arc::make_mut(&mut forged.schema.predicates)
+                .iter_mut()
+                .find_map(|predicate| match predicate {
+                    Predicate::Implements(goal)
+                        if matches!(&goal.self_ty, Ty::AssociatedType(_)) =>
+                    {
+                        Some(goal)
+                    }
+                    _ => None,
+                })
+                .unwrap();
+            if mutation == 2 {
+                row.declaration = world.catalog.id(CatalogItem::Clone);
+            } else {
+                let Ty::AssociatedType(projection) = &mut row.self_ty else {
+                    unreachable!()
+                };
+                let projection = Arc::make_mut(projection);
+                if mutation == 0 {
+                    projection.item.index = u64::MAX;
+                } else {
+                    Arc::make_mut(&mut projection.trait_ref.args).swap(0, 1);
+                }
+            }
+            assert!(matches!(
+                world.validate_projected_required_schema(&forged),
+                Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+            ));
+        }
+    }
+
+    #[test]
+    fn projected_marker_bounds_preserve_user_trait_capability_boundary() {
+        let source = frontend::parse(
+            "trait Copy{}trait Has where Self::Out:Copy{type Out;fn get(self)->Self::Out;}fn main(){}",
+        ).unwrap();
+        let result = PlanCtx::from_program(&source, &PlanBudget::default())
+            .and_then(|plan| plan.trait_world());
+        assert!(matches!(
+            result,
+            Err(error) if error.contains("unsupported: projected method associated bounds")
+        ));
+    }
+
+    #[test]
+    fn projected_marker_impl_wf_rejects_missing_actual_copy_even_unused() {
+        for source in [
+            "struct S;struct NoCopy;trait Has where Self::Out:Copy{type Out;fn get(self)->Self::Out;}impl Has for S{type Out=NoCopy;fn get(self)->NoCopy{NoCopy}}fn main(){}",
+            "struct Wrap<T>(T);trait Has where Self::Out:Copy{type Out;fn get(self)->Self::Out;}impl<T> Has for Wrap<T>{type Out=T;fn get(self)->T{self.0}}fn main(){}",
+        ] {
+            let program = frontend::parse(source).unwrap();
+            let result = PlanCtx::from_program(&program, &PlanBudget::default())
+                .and_then(|plan| plan.trait_world());
+            assert!(matches!(
+                result,
+                Err(error) if error.contains("trait obligation is not proven by caller bounds or a conditional implementation")
+            ));
+        }
+    }
+
+    #[test]
+    fn projected_marker_impl_wf_rejects_copied_owner_and_changed_ordered_arguments() {
+        let world = projected_marker_paired();
+        let implementations = owners(&world);
+        let first = implementations[0];
+        let facts = world.callable_facts(first.items[0].1).unwrap();
+        let copied = (*first).clone();
+        assert!(matches!(
+            world.require_impl_wf(
+                &copied,
+                &first.trait_ref,
+                &[],
+                ProofContext::from_facts(&facts),
+                &mut ProofScratch::default(),
+            ),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
+        assert!(matches!(
+            world.require_impl_wf(
+                first,
+                &implementations[1].trait_ref,
+                &[],
+                ProofContext::from_facts(&facts),
+                &mut ProofScratch::default(),
+            ),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
+    }
+
+    #[test]
+    fn projected_marker_normalization_preserves_active_rhs_obligation_ancestry() {
+        let world = projected_marker_paired();
+        let owner = owners(&world)[0];
+        let mut active = ProofScratch::default();
+        // Closed implementation selection uses the assumption-free world
+        // environment, not the callable environment of the original item.
+        let context = ProofContext {
+            original: None,
+            predicates: &world.empty,
+            phase: FactsPhase::Closed,
+        };
+        let subject = Ty::AssociatedType(Arc::new(ir::AssociatedTypeProjection {
+            trait_ref: owner.trait_ref.clone(),
+            item: owner.associated_types[0].associated,
+        }));
+        let goal = Predicate::Implements(TraitRef {
+            declaration: world.catalog.id(CatalogItem::Copy),
+            self_ty: subject,
+            args: Arc::from([]),
+        });
+        active
+            .with_caller_arena(world.id, context.original, |arena| {
+                arena.active.push(GoalKey {
+                    environment: context.predicates.index,
+                    phase: context.phase,
+                    finalized: world.owner_normalization_finalized,
+                    goal: Predicate::Implements(TraitRef {
+                        declaration: world.catalog.id(CatalogItem::Copy),
+                        self_ty: owner.associated_types[0].rhs.clone(),
+                        args: Arc::from([]),
+                    }),
+                });
+                // The owning implementation must prove its actual RHS Copy
+                // obligation. Preserve that ancestry through normalization.
+                // Implementation selection itself is not a prove_in entry.
+                let result = world.prove_projected_subject(&goal, context, arena);
+                match result {
+                    Err(error) => assert_eq!(error.kind(), FactsErrorKind::Cycle),
+                    Ok(Some(ProofOutcome::Proved(_))) => {
+                        panic!("normalization unexpectedly proved an active RHS obligation")
+                    }
+                    Ok(Some(ProofOutcome::NotProven)) => {
+                        panic!("normalization returned NotProven instead of Cycle")
+                    }
+                    Ok(None) => panic!("projected subject was not consumed"),
+                }
+                assert_eq!(arena.active.len(), 1);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

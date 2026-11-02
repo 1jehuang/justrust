@@ -91,3 +91,48 @@ fn main() { count(&W); }
 "#,
     );
 }
+
+#[test]
+fn associated_copy_equality_does_not_grant_rhs_parameter_copy() {
+    oracle::stock_and_native_reject(
+        r#"
+trait Source<A> { type Item: Copy; fn get(self) -> Self::Item; }
+struct S;
+impl Source<u8> for S { type Item = (i32, bool); fn get(self) -> Self::Item { (37, true) } }
+fn duplicate<T: Source<A, Item = U>, U, A>(source: T) -> (U, U) {
+    let value: U = source.get(); (value, value)
+}
+
+fn main() {
+    let ((a, first), (b, second)) = duplicate::<S, (i32, bool), u8>(S);
+    println!("{} {} {}", a + b, first, second);
+}
+"#,
+    );
+    for source in [
+        "trait Source {type Item;} struct Token; struct S; impl Source for S{type Item=Token;} fn duplicate<T:Source<Item=U>,U>(value:U)->(U,U){(value,value)} fn main(){}",
+        "trait Copy {} trait Source {type Item:Copy;} struct Token;impl Copy for Token{} struct S;impl Source for S{type Item=Token;}fn duplicate<T:Source<Item=U>,U>(value:U)->(U,U){(value,value)}fn main(){}",
+        "trait Source<A>{type Item;}trait Other<A>{type Item:Copy;}fn duplicate<T:Source<u8,Item=U>+Other<bool>,U>(value:U)->(U,U){(value,value)}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}
+
+#[test]
+fn trait_where_projection_keeps_original_owner_occurrence() {
+    oracle::stock_native(
+        r#"trait Source where Self::Out: Copy { type Out; fn get(self) -> Self::Out; }
+fn dup<T: Source>(x: T) -> (T::Out, T::Out) { let y = x.get(); (y, y) }
+struct Wrap<T>(T);
+impl<T: Copy> Source for Wrap<T> { type Out = T; fn get(self) -> T { self.0 } }
+fn main() { let _ = dup(Wrap(1u8)); println!("ok"); }
+"#,
+    );
+    // The original projected obligation applies even to unused implementations.
+    for source in [
+        "trait Source where Self::Out:Copy{type Out;fn get(self)->Self::Out;}struct S;impl Source for S{type Out=String;fn get(self)->String{String::new()}}fn main(){}",
+        "trait Source where Self::Out:Copy{type Out;fn get(self)->Self::Out;}struct Wrap<T>(T);impl<T> Source for Wrap<T>{type Out=T;fn get(self)->T{self.0}}fn main(){}",
+    ] {
+        oracle::stock_and_native_reject(source);
+    }
+}

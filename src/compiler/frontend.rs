@@ -7406,6 +7406,7 @@ fn replay_shared_local_inputs(
     }
     let trace = sr::infer_call_input_trace_with_partial_context(
         view,
+        facts,
         &input_types,
         expected.as_ref(),
         budget,
@@ -21896,6 +21897,9 @@ impl DeclRegistry {
                     .ok_or("missing retained trait bound projection item")?
                     .signature;
                 inspect_bounds(&head.bounds)?;
+                // Method schemas inherit their exact original trait's where
+                // predicates, including the owner's projection occurrences.
+                inspect_bounds(&self.program.traits[owner.source_index].bounds)?;
             }
             ir::DeclKind::TraitImpl => {
                 inspect_bounds(&self.program.impls[info.source_index].bounds)?

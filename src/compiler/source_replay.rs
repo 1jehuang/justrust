@@ -1873,6 +1873,13 @@ pub(super) fn publish_canonical_source(
     }))
 }
 
+#[derive(Clone, Debug)]
+struct OriginalEqualityTrace {
+    projection: InferTerm,
+    rhs: InferTerm,
+    normal: Option<ir::Ty>,
+}
+
 /// Immutable replay of constraints from every original source argument. This is
 /// not source authentication: callers must independently recover input types
 /// from authored expressions, never from the checked call or its actuals.
@@ -1887,6 +1894,9 @@ pub(super) struct CallInputTrace {
     #[cfg_attr(not(test), allow(dead_code))]
     expected: Option<InferTerm>,
     evidence: Arc<[InferTerm]>,
+    // Exact original projection schema, composite RHS, and normalized source evidence.
+    #[cfg_attr(not(test), allow(dead_code))]
+    equalities: Arc<[OriginalEqualityTrace]>,
     slots: Arc<[InferTerm]>,
     actuals: Arc<[ir::Ty]>,
 }
@@ -1991,6 +2001,7 @@ impl CallInputTrace {
             || self.schemas.len() != other.schemas.len()
             || self.evidence.len() != other.evidence.len()
             || self.slots.len() != other.slots.len()
+            || self.equalities.len() != other.equalities.len()
             || !terms_equal(&self.result_schema, &other.result_schema, budget, 0)?
         {
             return Err(FactsError::invalid(budget, "source input frontier changed"));
@@ -2016,6 +2027,21 @@ impl CallInputTrace {
                 return Err(FactsError::invalid(
                     budget,
                     "source input constraint changed",
+                ));
+            }
+        }
+        for (left, right) in self.equalities.iter().zip(other.equalities.iter()) {
+            if !terms_equal(&left.projection, &right.projection, budget, 0)?
+                || !terms_equal(&left.rhs, &right.rhs, budget, 0)?
+                || match (&left.normal, &right.normal) {
+                    (None, None) => false,
+                    (Some(left), Some(right)) => !replay_types_equal(left, right, budget)?,
+                    _ => true,
+                }
+            {
+                return Err(FactsError::invalid(
+                    budget,
+                    "source equality evidence changed",
                 ));
             }
         }
@@ -2084,6 +2110,7 @@ fn infer_input_schema_trace(
 
 pub(super) fn infer_call_input_trace_with_partial_context(
     view: &tr::OriginalCallableView,
+    facts: &tr::ValidatedFacts,
     inputs: &[ir::Ty],
     expected: Option<&InferTerm>,
     budget: &ir::PlanBudget,
@@ -2096,10 +2123,13 @@ pub(super) fn infer_call_input_trace_with_partial_context(
             "input inference requires an authenticated own binder",
         ));
     }
+    let predicates = view.inference_predicates(facts)?;
     infer_input_schema_trace_with_partial_context(
+        Some((predicates, &mut |ty| {
+            facts.normalize_substituted_projection_type(ty, budget)
+        })),
         scopes.first().cloned(),
-        &view.signature().params,
-        &view.signature().result,
+        (&view.signature().params, &view.signature().result),
         inputs,
         expected,
         budget,
@@ -2121,9 +2151,9 @@ fn infer_input_schema_trace_with_context(
         .map(|ty| state.type_term(ty, None, 0))
         .transpose()?;
     infer_input_schema_trace_with_partial_context(
+        None,
         env,
-        parameters,
-        result,
+        (parameters, result),
         inputs,
         expected.as_ref(),
         budget,
@@ -2131,10 +2161,95 @@ fn infer_input_schema_trace_with_context(
     )
 }
 
+type ProjectionNormalizer<'a> = dyn FnMut(&ir::Ty) -> Result<ir::Ty, FactsError> + 'a;
+type OriginalEqualities<'a> = (&'a [ir::Predicate], &'a mut ProjectionNormalizer<'a>);
+
+// Only retained original predicates enter this helper. Neither checked call
+// actuals nor mapped signatures are inference evidence. Normalization receives
+// the exact trait declaration, associated item and ordered source-inferred args.
+fn infer_original_equalities(
+    state: &mut CallInferenceState,
+    predicates: &[ir::Predicate],
+    binder: Option<ir::BinderId>,
+    materialize: &mut impl FnMut(ir::DeclId, &[ir::Ty]) -> Result<ir::Ty, FactsError>,
+    normalize: &mut ProjectionNormalizer<'_>,
+) -> Result<Vec<OriginalEqualityTrace>, FactsError> {
+    let mut equalities = Vec::new();
+    for predicate in predicates {
+        state.work(0)?;
+        if let ir::Predicate::ProjectionEq { projection, ty } = predicate {
+            let projection = state.type_term(
+                &ir::Ty::AssociatedType(Arc::new(projection.clone())),
+                binder,
+                0,
+            )?;
+            let rhs = state.type_term(ty, binder, 0)?;
+            push(
+                &mut equalities,
+                OriginalEqualityTrace {
+                    projection,
+                    rhs,
+                    normal: None,
+                },
+                &state.budget,
+            )?;
+        }
+    }
+    // Each productive pass consumes at least one equality. A reverse-ordered
+    // chain therefore terminates in at most the original equality count + 1
+    // passes, with all scanning and type traversal charged to this node.
+    for _ in 0..=equalities.len() {
+        let mut progress = false;
+        for OriginalEqualityTrace {
+            projection,
+            rhs,
+            normal: evidence,
+        } in &mut equalities
+        {
+            state.work(0)?;
+            if evidence.is_some() {
+                continue;
+            }
+            // Slot markers belong to the original schema, not to resolve's
+            // evidence language. Bind only the current source constraints.
+            // Missing inputs stay explicitly unknown for the next pass.
+            state.storage(state.slots.len())?;
+            let bindings = state.collect_terms(
+                state.slots.len(),
+                state.slots().iter().map(|slot| {
+                    state.work(0)?;
+                    match slot {
+                        Some(term) => Ok(term.clone()),
+                        None => state.node(InferKind::Unknown(false)),
+                    }
+                }),
+            )?;
+            let bound = state.bind_schema(projection, &bindings, 0)?;
+            let Some(raw) = state.resolve(&bound, false, 0, materialize)? else {
+                continue;
+            };
+            // The production callback validates canonical metadata before
+            // normalization. An unreduced rigid family grants no new slots.
+            let normal = normalize(&raw)?;
+            if replay_types_equal(&raw, &normal, &state.budget)? {
+                continue;
+            }
+            let actual = state.type_term(&normal, None, 0)?;
+            state.constrain(rhs, &actual, 0)?;
+            *evidence = Some(normal);
+            progress = true;
+        }
+        if !progress {
+            break;
+        }
+    }
+    Ok(equalities)
+}
+
 fn infer_input_schema_trace_with_partial_context(
+    equalities: Option<OriginalEqualities<'_>>,
     env: Option<Arc<ir::ParamEnv>>,
-    parameters: &[ir::Ty],
-    result: &ir::Ty,
+    (parameters, result): (&[ir::Ty], &ir::Ty),
     inputs: &[ir::Ty],
     expected: Option<&InferTerm>,
     budget: &ir::PlanBudget,
@@ -2170,6 +2285,12 @@ fn infer_input_schema_trace_with_partial_context(
         schemas.push(schema);
         evidence.push(actual);
     }
+    let equalities = match equalities {
+        Some((predicates, normalize)) => {
+            infer_original_equalities(&mut state, predicates, binder, materialize, normalize)?
+        }
+        None => Vec::new(),
+    };
     let actuals = state.finish(false, materialize)?.ok_or_else(|| {
         FactsError::unsupported(budget, "source evidence leaves generic slots unresolved")
     })?;
@@ -2192,6 +2313,7 @@ fn infer_input_schema_trace_with_partial_context(
         result_schema,
         expected,
         evidence: evidence.into(),
+        equalities: equalities.into(),
         slots: slots.into(),
         actuals: actuals.into(),
     }))
@@ -2995,9 +3117,9 @@ mod call_input_trace_tests {
             .unwrap();
         let result = ir::Ty::Tuple(vec![param(&own, 0), ir::Ty::Bool].into());
         let trace = infer_input_schema_trace_with_partial_context(
+            None,
             Some(own.clone()),
-            &[],
-            &result,
+            (&[], &result),
             &[],
             Some(&expected),
             &budget,
@@ -3014,9 +3136,9 @@ mod call_input_trace_tests {
         let no_evidence = state.node(InferKind::Unknown(false)).unwrap();
         assert!(
             infer_input_schema_trace_with_partial_context(
+                None,
                 Some(own),
-                &[],
-                &result,
+                (&[], &result),
                 &[],
                 Some(&no_evidence),
                 &budget,
@@ -3024,6 +3146,206 @@ mod call_input_trace_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn original_projection_equalities_infer_composite_rhs_to_fixed_point() {
+        let budget = ir::PlanBudget::default();
+        let own = env(3);
+        let trait_id = env(0).binder().declaration;
+        let first_item = env(0).binder().declaration;
+        let second_item = env(0).binder().declaration;
+        let projection = |self_ty, item| ir::AssociatedTypeProjection {
+            trait_ref: ir::TraitRef {
+                declaration: trait_id,
+                self_ty,
+                args: Arc::from([ir::Ty::Bool, ir::Ty::Char]),
+            },
+            item,
+        };
+        // Deliberately reverse dependency order: U's equality is initially
+        // unresolved until C's equality supplies its composite array element.
+        let predicates = [
+            ir::Predicate::ProjectionEq {
+                projection: projection(param(&own, 1), second_item),
+                ty: ir::Ty::Tuple(Arc::from([param(&own, 0), ir::Ty::Bool])),
+            },
+            ir::Predicate::ProjectionEq {
+                projection: projection(param(&own, 2), first_item),
+                ty: array(param(&own, 1), 2),
+            },
+        ];
+        let run = |predicates: &[ir::Predicate], budget: &ir::PlanBudget| {
+            infer_input_schema_trace_with_partial_context(
+                Some((predicates, &mut |raw| {
+                    if raw
+                        == &ir::Ty::AssociatedType(Arc::new(projection(ir::Ty::Bool, first_item)))
+                    {
+                        Ok(array(ir::Ty::Char, 2))
+                    } else if raw
+                        == &ir::Ty::AssociatedType(Arc::new(projection(ir::Ty::Char, second_item)))
+                    {
+                        Ok(ir::Ty::Tuple(Arc::from([
+                            ir::Ty::Int(ir::IntTy::I32),
+                            ir::Ty::Bool,
+                        ])))
+                    } else {
+                        Err(FactsError::invalid(
+                            budget,
+                            "test normalization requires exact canonical projection",
+                        ))
+                    }
+                })),
+                Some(own.clone()),
+                (&[param(&own, 2)], &ir::Ty::Unit),
+                &[ir::Ty::Bool],
+                None,
+                budget,
+                &mut |_, _| unreachable!(),
+            )
+        };
+        let trace = run(&predicates, &budget).unwrap();
+        assert_eq!(
+            trace.actuals(),
+            &[ir::Ty::Int(ir::IntTy::I32), ir::Ty::Char, ir::Ty::Bool]
+        );
+        let replay = run(&predicates, &budget).unwrap();
+        trace.validate_replayed(&replay, &budget).unwrap();
+        assert!(
+            trace
+                .validate_actuals(&[ir::Ty::Char, ir::Ty::Char, ir::Ty::Bool], &budget)
+                .is_err()
+        );
+        for change in 0..5 {
+            let mut forged = (*trace).clone();
+            let mut equalities = forged.equalities.to_vec();
+            match change {
+                0 => equalities.clear(),
+                1 => equalities.swap(0, 1),
+                2 => equalities[0].normal = Some(ir::Ty::Char),
+                3 => equalities[0].rhs = Arc::new(InferKind::Rigid(ir::Ty::Char)),
+                _ => equalities[0].projection = Arc::new(InferKind::Rigid(ir::Ty::Char)),
+            }
+            forged.equalities = equalities.into();
+            assert!(trace.validate_replayed(&forged, &budget).is_err());
+        }
+        for change in 0..5 {
+            let mut forged = predicates.clone();
+            let ir::Predicate::ProjectionEq {
+                projection: schema, ..
+            } = &mut forged[1]
+            else {
+                unreachable!()
+            };
+            match change {
+                0 => schema.item = second_item,
+                1 => schema.trait_ref.declaration = first_item,
+                2 => schema.trait_ref.args = Arc::from([ir::Ty::Char, ir::Ty::Bool]),
+                3 => schema.trait_ref.self_ty = param(&env(3), 2),
+                _ => schema.trait_ref.args = Arc::from([ir::Ty::Bool]),
+            }
+            assert!(run(&forged, &budget).is_err());
+        }
+        assert!(run(&[], &budget).is_err());
+        let tiny = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(run(&predicates, &tiny).unwrap_err().is_resource());
+    }
+
+    #[test]
+    fn original_projection_equality_never_inverts_unreduced_rigid_family() {
+        let budget = ir::PlanBudget::default();
+        let own = env(2);
+        let caller = env(1);
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: ir::TraitRef {
+                declaration: env(0).binder().declaration,
+                self_ty: param(&own, 1),
+                args: Arc::from([]),
+            },
+            item: env(0).binder().declaration,
+        };
+        let predicates = [ir::Predicate::ProjectionEq {
+            projection,
+            ty: array(param(&own, 0), 2),
+        }];
+        let mut calls = 0;
+        let error = infer_input_schema_trace_with_partial_context(
+            Some((&predicates, &mut |raw| {
+                calls += 1;
+                Ok(raw.clone())
+            })),
+            Some(own.clone()),
+            (&[param(&own, 1)], &ir::Ty::Unit),
+            &[param(&caller, 0)],
+            None,
+            &budget,
+            &mut |_, _| unreachable!(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), tr::FactsErrorKind::Unsupported);
+        assert_eq!(calls, 1);
+    }
+
+    #[test]
+    fn original_projection_equality_binding_keeps_missing_slots_pending_and_rejects_markers() {
+        let budget = ir::PlanBudget::default();
+        let own = env(2);
+        let projection = ir::AssociatedTypeProjection {
+            trait_ref: ir::TraitRef {
+                declaration: env(0).binder().declaration,
+                self_ty: param(&own, 1),
+                args: Arc::from([]),
+            },
+            item: env(0).binder().declaration,
+        };
+        let predicates = [ir::Predicate::ProjectionEq {
+            projection,
+            ty: array(param(&own, 0), 2),
+        }];
+        let mut pending = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+        let evidence = infer_original_equalities(
+            &mut pending,
+            &predicates,
+            Some(own.binder()),
+            &mut |_, _| unreachable!(),
+            &mut |_| unreachable!(),
+        )
+        .unwrap();
+        assert_eq!(evidence.len(), 1);
+        assert!(evidence[0].normal.is_none());
+        assert!(pending.slots().iter().all(Option::is_none));
+        // Evidence is not allowed to contain schema markers. Neither aliases,
+        // self cycles nor out-of-range markers gain authority via substitution.
+        for slot in [0, 1, 2] {
+            let mut forged = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+            forged.slots[1] = Some(Arc::new(InferKind::Slot(slot)));
+            let error = infer_original_equalities(
+                &mut forged,
+                &predicates,
+                Some(own.binder()),
+                &mut |_, _| unreachable!(),
+                &mut |_| unreachable!(),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+        }
+        let mut outside = predicates.clone();
+        let ir::Predicate::ProjectionEq { projection, .. } = &mut outside[0] else {
+            unreachable!()
+        };
+        projection.trait_ref.self_ty = param(&own, 2);
+        let error = infer_original_equalities(
+            &mut pending,
+            &outside,
+            Some(own.binder()),
+            &mut |_, _| unreachable!(),
+            &mut |_| unreachable!(),
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
     }
 
     fn env(count: usize) -> Arc<ir::ParamEnv> {

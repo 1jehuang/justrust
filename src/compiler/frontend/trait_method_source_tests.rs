@@ -2,6 +2,50 @@
 use super::*;
 
 #[test]
+fn inherited_trait_where_projection_replays_only_its_retained_owner() {
+    let program = parse("trait First where Self::Out:Copy{type Out;fn get(self)->i32;}trait Second where Self::Out:Copy{type Out;fn get(self)->i32;}fn main(){}").unwrap();
+    let plan = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+    let projection = |index: usize| {
+        let Type::Projection(projection) = &plan.program.traits[index].bounds[0].subject else {
+            panic!("original owner where-projection");
+        };
+        projection.as_ref()
+    };
+    let first = plan
+        .registry
+        .source_type_context(plan.registry.trait_items[0][0])
+        .unwrap();
+    let second = plan
+        .registry
+        .source_type_context(plan.registry.trait_items[1][0])
+        .unwrap();
+    for (context, original, foreign) in [
+        (first, projection(0), projection(1)),
+        (second, projection(1), projection(0)),
+    ] {
+        plan.registry
+            .validate_source_projection(context, original, &plan.budget)
+            .unwrap();
+        assert!(
+            plan.registry
+                .validate_source_projection(context, foreign, &plan.budget)
+                .is_err()
+        );
+        let mut wrong_owner = context;
+        wrong_owner.owner = if context.owner == first.owner {
+            second.owner
+        } else {
+            first.owner
+        };
+        assert!(
+            plan.registry
+                .validate_source_projection(wrong_owner, original, &plan.budget)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn closed_trait_method_bound_predicates_normalize_before_world_validation() {
     // No call expression or closure inference runs here. A failure identifies
     // declaration predicate construction rather than a caller's hint consumer.
