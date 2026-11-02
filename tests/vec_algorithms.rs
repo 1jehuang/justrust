@@ -168,6 +168,8 @@ fn native_heap_nested_affine_reborrow_preserves_aliases_moves_and_lifetimes() {
         r#"fn main(){let mut a=1i32;let mut v=vec![&mut a];let moved=v[0usize];*moved=2i32;println!("{}",v[0usize]);}"#,
         r#"fn main(){let mut outer=1i32;let mut v=vec![&mut outer];{let mut short=2i32;v[0usize]=&mut short;}println!("{}",v[0usize]);}"#,
         r#"fn main(){let mut a=1i32;let first=&mut a;let values=vec![first,first];println!("{}",values[0usize]);}"#,
+        // Replacing the slot does not erase the collection's borrowed lifetime.
+        r#"fn main(){let mut a=1i32;let mut b=2i32;let mut v=vec![&mut a];{let mut short=3i32;v[0usize]=&mut short;v[0usize]=&mut b;}println!("{}",v[0usize]);}"#,
     ] {
         iterator_oracle::stock_and_native_reject_observed(source, |workers, check, failure| {
             assert!(

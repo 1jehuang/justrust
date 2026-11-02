@@ -180,15 +180,6 @@ impl Reserve<'_> {
                     return Ok(false);
                 };
                 let info = self.registry.declaration(declaration)?;
-                let Some(source) = info.embedded_function.as_ref() else {
-                    return Ok(false);
-                };
-                source.replay_admission(
-                    &self.registry.program,
-                    self.registry,
-                    declaration,
-                    self.budget,
-                )?;
                 let Some(callee) = self.registry.source_callable(declaration) else {
                     return Ok(false);
                 };
@@ -229,6 +220,25 @@ impl Reserve<'_> {
                         .any(|issuer| issuer.authorizes(names.session().sources(), original))
                 {
                     return Ok(false);
+                }
+                if stride {
+                    if !super::super::slot::authenticates_stride(
+                        self.registry,
+                        declaration,
+                        self.budget,
+                    )? {
+                        return Ok(false);
+                    }
+                } else {
+                    let Some(source) = info.embedded_function.as_ref() else {
+                        return Ok(false);
+                    };
+                    source.replay_admission(
+                        &self.registry.program,
+                        self.registry,
+                        declaration,
+                        self.budget,
+                    )?;
                 }
                 for argument in args {
                     if !self.expression(argument)? {

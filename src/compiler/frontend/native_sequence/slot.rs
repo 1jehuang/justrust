@@ -229,6 +229,16 @@ fn stride_source(
     }))
 }
 
+/// Reuse the independently sealed physical-element query proof, without
+/// exposing its private receipt or accepting another query kind.
+pub(super) fn authenticates_stride(
+    registry: &DeclRegistry,
+    declaration: ir::DeclId,
+    budget: &ir::PlanBudget,
+) -> Result<bool, String> {
+    Ok(stride_source(registry, declaration, budget)?.is_some())
+}
+
 /// Source schema issuance, never inferred from a printed callee name. The exact
 /// original declaration must calculate `base + index * element_stride::<T>()`.
 /// Its exact canonical original mem::element_stride declaration and typed query

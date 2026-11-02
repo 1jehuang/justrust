@@ -1,6 +1,8 @@
 //! Finite original function syntax, issued only by the parser's embedded-source arm.
 //! This receipt deliberately does not retain an AST, checked body, world, or budget.
 use super::*;
+
+mod singleton_seed;
 use crate::compiler::token_session::OriginalSpan;
 #[cfg(test)]
 #[path = "function_source_tests.rs"]
@@ -12,6 +14,11 @@ pub(in crate::compiler) mod packed_query;
 #[derive(Clone, Debug)]
 enum FunctionSyntaxEvent {
     CatalogCallable(Option<super::super::semantic_path::CatalogCallable>),
+    SingletonSeed,
+    SeedParameterType,
+    SeedAppliedType,
+    SeedConstructor,
+    SeedAppend,
     Path(PathAnchor, usize),
     OriginalPath(PathAnchor, usize),
     Name(AstIdent),
@@ -93,6 +100,11 @@ fn event_equal(
             exact_source_ident(names, *a, *b)?
         }
         (FunctionSyntaxEvent::IntType(a), FunctionSyntaxEvent::IntType(b)) => a == b,
+        (FunctionSyntaxEvent::SingletonSeed, FunctionSyntaxEvent::SingletonSeed)
+        | (FunctionSyntaxEvent::SeedParameterType, FunctionSyntaxEvent::SeedParameterType)
+        | (FunctionSyntaxEvent::SeedAppliedType, FunctionSyntaxEvent::SeedAppliedType)
+        | (FunctionSyntaxEvent::SeedConstructor, FunctionSyntaxEvent::SeedConstructor)
+        | (FunctionSyntaxEvent::SeedAppend, FunctionSyntaxEvent::SeedAppend) => true,
         (FunctionSyntaxEvent::InferType, FunctionSyntaxEvent::InferType)
         | (FunctionSyntaxEvent::UnitType, FunctionSyntaxEvent::UnitType)
         | (FunctionSyntaxEvent::Variable, FunctionSyntaxEvent::Variable)
@@ -269,8 +281,10 @@ fn recipe(
     function: &Function,
     emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
 ) -> Result<bool, String> {
+    if !function.type_params.is_empty() {
+        return singleton_seed::recipe(names, function, emit);
+    }
     if function.static_mut
-        || !function.type_params.is_empty()
         || !function.bounds.is_empty()
         || function.impl_params != 0
         || function.regions.receiver.is_some()
@@ -307,6 +321,7 @@ pub(super) struct SourceFunction {
     constness: Constness,
     unsafety: bool,
     parameters: usize,
+    type_parameters: usize,
     events: Arc<[FunctionSyntaxEvent]>,
     // Exact original builtin invocation and its full-recipe event ordinal.
     packed_query: Option<(usize, OriginalSpan)>,
@@ -397,6 +412,7 @@ pub(super) fn issue(
         constness: function.constness,
         unsafety: function.unsafety,
         parameters: function.params.len(),
+        type_parameters: function.type_params.len(),
         events: events.into(),
         packed_query,
         _admitted: admitted,
@@ -422,6 +438,7 @@ impl SourceFunction {
             || self.constness != function.constness
             || self.unsafety != function.unsafety
             || self.parameters != function.params.len()
+            || self.type_parameters != function.type_params.len()
         {
             return Err("embedded function changed original header or issuer".into());
         }
@@ -912,7 +929,12 @@ pub(in crate::compiler) struct BoundFunctionSource {
     binder: ir::BinderId,
 }
 
-fn canonical_header(info: &DeclInfo, index: usize, declaration: ir::DeclId) -> Result<(), String> {
+fn canonical_header(
+    info: &DeclInfo,
+    index: usize,
+    declaration: ir::DeclId,
+    arity: usize,
+) -> Result<(), String> {
     if info.id != declaration
         || info.kind != ir::DeclKind::Function
         || info.path.kind != ir::DeclKind::Function
@@ -920,17 +942,33 @@ fn canonical_header(info: &DeclInfo, index: usize, declaration: ir::DeclId) -> R
         || info.source_index != index
         || info.owner.is_some()
         || info.receiver != ReceiverKind::None
-        || !info.type_params.is_empty()
+        || info.type_params.len() != arity
         || info.param_env.binder().declaration != declaration
-        || info.param_env.arity() != 0
-        || info.env.total_arity() != 0
+        || info.param_env.arity() != arity
+        || info.env.total_arity() != arity
         || info.env.scopes().len() != 1
         || info.env.scopes()[0].binder() != info.param_env.binder()
-        || info.env.scopes()[0].arity() != 0
+        || info.env.scopes()[0].arity() != arity
     {
         return Err("embedded function changed canonical declaration or environment".into());
     }
     Ok(())
+}
+
+fn canonical_parameters(
+    info: &DeclInfo,
+    function: &Function,
+    names: &NameStore,
+) -> Result<bool, String> {
+    if info.type_params.len() != function.type_params.len() {
+        return Ok(false);
+    }
+    for (registered, original) in info.type_params.iter().zip(&function.type_params) {
+        if !exact_source_ident(names, *registered, *original)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn canonical_item(info: &DeclInfo, function: &Function, names: &NameStore) -> Result<bool, String> {
@@ -950,7 +988,6 @@ pub(super) fn bind_registration(
     declaration: ir::DeclId,
     budget: &ir::PlanBudget,
 ) -> Result<Arc<BoundFunctionSource>, String> {
-    canonical_header(info, function_index, declaration)?;
     let function = program
         .functions
         .get(function_index)
@@ -958,6 +995,7 @@ pub(super) fn bind_registration(
     let FunctionPhase::Resolved { original, .. } = &receipt.phase else {
         return Err("embedded function registration lacks resolved source receipt".into());
     };
+    canonical_header(info, function_index, declaration, original.type_parameters)?;
     if original.function_index != function_index
         || !function
             .embedded_source
@@ -973,6 +1011,7 @@ pub(super) fn bind_registration(
         || !receipt.matches_resolved(function, &program.names)?
         || info.path.module != function.module
         || !canonical_item(info, function, &program.names)?
+        || !canonical_parameters(info, function, &program.names)?
         || info.visibility != function.visibility
     {
         return Err("embedded function registration changed original source or occurrence".into());
@@ -997,7 +1036,13 @@ impl BoundFunctionSource {
     ) -> Result<(), String> {
         budget.charge_work(1)?;
         let info = registry.declaration(declaration)?;
-        canonical_header(info, self.function_index, declaration)?;
+        let expected_arity = match &self.source.phase {
+            FunctionPhase::Resolved { original, .. } => original.type_parameters,
+            FunctionPhase::Original(_) => {
+                return Err("embedded function lost resolved source receipt".into());
+            }
+        };
+        canonical_header(info, self.function_index, declaration, expected_arity)?;
         let position = registry
             .function_position(declaration)
             .ok_or("embedded canonical function is not registered")?;
@@ -1028,6 +1073,7 @@ impl BoundFunctionSource {
             || !self.source.matches_resolved(function, &program.names)?
             || info.path.module != function.module
             || !canonical_item(info, function, &program.names)?
+            || !canonical_parameters(info, function, &program.names)?
             || info.visibility != function.visibility
         {
             return Err(

@@ -74,7 +74,7 @@ fn native_singleton_element_roles_require_original_recipes_and_issuer() {
     let reserve_position = position("reserve");
     let length =
         plan.program.structs[plan.registry.declaration(owner).unwrap().source_index].fields[1].name;
-    for mutation in 0..8 {
+    for mutation in 0..9 {
         let mut program = plan.program.as_ref().clone();
         match mutation {
             0 => program.embedded_issuers = Arc::from([]),
@@ -157,6 +157,14 @@ fn native_singleton_element_roles_require_original_recipes_and_issuer() {
                 };
                 owner.segments.last_mut().unwrap().args[0] = Type::Bool;
             }
+            8 => {
+                let index = named(&plan.program, "element_stride");
+                program.functions[index].body.tail =
+                    Some(Box::new(Expr::Integer(IntegerLiteral {
+                        magnitude: 1,
+                        suffix: Some(ir::IntTy::Usize),
+                    })));
+            }
             _ => unreachable!(),
         }
         let mut registry = plan.registry.empty_like();
@@ -173,6 +181,104 @@ fn native_singleton_element_roles_require_original_recipes_and_issuer() {
                 .unwrap()
                 .is_none(),
             "forged seed mutation={mutation}"
+        );
+    }
+}
+
+#[test]
+fn native_singleton_seed_capsule_replays_original_binder_and_complete_syntax() {
+    let plan = genuine_plan();
+    let seed = declaration(&plan, "__jr_vec_seed");
+    let index = named(&plan.program, "__jr_vec_seed");
+    let source = plan
+        .registry
+        .declaration(seed)
+        .unwrap()
+        .embedded_function
+        .as_ref()
+        .expect("genuine generic seed has a complete original syntax capsule");
+    source
+        .replay_admission(&plan.program, &plan.registry, seed, &plan.budget)
+        .unwrap();
+    for mutation in 0..6 {
+        let mut program = plan.program.as_ref().clone();
+        let function = &mut program.functions[index];
+        match mutation {
+            0 => function.embedded_source = None,
+            1 => {
+                let Expr::Var(tail) = function.body.tail.as_deref().unwrap() else {
+                    panic!("seed tail");
+                };
+                let tail = Expr::Var(tail.clone());
+                let Stmt::Expr(Expr::MethodCall { args, .. }) = &mut function.body.statements[1]
+                else {
+                    panic!("seed append");
+                };
+                args[0] = tail;
+            }
+            2 => function.type_params.clear(),
+            3 => {
+                let value = function.param_mut.first().copied().unwrap_or(false);
+                function.param_mut = vec![!value, false];
+            }
+            4 => {
+                let Type::Apply(result) = &mut function.result else {
+                    panic!("seed result");
+                };
+                result.segments.last_mut().unwrap().args[0] = Type::Bool;
+            }
+            5 => {
+                let Type::Param(parameter) = &function.params[0].1 else {
+                    panic!("seed parameter");
+                };
+                let qualified = AstPath::new(
+                    plan.program.names.as_ref(),
+                    PathAnchor::Crate,
+                    &[*parameter],
+                )
+                .unwrap();
+                function.params[0].1 = Type::Named(qualified);
+            }
+            _ => unreachable!(),
+        }
+        assert!(
+            source
+                .replay_admission(&program, &plan.registry, seed, &plan.budget)
+                .is_err(),
+            "forged seed capsule mutation={mutation}"
+        );
+    }
+    let foreign = declaration(&plan, "raw_realloc");
+    assert!(
+        source
+            .replay_admission(&plan.program, &plan.registry, foreign, &plan.budget)
+            .is_err()
+    );
+    for mutation in 0..2 {
+        let mut registry = plan.registry.empty_like();
+        registry.declarations = plan.registry.declarations.clone();
+        registry.slots = plan.registry.slots.clone();
+        registry.function_ids = plan.registry.function_ids.clone();
+        registry.callable_sources = plan.registry.callable_sources.clone();
+        let info = decl_mut(&registry.slots, &mut registry.declarations, seed).unwrap();
+        if mutation == 0 {
+            let BindingName::Named(first) = plan.program.functions[index].params[0].0 else {
+                panic!("seed input");
+            };
+            info.type_params = vec![first].into();
+        } else {
+            info.param_env = plan
+                .registry
+                .declaration(foreign)
+                .unwrap()
+                .param_env
+                .clone();
+        }
+        assert!(
+            source
+                .replay_admission(&plan.program, &registry, seed, &plan.budget)
+                .is_err(),
+            "forged seed binder mutation={mutation}"
         );
     }
 }
