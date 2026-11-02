@@ -662,12 +662,70 @@ fn native_empty_sequence_source_requires_original_recipe_and_issuer() {
             .unwrap()
             .is_none()
     );
+    let original_new = new;
+    let local_declarations = |registry: &DeclRegistry, original: &Program| {
+        assert!(Arc::ptr_eq(&registry.program.names, &original.names));
+        [new, default].map(|original| {
+            let position = plan.registry.function_position(original).unwrap();
+            let (
+                CallableSource::Associated {
+                    implementation: expected_impl,
+                    item: expected_item,
+                },
+                CallableSource::Associated {
+                    implementation,
+                    item,
+                },
+            ) = (
+                plan.registry.callable_sources[position],
+                registry.callable_sources[position],
+            )
+            else {
+                panic!("same original associated source required")
+            };
+            assert_eq!((implementation, item), (expected_impl, expected_item));
+            let local = registry.function_ids[position];
+            let expected = plan
+                .registry
+                .declaration(original)
+                .unwrap()
+                .path
+                .associated
+                .as_ref()
+                .unwrap();
+            let actual = registry
+                .declaration(local)
+                .unwrap()
+                .path
+                .associated
+                .as_ref()
+                .unwrap();
+            assert_eq!(
+                registry.declaration(actual.nominal).unwrap().source_index,
+                plan.registry
+                    .declaration(expected.nominal)
+                    .unwrap()
+                    .source_index
+            );
+            assert_eq!(
+                actual
+                    .trait_decl
+                    .map(|id| registry.declaration(id).unwrap().source_index),
+                expected
+                    .trait_decl
+                    .map(|id| plan.registry.declaration(id).unwrap().source_index)
+            );
+            local
+        })
+    };
     for issuers in [Arc::from([]), foreign.embedded_issuers.clone()] {
+        let genuine = native_box_source_program();
         let budget = ir::PlanBudget::default();
         let fresh = PlanCtx::from_program(&genuine, &budget).unwrap();
         let mut adapter = native_box_source_adapter(&fresh, &budget);
         drop(fresh);
         let registry = Arc::get_mut(&mut adapter.registry).unwrap();
+        let [new, default] = local_declarations(registry, &genuine);
         let mut program = genuine.clone();
         program.embedded_issuers = issuers;
         registry.program = Arc::new(program);
@@ -687,11 +745,13 @@ fn native_empty_sequence_source_requires_original_recipe_and_issuer() {
         (vec![Type::Infer, Type::Infer], false),
         (vec![Type::Infer], true),
     ] {
+        let genuine = native_box_source_program();
         let budget = ir::PlanBudget::default();
         let fresh = PlanCtx::from_program(&genuine, &budget).unwrap();
         let mut adapter = native_box_source_adapter(&fresh, &budget);
         drop(fresh);
         let registry = Arc::get_mut(&mut adapter.registry).unwrap();
+        let [_, default] = local_declarations(registry, &genuine);
         let mut program = genuine.clone();
         let position = registry.function_position(default).unwrap();
         let CallableSource::Associated {
@@ -709,22 +769,26 @@ fn native_empty_sequence_source_requires_original_recipe_and_issuer() {
         else {
             panic!("resolved omitted Vec owner")
         };
+        let missing_arguments = arguments.is_empty();
         path.segments.last_mut().unwrap().args = arguments;
         if forged_result {
             function.result = Type::Bool;
         }
         registry.program = Arc::new(program);
-        assert!(
-            native_sequence::issue_empty(registry, default, &budget)
-                .unwrap()
-                .is_none()
-        );
+        match native_sequence::issue_empty(registry, default, &budget) {
+            Ok(None) => {}
+            Err(error) if missing_arguments && error == "missing explicit generic arguments" => {}
+            Ok(Some(_)) => panic!("forged constructor owner admitted an empty source receipt"),
+            Err(error) => panic!("unexpected forged constructor rejection: {error}"),
+        }
     }
+    let genuine = native_box_source_program();
     let budget = ir::PlanBudget::default();
     let fresh = PlanCtx::from_program(&genuine, &budget).unwrap();
     let mut changed_adapter = native_box_source_adapter(&fresh, &budget);
     drop(fresh);
     let registry = Arc::get_mut(&mut changed_adapter.registry).unwrap();
+    let [new, default] = local_declarations(registry, &genuine);
     let mut program = genuine.clone();
     let position = registry.function_position(new).unwrap();
     let CallableSource::Associated {
@@ -761,7 +825,7 @@ fn native_empty_sequence_source_requires_original_recipe_and_issuer() {
         work: 0,
         ..ir::PlanLimits::default()
     });
-    assert!(native_sequence::issue_empty(&plan.registry, new, &exhausted).is_err());
+    assert!(native_sequence::issue_empty(&plan.registry, original_new, &exhausted).is_err());
 }
 
 fn native_box_source_program() -> Program {
