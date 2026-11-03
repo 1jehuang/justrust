@@ -311,15 +311,77 @@ def witness_artifact_path(path, repo_root, source_root):
     return path
 
 
+def assess_witness_links(data, index_path, candidate_path, source_root, repo_root, reports=()):
+    """Observe exact linked executions, without upgrading source attribution."""
+    validate_witness_links(data, index_path, candidate_path, source_root, repo_root)
+    import conformance as c
+    import compatibility_scope as coverage
+    root = safe_path(repo_root)
+    scope = coverage.validate(c.load_json(root / 'data/compiler-compatibility-scope.json'), c, root)
+    base = c.validate(c.load_json(root / c.MANIFEST), root)
+    manifest = coverage.case_manifest(scope, base, c)
+    directories = sorted({safe_path(directory) for directory in reports})
+    identity = c.source_identity(root) if directories else None
+    runner = coverage.runner_identity(c) if directories else None
+    observations = {coverage.case_id(link): [] for link in data['links']}
+    for directory in directories:
+        # Parse every selected receipt row with the ordinary authenticated API,
+        # even when it is not one of this artifact's six exact selectors.
+        for key, value in coverage.evidence(scope, manifest, directory, identity, runner, c, root).items():
+            if key in observations:
+                observations[key].append(value)
+    counts = dict.fromkeys(('passed', 'failed', 'timeout', 'infrastructure', 'unverified',
+                            'untested', 'missing', 'stale', 'conflicting'), 0)
+    links = []
+    for link in data['links']:
+        attempts = observations[coverage.case_id(link)]
+        states = {attempt['status'] for attempt in attempts if attempt['status'] != 'stale'}
+        require(all(attempt['status'] in counts for attempt in attempts), 'unknown evidence status')
+        status = ('conflicting' if len(states) > 1 else next(iter(states)) if states
+                  else 'stale' if attempts else 'untested')
+        counts[status] += 1
+        links.append({'suite': link['suite'], 'test': link['test'], 'status': status,
+                      'evidence': attempts})
+    return {
+        'schema_version': 1, 'schema': 'bounded-token-witness-observations-v1',
+        'source_contract': data['source_contract'], 'source_contract_state': 'partial',
+        'witness_artifact_sha256': digest(witness_bytes(data)),
+        'source_identity': identity, 'runner_identity': runner,
+        'summary': {
+            'global_rule_identities': 2965, 'selected_rule_rows': 115,
+            'unselected_rule_identities': 2850, 'direct_witness_selectors': 6,
+            'distinct_linked_selectors_observed': sum(bool(row['evidence']) for row in links),
+            'evidence_directories': len(directories), 'status_counts': counts,
+            'reviewed_rule_rows': 0, 'completed_rules': 0,
+            'rows_with_exact_executable_evidence': 0, 'full_rust_percent': None,
+        },
+        'links': links,
+        'limitations': [
+            'Execution observations apply only to exact linked selectors, never rule completeness or reviewed inventory evidence.',
+            'The source contract remains partial and unreviewed. All reconciliation missing needs remain open.',
+        ],
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['generate','validate','build-witness-links','validate-witness-links'])
+    parser.add_argument('action', choices=['generate','validate','build-witness-links','validate-witness-links','assess-witness-links'])
     parser.add_argument('--rule-index', type=Path, required=True)
     parser.add_argument('--inventory', type=Path, required=True)
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--artifact', type=Path, required=True)
     parser.add_argument('--repo-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--evidence', type=Path, action='append', default=[])
     args = parser.parse_args(argv)
+    require(not args.evidence or args.action == 'assess-witness-links', '--evidence requires assess-witness-links')
+    if args.action == 'assess-witness-links':
+        artifact = witness_artifact_path(args.artifact, args.repo_root, args.source_root)
+        raw = artifact.read_bytes()
+        data = json.loads(raw)
+        require(raw == witness_bytes(data), 'noncanonical or nondeterministic witness artifact bytes')
+        print(json.dumps(assess_witness_links(data, args.rule_index, args.inventory,
+                                            args.source_root, args.repo_root, args.evidence), sort_keys=True))
+        return
     if args.action in ('build-witness-links', 'validate-witness-links'):
         artifact = witness_artifact_path(args.artifact, args.repo_root, args.source_root)
         if args.action == 'build-witness-links':

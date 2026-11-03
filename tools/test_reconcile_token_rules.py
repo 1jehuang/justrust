@@ -394,6 +394,162 @@ class WitnessLinkTests(unittest.TestCase):
                     self.invoke('build-witness-links', unsafe)
 
 
+class WitnessObservationTests(WitnessLinkTests):
+    def setUp(self):
+        super().setUp()
+        import conformance as c
+        # Minimal valid ordinary manifest, bound to the synthetic verifier.
+        (self.repo / c.MANIFEST).write_text(json.dumps({
+            'schema_version': 1,
+            'contract': {**SCOPE, 'semantic_inventory': 'incomplete',
+                         'oracle': {'verifier': 'tests/support/stock_rustc.rs',
+                                    'release': 'synthetic', 'commit': 'synthetic', 'llvm': 'synthetic'}},
+            'gates': [{'id': 'format', 'kind': 'fmt', 'profiles': ['full']}],
+            'requirements': [{'id': 'partial', 'state': 'partial', 'gates': ['format'],
+                              'remaining': ['all semantic review']}], 'known_gaps': [],
+        }))
+
+    def assess(self, reports=(), data=None):
+        return reconciliation.assess_witness_links(
+            self.data if data is None else data, self.index_path, self.candidate_path,
+            self.root, self.repo, reports)
+
+    def test_no_evidence_is_untested_and_zero_credit(self):
+        import conformance as c
+        with mock.patch.object(c, 'source_identity', side_effect=AssertionError('not needed')):
+            result = self.assess()
+        self.assertEqual(result['summary']['status_counts']['untested'], 6)
+        self.assertEqual(result['summary']['distinct_linked_selectors_observed'], 0)
+        self.assertEqual(result['summary']['reviewed_rule_rows'], 0)
+        self.assertEqual(result['summary']['completed_rules'], 0)
+        self.assertIsNone(result['summary']['full_rust_percent'])
+        self.assertEqual(result['source_contract_state'], 'partial')
+
+    def test_assess_cli_is_read_only_and_rejects_noncanonical_artifact(self):
+        with tempfile.TemporaryDirectory() as external:
+            artifact = Path(external) / 'links.json'
+            raw = reconciliation.witness_bytes(self.data)
+            artifact.write_bytes(raw)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main(self.command('assess-witness-links', artifact))
+            result = json.loads(output.getvalue())
+            self.assertEqual(result['summary']['status_counts']['untested'], 6)
+            self.assertEqual(artifact.read_bytes(), raw)
+            artifact.write_bytes(raw + b'\n')
+            with self.assertRaisesRegex(ValueError, 'noncanonical'):
+                main(self.command('assess-witness-links', artifact))
+
+    def test_dispatch_current_identity_dedup_exact_filter_and_conflicts(self):
+        import conformance as c
+        import compatibility_scope as coverage
+        key = coverage.case_id(self.data['links'][0])
+        first, second = self.root / 'first', self.root / 'second'
+        identity, runner = {'actual': 'source'}, {'actual': 'runner'}
+        def observed(scope, manifest, directory, current, executable, api, root):
+            self.assertIs(api, c)
+            self.assertEqual(root, self.repo)
+            self.assertEqual(current, identity)
+            self.assertEqual(executable, runner)
+            self.assertIn(key, {row['id'] for row in manifest['gates']})
+            return {key: {'status': 'passed' if directory == first else 'failed'},
+                    'unlinked-selector': {'status': 'passed'}}
+        with mock.patch.object(c, 'source_identity', return_value=identity) as source, \
+             mock.patch.object(coverage, 'runner_identity', return_value=runner) as executable, \
+             mock.patch.object(coverage, 'evidence', side_effect=observed) as evidence:
+            result = self.assess([first, first, second])
+        source.assert_called_once_with(self.repo)
+        executable.assert_called_once_with(c)
+        self.assertEqual(evidence.call_count, 2)
+        self.assertEqual(result['summary']['distinct_linked_selectors_observed'], 1)
+        self.assertEqual(result['summary']['status_counts']['conflicting'], 1)
+        self.assertEqual(result['summary']['status_counts']['passed'], 0)
+
+    def test_all_nonpass_states_preserved_at_evidence_boundary(self):
+        import conformance as c
+        import compatibility_scope as coverage
+        states = ('failed', 'stale', 'timeout', 'infrastructure', 'unverified', 'passed')
+        rows = {coverage.case_id(link): {'status': status}
+                for link, status in zip(self.data['links'], states)}
+        with mock.patch.object(c, 'source_identity', return_value={}), \
+             mock.patch.object(coverage, 'runner_identity', return_value={}), \
+             mock.patch.object(coverage, 'evidence', return_value=rows):
+            result = self.assess([self.root / 'receipt'])
+        self.assertEqual([row['status'] for row in result['links']], list(states))
+        self.assertEqual(result['summary']['completed_rules'], 0)
+
+    def test_invalid_artifact_rejected_before_evidence_or_identity(self):
+        import conformance as c
+        data = copy.deepcopy(self.data)
+        data['links'][0]['status'] = 'passed'
+        with mock.patch.object(c, 'source_identity', side_effect=AssertionError('too early')):
+            with self.assertRaisesRegex(ValueError, 'artifact differs'):
+                self.assess([self.root / 'receipt'], data)
+
+    def test_real_evidence_parser_rejects_forged_and_unfinalized_reports(self):
+        import conformance as c
+        import compatibility_scope as coverage
+        directory = self.root / 'receipt'
+        directory.mkdir()
+        for report in ({'outcome': 'passed'}, {'source_before': {}, 'source_after': {},
+                                              'runner_before': {}, 'runner_after': {}}):
+            (directory / 'report.json').write_text(json.dumps(report))
+            with mock.patch.object(c, 'source_identity', return_value={}), \
+                 mock.patch.object(coverage, 'runner_identity', return_value={}):
+                with self.assertRaises(c.InvalidEvidence):
+                    self.assess([directory])
+
+    def test_real_receipt_current_stale_and_tampered_log(self):
+        import conformance as c
+        import compatibility_scope as coverage
+        directory = self.root / 'ordinary-receipt'
+        directory.mkdir()
+        scope = c.load_json(self.scope_path)
+        base = c.validate(c.load_json(self.repo / c.MANIFEST), self.repo)
+        manifest = coverage.case_manifest(scope, base, c)
+        key = coverage.case_id(self.data['links'][0])
+        entry = c.plan(manifest, 'full', [key], 'scratch-target')[0]
+        payload = b'test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out\n'
+        (directory / 'case.log').write_bytes(payload)
+        identity, runner = {'actual-source': 1}, {'actual-runner': 1}
+        report = {'schema_version': 1, 'profile': 'full', 'selected': [key],
+                  'target_dir': 'scratch-target',
+                  'scope_sha256': c.digest(c.encoded(scope)),
+                  'manifest_sha256': c.digest(c.encoded(manifest)),
+                  'source_before': identity, 'source_after': identity,
+                  'runner_before': runner, 'runner_after': runner,
+                  'integration_suites': c.integration_suites(self.repo),
+                  'results': [{**entry, 'log': 'case.log', 'returncode': 0,
+                               'timed_out': False, 'outcome': 'passed',
+                               'tests_passed': 1, 'log_sha256': c.digest(payload)}]}
+        path = directory / 'report.json'
+        path.write_text(json.dumps(report))
+        with mock.patch.object(c, 'source_identity', return_value=identity), \
+             mock.patch.object(coverage, 'runner_identity', return_value=runner):
+            self.assertEqual(self.assess([directory])['links'][0]['status'], 'passed')
+            failed = self.root / 'failed-receipt'
+            failed.mkdir()
+            failed_payload = b'[justrust-conformance-failure:v1] semantic-stage-unproven\n'
+            (failed / 'case.log').write_bytes(failed_payload)
+            failed_report = copy.deepcopy(report)
+            failed_report['results'][0].update(returncode=1, outcome='failed', tests_passed=0,
+                                                log_sha256=c.digest(failed_payload))
+            (failed / 'report.json').write_text(json.dumps(failed_report))
+            observed = self.assess([directory, failed])['links'][0]
+            self.assertEqual(observed['status'], 'conflicting')
+            self.assertEqual([row['failure_annotation'] for row in observed['evidence']
+                              if row['status'] == 'failed'], ['semantic-stage-unproven'])
+            report['source_before'] = {'old-source': 1}
+            path.write_text(json.dumps(report))
+            self.assertEqual(self.assess([directory])['links'][0]['status'], 'stale')
+            report['source_before'] = identity
+            report['runner_after'] = {'old-runner': 1}
+            path.write_text(json.dumps(report))
+            self.assertEqual(self.assess([directory])['links'][0]['status'], 'stale')
+            (directory / 'case.log').write_bytes(b'caller authored success')
+            with self.assertRaisesRegex(c.InvalidEvidence, 'inconsistent evidence'):
+                self.assess([directory])
+
+
 class FrozenRootWitnessTests(unittest.TestCase):
     def test_actual_frozen_root_if_reference_source_is_supplied(self):
         source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')

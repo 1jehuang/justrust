@@ -282,6 +282,16 @@ Set `JUSTRUST_WITNESS_REFERENCE_ROOT="$REFERENCE_SOURCE_ROOT"` when running
 as well as the synthetic adversarial controls. Without that input, the actual
 source test is explicitly skipped.
 
+Use `assess-witness-links` with the same artifact arguments and repeated
+`--evidence <track-directory>` to observe executions for those exact selectors.
+It reuses the ordinary authenticated receipt and log checks, deduplicates report
+directories, and keeps failed, stale, conflicting and untested states distinct.
+Without evidence it reports all six selectors as untested and does not need an
+installed runner. This read-only action reports observations, not an acceptance
+gate: even a passing selector does not complete a rule or review an obligation.
+Review and completed-rule credit remain zero and the full-Rust percentage stays
+unavailable. Source or runner changes make earlier execution receipts stale.
+
 Undefined behavior is not a runtime-output parity obligation. Unsafe
 preconditions and compiler-enforced restrictions must be tracked separately.
 Where documented behavior permits multiple outcomes, a differential oracle
