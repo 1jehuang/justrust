@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import os
+from pathlib import Path
 import re
 
 import compatibility_scope as scope_tools
@@ -154,8 +155,75 @@ def assess(report, directory, c, root, scope, identity, runner):
                         "Hashes detect stale or altered receipts, not a malicious operator able to rewrite logs and provenance together."]}
 
 
+def coverage(directories, c, root, scope, identity, runner):
+    """Combine original inventories, never reinterpret them as test execution.
+
+    A successful current retry can resolve a failed listing attempt. Conflicting
+    current successful listings cannot be resolved by path order or recency.
+    Every attempt remains visible even when another receipt supplies the names.
+    """
+    if not isinstance(directories, (list, tuple)) or not directories:
+        raise c.InvalidEvidence("catalog-coverage requires retained catalog directories")
+    canonical = set()
+    for directory in directories:
+        if not isinstance(directory, (str, Path)):
+            raise c.InvalidEvidence("catalog evidence must name a directory")
+        directory = Path(directory).resolve()
+        receipt = directory / "catalog.json"
+        if not directory.is_dir() or receipt.is_symlink() or not receipt.is_file():
+            raise c.InvalidEvidence("missing or unsafe catalog receipt")
+        canonical.add(directory)
+    expected = sorted(c.integration_suites(root))
+    by_suite = {suite: [] for suite in expected}
+    for directory in sorted(canonical):
+        summary = assess(c.load_json(directory / "catalog.json"), directory,
+                         c, root, scope, identity, runner)
+        for row in summary["suites"]:
+            by_suite[row["suite"]].append({**row,
+                "receipt": str(directory / "catalog.json")})
+    observations = []
+    for suite in expected:
+        attempts = by_suite[suite]
+        current = [row for row in attempts if row["status"] == "listed"]
+        signatures = {(tuple(row["tests"]), tuple(row["benchmarks"])) for row in current}
+        if len(signatures) > 1:
+            status = "conflicting"
+        elif current:
+            status = "listed"
+        else:
+            statuses = {row["status"] for row in attempts}
+            status = (next(iter(statuses)) if len(statuses) == 1
+                      else "unresolved" if statuses else "missing")
+        names = {key: current[0][key] if status == "listed" else [] for key in
+                 ("tests", "benchmarks", "lexical_only", "listed_only", "mapped_not_listed")}
+        observations.append({"suite": suite, "status": status, **names,
+            "attempts": [{key: row[key] for key in ("status", "receipt", "log")}
+                         for row in attempts]})
+    complete = bool(observations) and all(row["status"] == "listed" for row in observations)
+    return {"schema_version": 1, "purpose": "libtest-selector-catalog-coverage-v1",
+        "source": identity, "evidence_directory_count": len(canonical),
+        "expected_suite_count": len(expected),
+        "listed_suite_count": sum(row["status"] == "listed" for row in observations),
+        "complete_current_inventory": complete,
+        "all_mapped_tests_listed": complete and not any(row["mapped_not_listed"] for row in observations),
+        "listed_test_count": sum(len(row["tests"]) for row in observations),
+        "suites": observations,
+        "executed_compatibility_case_count": 0,
+        "full_rust_support_established": False, "full_rust_completion_percent": None,
+        "limitations": ["Complete means every current integration suite has an authenticated listing, not that any test was executed or passed.",
+                        "A current successful retry resolves listing failures only. Earlier failed and stale attempts remain diagnostic observations.",
+                        "Conflicting current listings are unresolved, never selected by path order. Names remain target/configuration-specific.",
+                        "Neither listed names nor mapped membership establish reviewed semantic coverage or a full Rust denominator."]}
+
+
 def main(args, base, c):
     root = c.ROOT
+    if args.action == "catalog-coverage":
+        scope = scope_tools.validate(c.load_json(args.scope), c, root)
+        summary = coverage(args.evidence, c, root, scope,
+                           c.source_identity(root), runner_identity(c))
+        print(c.encoded(summary).decode(), end="")
+        return 0 if summary["all_mapped_tests_listed"] else 1
     if args.out is None:
         raise c.InvalidEvidence("catalog and assess-catalog require --out")
     scope = scope_tools.validate(c.load_json(args.scope), c, root)

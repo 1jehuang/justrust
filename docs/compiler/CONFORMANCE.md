@@ -100,6 +100,10 @@ python3 tools/conformance.py catalog --suite conformance_generated \
   --out "$JCODE_SCRATCH_DIR/test-catalog-current"
 python3 tools/conformance.py assess-catalog \
   --out "$JCODE_SCRATCH_DIR/test-catalog-current"
+# Combine separately listed suite groups or a retry, retaining all attempts.
+python3 tools/conformance.py catalog-coverage \
+  --evidence "$JCODE_SCRATCH_DIR/test-catalog-current" \
+  --evidence "$JCODE_SCRATCH_DIR/test-catalog-other-suites"
 ```
 
 `catalog.json` retains source/client/environment identities, exact `--list`
@@ -115,6 +119,18 @@ The raw executor deliberately reports these zero-execution invocations as
 `unverified` conformance, while the catalog can report inventory status `listed`.
 Its executed compatibility count is always zero. Catalog receipts are not
 `track` evidence and must not be passed to `coverage --evidence`.
+
+`catalog-coverage` requires retained catalog directories and accounts for **all**
+current integration suites, not just the selected suites in one receipt. It exits
+zero only when every suite has a current authenticated listing and all mapped
+selectors appear. Canonical duplicate directories and identical listings count
+once. A successful current retry may supply names after a failed or stale attempt,
+but those earlier attempts remain visible. Differing current successful listings
+for one suite are `conflicting` and supply no names. Missing, stale, failed,
+unverified or conflicting inventories cannot make the complete gate pass.
+This is a complete test-name inventory gate, not an execution or compatibility
+gate. Its executed compatibility count remains zero and full Rust percentage
+remains null, even when the inventory is complete.
 
 ```sh
 # Inventory and denominator, with missing and unexecuted tests visible.

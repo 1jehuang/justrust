@@ -616,6 +616,186 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(report["runner_after"], self.runner)
         self.assertEqual(report["results"][0]["outcome"], "unverified")
 
+    def coverage_receipt(self, name, suite="a", payload=None, code=0, stale=False):
+        """Persist original receipts and logs through the existing fixture API."""
+        report = self.receipt(payload, code=code)
+        directory = self.root / name
+        directory.mkdir()
+        row = report["results"][0]
+        original_log = self.root / row["log"]
+        row.update(self.catalog.entry(suite, report["target_dir"]))
+        row["log"] = row["id"] + ".log"
+        (directory / row["log"]).write_bytes(original_log.read_bytes())
+        report["selected_suites"] = [suite]
+        if stale:
+            report["source_before"] = {"revision": "old"}
+        (directory / "catalog.json").write_bytes(c.encoded(report))
+        return directory
+
+    def catalog_coverage(self, directories):
+        return self.catalog.coverage(directories, c, self.root, self.scope,
+                                     self.identity, self.runner)
+
+    def test_catalog_coverage_partial_and_canonical_duplicate_directories(self):
+        directory = self.coverage_receipt("partial")
+        alias = self.root / "alias"
+        alias.symlink_to(directory, target_is_directory=True)
+        result = self.catalog_coverage([directory, directory / ".", alias])
+        self.assert_inventory_only(result)
+        self.assertFalse(result["complete_current_inventory"])
+        self.assertFalse(result["all_mapped_tests_listed"])
+        self.assertEqual(result["listed_test_count"], 2)
+        rows = {row["suite"]: row for row in result["suites"]}
+        self.assertEqual(set(rows), {"a", "b"})
+        self.assertEqual(rows["a"]["status"], "listed")
+        self.assertEqual(len(rows["a"]["attempts"]), 1)
+        self.assertEqual(rows["b"]["status"], "missing")
+        self.assertEqual(rows["b"]["tests"], [])
+
+    def test_catalog_coverage_identical_listings_coalesce_without_execution_credit(self):
+        payload = b"absent: test\nlexical: test\n2 tests, 0 benchmarks\n"
+        first = self.coverage_receipt("first", payload=payload)
+        second = self.coverage_receipt("second", payload=payload)
+        # The same name in a different suite is a distinct inventory entry.
+        other = self.coverage_receipt("other", suite="b",
+                                      payload=b"lexical: test\n1 test, 0 benchmarks\n")
+        result = self.catalog_coverage([first, second, other])
+        self.assert_inventory_only(result)
+        self.assertTrue(result["complete_current_inventory"])
+        self.assertTrue(result["all_mapped_tests_listed"])
+        self.assertEqual(result["listed_test_count"], 3)
+        rows = {row["suite"]: row for row in result["suites"]}
+        self.assertEqual(len(rows["a"]["attempts"]), 2)
+        self.assertEqual(rows["a"]["tests"], ["absent", "lexical"])
+
+    def test_catalog_coverage_complete_inventory_can_lack_mapped_names(self):
+        first = self.coverage_receipt("first")
+        other = self.coverage_receipt("other", suite="b", payload=b"0 tests, 0 benchmarks\n")
+        result = self.catalog_coverage([first, other])
+        self.assertTrue(result["complete_current_inventory"])
+        self.assertFalse(result["all_mapped_tests_listed"])
+        rows = {row["suite"]: row for row in result["suites"]}
+        self.assertEqual(rows["a"]["mapped_not_listed"], ["absent"])
+        self.assert_inventory_only(result)
+
+    def test_catalog_coverage_stale_names_never_establish_inventory(self):
+        stale = self.coverage_receipt("stale", stale=True)
+        result = self.catalog_coverage([stale])
+        row = next(row for row in result["suites"] if row["suite"] == "a")
+        self.assertEqual(row["status"], "stale")
+        self.assertEqual(row["tests"], [])
+        self.assertEqual(row["benchmarks"], [])
+        self.assertEqual(result["listed_test_count"], 0)
+        self.assertFalse(result["complete_current_inventory"])
+
+    def test_catalog_coverage_successful_retry_retains_unsuccessful_attempts(self):
+        failed = self.coverage_receipt("failed", code=101)
+        stale = self.coverage_receipt("stale", stale=True)
+        success = self.coverage_receipt("success")
+        for directories in ([failed, stale, success], [success, stale, failed]):
+            with self.subTest(directories=directories):
+                result = self.catalog_coverage(directories)
+                row = next(row for row in result["suites"] if row["suite"] == "a")
+                self.assertEqual(row["status"], "listed")
+                self.assertEqual(row["tests"], ["lexical", "macro_generated::nested::case"])
+                self.assertEqual(len(row["attempts"]), 3)
+                self.assertEqual(result["listed_test_count"], 2)
+
+    def test_catalog_coverage_conflicting_tests_or_benchmarks_credit_no_names(self):
+        first = self.coverage_receipt("first")
+        for name, payload in (
+                ("tests-conflict", b"different: test\n1 test, 0 benchmarks\n"),
+                ("benches-conflict", self.text.replace(
+                    "2 tests, 0 benchmarks", "bench: benchmark\n2 tests, 1 benchmark").encode())):
+            other = self.coverage_receipt(name, payload=payload)
+            with self.subTest(name=name):
+                result = self.catalog_coverage([first, other])
+                row = next(row for row in result["suites"] if row["suite"] == "a")
+                self.assertEqual(row["status"], "conflicting")
+                self.assertEqual(row["tests"], [])
+                self.assertEqual(row["benchmarks"], [])
+                self.assertEqual(result["listed_test_count"], 0)
+                self.assertFalse(result["complete_current_inventory"])
+                self.assertFalse(result["all_mapped_tests_listed"])
+
+    def test_catalog_coverage_authenticates_every_original_receipt_and_log(self):
+        good = self.coverage_receipt("good")
+        tampered = self.coverage_receipt("tampered")
+        (tampered / "catalog-a.log").write_text("forged: test\n1 test, 0 benchmarks\n")
+        with self.assertRaises(c.InvalidEvidence):
+            self.catalog_coverage([good, tampered])
+        bad_receipt = self.coverage_receipt("bad-receipt")
+        report = c.load_json(bad_receipt / "catalog.json")
+        report["results"][0]["command"].append("--ignored")
+        (bad_receipt / "catalog.json").write_bytes(c.encoded(report))
+        with self.assertRaises(c.InvalidEvidence):
+            self.catalog_coverage([good, bad_receipt])
+
+    def test_catalog_coverage_rejects_missing_and_redirected_receipts(self):
+        for value in ([], None, "not-a-list", [True], [self.root / "missing"]):
+            with self.subTest(value=value), self.assertRaises(c.InvalidEvidence):
+                self.catalog_coverage(value)
+        directory = self.coverage_receipt("redirected")
+        receipt = directory / "catalog.json"
+        original = self.root / "outside.json"
+        receipt.rename(original)
+        receipt.symlink_to(original)
+        with self.assertRaises(c.InvalidEvidence):
+            self.catalog_coverage([directory])
+
+    def test_catalog_coverage_preserves_multiple_unresolved_attempt_categories(self):
+        failed = self.coverage_receipt("failed", code=101)
+        stale = self.coverage_receipt("stale", stale=True)
+        row = self.catalog_coverage([failed, stale])["suites"][0]
+        self.assertEqual(row["status"], "unresolved")
+        self.assertEqual({attempt["status"] for attempt in row["attempts"]},
+                         {"failed", "stale"})
+        self.assertEqual(row["tests"], [])
+
+    def test_catalog_coverage_invalid_cli_combinations_before_io(self):
+        base = ["catalog-coverage", "--evidence", "absent"]
+        invalid = [["catalog-coverage"]]
+        invalid += [base + flags for flags in (
+            ["--out", "output"], ["--suite", "a"], ["--dry-run"],
+            ["--area", "x"], ["--case", "a::x"], ["--gate", "x"],
+            ["--shard", "0/2"], ["--require-complete"],
+            ["--jobs", "2"], ["--profile", "full"])]
+        for argv in invalid:
+            with self.subTest(argv=argv), patch.object(c, "load_json") as load, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(c.main(argv), 2)
+                load.assert_not_called()
+
+    def test_catalog_coverage_cli_returns_zero_only_for_complete_mapped_inventory(self):
+        import json
+        import compatibility_scope
+        manifest = self.root / "manifest.json"
+        manifest.write_bytes(c.encoded({}))
+        scope_path = self.root / "scope.json"
+        scope_path.write_bytes(c.encoded(self.scope))
+        partial = self.coverage_receipt("partial")
+        complete = self.coverage_receipt("complete",
+            payload=b"absent: test\nlexical: test\n2 tests, 0 benchmarks\n")
+        other = self.coverage_receipt("other", suite="b", payload=b"0 tests, 0 benchmarks\n")
+        for directories, expected in (([partial], 1), ([partial, other], 1),
+                                      ([complete, other], 0)):
+            argv = ["catalog-coverage", "--manifest", str(manifest),
+                    "--scope", str(scope_path), "--json"]
+            for directory in directories:
+                argv += ["--evidence", str(directory)]
+            output = io.StringIO()
+            with self.subTest(directories=directories), \
+                    patch.object(c, "ROOT", self.root), \
+                    patch.object(c, "validate", return_value={}), \
+                    patch.object(compatibility_scope, "validate", return_value=self.scope), \
+                    patch.object(c, "source_identity", return_value=self.identity), \
+                    patch.object(self.catalog, "runner_identity", return_value=self.runner), \
+                    patch.object(c, "execute") as execute, \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(c.main(argv), expected)
+                execute.assert_not_called()
+                self.assert_inventory_only(json.loads(output.getvalue()))
+
     def test_dry_run_needs_no_client_source_identity_execution_or_output_directory(self):
         import argparse
         import json
