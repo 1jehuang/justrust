@@ -690,6 +690,120 @@ class ScopeTests(unittest.TestCase):
             with self.assertRaises(c.InvalidEvidence):
                 s.validate(changed, c, self.root)
 
+    def interaction_accounting(self, reports=()):
+        return self.summary(reports)["interaction_matrix"]["combination_accounting"]
+
+    def test_combination_partitions_no_evidence_and_no_inferred_axes(self):
+        absent = self.interaction_accounting()
+        self.assertEqual(absent["declared_axis_count"], 0)
+        self.assertEqual(absent["declared_scenario_count"], 0)
+        for name in ("pairs", "triples"):
+            self.assertEqual(absent[name]["total_combinations"], 0)
+            self.assertEqual(absent[name]["authored_combinations"], 0)
+            self.assertEqual(absent[name]["missing_combinations"], [])
+        self.matrix()
+        result = self.interaction_accounting()
+        self.assertEqual(result["declared_axis_count"], 3)
+        self.assertEqual(result["pairs"]["total_combinations"], 3)
+        self.assertEqual(result["pairs"]["authored_combinations"], 1)
+        self.assertEqual(result["pairs"]["authored_status_counts"]["untested"], 1)
+        self.assertEqual(result["pairs"]["missing_combinations"],
+                         [["borrow", "drop"], ["drop", "generic"]])
+        self.assertEqual(result["triples"]["total_combinations"], 1)
+        self.assertEqual(result["triples"]["authored_combinations"], 0)
+        self.assertEqual(result["triples"]["missing_combinations"], [["borrow", "drop", "generic"]])
+        self.assertIn("Applicability is unreviewed", result["note"])
+        # A source-only snapshot needs neither Git nor an installed runner.
+        with patch.object(c, "source_identity", side_effect=AssertionError("no Git")), \
+                patch.object(s, "runner_identity", side_effect=AssertionError("no runner")):
+            path = self.root / "scope.json"
+            path.write_bytes(c.encoded(self.scope))
+            with patch.object(c, "ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(s.main(SimpleNamespace(scope=path, action="coverage", evidence=[], json=True),
+                                        self.base, c), 0)
+
+    def test_shared_pair_and_triple_require_every_scenario_and_every_test(self):
+        for state in ("passed", "failed", "untested", "stale", "conflicting",
+                      "timeout", "infrastructure", "unverified", "missing"):
+            with self.subTest(state=state):
+                self.matrix()
+                matrix = self.scope["interaction_matrix"]
+                matrix["scenarios"][0]["features"].append("drop")
+                matrix["scenarios"].append({"id": "second", "features": ["drop", "generic", "borrow"],
+                                            "tests": [] if state == "missing" else [self.reject]})
+                passing, _ = self.report(state + "-pass")
+                reports = [passing]
+                if state not in {"untested", "missing"}:
+                    code, text = ((0, "justrust: ok: 1 test passed\n") if state in {"passed", "stale", "conflicting"}
+                                  else (101, "failure"))
+                    other, report = self.report(state + "-other", {"rejects": (code, text)})
+                    if state == "stale":
+                        report["source_before"] = {"revision": "old"}
+                    elif state in {"timeout", "infrastructure", "unverified"}:
+                        row = report["results"][0]
+                        payload = b"not verified\n"
+                        (other / row["log"]).write_bytes(payload)
+                        row.update(returncode=101 if state == "timeout" else None if state == "infrastructure" else 0,
+                                   timed_out=state == "timeout", outcome=state, tests_passed=0,
+                                   log_sha256=c.digest(payload))
+                    self.save(other, report)
+                    reports.append(other)
+                    if state == "conflicting":
+                        failed, _ = self.report(state + "-failed", {"rejects": (101, "failure")})
+                        reports.append(failed)
+                result = self.interaction_accounting(reports + reports)
+                self.assertEqual(result["declared_scenario_count"], 2)
+                for name, total in (("pairs", 3), ("triples", 1)):
+                    partition = result[name]
+                    self.assertEqual(partition["authored_combinations"], total)
+                    self.assertEqual(partition["authored_status_counts"][state], total)
+                    self.assertEqual(sum(partition["authored_status_counts"].values()), total)
+                    self.assertEqual(partition["missing_combinations_count"], 0)
+                if state == "failed":
+                    # A passed test cannot hide a failed test in the same list.
+                    matrix["scenarios"][0]["tests"] = [self.accept, self.reject]
+                    # Scope digests are reauthenticated after changing the mapping.
+                    both, _ = self.report("mixed-tests", {"accepts": (0, "justrust: ok: 1 test passed\n"),
+                                                          "rejects": (101, "failure")})
+                    self.assertEqual(self.interaction_accounting([both])["triples"]["authored_status_counts"]["failed"], 1)
+
+    def test_duplicate_authored_scenarios_do_not_inflate_combination_counts(self):
+        self.matrix()
+        first = self.scope["interaction_matrix"]["scenarios"][0]
+        first["features"].append("drop")
+        second = copy.deepcopy(first)
+        second["id"] = "second"
+        self.scope["interaction_matrix"]["scenarios"].append(second)
+        s.validate(self.scope, c, self.root)
+        directory, _ = self.report()
+        result = self.summary([directory, directory])
+        accounting = result["interaction_matrix"]["combination_accounting"]
+        self.assertEqual(accounting["pairs"]["authored_status_counts"]["passed"], 3)
+        self.assertEqual(accounting["triples"]["authored_status_counts"]["passed"], 1)
+        self.assertEqual(sum(result["exact_case_counts"].values()), 2)
+        second["tests"] = [self.accept, self.accept]
+        with self.assertRaises(c.InvalidEvidence):
+            s.validate(self.scope, c, self.root)
+
+    def test_missing_combination_details_are_bounded_but_counts_are_exact(self):
+        self.matrix()
+        self.scope["interaction_matrix"]["axes"].extend(
+            {"id": "axis-" + chr(97 + index // 26) + chr(97 + index % 26), "title": "Axis"}
+            for index in range(57))
+        s.validate(self.scope, c, self.root)
+        result = self.interaction_accounting()
+        self.assertEqual(result["pairs"]["total_combinations"], 1770)
+        self.assertEqual(result["pairs"]["missing_combinations_count"], 1769)
+        self.assertEqual(result["triples"]["total_combinations"], 34220)
+        self.assertEqual(result["triples"]["missing_combinations_count"], 34220)
+        for name in ("pairs", "triples"):
+            partition = result[name]
+            self.assertEqual(len(partition["missing_combinations"]), 100)
+            self.assertTrue(partition["missing_combinations_truncated"])
+            self.assertEqual(partition["missing_combinations"], sorted(partition["missing_combinations"]))
+        self.assertLess(len(c.encoded(result)), 30000)
+        self.assertIn("Combinatorial triples: 34220 total", s.render(self.summary()))
+
     def test_generated_probe_names_are_discovered_but_do_not_become_evidence(self):
         (self.root / "tests/conformance_generated.rs").write_text(
             "probes!(false; valid_00 = 0, valid_01 = 1,);\n")

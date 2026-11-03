@@ -7493,19 +7493,19 @@
     "axes": [
       {
         "id": "generic-identity",
-        "title": "Bounded generic identity<T> applied to an i32 tuple"
+        "title": "Source generic identity<T> instantiated with scalar, tuple or nominal values"
       },
       {
         "id": "tuple-values",
-        "title": "Bounded two-i32 tuple construction and field selection"
+        "title": "Source tuple construction and projected fields, including scalar and owned payloads"
       },
       {
         "id": "shared-borrow",
-        "title": "Explicit shared reference to a tuple field, read through a closure"
+        "title": "Explicit source shared reference reads, including projected fields and callable contexts"
       },
       {
         "id": "mutable-borrow",
-        "title": "Explicit mutable scalar reference read and updated through an FnMut closure"
+        "title": "Explicit source mutable references, reads/writes and projected replacement"
       },
       {
         "id": "nested-closure",
@@ -7513,7 +7513,7 @@
       },
       {
         "id": "option-match",
-        "title": "Some construction and exhaustive Some/None matching around a callable result"
+        "title": "Source Option construction and exhaustive Some/None matching across callable or branch results"
       },
       {
         "id": "owned-drop",

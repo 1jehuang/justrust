@@ -165,10 +165,19 @@ can lower the percentage. No completion date follows from this number.
 The separate interaction matrix enumerates every pair of its declared bounded
 semantic axes, including pairs without tests. Multi-feature scenarios execute
 as written; pair coverage requires every declared scenario for that pair to
-pass. This is a systematic denominator within those axes, not exhaustive
-coverage of all language-feature pairs, values, orders or higher-order programs.
-Adding an axis automatically exposes all its missing pairs. Keep individual
-feature, rejection, pairwise and whole-project coverage visible separately.
+pass. `interaction_matrix.combination_accounting` separately reports authored
+pair and triple partitions, their authenticated outcome counts, and unauthored
+combinations. Each combination requires all tests in every matching authored
+scenario to pass. Adding a passing scenario cannot hide another scenario's
+failure or missing evidence. Missing-combination lists are lexicographic samples
+capped at 100 entries, with exact total counts and explicit truncation flags.
+
+These are combinatorial counts over the declared axes, not a reviewed denominator
+of applicable language requirements. Applicability remains unreviewed, and an
+unauthored combination is not automatically a normative obligation. No pair or
+triple count establishes exhaustive coverage of values, orders, programs, or
+higher-order interactions. Keep individual feature, rejection, pairwise,
+higher-order and whole-project evidence visible separately.
 
 As features advance, add unchanged valid and invalid oracle scenarios, map their
 exact test identities, and add interactions and representative programs. Do not

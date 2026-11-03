@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 import itertools
+import math
 import os
 from pathlib import Path
 import re
@@ -233,6 +234,51 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
         status = "missing" if not matching or any(not row["tests"] for row in matching) else gate_status(cases)
         matrix_pairs.append({"features": list(pair), "status": status,
                              "scenarios": [row["id"] for row in matching]})
+    # Reuse the existing conservative pair statuses unchanged. Triples use the
+    # same exact-case aggregation, with no inferred tags or applicability claims.
+    axes = sorted(axis["id"] for axis in matrix.get("axes", []))
+    authored_triples = {}
+    for scenario in scenarios:
+        for triple in itertools.combinations(sorted(scenario["features"]), 3):
+            authored_triples.setdefault(triple, []).append(scenario)
+    triple_rows = []
+    for triple, matching in sorted(authored_triples.items()):
+        cases = [case for scenario in matching for case in scenario["tests"]]
+        status = ("missing" if any(not row["tests"] for row in matching)
+                  else gate_status(cases))
+        triple_rows.append({"features": list(triple), "status": status,
+                            "scenarios": [row["id"] for row in matching]})
+
+    def combination_partition(order, rows):
+        authored = {tuple(row["features"]) for row in rows if row["scenarios"]}
+        total = math.comb(len(axes), order) if len(axes) >= order else 0
+        missing_count = total - len(authored)
+        # Exact counts are unconditional. Bound the JSON list even for large
+        # declared matrices, and explicitly disclose any omitted combinations.
+        limit = 100
+        missing = list(itertools.islice(
+            (list(features) for features in itertools.combinations(axes, order)
+             if features not in authored), limit)) if missing_count else []
+        return {"total_combinations": total,
+                "authored_combinations": len(authored),
+                "authored_status_counts": {
+                    status: sum(row["status"] == status for row in rows if row["scenarios"])
+                    for status in counts},
+                "missing_combinations_count": missing_count,
+                "missing_combinations": missing,
+                "missing_combinations_truncated": missing_count > len(missing)}
+
+    combination_accounting = {
+        "declared_axis_count": len(axes),
+        "declared_scenario_count": len(scenarios),
+        "pairs": combination_partition(2, matrix_pairs),
+        "triples": combination_partition(3, triple_rows),
+        "note": "Combinatorial bookkeeping over declared axes and authored scenarios only. "
+                "Applicability is unreviewed: missing combinations are not inferred obligations. "
+                "All tests in every authored scenario must pass for a passing combination. "
+                "Authored missing status means a scenario has no tests, not an unauthored combination. "
+                "No normative coverage, pair/triple applicability, or full Rust percentage is established.",
+    }
     # Count the unique manifest, not repeated gate mappings. This also includes
     # cases mapped exclusively through interaction-matrix scenarios.
     exact_cases = [observe({"suite": gate["suite"], "test": gate["test"]})
@@ -301,6 +347,7 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
             "areas": areas,
             "unmapped_integration_suites": unmapped,
             "interaction_matrix": {"axes": matrix.get("axes", []), "scenarios": scenarios,
+                                   "combination_accounting": combination_accounting,
                                    "pairs": matrix_pairs, "pair_count": len(matrix_pairs),
                                    "passing_pairs": sum(row["status"] == "passed" for row in matrix_pairs),
                                    "missing_pairs": sum(row["status"] == "missing" for row in matrix_pairs)},
@@ -338,6 +385,13 @@ def render(summary):
         lines.append(area["id"] + " / " + " / ".join(cells))
     matrix = summary["interaction_matrix"]
     lines.append(f"Systematic bounded feature pairs: {matrix['passing_pairs']}/{matrix['pair_count']} verified; {matrix['missing_pairs']} pairs have no tests. Higher-order scenarios run too, but are not exhaustive.")
+    accounting = matrix["combination_accounting"]
+    lines.append(f"Declared interaction axes: {accounting['declared_axis_count']}; authored scenarios: {accounting['declared_scenario_count']}.")
+    for name in ("pairs", "triples"):
+        partition = accounting[name]
+        states = ", ".join(f"{status}: {count}" for status, count in partition["authored_status_counts"].items())
+        lines.append(f"Combinatorial {name}: {partition['total_combinations']} total; {partition['authored_combinations']} authored; {partition['missing_combinations_count']} missing (unauthored). Authored statuses: {states}.")
+    lines.append(accounting["note"])
     lines.extend([f"{len(summary['unmapped_integration_suites'])} integration suites still need explicit coverage mapping.",
                   "Source-referenced inventory readiness: " + summary["semantic_inventory"]["readiness"] + ". Inventory links are not executable evidence.",
                   "Scope is incomplete. Use --json for exact missing requirements, case commands and evidence paths."])
