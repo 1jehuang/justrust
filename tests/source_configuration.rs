@@ -605,3 +605,254 @@ fn native_after_complete_stock_oracle() {
     );
     assert!(failures.is_empty(), "{}", failures.join("\n\n"));
 }
+
+// Scoped negative original-file CLI diagnostic witnesses only. These do not
+// establish semantic/type-invalid rejection, macro expansion provenance, or
+// complete source identity. Both the exact pinned stock oracle and native
+// CHECK/BUILD are exercised on unchanged existing fixtures.
+#[path = "support/stock_rustc.rs"]
+mod original_file_diagnostic_stock;
+
+fn original_file_diagnostic_rejection(label: &str, result: &Captured, anchor: &str) {
+    // capture rejects signal termination, timeouts and oversized output itself.
+    assert_eq!(result.code, 1, "{label}: unhealthy exit: {result:?}");
+    assert!(
+        result.stdout.is_empty(),
+        "{label}: success/stdout: {result:?}"
+    );
+    assert!(!result.stderr.is_empty(), "{label}: missing diagnostic");
+    let diagnostic = std::str::from_utf8(&result.stderr)
+        .unwrap_or_else(|error| panic!("{label}: invalid diagnostic UTF-8: {error}"));
+    assert!(
+        diagnostic.match_indices(anchor).any(|(start, _)| {
+            let suffix = &diagnostic[start + anchor.len()..];
+            suffix.is_empty() || suffix.starts_with(':') || suffix.starts_with(char::is_whitespace)
+        }),
+        "{label}: missing exact original path/line/column {anchor}: {diagnostic}"
+    );
+    let lower = diagnostic.to_ascii_lowercase();
+    for forbidden in [
+        "unsupported",
+        "resource",
+        "infrastructure",
+        "panicked",
+        "panic:",
+        "internal",
+        "contract:",
+        "segmentation",
+        "signal",
+        "crash",
+        "sigabrt",
+        "fatal runtime error",
+        "overflow",
+        "limit",
+        "exceeded",
+        "timed out",
+        "os error",
+        "failed to spawn",
+        "could not execute",
+        "out of memory",
+        "positions refer to expanded",
+        "expanded-source",
+    ] {
+        assert!(
+            !lower.contains(forbidden),
+            "{label}: unhealthy/legacy diagnostic {forbidden:?}: {diagnostic}"
+        );
+    }
+}
+
+fn original_file_diagnostic_no_output(scratch: &Scratch) {
+    for name in [
+        "stock.rmeta",
+        "stock-program",
+        "native-program",
+        "input",
+        "a.out",
+        "libsource_configuration_original_file.rmeta",
+    ] {
+        assert_eq!(
+            fs::symlink_metadata(scratch.path(name)).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound,
+            "rejection published {name}"
+        );
+    }
+}
+
+fn original_file_diagnostic_witness(
+    fixture: Fixture,
+    native_anchor: &str,
+    stock_anchor: &str,
+    stock_fragment: &str,
+) {
+    assert_eq!(fixture.outcome, Outcome::Invalid);
+    assert_eq!(fixture.location, Some(native_anchor));
+    assert_eq!(
+        fixture.stock_location.or(fixture.location),
+        Some(stock_anchor)
+    );
+    assert_eq!(fixture.stock_diagnostic, stock_fragment);
+    // The shared verifier accepts only the exact pinned release/commit/host/LLVM.
+    // An explicit override is exclusive when supplied. Otherwise it discovers
+    // verified absolute system/rustup paths, never the legacy PATH rustc.
+    let stock = original_file_diagnostic_stock::stock_rustc();
+    assert!(
+        Path::new(&stock).is_absolute(),
+        "stock oracle must be absolute"
+    );
+    for check in [true, false] {
+        let scratch = fixture.materialize();
+        let mut command = Command::new(&stock);
+        command
+            .current_dir(&scratch.0)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .arg(scratch.path("src/input.rs"))
+            .args([
+                "--edition=2024",
+                "--target=x86_64-unknown-linux-gnu",
+                "--crate-name=source_configuration_original_file",
+                "--color=never",
+                "-C",
+                "panic=abort",
+                "-A",
+                "warnings",
+            ]);
+        for cfg in &fixture.cfg {
+            command.arg("--cfg").arg(cfg);
+        }
+        if check {
+            command.arg("--emit=metadata");
+        }
+        command.arg("-o").arg(scratch.path(if check {
+            "stock.rmeta"
+        } else {
+            "stock-program"
+        }));
+        let result = capture(&mut command, &scratch, COMPILE_TIMEOUT);
+        let label = format!("stock {} check={check}", fixture.name);
+        original_file_diagnostic_rejection(&label, &result, stock_anchor);
+        assert!(
+            String::from_utf8_lossy(&result.stderr).contains(stock_fragment),
+            "{label}: missing stock diagnostic {stock_fragment:?}: {result:?}"
+        );
+        original_file_diagnostic_no_output(&scratch);
+    }
+    for workers in [1, 8] {
+        for check in [true, false] {
+            // Independent materialization for every mode prevents stale output
+            // or discovery from another rejection from masking a failure.
+            let scratch = fixture.materialize();
+            let mut command = Command::new(env!("CARGO_BIN_EXE_jr-rust"));
+            command
+                .current_dir(&scratch.0)
+                .env_remove("RUSTC_BOOTSTRAP")
+                .env("RUSTC", scratch.path("no-rustc"))
+                .env("PATH", scratch.path("no-tools"))
+                .arg(scratch.path("src/input.rs"))
+                .args(["--edition=2024", "--workers", &workers.to_string()]);
+            for cfg in &fixture.cfg {
+                command.arg("--cfg").arg(cfg);
+            }
+            if check {
+                command.arg("--check");
+            } else {
+                command.arg("-o").arg(scratch.path("native-program"));
+            }
+            let result = capture(&mut command, &scratch, COMPILE_TIMEOUT);
+            let label = format!("native {} workers={workers} check={check}", fixture.name);
+            original_file_diagnostic_rejection(&label, &result, native_anchor);
+            assert!(
+                String::from_utf8_lossy(&result.stderr).contains("jr-rust:"),
+                "{label}: missing native CLI diagnostic: {result:?}"
+            );
+            original_file_diagnostic_no_output(&scratch);
+        }
+    }
+}
+
+#[test]
+fn child_unicode_crlf_parse_original_file_cli_diagnostic() {
+    let fixture = fixtures()
+        .into_iter()
+        .find(|fixture| fixture.name == "child_unicode_crlf_parse_span")
+        .expect("existing child_unicode_crlf_parse_span fixture");
+    original_file_diagnostic_witness(
+        fixture,
+        "src/outer/child.rs:2:32",
+        "src/outer/child.rs:2:32",
+        "expected pattern",
+    );
+}
+
+#[test]
+fn child_unicode_cfg_original_file_cli_diagnostic() {
+    let fixture = fixtures()
+        .into_iter()
+        .find(|fixture| fixture.name == "child_unicode_cfg_error_span")
+        .expect("existing child_unicode_cfg_error_span fixture");
+    // Native anchors the offending beta, stock the preceding whitespace.
+    original_file_diagnostic_witness(
+        fixture,
+        "src/child.rs:2:9",
+        "src/child.rs:2:8",
+        "attribute items not separated",
+    );
+}
+
+#[test]
+fn original_file_diagnostic_guard_rejects_unhealthy_or_wrong_anchor() {
+    // Synthetic guard controls only, not stock/native compatibility evidence.
+    let anchor = "src/child.rs:2:9";
+    let healthy = || Captured {
+        code: 1,
+        stdout: vec![],
+        stderr: b"jr-rust: syntax error at src/child.rs:2:9: expected comma\n".to_vec(),
+    };
+    original_file_diagnostic_rejection("guard control", &healthy(), anchor);
+    let mut captures = vec![
+        Captured {
+            code: 0,
+            ..healthy()
+        },
+        Captured {
+            code: -1,
+            ..healthy()
+        },
+        Captured {
+            stdout: b"success".to_vec(),
+            ..healthy()
+        },
+        Captured {
+            stderr: vec![],
+            ..healthy()
+        },
+        Captured {
+            stderr: vec![0xff],
+            ..healthy()
+        },
+    ];
+    for text in [
+        "jr-rust: src/child.rs:2:90: expected comma",
+        "jr-rust: src/other.rs:2:9: expected comma",
+        "jr-rust: src/child.rs:2:9: unsupported syntax",
+        "jr-rust: src/child.rs:2:9: resource limit",
+        "jr-rust: src/child.rs:2:9: infrastructure error",
+        "jr-rust: src/child.rs:2:9: internal contract: invalid fact",
+        "jr-rust: src/child.rs:2:9: compiler panicked",
+        "jr-rust: src/child.rs:2:9: positions refer to expanded source",
+    ] {
+        captures.push(Captured {
+            stderr: text.as_bytes().to_vec(),
+            ..healthy()
+        });
+    }
+    for capture in captures {
+        assert!(
+            std::panic::catch_unwind(|| {
+                original_file_diagnostic_rejection("forged guard control", &capture, anchor);
+            })
+            .is_err(),
+            "guard accepted {capture:?}"
+        );
+    }
+}

@@ -890,7 +890,31 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "source_configuration",
+                  "test": "child_unicode_crlf_parse_original_file_cli_diagnostic"
+                },
+                {
+                  "suite": "source_configuration",
+                  "test": "child_unicode_cfg_original_file_cli_diagnostic"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Narrow negative original-file CLI diagnostic workflow only. Unchanged UTF-8/CRLF nested child parse and configuration-invalid fixtures use exact verified rustc 1.98.1, edition 2024, metadata CHECK/BUILD and native CHECK/BUILD workers 1/8. Ordinary exit 1, empty stdout, no published image, exact original file/line/column and distinct explicit stock/native configuration anchors are required. Unsupported/resource/infrastructure/internal-contract/panic/signal and expanded-source attribution are rejected. Not typed semantic-invalid evidence, macro expansion provenance, complete source identity, or successful program runtime behavior.",
+                  "tests": [
+                    {
+                      "suite": "source_configuration",
+                      "test": "child_unicode_crlf_parse_original_file_cli_diagnostic"
+                    },
+                    {
+                      "suite": "source_configuration",
+                      "test": "child_unicode_cfg_original_file_cli_diagnostic"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -914,7 +938,31 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "source_configuration",
+                  "test": "child_unicode_crlf_parse_original_file_cli_diagnostic"
+                },
+                {
+                  "suite": "source_configuration",
+                  "test": "child_unicode_cfg_original_file_cli_diagnostic"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Narrow negative original-file CLI diagnostic workflow only. Unchanged UTF-8/CRLF nested child parse and configuration-invalid fixtures use exact verified rustc 1.98.1, edition 2024, metadata CHECK/BUILD and native CHECK/BUILD workers 1/8. Ordinary exit 1, empty stdout, no published image, exact original file/line/column and distinct explicit stock/native configuration anchors are required. Unsupported/resource/infrastructure/internal-contract/panic/signal and expanded-source attribution are rejected. Not typed semantic-invalid evidence, macro expansion provenance, complete source identity, or successful program runtime behavior.",
+                  "tests": [
+                    {
+                      "suite": "source_configuration",
+                      "test": "child_unicode_crlf_parse_original_file_cli_diagnostic"
+                    },
+                    {
+                      "suite": "source_configuration",
+                      "test": "child_unicode_cfg_original_file_cli_diagnostic"
+                    }
+                  ]
+                }
+              ]
             }
           ],
           "id": "source-provenance",
