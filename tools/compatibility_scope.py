@@ -130,6 +130,10 @@ def runner_identity(c):
 def evidence(scope, manifest, directory, identity, runner, c, root):
     """Recompute each result from original logs, while retaining partial failures."""
     report = c.load_json(directory / "report.json")
+    if not isinstance(report, dict) or any(
+            report.get(key) is None
+            for key in ("source_before", "source_after", "runner_before", "runner_after")):
+        raise c.InvalidEvidence(f"unfinalized tracked receipt: source and runner provenance required: {directory}")
     if (report.get("scope_sha256") != c.digest(c.encoded(scope))
             or report.get("manifest_sha256") != c.digest(c.encoded(manifest))):
         raise c.InvalidEvidence(f"changed scope or invocation manifest: {directory}")
@@ -239,6 +243,18 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
         row.get("failure_annotation") == annotation for row in exact_cases
         if row["status"] == "failed")
         for annotation in (*c.FAILURE_ANNOTATIONS, "unannotated")}
+    measured_cases = exact_case_counts["passed"] + exact_case_counts["failed"]
+    campaign = {
+        "expected_case_count": len(exact_cases),
+        "measured_case_count": measured_cases,
+        "complete_current_measurement": bool(exact_cases) and measured_cases == len(exact_cases),
+        "all_cases_passed": bool(exact_cases) and exact_case_counts["passed"] == len(exact_cases),
+        "unresolved_cases": [{"id": case_id(row), "status": row["status"]}
+                             for row in exact_cases if row["status"] not in {"passed", "failed"}],
+        "failed_case_ids": [case_id(row) for row in exact_cases if row["status"] == "failed"],
+        "scope_note": "All mapped exact tests only. Complete measurement is not passing conformance, "
+                      "does not fill missing layer obligations, and does not establish full Rust compatibility.",
+    }
     total = sum(counts.values())
     layer_counts = {layer: {status: sum(gate["status"] == status for area in areas
                                       for requirement in area["requirements"] for gate in requirement["gates"]
@@ -277,6 +293,7 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
             "declared_gate_count": total, "gate_counts": counts,
             "exact_case_counts": exact_case_counts,
             "failed_case_annotations": failed_case_annotations,
+            "campaign": campaign,
             "passing_declared_gates_percent": round(100 * counts["passed"] / total, 2),
             "missing_test_gates": counts["missing"], "by_layer": layer_counts,
             "requirements_with_all_declared_gates_passed": sum(row["all_declared_gates_passed"]
@@ -310,6 +327,7 @@ def render(summary):
         f"Unique exact tests: {sum(exact.values())}; passed: {exact['passed']}; failed: {exact['failed']}; untested: {exact['untested']}; stale: {exact['stale']}; conflicts: {exact['conflicting']}; timeout: {exact['timeout']}; infrastructure: {exact['infrastructure']}; unverified: {exact['unverified']}.",
         "Failure annotations (diagnostic only, not proof or outcome changes): "
         + ", ".join(f"{key}: {value}" for key, value in summary["failed_case_annotations"].items()) + ".",
+        f"Mapped campaign: {summary['campaign']['measured_case_count']}/{summary['campaign']['expected_case_count']} cases measured; complete: {summary['campaign']['complete_current_measurement']}; all passed: {summary['campaign']['all_cases_passed']}. Not full Rust compatibility.",
     ]
     for area in summary["areas"]:
         cells = []
@@ -371,6 +389,8 @@ def main(args, base, c):
         runner = runner_identity(c) if args.evidence else None
         summary = summarize(scope, manifest, args.evidence, identity, runner, c, root)
         print(c.encoded(summary).decode() if args.json else render(summary))
+        if getattr(args, "require_complete", False):
+            return 0 if summary["campaign"]["all_cases_passed"] else 1
         return 0
     jobs = getattr(args, "jobs", 1)
     if not isinstance(jobs, int) or isinstance(jobs, bool) or not 1 <= jobs <= 8:

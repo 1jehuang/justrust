@@ -15,6 +15,142 @@ import conformance as c
 
 
 class ScopeTests(unittest.TestCase):
+    def assert_campaign(self, result, statuses):
+        ids = [row["id"] for row in self.manifest()["gates"]]
+        self.assertEqual(set(ids), set(statuses))
+        campaign = result["campaign"]
+        self.assertEqual(set(campaign), {"expected_case_count", "measured_case_count",
+            "complete_current_measurement", "all_cases_passed", "unresolved_cases",
+            "failed_case_ids", "scope_note"})
+        measured = sum(statuses[key] in {"passed", "failed"} for key in ids)
+        self.assertEqual(campaign["expected_case_count"], len(ids))
+        self.assertEqual(campaign["measured_case_count"], measured)
+        self.assertIs(campaign["complete_current_measurement"], bool(ids) and measured == len(ids))
+        self.assertIs(campaign["all_cases_passed"], bool(ids) and all(statuses[key] == "passed" for key in ids))
+        self.assertEqual(campaign["unresolved_cases"], [{"id": key, "status": statuses[key]}
+            for key in ids if statuses[key] not in {"passed", "failed"}])
+        self.assertEqual(campaign["failed_case_ids"], [key for key in ids if statuses[key] == "failed"])
+        self.assertIsInstance(campaign["scope_note"], str)
+        self.assertIn("mapped", campaign["scope_note"].lower())
+        self.assertIn("rust", campaign["scope_note"].lower())
+        self.assertFalse(result["full_rust_support_established"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+
+    def coverage(self, reports=(), strict=False, json_output=True):
+        path = self.root / "scope.json"
+        path.write_bytes(c.encoded(self.scope))
+        args = SimpleNamespace(scope=path, action="coverage", evidence=list(reports),
+                               json=json_output, require_complete=strict)
+        output = io.StringIO()
+        with patch.object(c, "ROOT", self.root), \
+                patch.object(c, "source_identity", return_value=self.identity), \
+                patch.object(s, "runner_identity", return_value=self.runner), \
+                contextlib.redirect_stdout(output):
+            code = s.main(args, self.base, c)
+        return code, json.loads(output.getvalue()) if json_output else output.getvalue()
+
+    def test_campaign_successful_union_missing_layers_is_not_full_rust(self):
+        first, _ = self.report("first")
+        second, _ = self.report("second", {"rejects": (0, "justrust: ok: 1 test passed\n")})
+        for reports in ([first, second], [second, first], [first, second, first]):
+            result = self.summary(reports)
+            self.assert_campaign(result, {s.case_id(self.accept): "passed", s.case_id(self.reject): "passed"})
+            self.assertEqual(result["gate_counts"]["missing"], 2)
+            code, printed = self.coverage(reports, strict=True)
+            self.assertEqual(code, 0)
+            self.assertEqual(printed, result)
+
+    def test_campaign_complete_failed_has_measurement_but_strict_exit_one(self):
+        directory, _ = self.report(states={"accepts": (101, "failure"), "rejects": (101, "failure")})
+        result = self.summary([directory])
+        self.assert_campaign(result, {s.case_id(self.accept): "failed", s.case_id(self.reject): "failed"})
+        for strict, expected in ((False, 0), (True, 1)):
+            code, printed = self.coverage([directory], strict=strict)
+            self.assertEqual(code, expected)
+            self.assertEqual(printed, result)
+        code, text = self.coverage([directory], strict=True, json_output=False)
+        self.assertEqual(code, 1)
+        self.assertEqual(text, s.render(result) + "\n")
+
+    def test_campaign_partial_no_evidence_and_empty_manifest(self):
+        directory, _ = self.report()
+        for reports, status in (([], "untested"), ([directory], "passed")):
+            result = self.summary(reports)
+            self.assert_campaign(result, {s.case_id(self.accept): status, s.case_id(self.reject): "untested"})
+            self.assertEqual(self.coverage(reports)[0], 0)
+        code, printed = self.coverage([directory], strict=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(printed, self.summary([directory]))
+        for gate in self.scope["areas"][0]["requirements"][0]["gates"]:
+            gate["tests"] = []
+        self.assert_campaign(self.summary(), {})
+
+    def test_campaign_noncurrent_or_unverified_cases_remain_unresolved(self):
+        for status in ("stale", "conflicting", "timeout", "infrastructure", "unverified"):
+            with self.subTest(status=status):
+                directory, report = self.report(status, {test: (0, "justrust: ok: 1 test passed\n")
+                                                        for test in ("accepts", "rejects")})
+                reports = [directory]
+                if status == "stale":
+                    report["source_before"] = {"revision": "old"}
+                elif status == "conflicting":
+                    failed, _ = self.report("conflict-failure", {"accepts": (101, "failure")})
+                    reports.append(failed)
+                else:
+                    row = next(row for row in report["results"] if row["id"] == s.case_id(self.accept))
+                    payload = b"unverified log\n"
+                    (directory / row["log"]).write_bytes(payload)
+                    row.update(returncode=101 if status == "timeout" else None if status == "infrastructure" else 0,
+                               timed_out=status == "timeout", outcome=status, tests_passed=0,
+                               log_sha256=c.digest(payload))
+                self.save(directory, report)
+                self.assert_campaign(self.summary(reports), {s.case_id(self.accept): status,
+                    s.case_id(self.reject): "stale" if status == "stale" else "passed"})
+                code, printed = self.coverage(reports, strict=True)
+                self.assertEqual(code, 1)
+                self.assertEqual(printed, self.summary(reports))
+
+    def test_campaign_interaction_only_and_duplicate_mappings_are_unique(self):
+        (self.root / "tests/sample.rs").write_text(
+            "#[test]\nfn accepts() {}\n#[test]\nfn rejects() {}\n#[test]\nfn combined() {}\n")
+        self.matrix()
+        combined = {"suite": "sample", "test": "combined"}
+        self.scope["interaction_matrix"]["scenarios"][0]["tests"] = [combined]
+        original = self.scope["areas"][0]["requirements"][0]
+        original["gates"][2]["tests"] = [self.accept]
+        another = copy.deepcopy(original)
+        another["id"] = "duplicate-campaign-mapping"
+        self.scope["areas"][0]["requirements"].append(another)
+        directory, _ = self.report(states={test: (0, "justrust: ok: 1 test passed\n")
+                                           for test in ("accepts", "rejects", "combined")})
+        self.assert_campaign(self.summary([directory, directory]), {
+            s.case_id(case): "passed" for case in (self.accept, self.reject, combined)})
+        self.assertEqual(self.coverage([directory], strict=True)[0], 0)
+
+    def test_campaign_malformed_or_interrupted_reports_never_complete(self):
+        changes = {
+            "interrupted": lambda report: report["results"].pop(),
+            "nonobject": lambda report: None,
+            **{f"missing-{field}": lambda report, field=field: report.pop(field)
+               for field in ("source_before", "source_after", "runner_before", "runner_after")},
+            **{f"null-{field}": lambda report, field=field: report.update({field: None})
+               for field in ("source_before", "source_after", "runner_before", "runner_after")},
+            "duplicate": lambda report: report["results"].append(report["results"][0]),
+            "forged": lambda report: report["results"][0].update(tests_passed=999),
+        }
+        for name, change in changes.items():
+            with self.subTest(name=name):
+                directory, report = self.report(name, {test: (0, "justrust: ok: 1 test passed\n")
+                                                       for test in ("accepts", "rejects")})
+                change(report)
+                self.save(directory, [] if name == "nonobject" else report)
+                with self.assertRaises(c.InvalidEvidence):
+                    self.coverage([directory], strict=True)
+        directory, _ = self.report("broken-json")
+        (directory / "report.json").write_text('{"results": [')
+        with self.assertRaises(c.InvalidEvidence):
+            self.coverage([directory], strict=True)
+
     def test_timeout_infrastructure_and_unverified_logs_never_annotate_failures(self):
         marker = "[justrust-conformance-failure:v1] invalid-source-accepted\n"
         for status, code, timed_out in (("timeout", 101, True),

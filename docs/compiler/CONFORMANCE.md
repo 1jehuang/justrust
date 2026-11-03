@@ -91,7 +91,23 @@ python3 tools/conformance.py track --timeout 600 \
   --out "$JCODE_SCRATCH_DIR/compatibility-current"
 python3 tools/conformance.py coverage \
   --evidence "$JCODE_SCRATCH_DIR/compatibility-current"
+# Automation gate for the entire mapped exact-case manifest, not one shard.
+# Repeat --evidence for every independently run shard directory.
+python3 tools/conformance.py coverage --require-complete --json \
+  --evidence "$JCODE_SCRATCH_DIR/compatibility-current"
 ```
+
+The optional `coverage --require-complete` gate exits zero only when every
+mapped exact case has current, nonconflicting passing evidence. It requires
+`--evidence` and is invalid for other actions. The full summary is still emitted
+on exit 1 for incomplete or failing campaigns. Malformed or interrupted receipts
+are rejected with exit 2 rather than patched or silently imported.
+`campaign.complete_current_measurement` distinguishes a complete pass/fail
+measurement from an incomplete campaign; a complete measurement containing
+failed cases still has `campaign.all_cases_passed=false` and fails the gate.
+Unmeasured, stale, conflicting, timed-out, infrastructure and unverified cases
+remain unresolved. Completion here covers only the mapped exact tests. It does
+not fill missing layer obligations or certify the full Rust inventory.
 
 Use a new output directory per run. Run on a stable source state. `track --jobs 2`
 runs at most two independent exact-case processes concurrently (allowed range

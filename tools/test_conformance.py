@@ -23,6 +23,39 @@ CLIENT_RETRY_LINES = (
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_require_complete_invalid_combinations_are_rejected_before_io(self):
+        invalid = [[action, "--require-complete"]
+                   for action in ("validate", "plan", "discover", "run", "assess", "track")]
+        invalid += [[action, "--require-complete", "--evidence", "missing-report"]
+                    for action in ("validate", "plan", "discover", "run", "assess", "track")]
+        invalid.append(["coverage", "--require-complete"])
+        for argv in invalid:
+            with self.subTest(argv=argv), patch.object(c, "load_json") as load, \
+                    contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(c.main(argv), 2)
+                load.assert_not_called()
+                self.assertIn("--require-complete", errors.getvalue())
+
+    def test_require_complete_with_evidence_reaches_coverage_dispatch(self):
+        import compatibility_scope
+        for evidence in (["first"], ["first", "second"]):
+            argv = ["coverage", "--require-complete", "--json"]
+            for directory in evidence:
+                argv.extend(["--evidence", directory])
+            for code in (0, 1):
+                with self.subTest(evidence=evidence, code=code), \
+                        patch.object(c, "load_json", return_value=self.data) as load, \
+                        patch.object(c, "validate", return_value=self.data), \
+                        patch.object(compatibility_scope, "main", return_value=code) as scope_main:
+                    self.assertEqual(c.main(argv), code)
+                    load.assert_called_once()
+                    args, data, runner = scope_main.call_args.args
+                    self.assertTrue(args.require_complete)
+                    self.assertTrue(args.json)
+                    self.assertEqual(args.evidence, list(map(Path, evidence)))
+                    self.assertIs(data, self.data)
+                    self.assertIs(runner, c)
+
     def test_failure_annotations_require_whole_whitelisted_lines(self):
         prefix = "[justrust-conformance-failure:v1] "
         for annotation in c.FAILURE_ANNOTATIONS:

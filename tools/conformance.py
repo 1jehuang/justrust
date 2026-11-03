@@ -360,6 +360,8 @@ def main(argv=None) -> int:
     parser.add_argument("--area", action="append", default=[], help="track only these compatibility areas")
     parser.add_argument("--case", action="append", default=[], help="track exact mapped suite::test")
     parser.add_argument("--evidence", type=Path, action="append", default=[], help="coverage: retained track directory")
+    parser.add_argument("--require-complete", action="store_true",
+                        help="coverage only: exit zero only when every mapped exact case has current passing evidence")
     parser.add_argument("--json", action="store_true", help="machine-readable layered coverage")
     parser.add_argument("--dry-run", action="store_true", help="show exact track invocations without executing")
     parser.add_argument("--jobs", type=int, default=1, help="track: independent exact-case processes, 1..8")
@@ -369,6 +371,8 @@ def main(argv=None) -> int:
     try:
         if args.shard and args.action != "track":
             raise InvalidEvidence("--shard is only valid with track")
+        if args.require_complete and (args.action != "coverage" or not args.evidence):
+            raise InvalidEvidence("--require-complete requires coverage with --evidence")
         data = validate(load_json(args.manifest))
         if args.action in {"coverage", "track"}:
             import compatibility_scope
