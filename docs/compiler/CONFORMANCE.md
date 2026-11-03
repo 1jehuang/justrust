@@ -179,6 +179,23 @@ existing requirement has passing scenarios. Ordinary tests and CI reject
 malformed references, unknown mappings, duplicate identities and an oracle
 contract that disagrees with the actual stock verifier.
 
+`data/compiler-language-reference-rules.json` separately indexes the Reference
+revision linked by the pinned compiler's source submodule. It retains page
+hashes, source positions and rule labels, including unlinked Markdown pages.
+Chapter adjacency is not a reviewed rule-to-obligation mapping. Rule labels
+are also not a complete semantic inventory: unlabeled prose, grammar and
+tables can impose additional requirements.
+
+To reproduce the index, use `tools/extract_reference_rules.py` with
+`--source-root`, `--pin`, `--compiler-commit`, `--inventory`,
+`--source-archive`, `--archive-sha256` and a new `--output` path. The extractor
+checks every local source file against the supplied archive and rejects links,
+path escapes, changed files and duplicate rules. Official source URLs and
+archive hashes are retained, not the full Reference prose. A supplied expected
+hash establishes byte consistency, not independent authentication. Ordinary
+metadata validation must not claim that external source bytes were reverified
+when the archive was not supplied.
+
 Undefined behavior is not a runtime-output parity obligation. Unsafe
 preconditions and compiler-enforced restrictions must be tracked separately.
 Where documented behavior permits multiple outcomes, a differential oracle

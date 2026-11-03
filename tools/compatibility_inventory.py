@@ -7,10 +7,13 @@ validation remains the responsibility of compatibility_scope.py and conformance.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import io
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import sys
+import tarfile
 from urllib.parse import urlsplit
 
 CONTRACT = {"edition": "2024", "target": "x86_64-unknown-linux-gnu"}
@@ -231,9 +234,256 @@ def read_verifier(path):
         raise InvalidInventory(f"{path}: {exc}") from exc
 
 
+REFERENCE_RULES = "data/compiler-language-reference-rules.json"
+_ABSENT = object()
+
+
+def file_bytes(path):
+    try:
+        return Path(path).read_bytes()
+    except OSError as exc:
+        raise InvalidInventory(f"{path}: {exc}") from exc
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def exact_hex(value, length, where):
+    require(isinstance(value, str) and re.fullmatch(r"[0-9a-f]{" + str(length) + "}", value) is not None,
+            f"{where}: exact lowercase hexadecimal identity required")
+    return value
+
+
+def positive_integer(value, where):
+    require(type(value) is int and value > 0, f"{where}: positive integer required")
+
+
+def reference_path(value):
+    text(value, "reference.path")
+    path = PurePosixPath(value)
+    require(not path.is_absolute() and path.as_posix() == value and '..' not in path.parts
+            and len(path.parts) >= 2 and path.parts[0] == "src" and path.suffix == ".md"
+            and re.fullmatch(r"[A-Za-z0-9_./-]+", value) is not None,
+            "reference.path: canonical source Markdown path required")
+    return value
+
+
+def validate_reference_rules(root: Path, data=_ABSENT, *, candidate_path=None, contract=None,
+                             source_archive=None, submodule_proof=None):
+    """Validate static rule identities, not semantic coverage or authenticated receipts.
+
+    Archive and submodule bytes are optional external reproduction inputs. Ordinary
+    offline validation does not pretend to reauthenticate source bytes or GitHub.
+    """
+    root = Path(root)
+    data = load(root / REFERENCE_RULES) if data is _ABSENT else data
+    candidate_path = Path(candidate_path) if candidate_path else root / "data/compiler-language-inventory.json"
+    candidate = load(candidate_path)
+    contract = contract if contract is not None else load(root / "data/compiler-compatibility-contract.json")
+    validate_contract(contract, read_verifier(root / "tests/support/stock_rustc.rs"))
+    validate(candidate, scope_ids(load(root / "data/compiler-compatibility-scope.json")))
+    fields(data, ("schema_version", "review_status", "scope", "provenance", "counts",
+                  "pinned_pages_without_candidate_section", "candidate_pages_absent_from_pinned_summary",
+                  "unlinked_markdown_files", "limitations", "pages"), "reference_rules")
+    require(type(data["schema_version"]) is int and data["schema_version"] == 1,
+            "reference_rules: schema_version must be 1")
+    require(data["scope"] == CONTRACT and data["review_status"] == "unreviewed",
+            "reference_rules: scope mismatch or non-unreviewed status")
+    strings(data["limitations"], "reference_rules.limitations", True)
+    provenance = data["provenance"]
+    fields(provenance, ("compiler_commit", "reference_commit", "compiler_submodule_api_url",
+                        "compiler_submodule_response_sha256", "reference_repository_url", "source_archive_url",
+                        "source_archive_sha256", "archive_verified_local_files", "local_source_bytes_match_archive",
+                        "summary_sha256", "candidate_inventory_sha256"), "reference_rules.provenance")
+    compiler = exact_hex(provenance["compiler_commit"], 40, "compiler_commit")
+    reference = exact_hex(provenance["reference_commit"], 40, "reference_commit")
+    require(isinstance(contract, dict) and isinstance(contract.get("oracle"), dict)
+            and compiler == contract["oracle"].get("commit"), "reference_rules: compiler pin mismatch")
+    for name in ("compiler_submodule_response_sha256", "source_archive_sha256", "summary_sha256", "candidate_inventory_sha256"):
+        exact_hex(provenance[name], 64, name)
+    require(provenance["candidate_inventory_sha256"] == sha256(file_bytes(candidate_path)),
+            "reference_rules: candidate inventory bytes changed")
+    api = "https://api.github.com/repos/rust-lang/rust/contents/src/doc/reference?ref=" + compiler
+    repository = "https://github.com/rust-lang/reference/tree/" + reference
+    require(provenance["compiler_submodule_api_url"] == api
+            and provenance["reference_repository_url"] == repository
+            and provenance["source_archive_url"] == "https://codeload.github.com/rust-lang/reference/tar.gz/" + reference,
+            "reference_rules: immutable official provenance URLs required")
+    positive_integer(provenance["archive_verified_local_files"], "archive_verified_local_files")
+    require(provenance["local_source_bytes_match_archive"] is True,
+            "reference_rules: extraction must record archive consistency, not a pass status")
+    # The caller validates the complete candidate schema against the current scope.
+    # Independently require unambiguous page identities for the adjacency relation.
+    candidate_pages = {}
+    for section in rows(candidate.get("sections"), "candidate.sections"):
+        require(isinstance(section, dict), "candidate.section: object required")
+        refs = rows(section.get("source_refs"), "candidate.source_refs")
+        first = refs[0]
+        require(isinstance(first, dict), "candidate.source_ref: object required")
+        page = text(first.get("section"), "candidate.source_ref.section")
+        require(page.endswith(".html"), "candidate source section must be a page .html identity")
+        path = reference_path("src/" + page.removesuffix(".html") + ".md")
+        require(path not in candidate_pages, "candidate: ambiguous page adjacency")
+        candidate_pages[path] = section
+    paths, labels = set(), set()
+    groups = []
+    all_pages = []
+    page_names = ("path", "url", "sha256", "headings", "edition_note_markers", "rules",
+                  "candidate_section", "candidate_obligations", "rule_obligation_mapping_status")
+    for group in ("pages", "unlinked_markdown_files"):
+        group_pages = rows(data[group], "reference_rules." + group, group == "pages")
+        group_paths = set()
+        count = 0
+        for page in group_pages:
+            fields(page, page_names, "reference.page")
+            path = reference_path(page["path"])
+            require(path not in paths, "reference_rules: duplicate page path")
+            paths.add(path)
+            group_paths.add(path)
+            require(page["url"] == "https://github.com/rust-lang/reference/blob/" + reference + "/" + path,
+                    "reference.page: immutable official URL mismatch")
+            exact_hex(page["sha256"], 64, "reference.page.sha256")
+            require(page["rule_obligation_mapping_status"] == "unreviewed", "reference.page: mappings must remain unreviewed")
+            expected = candidate_pages.get(path) if group == "pages" else None
+            require(page["candidate_section"] == (expected["id"] if expected else None)
+                    and page["candidate_obligations"] == ([item["id"] for item in expected["obligations"]] if expected else []),
+                    "reference.page: candidate adjacency mismatch, not semantic mapping")
+            for name, keys in (("headings", ("level", "title", "line")),
+                               ("edition_note_markers", ("edition", "line")), ("rules", ("label", "line"))):
+                prior = 0
+                for item in rows(page[name], "reference.page." + name, False):
+                    fields(item, keys, "reference.page." + name)
+                    positive_integer(item["line"], "reference.line")
+                    require(item["line"] > prior, "reference.page: line identities must be strictly ordered")
+                    prior = item["line"]
+                    if name == "headings":
+                        require(type(item["level"]) is int and 1 <= item["level"] <= 6, "reference.heading: invalid level")
+                        text(item["title"], "reference.heading.title")
+                    elif name == "edition_note_markers":
+                        require(isinstance(item["edition"], str) and re.fullmatch(r"[0-9]{4}", item["edition"]),
+                                "reference.edition marker: four digits required")
+                    else:
+                        label = text(item["label"], "reference.rule.label")
+                        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", label) is not None
+                                and label not in labels, "reference.rule: duplicate or malformed label")
+                        labels.add(label)
+                        count += 1
+            all_pages.append(page)
+        groups.append((group_paths, count))
+    linked, linked_count = groups[0]
+    unlinked, unlinked_count = groups[1]
+    summary = next((page for page in all_pages if page["path"] == "src/SUMMARY.md"), None)
+    require(summary is not None and "src/SUMMARY.md" in unlinked
+            and summary["sha256"] == provenance["summary_sha256"], "reference_rules: summary hash missing or inconsistent")
+    absent = sorted(set(candidate_pages) - linked)
+    unmatched = sorted(linked - set(candidate_pages))
+    require(data["pinned_pages_without_candidate_section"] == [path.removeprefix("src/") for path in unmatched]
+            and data["candidate_pages_absent_from_pinned_summary"] == [path.removeprefix("src/") for path in absent],
+            "reference_rules: missing-page accounting mismatch")
+    computed = {"chapter_pages": len(linked), "linked_page_rule_labels": linked_count,
+                "unlinked_page_rule_labels": unlinked_count, "unique_rule_labels_total": len(labels),
+                "duplicate_rule_labels": 0, "candidate_pages": len(candidate_pages),
+                "chapter_pages_without_candidate_section": len(unmatched),
+                "candidate_pages_absent_from_pinned_summary": len(absent),
+                "rules_with_reviewed_obligation_mapping": 0, "rules_requiring_mapping_review": len(labels)}
+    require(isinstance(data["counts"], dict) and set(data["counts"]) == set(computed)
+            and all(type(data["counts"][key]) is int and data["counts"][key] == value for key, value in computed.items()),
+            "reference_rules: declared counts disagree with exact page/rule inventory")
+    archive_state = "not_reverified_in_this_run"
+    if source_archive is not None:
+        verify_reference_archive(source_archive, provenance, all_pages, linked)
+        archive_state = "reproduced-from-provided-archive"
+    pin_state = "not_reverified_in_this_run"
+    if submodule_proof is not None:
+        require(sha256(file_bytes(submodule_proof)) == provenance["compiler_submodule_response_sha256"],
+                "reference_rules: submodule response bytes mismatch")
+        pin = load(submodule_proof)
+        require(isinstance(pin, dict) and pin.get("sha") == reference and pin.get("path") == "src/doc/reference"
+                and pin.get("type") == "submodule" and pin.get("url") == api and pin.get("html_url") == repository
+                and pin.get("submodule_git_url") == "https://github.com/rust-lang/reference.git",
+                "reference_rules: compiler submodule identity mismatch")
+        pin_state = "reproduced-from-provided-response"
+    return {"readiness": "review-required", "review_status": "unreviewed", "counts": computed,
+            "full_rust_completion_percent": None, "source_archive_byte_verification": archive_state,
+            "compiler_submodule_byte_verification": pin_state,
+            "limitations": ["Page adjacency is not a reviewed rule mapping or executable evidence.",
+                            "Offline metadata validation does not authenticate GitHub, compiler binaries, or signed receipts.",
+                            "Recorded extraction byte consistency is not independently reproduced without external source inputs."]}
+
+
+def verify_reference_archive(path, provenance, pages, linked):
+    """Read, never extract, optional external archive bytes. No network or shared writes."""
+    try:
+        from extract_reference_rules import LINK, parse_markdown
+    except ImportError as exc:
+        raise InvalidInventory("archive reproduction requires tools/extract_reference_rules.py") from exc
+    path = Path(path)
+    require(not path.is_symlink(), "reference source archive must not be a symlink")
+    archive_bytes = file_bytes(path)
+    require(sha256(archive_bytes) == provenance["source_archive_sha256"], "reference source archive SHA256 mismatch")
+    prefix = "reference-" + provenance["reference_commit"]
+    files, markdown = set(), {}
+    consumed = 0
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:*") as archive:
+            for member in archive:
+                name = PurePosixPath(member.name)
+                require(not name.is_absolute() and '..' not in name.parts and name.parts
+                        and name.parts[0] == prefix, "reference source archive: unsafe member path")
+                require(not member.issym() and not member.islnk(), "reference source archive: links forbidden")
+                if member.isdir():
+                    continue
+                require(member.isfile() and len(name.parts) >= 2, "reference source archive: nonregular member")
+                relative = PurePosixPath(*name.parts[1:]).as_posix()
+                require(relative not in files, "reference source archive: duplicate member")
+                files.add(relative)
+                require(member.size >= 0, "reference source archive: negative file size")
+                consumed += member.size
+                require(consumed <= 64 * 1024 * 1024 and len(files) <= 10000,
+                        "reference source archive: validation resource limit")
+                if relative.startswith("src/") and relative.endswith(".md"):
+                    handle = archive.extractfile(member)
+                    require(handle is not None, "reference source archive: unreadable member")
+                    with handle:
+                        markdown[relative] = handle.read()
+    except (OSError, tarfile.TarError, EOFError) as exc:
+        raise InvalidInventory(f"reference source archive: {exc}") from exc
+    require(len(files) == provenance["archive_verified_local_files"], "reference source archive: file count mismatch")
+    require(set(markdown) == {page["path"] for page in pages}, "reference source archive: Markdown page set mismatch")
+    for page in pages:
+        raw = markdown[page["path"]]
+        require(sha256(raw) == page["sha256"], "reference source archive: page hash mismatch")
+        try:
+            rules, headings, editions = parse_markdown(raw.decode("utf-8"))
+        except UnicodeError as exc:
+            raise InvalidInventory("reference source archive: invalid source encoding") from exc
+        require(page["rules"] == rules and page["headings"] == headings and page["edition_note_markers"] == editions,
+                "reference source archive: extracted metadata differs from index")
+    summary = markdown["src/SUMMARY.md"]
+    require(sha256(summary) == provenance["summary_sha256"], "reference source archive: summary hash mismatch")
+    require({"src/" + path for path in LINK.findall(summary.decode("utf-8"))} == linked,
+            "reference source archive: linked page set differs from summary")
+
+
+def reference_readiness(root, *, data=_ABSENT, candidate_path=None, contract=None,
+                        source_archive=None, submodule_proof=None):
+    if data is _ABSENT and not (Path(root) / REFERENCE_RULES).is_file():
+        return {"readiness": "missing", "review_status": "unreviewed", "missing_files": [REFERENCE_RULES],
+                "full_rust_completion_percent": None,
+                "limitations": ["Pinned reference rule inventory is missing, so inventory readiness remains blocked."]}
+    return validate_reference_rules(root, data, candidate_path=candidate_path, contract=contract,
+                                    source_archive=source_archive, submodule_proof=submodule_proof)
+
+
 def load_and_summarize(root: Path):
     """Return honest missing readiness for partial fixtures, reject malformed present inputs."""
     root = Path(root)
+    reference_data = load(root / REFERENCE_RULES) if (root / REFERENCE_RULES).is_file() else _ABSENT
+    if reference_data is not _ABSENT:
+        fields(reference_data, ("schema_version", "review_status", "scope", "provenance", "counts",
+                               "pinned_pages_without_candidate_section", "candidate_pages_absent_from_pinned_summary",
+                               "unlinked_markdown_files", "limitations", "pages"), "reference_rules")
     names = ("data/compiler-compatibility-contract.json", "data/compiler-compatibility-scope.json",
              "data/compiler-language-inventory.json", "data/compiler-library-project-inventory.json",
              "tests/support/stock_rustc.rs")
@@ -256,9 +506,14 @@ def load_and_summarize(root: Path):
         return {"schema_version": 1, "scope": CONTRACT, "readiness": "missing",
                 "review_status": "unreviewed", "missing_files": missing,
                 "full_rust_completion_percent": None,
+                "inventory_readiness_blockers": missing + ([REFERENCE_RULES] if reference_data is _ABSENT else []),
+                "reference_rules": {"readiness": "missing" if reference_data is _ABSENT else "blocked-by-missing-inputs",
+                                    "full_rust_completion_percent": None},
                 "limitations": ["Missing inventory inputs cannot establish executable evidence or full compatibility."]}
     result = summarize([present[name] for name in names[2:4]], present[names[1]])
     result.update(contract_id=contract["contract_id"], readiness="unreviewed", missing_files=[])
+    result["reference_rules"] = reference_readiness(root, data=reference_data, contract=contract)
+    result["inventory_readiness_blockers"] = ([REFERENCE_RULES] if result["reference_rules"]["readiness"] == "missing" else [])
     return result
 
 
@@ -269,6 +524,9 @@ def main(argv=None):
     parser.add_argument("--scope", type=Path)
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--oracle-verifier", type=Path)
+    parser.add_argument("--reference-rules", type=Path)
+    parser.add_argument("--source-archive", type=Path)
+    parser.add_argument("--submodule-proof", type=Path)
     args = parser.parse_args(argv)
     args.scope = args.scope or args.root / "data/compiler-compatibility-scope.json"
     args.inventory = args.inventory or [args.root / "data/compiler-language-inventory.json",
@@ -280,6 +538,11 @@ def main(argv=None):
         report = summarize([load(path) for path in args.inventory], load(args.scope))
         report["contract_id"] = contract["contract_id"]
         report["readiness"] = "unreviewed"
+        report["reference_rules"] = reference_readiness(
+            args.root, data=load(args.reference_rules) if args.reference_rules else _ABSENT,
+            candidate_path=next((path for path in args.inventory if path.name == "compiler-language-inventory.json"), None),
+            contract=contract, source_archive=args.source_archive, submodule_proof=args.submodule_proof)
+        report["inventory_readiness_blockers"] = ([REFERENCE_RULES] if report["reference_rules"]["readiness"] == "missing" else [])
     except InvalidInventory as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2

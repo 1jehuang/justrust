@@ -290,6 +290,7 @@ class EvidenceTests(unittest.TestCase):
             (self.root / "data").mkdir(exist_ok=True)
             for filename in ("compiler-compatibility-contract.json",
                              "compiler-language-inventory.json",
+                             "compiler-language-reference-rules.json",
                              "compiler-library-project-inventory.json"):
                 before = c.source_identity(self.root)
                 path = self.root / "data" / filename
