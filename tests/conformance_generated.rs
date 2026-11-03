@@ -136,7 +136,7 @@ fn probe(id: usize, is_invalid: bool) {
     let tag = format!("generated_seed_{SEED:016x}_{kind}_{id:02}");
     let (source, expectation) = if is_invalid {
         let (source, code) = invalid(id);
-        (source, Expect::Invalid(code))
+        (source, Expect::InvalidAfterParse(code))
     } else {
         let (source, stdout) = valid(id);
         (source, Expect::Run(Box::leak(stdout.into_boxed_str())))
