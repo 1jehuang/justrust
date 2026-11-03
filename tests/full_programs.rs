@@ -603,3 +603,63 @@ fn full_programs_ratchet() {
         failures.join("\n")
     );
 }
+
+#[allow(dead_code)]
+#[path = "support/closure_oracle.rs"]
+mod unchanged_programs_closure_oracle;
+
+#[test]
+fn unchanged_closures_iterators_pinned_stock_workers1_8() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_closures_iterators_pinned_stock_workers1_8",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "11_closures_iterators",
+            source: include_str!("fixtures/full_programs/11_closures_iterators.rs"),
+            expect: unchanged_programs_closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/11_closures_iterators.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn unchanged_linked_list_pinned_stock_workers1_8() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_linked_list_pinned_stock_workers1_8",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "12_linked_list",
+            source: include_str!("fixtures/full_programs/12_linked_list.rs"),
+            expect: unchanged_programs_closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/12_linked_list.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn unchanged_hashmap_word_count_pinned_stock_workers1_8() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_hashmap_word_count_pinned_stock_workers1_8",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "17_hashmap_word_count",
+            source: include_str!("fixtures/full_programs/17_hashmap_word_count.rs"),
+            expect: unchanged_programs_closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/17_hashmap_word_count.stdout"
+            )),
+        }],
+    );
+}
+
+#[test]
+fn unchanged_inventory_system_pinned_stock_workers1_8() {
+    unchanged_programs_closure_oracle::check(
+        "unchanged_inventory_system_pinned_stock_workers1_8",
+        &[unchanged_programs_closure_oracle::Case {
+            name: "20_inventory_system",
+            source: include_str!("fixtures/full_programs/20_inventory_system.rs"),
+            expect: unchanged_programs_closure_oracle::Expect::Run(include_str!(
+                "fixtures/full_programs/20_inventory_system.stdout"
+            )),
+        }],
+    );
+}

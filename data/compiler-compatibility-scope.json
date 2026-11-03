@@ -6943,17 +6943,32 @@
               ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Four selected existing single-file programs retain their original source/stdout fixtures and use the live exact pinned stock oracle plus native CHECK/BUILD/run at workers 1 and 8. They exercise closure/iterator composition, recursive lists, deterministic word counts and an inventory observer system. This is not external Cargo crate, build-script, proc-macro, clean/incremental or full real-project coverage. The older trait-object selector retains its stored-stock oracle scope.",
+                  "tests": [
+                    {"suite": "full_programs", "test": "unchanged_closures_iterators_pinned_stock_workers1_8"},
+                    {"suite": "full_programs", "test": "unchanged_linked_list_pinned_stock_workers1_8"},
+                    {"suite": "full_programs", "test": "unchanged_hashmap_word_count_pinned_stock_workers1_8"},
+                    {"suite": "full_programs", "test": "unchanged_inventory_system_pinned_stock_workers1_8"}
+                  ]
+                }
+              ],
               "layer": "end_to_end",
               "tests": [
                 {
                   "suite": "full_programs",
                   "test": "unchanged_trait_objects_actual_program"
-                }
+                },
+                {"suite": "full_programs", "test": "unchanged_closures_iterators_pinned_stock_workers1_8"},
+                {"suite": "full_programs", "test": "unchanged_linked_list_pinned_stock_workers1_8"},
+                {"suite": "full_programs", "test": "unchanged_hashmap_word_count_pinned_stock_workers1_8"},
+                {"suite": "full_programs", "test": "unchanged_inventory_system_pinned_stock_workers1_8"}
               ]
             }
           ],
           "id": "project-unchanged-programs",
-          "title": "Unchanged trait-object program CHECK/BUILD/run versus stored stock stdout at workers 1 and 8"
+          "title": "Selected unchanged single-file programs through native CHECK/BUILD/run at workers 1 and 8, with stored or live pinned stock oracle scope identified per test"
         },
         {
           "gates": [
