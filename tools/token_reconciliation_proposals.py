@@ -26,10 +26,10 @@ WITNESS_SOURCE_CONTRACT = {
     'rule_index_sha256': '1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85',
     'candidate_inventory_sha256': '29e61520b930ee3f15ae005e79e70223e095901fc0f286ac61c82613e2f47a0c',
     'files': {
-        'tests/conformance_generated.rs': '1288003e8f18f47e93ca06d7292288c51ea64e56028e7ca1e9d696548e2485e6',
+        'tests/conformance_generated.rs': 'cb2a7adfc7789a01337c891994b2e75c9e861905e4b4cad17bfcc62e0d8fe4c5',
         'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
         'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
-        'data/compiler-compatibility-scope.json': '16c95306744d5848c6c890d8d3085b993ab43c6802383d405f948262ea072d30',
+        'data/compiler-compatibility-scope.json': '88afac0397deb6ae82dd586c166f81ec1316c14a22c716d98a774d87b07b3f59',
     },
 }
 # selector | expectation class | literal rules | candidate aliases | rationale | limits

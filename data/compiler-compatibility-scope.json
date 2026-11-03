@@ -5902,20 +5902,116 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Bounded Edition 2024 Linux x86_64 source obligations: ordered SSE2 integer lanes stored unaligned into a valid four-i32 array, a separate SSE2 target-feature scalar call on the fixed x86_64 baseline, and stable inline assembly register addition. Exact pinned stock and native CHECK/BUILD/run with workers 1/8 are required. Unsupported input is a failure, not support. These cases do not cover arbitrary targets, feature detection, all intrinsics or performance.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_sse2_ordered_lanes"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_target_feature_sse2_scalar"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_asm_register_add"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_sse2_ordered_lanes"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_target_feature_sse2_scalar"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_asm_register_add"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Unused-function strict semantic rejection obligations: SIMD u32 argument instead of __m128i (stock E0308), inline assembly outside unsafe (E0133), and an unknown target-feature name (not valid for this target). Original parse/declaration facts and healthy semantic rejection are required. Unsupported syntax, imports, macros or active attributes cannot satisfy these obligations.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_unused_simd_wrong_second_argument"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_unused_asm_without_unsafe"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_unused_nonexistent_target_feature"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_unused_simd_wrong_second_argument"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_unused_asm_without_unsafe"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_unused_nonexistent_target_feature"
+                }
+              ]
             },
             {
               "layer": "interaction",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "The same three bounded positive source witnesses require exact stdout: ordered lanes 7 18 9 405, scalar result 23, and assembly result 12, each followed by newline. This shares witnesses with the feature layer, not independent evidence or full intrinsics coverage.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_sse2_ordered_lanes"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_target_feature_sse2_scalar"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "runtime_intrinsics_asm_register_add"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_sse2_ordered_lanes"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_target_feature_sse2_scalar"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "runtime_intrinsics_asm_register_add"
+                }
+              ]
             }
           ],
           "id": "runtime-intrinsics",

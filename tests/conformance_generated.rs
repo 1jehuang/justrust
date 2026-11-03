@@ -1977,3 +1977,124 @@ fn campaign_seed_unused_generic_wrong_argument() {
 fn campaign_seed_unused_conditional_noncopy_move() {
     bounded_seed_campaign::campaign(5);
 }
+
+// Strict bounded x86_64 obligations, not full intrinsics support.
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_intrinsics_sse2_ordered_lanes() {
+    oracle::check(
+        "runtime_intrinsics_sse2_ordered_lanes",
+        &[Case {
+            name: "runtime_intrinsics_sse2_ordered_lanes",
+            source: r#"use std::arch::x86_64::{__m128i, _mm_add_epi32, _mm_setr_epi32, _mm_storeu_si128};
+fn main() {
+    let mut lanes = [0i32; 4];
+    unsafe {
+        let left = _mm_setr_epi32(1, 20, -3, 400);
+        let right = _mm_setr_epi32(6, -2, 12, 5);
+        let sum = _mm_add_epi32(left, right);
+        _mm_storeu_si128(lanes.as_mut_ptr().cast::<__m128i>(), sum);
+    }
+    println!("{} {} {} {}", lanes[0], lanes[1], lanes[2], lanes[3]);
+}
+"#,
+            expect: Expect::Run("7 18 9 405\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_intrinsics_target_feature_sse2_scalar() {
+    oracle::check(
+        "runtime_intrinsics_target_feature_sse2_scalar",
+        &[Case {
+            name: "runtime_intrinsics_target_feature_sse2_scalar",
+            source: r#"#[target_feature(enable = "sse2")]
+unsafe fn calculate(value: u32) -> u32 {
+    value * 3 + 2
+}
+fn main() {
+    let result = unsafe { calculate(7) };
+    println!("{}", result);
+}
+"#,
+            expect: Expect::Run("23\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_intrinsics_asm_register_add() {
+    oracle::check(
+        "runtime_intrinsics_asm_register_add",
+        &[Case {
+            name: "runtime_intrinsics_asm_register_add",
+            source: r#"fn main() {
+    let mut value = 7u64;
+    unsafe {
+        std::arch::asm!("add {value}, 5", value = inout(reg) value, options(nomem, nostack));
+    }
+    println!("{}", value);
+}
+"#,
+            expect: Expect::Run("12\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_intrinsics_unused_simd_wrong_second_argument() {
+    oracle::check(
+        "runtime_intrinsics_unused_simd_wrong_second_argument",
+        &[Case {
+            name: "runtime_intrinsics_unused_simd_wrong_second_argument",
+            source: r#"use std::arch::x86_64::{_mm_add_epi32, _mm_setr_epi32};
+fn unused() {
+    unsafe {
+        let lanes = _mm_setr_epi32(1, 2, 3, 4);
+        let _result = _mm_add_epi32(lanes, 7u32);
+    }
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_intrinsics_unused_asm_without_unsafe() {
+    oracle::check(
+        "runtime_intrinsics_unused_asm_without_unsafe",
+        &[Case {
+            name: "runtime_intrinsics_unused_asm_without_unsafe",
+            source: r#"fn unused() {
+    let mut value = 7u64;
+    std::arch::asm!("add {value}, 5", value = inout(reg) value, options(nomem, nostack));
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0133"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_intrinsics_unused_nonexistent_target_feature() {
+    oracle::check(
+        "runtime_intrinsics_unused_nonexistent_target_feature",
+        &[Case {
+            name: "runtime_intrinsics_unused_nonexistent_target_feature",
+            source: r#"#[target_feature(enable = "justrust_nonexistent_feature")]
+unsafe fn unused_marker() {}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("not valid for this target"),
+        }],
+    );
+}
