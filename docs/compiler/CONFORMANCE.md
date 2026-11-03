@@ -208,6 +208,16 @@ the acquisition directory containing `pinned-source-final` and
 `tools/test_compact_library_surface_provenance.py`. A skipped fixture check is
 not proof of source-byte verification or API completeness.
 
+`tools/classify_proc_macro_details.py` provides a bounded literal review of
+retained `proc_macro` detail pages. It scopes stability annotations to their
+item header or method summary, keeps const instability separate, and leaves
+missing or conflicting evidence ambiguous. Public reachability, target
+availability and semantic API identity remain unresolved. Its fresh scratch
+output is not consumed as compatibility evidence or an API denominator. Run
+`tools/test_classify_proc_macro_details.py` with the same fixture environment
+to repeat exact-page and corruption controls. Full extracted sidecars are not
+vendored into this repository.
+
 Undefined behavior is not a runtime-output parity obligation. Unsafe
 preconditions and compiler-enforced restrictions must be tracked separately.
 Where documented behavior permits multiple outcomes, a differential oracle
