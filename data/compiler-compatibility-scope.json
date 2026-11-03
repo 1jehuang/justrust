@@ -559,7 +559,24 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "evidence_notes": [
+                {
+                  "note": "An absent external module must fail live exact pinned stock metadata-check/build with E0583 and native CLI CHECK/BUILD at workers 1/8 with the specific missing-module diagnostic. Both sides require ordinary exit(1), empty stdout and no output artifact. This is a source-discovery rejection, not a semantic-stage proof or general path-attribute coverage.",
+                  "tests": [
+                    {"suite": "external_modules", "test": "external_missing_file_strict_stock_and_native_rejection"}
+                  ]
+                },
+                {
+                  "note": "An existing external child contains an unused function returning bool instead of declared i32. Live exact pinned stock metadata-check/build requires E0308; native CLI CHECK/BUILD at workers 1/8 requires the specific bool/i32 mismatch, ordinary exit(1), empty stdout and no output artifact. Unsupported/resource/infrastructure/contract/crash diagnostics are forbidden. This CLI witness checks diagnostic identity, not original-source/declaration graph-publication receipts or general external-module rejection completeness.",
+                  "tests": [
+                    {"suite": "external_modules", "test": "external_unused_type_invalid_child_strict_stock_and_native_rejection"}
+                  ]
+                }
+              ],
+              "tests": [
+                {"suite": "external_modules", "test": "external_missing_file_strict_stock_and_native_rejection"},
+                {"suite": "external_modules", "test": "external_unused_type_invalid_child_strict_stock_and_native_rejection"}
+              ]
             },
             {
               "evidence_notes": [
@@ -7112,6 +7129,15 @@
                       "test": "providers_cannot_inspect_even_completed_foreign_engine_facts"
                     }
                   ]
+                },
+                {
+                  "note": "Original two-file source compilation compares an independently derived exact producer inventory, source-operation sharing, complete capture and source byte/file accounting at workers 1 and 8 in CHECK/BUILD. The expected key set and all assertions are retained unchanged; this is partial structural graph evidence, not a stock semantic or full language coverage proof.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "external_source_graph_is_shared_and_accounts_for_all_files"
+                    }
+                  ]
                 }
               ],
               "layer": "interaction",
@@ -7123,6 +7149,10 @@
                 {
                   "suite": "engine",
                   "test": "providers_cannot_inspect_even_completed_foreign_engine_facts"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "external_source_graph_is_shared_and_accounts_for_all_files"
                 }
               ]
             },

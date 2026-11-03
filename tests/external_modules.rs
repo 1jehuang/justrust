@@ -15,6 +15,196 @@ static NEXT_ID: AtomicU64 = AtomicU64::new(0);
 const COMPILE_TIMEOUT: Duration = Duration::from_secs(20);
 const RUN_TIMEOUT: Duration = Duration::from_secs(5);
 
+#[path = "support/stock_rustc.rs"]
+mod external_rejection_stock;
+
+// Unlike the historical broad rejection helper below, these witnesses require
+// the intended diagnostic, an ordinary exit(1), and no output publication.
+fn strict_external_rejection(label: &str, result: &Captured, required: &[&str]) {
+    assert_eq!(
+        result.status.code(),
+        Some(1),
+        "{label}: unhealthy exit: {result:?}"
+    );
+    assert!(
+        result.stdout.is_empty(),
+        "{label}: unexpected stdout: {result:?}"
+    );
+    let diagnostic = String::from_utf8_lossy(&result.stderr);
+    for marker in required {
+        assert!(
+            diagnostic.contains(marker),
+            "{label}: missing {marker:?}: {diagnostic}"
+        );
+    }
+    let lower = diagnostic.to_ascii_lowercase();
+    for forbidden in [
+        "unsupported",
+        "resource",
+        "infrastructure",
+        "panicked",
+        "panic:",
+        "internal",
+        "contract:",
+        "segmentation",
+        "signal",
+        "crash",
+        "sigabrt",
+        "fatal runtime error",
+        "overflow",
+        "limit",
+        "exceeded",
+        "timed out",
+        "os error",
+        "failed to spawn",
+        "could not execute",
+        "out of memory",
+    ] {
+        assert!(
+            !lower.contains(forbidden),
+            "{label}: unhealthy diagnostic {forbidden:?}: {diagnostic}"
+        );
+    }
+}
+
+fn external_rejection_no_output(scratch: &Scratch) {
+    for name in ["program", "stock-program", "stock.rmeta"] {
+        assert_eq!(
+            fs::symlink_metadata(scratch.path(name)).unwrap_err().kind(),
+            std::io::ErrorKind::NotFound,
+            "rejection published {name}"
+        );
+    }
+}
+
+fn external_rejection_pinned_stock() -> String {
+    // Reuse the shared exact version contract, but bound even version probes
+    // with this harness's capture/kill/wait discipline. No PATH fallback.
+    let candidates: Vec<String> = match std::env::var("JR_STOCK_RUSTC")
+        .ok()
+        .filter(|path| !path.is_empty())
+    {
+        Some(path) => vec![path],
+        None => std::iter::once("/usr/bin/rustc".to_string())
+            .chain(std::env::var("HOME").ok().map(|home| {
+                format!("{home}/.rustup/toolchains/1.98.1-x86_64-unknown-linux-gnu/bin/rustc")
+            }))
+            .collect(),
+    };
+    let scratch = Scratch::new();
+    let mut rejected = Vec::new();
+    for path in candidates {
+        if !Path::new(&path).is_file() {
+            rejected.push(format!("{path}: not a file"));
+            continue;
+        }
+        let result = capture(
+            Command::new(&path).env_remove("RUSTC_BOOTSTRAP").arg("-vV"),
+            &scratch,
+            COMPILE_TIMEOUT,
+        );
+        let text = String::from_utf8_lossy(&result.stdout);
+        match external_rejection_stock::verify_version_output(result.status.success(), &text) {
+            Ok(()) => {
+                assert!(result.stderr.is_empty(), "stock version stderr: {result:?}");
+                return path;
+            }
+            Err(error) => rejected.push(format!("{path}: {error}")),
+        }
+    }
+    panic!("no exact pinned stock oracle: {}", rejected.join("\n"));
+}
+
+fn strict_external_stock_and_native_reject(
+    files: &[(&str, &str)],
+    stock_markers: &[&str],
+    native_alternatives: &[&str],
+) {
+    let stock = external_rejection_pinned_stock();
+    for check in [true, false] {
+        let scratch = fixture(files);
+        let mut stock_command = Command::new(&stock);
+        stock_command
+            .current_dir(&scratch.0)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .arg(scratch.path("src/input.rs"))
+            .args([
+                "--edition=2024",
+                "--crate-name=external_rejection",
+                "--color=never",
+                "-C",
+                "panic=abort",
+                "-A",
+                "warnings",
+            ]);
+        if check {
+            stock_command
+                .arg("--emit=metadata")
+                .arg("-o")
+                .arg(scratch.path("stock.rmeta"));
+        } else {
+            stock_command.arg("-o").arg(scratch.path("stock-program"));
+        }
+        let result = capture(&mut stock_command, &scratch, COMPILE_TIMEOUT);
+        strict_external_rejection(&format!("stock check={check}"), &result, stock_markers);
+        external_rejection_no_output(&scratch);
+        for workers in [1, 8] {
+            // Fresh trees prevent an earlier rejection from hiding publication
+            // or poisoning discovery in another worker/mode configuration.
+            let scratch = fixture(files);
+            let result = capture(
+                &mut command(&scratch, workers, check),
+                &scratch,
+                COMPILE_TIMEOUT,
+            );
+            strict_external_rejection(
+                &format!("native workers={workers} check={check}"),
+                &result,
+                &["jr-rust:"],
+            );
+            let diagnostic = String::from_utf8_lossy(&result.stderr);
+            assert!(
+                native_alternatives
+                    .iter()
+                    .any(|marker| diagnostic.contains(marker)),
+                "native workers={workers} check={check}: wrong rejection: {diagnostic}"
+            );
+            external_rejection_no_output(&scratch);
+        }
+    }
+}
+
+#[test]
+fn external_missing_file_strict_stock_and_native_rejection() {
+    // Source discovery rejection, not proof of invalid semantic checking.
+    strict_external_stock_and_native_reject(
+        &[("src/input.rs", "mod foo; fn main() {}")],
+        &["error[E0583]", "file not found for module `foo`"],
+        &["module foo not found: expected"],
+    );
+}
+
+#[test]
+fn external_unused_type_invalid_child_strict_stock_and_native_rejection() {
+    // Both files exist. The bad function is never called, so neither a missing
+    // source diagnostic nor checking only reachable bodies authenticates this.
+    strict_external_stock_and_native_reject(
+        &[
+            ("src/input.rs", "mod foo; fn main() {}"),
+            ("src/foo.rs", "fn unused() -> i32 { true }"),
+        ],
+        &[
+            "error[E0308]",
+            "mismatched types",
+            "expected `i32`, found `bool`",
+        ],
+        &[
+            "expected Int(I32), got Bool",
+            "E0308: mismatched types: expected Fixed(Bool), found Fixed(Int(I32))",
+        ],
+    );
+}
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
