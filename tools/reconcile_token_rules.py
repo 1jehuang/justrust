@@ -6,6 +6,7 @@ The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
 """
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -14,6 +15,7 @@ from pathlib import Path
 
 from extract_reference_rules import SCOPE, parse_markdown
 from token_reconciliation_proposals import ALIASES, CLASS_NAMES, ROWS
+from token_reconciliation_proposals import DIRECT_WITNESSES, WITNESS_SOURCE_CONTRACT
 
 SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
@@ -186,14 +188,150 @@ def validate(data, index_path, candidate_path, source_root):
     return data['counts']
 
 
+def safe_path(path):
+    """Reject traversal and symlinks, including symlinked ancestors."""
+    path = Path(path)
+    require('..' not in path.parts, 'unsafe path traversal')
+    absolute = path.absolute()
+    for component in (absolute, *absolute.parents):
+        require(not component.is_symlink(), 'symlink path forbidden')
+    return absolute
+
+
+def witness_bytes(data):
+    return (json.dumps(data, indent=2, ensure_ascii=True, allow_nan=False) + '\n').encode('utf-8')
+
+
+def build_witness_links(index_path, candidate_path, source_root, repo_root):
+    """Direct partial attribution, never imported execution or reviewed coverage."""
+    index_path, candidate_path, source_root, repo_root = map(
+        safe_path, (index_path, candidate_path, source_root, repo_root))
+    # Reuse every v1 source/page/line/block and candidate identity check. Keep the
+    # entire reconciliation, including all missing needs and unselected rules.
+    reconciliation = build(index_path, candidate_path, source_root)
+    pin = copy.deepcopy(WITNESS_SOURCE_CONTRACT)
+    for field in ('reference_commit', 'rule_index_sha256', 'candidate_inventory_sha256'):
+        require(reconciliation['bindings'][field] == pin[field], 'witness source-contract ' + field)
+    require(reconciliation['counts']['global_rule_identities'] == 2965
+            and len(reconciliation['rows']) == 115
+            and len(reconciliation['unselected_rules']) == 2850,
+            'witness denominator mismatch')
+    candidate = json.loads(candidate_path.read_bytes())
+    obligations = {o['id'] for section in candidate['sections'] for o in section['obligations']}
+    require(len(obligations) == 205, 'witness requires the actual 205 candidate inventory')
+    files = []
+    for name, expected in pin['files'].items():
+        path = safe_path(repo_root / name)
+        require(path.is_relative_to(repo_root), 'source-contract path escapes repository')
+        actual = digest(path.read_bytes())
+        require(actual == expected, 'witness source-contract file mismatch: ' + name)
+        files.append({'path': name, 'sha256': actual})
+    # Discovery is lexical, not evidence. Reuse the ordinary exact-selector
+    # contract as well, but do not load/import any passing outcomes.
+    import conformance
+    import compatibility_scope
+    for path in (repo_root / 'tests').rglob('*'):
+        require(not path.is_symlink(), 'symlink in discovery source')
+    scope = json.loads((repo_root / 'data/compiler-compatibility-scope.json').read_bytes())
+    compatibility_scope.validate(scope, conformance, repo_root)
+    discovered = conformance.discover(repo_root)['source_test_functions']
+    scoped_selectors = {(case['suite'], case['test'])
+                        for area in scope['areas'] for requirement in area['requirements']
+                        for gate in requirement['gates'] for case in gate['tests']}
+    rows = {row['rule']: row for row in reconciliation['rows']}
+    links = []
+    require(len(DIRECT_WITNESSES) == 6, 'requires exactly six authored witnesses')
+    for selector, expectation, labels, aliases, rationale, limitations in DIRECT_WITNESSES:
+        matches = [row for row in discovered if row['file'] == 'tests/conformance_generated.rs'
+                   and row['test'] == selector]
+        require(len(matches) == 1, 'missing or duplicate exact top-level selector: ' + selector)
+        require(('conformance_generated', selector) in scoped_selectors,
+                'exact selector absent from compatibility scope: ' + selector)
+        require(expectation in ('positive', 'semantic-invalid'), 'foreign expectation class')
+        candidate_ids = [ALIASES[alias] for alias in aliases]
+        require(set(candidate_ids) <= obligations and len(set(candidate_ids)) == len(candidate_ids),
+                'foreign or duplicate direct candidate identity')
+        require(len(set(labels)) == len(labels), 'duplicate direct rule identity')
+        rule_links = []
+        for label in labels:
+            require(label in rows, 'foreign direct rule identity')
+            row = rows[label]
+            rule_links.append({key: row[key] for key in (
+                'id', 'page', 'rule', 'line', 'end_line', 'source_block_sha256')})
+        links.append({
+            'suite': 'conformance_generated', 'test': selector,
+            'source_file': 'tests/conformance_generated.rs',
+            'selector_line': matches[0]['line'],
+            'expectation_class': expectation,
+            'relationship': 'unreviewed-direct-partial-link',
+            'rule_links': rule_links, 'candidate_obligation_ids': candidate_ids,
+            'rationale': rationale, 'limitations': limitations,
+        })
+    require(len({link['test'] for link in links}) == 6, 'duplicate direct selector')
+    links.sort(key=lambda row: (row['suite'], row['test']))
+    return {
+        'schema_version': 1, 'schema': 'bounded-token-direct-witness-links-v1',
+        'purpose': 'scratch-only-unreviewed-token-direct-witness-links',
+        'scope': dict(SCOPE), 'source_contract': pin,
+        'source_files': files, 'reconciliation': reconciliation, 'links': links,
+        'summary': {
+            'global_rule_identities': 2965, 'selected_rule_rows': 115,
+            'unselected_rule_identities': 2850, 'direct_witness_selectors': len(links),
+            'direct_rule_links': sum(len(link['rule_links']) for link in links),
+            'distinct_direct_rule_identities': len({row['rule'] for link in links for row in link['rule_links']}),
+            'positive_selectors': sum(link['expectation_class'] == 'positive' for link in links),
+            'semantic_invalid_selectors': sum(link['expectation_class'] == 'semantic-invalid' for link in links),
+            'reviewed_rule_rows': 0, 'rows_with_exact_executable_evidence': 0,
+            'full_rust_percent': None,
+        },
+        'limitations': [
+            'Literal rule links and rationale are scoped unreviewed attribution, not normative review. No title-based coverage inference.',
+            'Whole-file hashes bind actual fixture and helper source, not extracted program bytes. No authored program hashes or stale worker fixture hashes are imported.',
+            'An exact selector link is not completion of a rule, candidate bucket, missing positive/invalid layer, or passing outcome. All v1 missing needs remain open.',
+            'Positive and semantic-invalid are authored expectation classes, not results. The known ignored tuple .01 selector remains linked. No evidence import, compiler execution or passing credit.',
+            'The source contract pins this bounded source snapshot only. It does not authenticate the full reference archive or certify full Rust support.',
+        ],
+    }
+
+
+def validate_witness_links(data, index_path, candidate_path, source_root, repo_root):
+    expected = build_witness_links(index_path, candidate_path, source_root, repo_root)
+    # Canonical byte comparison also distinguishes bool/int and rejects every
+    # arbitrary field, manual pass state, reordered list or weakened limitation.
+    require(witness_bytes(data) == witness_bytes(expected), 'witness artifact differs from exact authored source-bound links')
+    return expected['summary']
+
+
+def witness_artifact_path(path, repo_root, source_root):
+    path = safe_path(path)
+    require(not path.is_relative_to(safe_path(repo_root))
+            and not path.is_relative_to(safe_path(source_root))
+            and not path.is_relative_to(safe_path(Path(__file__).absolute().parent.parent)),
+            'scratch artifact must be outside repository and reference source')
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=['generate','validate'])
+    parser.add_argument('action', choices=['generate','validate','build-witness-links','validate-witness-links'])
     parser.add_argument('--rule-index', type=Path, required=True)
     parser.add_argument('--inventory', type=Path, required=True)
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--artifact', type=Path, required=True)
+    parser.add_argument('--repo-root', type=Path, default=Path(__file__).resolve().parent.parent)
     args = parser.parse_args(argv)
+    if args.action in ('build-witness-links', 'validate-witness-links'):
+        artifact = witness_artifact_path(args.artifact, args.repo_root, args.source_root)
+        if args.action == 'build-witness-links':
+            data = build_witness_links(args.rule_index, args.inventory, args.source_root, args.repo_root)
+            with artifact.open('xb') as output:
+                output.write(witness_bytes(data))
+        else:
+            raw = artifact.read_bytes()
+            data = json.loads(raw)
+            require(raw == witness_bytes(data), 'noncanonical or nondeterministic witness artifact bytes')
+        print(json.dumps(validate_witness_links(data, args.rule_index, args.inventory, args.source_root, args.repo_root), sort_keys=True))
+        return
     if args.action == 'generate':
         data = build(args.rule_index, args.inventory, args.source_root)
         with args.artifact.open('x', encoding='utf-8') as output:

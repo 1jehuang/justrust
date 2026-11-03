@@ -265,7 +265,22 @@ requires all selected rule rows and all 2,850 unselected identities to remain
 accounted for. Its tests reject omissions, foreign mappings and invented review
 or execution credit. Structural validation does not establish that a proposed
 normative interpretation is correct. All 2,965 rule mappings still require
-review, and direct exact tests remain missing from this candidate.
+review. The default candidate intentionally contains no direct test links.
+
+For the six explicitly authored token witnesses, use `build-witness-links`
+with the same arguments and a new external scratch artifact path. Check that
+separate artifact with `validate-witness-links`. These actions bind the exact
+fixture, oracle, stock verifier and scope bytes, verify selector discovery and
+scope membership, and retain every original rule and missing-test need. Source
+changes require explicit review of the pinned source contract before regeneration.
+The links are partial, unreviewed attribution, not passing results or completed
+rules. They import no execution receipts and leave review and execution credit
+at zero, including for the retained failing tuple-index witness.
+
+Set `JUSTRUST_WITNESS_REFERENCE_ROOT="$REFERENCE_SOURCE_ROOT"` when running
+`tools/test_reconcile_token_rules.py` to exercise actual pinned-source linkage
+as well as the synthetic adversarial controls. Without that input, the actual
+source test is explicitly skipped.
 
 Undefined behavior is not a runtime-output parity obligation. Unsafe
 preconditions and compiler-enforced restrictions must be tracked separately.

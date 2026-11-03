@@ -16,6 +16,55 @@ ALIASES = {
  'life': 'reference-lifetime-elision-elision-contracts',
 }
 CLASS_NAMES = {'N':'normative-semantic','G':'grammar','I':'index','X':'cross-reference','E':'edition-context'}
+
+# Separate, bounded direct attribution only. These literal identities were
+# authored from token-six-oracles.mapping.json, not inferred from test titles.
+# Old mapping fixture hashes and authored program hashes are deliberately absent.
+WITNESS_SOURCE_CONTRACT = {
+    'base_commit': '5d91f15b0f13239c175847ebbef794adadebc7c6',
+    'reference_commit': '86635e30bf861a038dc197d7e16fd09e7e514e7a',
+    'rule_index_sha256': '1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85',
+    'candidate_inventory_sha256': '29e61520b930ee3f15ae005e79e70223e095901fc0f286ac61c82613e2f47a0c',
+    'files': {
+        'tests/conformance_generated.rs': '5ee8a2cf6a25093b6d713a67daea0b13d0839d1661ee14c9fd40b049c11894c8',
+        'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
+        'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
+        'data/compiler-compatibility-scope.json': 'ceb92dd73d03bcabb29c5cb659a9bc39de5f5cd6f01615a6af47ca591721fd70',
+    },
+}
+# selector | expectation class | literal rules | candidate aliases | rationale | limits
+DIRECT_WITNESSES = (
+    ('token_suffix_literal_and_tt_macro_consumption_source', 'positive',
+     ('lex.token.literal.suffix.validity', 'lex.token.literal.literal.suffix.intro'),
+     ('lit', 'macro'),
+     'Arbitrary suffixed string and integer tokens are discarded by literal fragments, and a suffixed byte by tt, without expression interpretation.',
+     'Not expression/pattern suffix validity, general repetition, hygiene or cross-crate behavior.'),
+    ('token_raw_cooked_hash_escape_observable_source', 'positive',
+     ('lex.token.literal.str-raw.body', 'lex.token.literal.str-raw.content', 'lex.token.literal.str.intro', 'lex.token.literal.char-escape.ascii', 'lex.token.literal.char-escape.unicode'),
+     ('str', 'esc', 'val'),
+     'A two-hash raw delimiter contains a quote plus one hash. Raw backslash-n and cooked escapes spell equal output, with separate byte and Unicode escapes.',
+     'Valid boundaries only, not malformed raw tokens, maximum hashes, CRLF, continuation whitespace, all scalar boundaries or C strings.'),
+    ('token_numeric_spelling_radix_tuple_observable_source', 'positive',
+     ('lex.token.literal.int.kind-hex', 'lex.token.literal.int.kind-bin', 'lex.token.literal.int.kind-oct', 'lex.token.literal.int.kind-dec', 'lex.token.literal.float.form', 'lex.token.literal.int.tuple-field.eq'),
+     ('int', 'flt', 'tuple'),
+     'Hex f32/e3-like digit sequences remain integer digits. Binary/octal separators, decimal leading zeros, decimal exponent and canonical tuple fields contribute visible values.',
+     'Specified spellings only, not arithmetic completeness, invalid radices or empty exponents.'),
+    ('token_unused_forwarded_float_suffix_type_error_source', 'semantic-invalid',
+     ('lex.token.literal.suffix.validity', 'lex.token.literal.suffix.parse', 'lex.token.literal.int.suffix'),
+     ('lit', 'val', 'macro'),
+     'Lexically valid 2f32 is forwarded by a literal macro into an unused body with a conflicting u8 expectation. The intended rejection is semantic E0308 after parsing.',
+     'Not unknown suffix or nonnumeric expression suffix rejection. Authored expectation, not measured outcome.'),
+    ('token_unused_valid_raw_string_type_error_source', 'semantic-invalid',
+     ('lex.token.literal.str-raw.body', 'lex.token.literal.str-raw.content'),
+     ('str', 'val'),
+     'The valid raw delimiter witness appears under a bool expectation in an unused body. Intended E0308 is string-versus-bool rejection after admission.',
+     'Not malformed raw-string rejection or complete string semantics. Authored expectation, not measured outcome.'),
+    ('token_unused_tuple_leading_zero_field_error_source', 'semantic-invalid',
+     ('lex.token.literal.int.tuple-field.syntax', 'lex.token.literal.int.tuple-field.eq'),
+     ('int', 'tuple'),
+     'Tuple projection .01 is admitted as an integer-shaped index but must not normalize to canonical field 1. Intended unused-body rejection is E0609 after parsing.',
+     'Known ignored case remains linked, not passed. No forbidden suffixes, malformed radix digits or broader field/move rules are covered.'),
+)
 ROWS = r'''
 lex.token|I|The block is only the chapter heading and adds no standalone acceptance rule.|lit pun|Review chapter routing without executable credit.|No standalone rejection obligation follows from this heading.|Check all subordinate token sections remain represented.
 lex.token.syntax|G|The union production determines which lexical categories are recognized, not their runtime meaning.|lit pun|Author one lexical witness for each listed token alternative.|Reject source not admitted by any alternative rather than split it opportunistically.|Preserve macro token category transport for every alternative.
