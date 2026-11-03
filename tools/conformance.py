@@ -161,6 +161,9 @@ def source_identity(root: Path = ROOT) -> dict:
         os.fsdecode(path).startswith(("src/", "libraries/", "tests/", "tools/", ".cargo/", "docs/compiler/"))
         or os.fsdecode(path) in {"Cargo.toml", "Cargo.lock", str(MANIFEST),
                                 "data/compiler-compatibility-scope.json",
+                                "data/compiler-compatibility-contract.json",
+                                "data/compiler-language-inventory.json",
+                                "data/compiler-library-project-inventory.json",
                                 ".github/workflows/compiler-conformance.yml"})})
     state = hashlib.sha256()
     for name in inputs:

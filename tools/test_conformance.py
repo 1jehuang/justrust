@@ -287,6 +287,17 @@ class EvidenceTests(unittest.TestCase):
             self.assertNotEqual(first, changed)
             (self.root / "tests/a.rs").unlink()
             self.assertNotEqual(changed, c.source_identity(self.root))
+            (self.root / "data").mkdir(exist_ok=True)
+            for filename in ("compiler-compatibility-contract.json",
+                             "compiler-language-inventory.json",
+                             "compiler-library-project-inventory.json"):
+                before = c.source_identity(self.root)
+                path = self.root / "data" / filename
+                path.write_text('{"revision": 1}')
+                added = c.source_identity(self.root)
+                self.assertNotEqual(before, added, filename)
+                path.write_text('{"revision": 2}')
+                self.assertNotEqual(added, c.source_identity(self.root), filename)
 
 
 if __name__ == "__main__":
