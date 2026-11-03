@@ -14,8 +14,8 @@ pub mod pinned_stock;
 pub enum Expect {
     Run(&'static str),
     Invalid(&'static str),
-    /// Requires the original input PARSE_FILE fact to have been published.
-    /// A parser rejecting unsupported syntax is not semantic invalid evidence.
+    /// Requires original input parsing and complete declaration facts.
+    /// Header parsing alone does not establish body syntax admission.
     InvalidAfterParse(&'static str),
 }
 pub struct Case {
@@ -159,9 +159,22 @@ pub fn validate_semantic_rejection(
                     .iter()
                     .any(|event| event.kind == "publish" && event.node == Some(*node))
         });
-    if !parsed {
+    let declarations =
+        report
+            .node_ids
+            .iter()
+            .zip(&report.node_evaluations)
+            .any(|(node, (key, _))| {
+                key.kind == 101
+                    && key.params.is_empty()
+                    && report
+                        .events
+                        .iter()
+                        .any(|event| event.kind == "publish" && event.node == Some(*node))
+            });
+    if !parsed || !declarations {
         return Err(
-            "original source did not finish parsing; parser rejection is not semantic invalid evidence",
+            "original source and declaration facts were not both published; parser rejection is not semantic invalid evidence",
         );
     }
     Ok(())

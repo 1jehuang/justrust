@@ -265,7 +265,6 @@ fn main() { use_identity(identity); }
 }
 
 #[test]
-#[ignore = "pending native unused associated projection Copy obligation rejection"]
 fn pending_unused_associated_required_copy_bound_is_invalid() {
     oracle::check(
         "pending-unused-associated-required-copy-bound",
@@ -307,7 +306,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "pending native compatibility obligation"]
 fn memory_raw_pointer_cast_roundtrip_and_unsafe_write_match_stock() {
     oracle::check(
         "memory-raw-pointer-cast-roundtrip",
@@ -333,7 +331,6 @@ fn memory_raw_pointer_cast_roundtrip_and_unsafe_write_match_stock() {
 }
 
 #[test]
-#[ignore = "pending native compatibility obligation"]
 fn memory_unused_raw_pointer_write_without_unsafe_is_invalid() {
     oracle::check(
         "memory-unused-raw-pointer-write-unsafe-required",
@@ -428,7 +425,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "pending native compatibility obligation"]
 fn const_fn_unused_runtime_call_source() {
     oracle::check(
         "const-fn-unused-runtime-call-source",
@@ -443,11 +439,11 @@ fn main() {}"#,
 }
 
 #[test]
-fn semantic_invalid_requires_original_parse_publication() {
+fn semantic_invalid_requires_source_and_declaration_publications() {
     let syntax = justrust_engine::compiler::compile_observed("fn main(){let = ;}".into(), 1, true)
         .err()
         .expect("malformed source must fail");
-    assert!(oracle::validate_semantic_rejection(&syntax).is_err());
+
     let mut semantic = justrust_engine::compiler::compile_observed(
         "fn unused(){let value:i32=true;}fn main(){}".into(),
         1,
@@ -455,7 +451,25 @@ fn semantic_invalid_requires_original_parse_publication() {
     )
     .err()
     .expect("unused type error must fail");
+
+    assert!(oracle::validate_semantic_rejection(&syntax).is_err());
     oracle::validate_semantic_rejection(&semantic).unwrap();
+    let report = semantic.report.as_mut().unwrap();
+    let declarations = report
+        .node_ids
+        .iter()
+        .zip(&report.node_evaluations)
+        .find_map(|(node, (key, _))| (key.kind == 101 && key.params.is_empty()).then_some(*node))
+        .expect("declaration fact node");
+    let events = report.events.clone();
+    report
+        .events
+        .retain(|event| !(event.kind == "publish" && event.node == Some(declarations)));
+    assert!(
+        oracle::validate_semantic_rejection(&semantic).is_err(),
+        "header parsing alone is insufficient"
+    );
+    semantic.report.as_mut().unwrap().events = events;
     let report = semantic.report.as_mut().unwrap();
     let root = report
         .node_ids

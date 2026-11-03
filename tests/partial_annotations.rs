@@ -1,7 +1,7 @@
-//! Placeholder annotations and source never types, compared with pinned stock rustc.
-//! Never-position admission follows the 1.101.0-nightly oracle (upstream
-//! 1d81eb4ad, 2026-10-07), not the older host 1.98.1 compiler. The shared harness
-//! logs and pins the actual executable and full version hash for each run.
+//! Placeholder annotations and source never types, compared with pinned stable rustc 1.98.1.
+//! The shared oracle verifies the exact stable compiler identity and removes RUSTC_BOOTSTRAP.
+//! Non-return-position never types remain separate stable feature-policy rejection obligations,
+//! not positive never-type inference evidence or an implicit nightly compatibility track.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 #[path = "support/oracle.rs"]
 mod oracle;
@@ -16,26 +16,6 @@ fn partial_annotations_match_stock() {
                 name: "never_return_rejects_inhabited_value",
                 source: "fn bad() -> ! { 7 } fn main() {}",
                 expect: Expect::Invalid("E0308"),
-            },
-            Case {
-                name: "never_generic_argument",
-                source: "fn f<T>() {} fn main() { f::<!>(); println!(\"never generic\"); }",
-                expect: Expect::Run("never generic\n"),
-            },
-            Case {
-                name: "never_aggregate_field",
-                source: "struct P { field: ! } fn main() { println!(\"never field\"); }",
-                expect: Expect::Run("never field\n"),
-            },
-            Case {
-                name: "never_local_annotation",
-                source: "fn diverge() { let x: ! = loop {}; } fn main() { println!(\"never local\"); }",
-                expect: Expect::Run("never local\n"),
-            },
-            Case {
-                name: "never_fn_trait_output",
-                source: "fn f(x: impl Fn() -> !) {} fn main() { println!(\"never bound\"); }",
-                expect: Expect::Run("never bound\n"),
             },
             Case {
                 name: "nominal_tuple_array_reference",
@@ -140,6 +120,38 @@ fn main() { let _ = read::<u8, N>(1, N { n: 7 }); }"#,
                 source: r#"fn diverge() -> ! { loop {} }
 fn main() { if false { diverge(); } println!("done"); }"#,
                 expect: Expect::Run("done\n"),
+            },
+        ],
+    );
+}
+
+/// Stable feature-policy rejection, not type-inference acceptance. Keep these sources
+/// unchanged while native rejection is pending, and track this ignored obligation explicitly.
+#[test]
+#[ignore = "pending native stable feature-policy rejection for non-return-position never types"]
+fn stable_never_feature_policy_matches_pinned_stock() {
+    oracle::check(
+        "stable-never-feature-policy",
+        &[
+            Case {
+                name: "never_generic_argument",
+                source: "fn f<T>() {} fn main() { f::<!>(); println!(\"never generic\"); }",
+                expect: Expect::Invalid("E0658"),
+            },
+            Case {
+                name: "never_aggregate_field",
+                source: "struct P { field: ! } fn main() { println!(\"never field\"); }",
+                expect: Expect::Invalid("E0658"),
+            },
+            Case {
+                name: "never_local_annotation",
+                source: "fn diverge() { let x: ! = loop {}; } fn main() { println!(\"never local\"); }",
+                expect: Expect::Invalid("E0658"),
+            },
+            Case {
+                name: "never_fn_trait_output",
+                source: "fn f(x: impl Fn() -> !) {} fn main() { println!(\"never bound\"); }",
+                expect: Expect::Invalid("E0658"),
             },
         ],
     );

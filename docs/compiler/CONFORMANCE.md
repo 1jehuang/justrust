@@ -108,7 +108,12 @@ Inventory-only coverage works without Git in hosted source snapshots, but it
 verifies no results. Retained executable evidence always requires provenance.
 Tracked cases use `--include-ignored`: a newly discovered valid-but-rejected
 scenario can be marked as a known gap in the ordinary regression suite while
-remaining an actual failing test in progress runs. Neither ignored nor
+remaining an actual failing test in progress runs. New semantic-invalid probes
+use `InvalidAfterParse`: they require healthy complete capture, the original
+input parse publication and complete declaration facts, not merely a parser
+refusing an unsupported construct. Header parsing alone is insufficient because
+body parsing is lazy. These are necessary admission checks, not a claim that
+every native diagnostic is already typed or matches stock exactly. Neither ignored nor
 expected-unsupported tests count as feature support.
 
 Reports separately expose **test-mapping coverage** (declared layer obligations

@@ -26,8 +26,24 @@
               ]
             },
             {
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "partial_annotations",
+                      "test": "stable_never_feature_policy_matches_pinned_stock"
+                    }
+                  ],
+                  "note": "Pinned stable feature-policy obligation: four original non-return-position never-type programs require stock E0658 rejection without changing source bytes or enabling nightly features. This is policy rejection, not positive never-type inference or a semantic body-check proof. The exact progress invocation includes ignored cases; native acceptance cannot count as support."
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "partial_annotations",
+                  "test": "stable_never_feature_policy_matches_pinned_stock"
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -3784,7 +3800,7 @@
             {
               "evidence_notes": [
                 {
-                  "note": "Pending ignored obligation, not full CTFE support. Source const fn make_table constructs Table {values:[7,11,24],sum:values[0]+values[1]+values[2]}; const TABLE=make_table(); runtime observes every element, length and sum. Reasoned stock stdout: 3 7 11 24 42\\n. No references, pointers, heap or general CTFE diagnostics claim.",
+                  "note": "Bounded CTFE obligation, not full support. Source const fn make_table constructs Table {values:[7,11,24],sum:values[0]+values[1]+values[2]}; const TABLE=make_table(); runtime observes every element, length and sum. Expected stock stdout: 3 7 11 24 42\\n. No references, pointers, heap or general CTFE diagnostics claim.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -3817,7 +3833,7 @@
                   ]
                 },
                 {
-                  "note": "Pending ignored obligation. Source fn runtime()->i32{42}, const fn unused()->i32{runtime()}, empty main. Reasoned stock E0015 for calling a non-const function in unused const fn body. Oracle validates native semantic failure rather than unsupported/resource/infrastructure in CHECK/BUILD workers 1/8.",
+                  "note": "Source fn runtime()->i32{42}, const fn unused()->i32{runtime()}, empty main. Expected stock E0015 for calling a non-const function in unused const fn body. Oracle validates native semantic failure rather than unsupported/resource/infrastructure in CHECK/BUILD workers 1/8.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -3845,7 +3861,7 @@
             {
               "evidence_notes": [
                 {
-                  "note": "Pending bounded combination of const-fn call, local array, array indexing/arithmetic, struct aggregate construction and named const runtime field reads. This one authored scenario does not establish general aggregate/reference CTFE completeness.",
+                  "note": "Bounded combination of const-fn call, local array, array indexing/arithmetic, struct aggregate construction and named const runtime field reads. This one authored scenario does not establish general aggregate/reference CTFE completeness.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -3865,7 +3881,7 @@
             {
               "evidence_notes": [
                 {
-                  "note": "Pending existing oracle CHECK/BUILD/run workers 1/8 against pinned stock and literal stdout, with CHECK codegen exclusion. All four new tests are ignored with pending native compatibility obligation; tracker must include ignored. No stock/native builds run for this deliverable.",
+                  "note": "Existing oracle CHECK/BUILD/run workers 1/8 against pinned stock and literal stdout, with CHECK codegen exclusion. The progress driver includes ignored obligations; ordinary regression ignores never constitute evidence.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -3945,7 +3961,7 @@
             {
               "evidence_notes": [
                 {
-                  "note": "Pending ignored obligation, not a passing-result claim. Source instantiates identity<const N:usize>([i32;N])->[i32;N] with N=3 and observes length and all elements. Reasoned stock stdout: 3 7 11 24\\n. Only concrete array const-parameter substitution, not general evaluatability.",
+                  "note": "Source instantiates identity<const N:usize>([i32;N])->[i32;N] with N=3 and observes length and all elements. Expected stock stdout: 3 7 11 24\\n. Only concrete array const-parameter substitution, not general evaluatability.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -3965,7 +3981,7 @@
             {
               "evidence_notes": [
                 {
-                  "note": "Pending ignored obligation. Source uses identity::<true> for usize N inside an unused function. Reasoned stock E0308: bool const argument where usize is required. Existing oracle requires stock diagnostic and strict semantic native rejection in CHECK/BUILD at workers 1/8, never Unsupported success.",
+                  "note": "Source uses identity::<true> for usize N inside an unused function. Expected stock E0308: bool const argument where usize is required. Existing oracle requires stock diagnostic and strict semantic native rejection in CHECK/BUILD at workers 1/8, never Unsupported success.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -3998,7 +4014,7 @@
                   ]
                 },
                 {
-                  "note": "Pending concrete const substitution combines array parameter/return typing, value transport, length and indexing; all three element values are observed. No type-generic identity, defaults, recursive const solving or arbitrary const-expression claim.",
+                  "note": "Concrete const substitution combines array parameter/return typing, value transport, length and indexing; all three element values are observed. No type-generic identity, defaults, recursive const solving or arbitrary const-expression claim.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -4026,7 +4042,7 @@
             {
               "evidence_notes": [
                 {
-                  "note": "Pending existing closure oracle workflow: pinned stock execution, native CHECK/BUILD/run workers 1/8, exact stdout, CHECK no image/codegen. No execution performed while preparing this scratch patch.",
+                  "note": "Existing closure oracle workflow: pinned stock execution, native CHECK/BUILD/run workers 1/8, exact stdout, CHECK no image/codegen. ",
                   "tests": [
                     {
                       "suite": "conformance_generated",
@@ -5955,8 +5971,24 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Oracle adversarial control: malformed original body cannot supply semantic-invalid evidence; a real unused type error must have original parse and complete declaration publications. Deleting either publication invalidates the receipt. This is harness correctness, not language feature completeness.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "semantic_invalid_requires_source_and_declaration_publications"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "semantic_invalid_requires_source_and_declaration_publications"
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -5972,6 +6004,15 @@
                       "test": "foreign_module_handle_rejects"
                     }
                   ]
+                },
+                {
+                  "note": "Oracle adversarial control: malformed original body cannot supply semantic-invalid evidence; a real unused type error must have original parse and complete declaration publications. Deleting either publication invalidates the receipt. This is harness correctness, not language feature completeness.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "semantic_invalid_requires_source_and_declaration_publications"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -5983,6 +6024,10 @@
                 {
                   "suite": "owner_authority",
                   "test": "foreign_module_handle_rejects"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "semantic_invalid_requires_source_and_declaration_publications"
                 }
               ]
             },
@@ -6691,108 +6736,108 @@
         ]
       },
       {
-        "id": "const-parameter-array-transport",
         "features": [
           "const-parameters",
           "array-values",
           "integer-values"
         ],
+        "id": "const-parameter-array-transport",
+        "note": "Concrete const parameter, array transport and observed values; no arbitrary const evaluatability claim.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "const_generic_array_identity_source"
           }
-        ],
-        "note": "Concrete const parameter, array transport and observed values; no arbitrary const evaluatability claim."
+        ]
       },
       {
-        "id": "aggregate-ctfe-array-fields",
         "features": [
           "const-evaluation",
           "array-values",
           "integer-values"
         ],
+        "id": "aggregate-ctfe-array-fields",
+        "note": "Const-fn struct/array initializer and runtime reads of every field.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "const_fn_aggregate_initializer_source"
           }
-        ],
-        "note": "Const-fn struct/array initializer and runtime reads of every field."
+        ]
       },
       {
-        "id": "repr-c-integer-field-layout",
         "features": [
           "platform-layout",
           "integer-values"
         ],
+        "id": "repr-c-integer-field-layout",
+        "note": "One repr(C) record on Linux x86-64, exact size/alignment and values; no general ABI completeness.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "runtime_repr_c_record_size_and_alignment_match_stock"
           }
-        ],
-        "note": "One repr(C) record on Linux x86-64, exact size/alignment and values; no general ABI completeness."
+        ]
       },
       {
-        "id": "raw-pointer-cast-explicit-mutation",
         "features": [
           "raw-pointers",
           "mutable-borrow",
           "integer-values"
         ],
+        "id": "raw-pointer-cast-explicit-mutation",
+        "note": "A live local mutable borrow forms a raw pointer, casts preserve provenance, and explicit unsafe writes are observed.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "memory_raw_pointer_cast_roundtrip_and_unsafe_write_match_stock"
           }
-        ],
-        "note": "A live local mutable borrow forms a raw pointer, casts preserve provenance, and explicit unsafe writes are observed."
+        ]
       },
       {
-        "id": "scalar-atomic-ordering-values",
         "features": [
           "atomic-ordering",
           "integer-values"
         ],
+        "id": "scalar-atomic-ordering-values",
+        "note": "Single-thread AcqRel/SeqCst operations and Acquire load only; no multithread memory-model claim.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "runtime_atomic_fetch_add_explicit_orderings_match_stock"
           }
-        ],
-        "note": "Single-thread AcqRel/SeqCst operations and Acquire load only; no multithread memory-model claim."
+        ]
       },
       {
-        "id": "unpolled-async-owned-capture-drop",
         "features": [
           "async-futures",
           "owned-drop",
           "integer-values"
         ],
+        "id": "unpolled-async-owned-capture-drop",
+        "note": "Captured owned value is destroyed without polling; no executor or suspension acceptance.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "pending_async_block_creation_and_unpolled_drop_match_stock"
           }
-        ],
-        "note": "Captured owned value is destroyed without polling; no executor or suspension acceptance."
+        ]
       },
       {
-        "id": "higher-ranked-shared-callable",
         "features": [
           "higher-ranked-binders",
           "shared-borrow",
           "trait-dispatch",
           "integer-values"
         ],
+        "id": "higher-ranked-shared-callable",
+        "note": "Fn bound called with shared borrows from distinct nested scopes and exact output.",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "pending_higher_ranked_callable_identity_matches_stock"
           }
-        ],
-        "note": "Fn bound called with shared borrows from distinct nested scopes and exact output."
+        ]
       }
     ]
   },
