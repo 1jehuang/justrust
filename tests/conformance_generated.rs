@@ -927,3 +927,115 @@ fn main() {}
         }],
     );
 }
+
+// Exact original-source token-rule obligations. Passing witnesses are ordinary
+// regressions. The remaining ignored semantic-stage gap is still executed by
+// the compatibility tracker with --include-ignored.
+#[test]
+fn token_suffix_literal_and_tt_macro_consumption_source() {
+    oracle::check(
+        "token-suffix-literal-and-tt-macro-consumption-source",
+        &[Case {
+            name: "arbitrary_literal_suffixes_are_tokens_until_interpreted",
+            source: r####"macro_rules! discard_literal { ($value:literal) => { 17i32 }; }
+macro_rules! discard_tree { ($value:tt) => { 19i32 }; }
+fn main() {
+    let first = discard_literal!("ignored"custom);
+    let second = discard_literal!(27custom);
+    let third = discard_tree!(b'Q'custom);
+    println!("{} {} {}", first, second, third);
+}
+"####,
+            expect: Expect::Run("17 17 19\n"),
+        }],
+    );
+}
+
+#[test]
+fn token_raw_cooked_hash_escape_observable_source() {
+    oracle::check(
+        "token-raw-cooked-hash-escape-observable-source",
+        &[Case {
+            name: "raw_hash_boundaries_preserve_backslashes_and_cooked_escapes_decode",
+            source: r####"fn main() {
+    let raw = r##"left"#\n"right"##;
+    let cooked = "left\"#\\n\"right";
+    println!("{}", raw);
+    println!("{}", cooked);
+    let byte: u8 = b'\x7f';
+    let letter: char = '\u{41}';
+    println!("{} {}", byte, letter);
+}
+"####,
+            expect: Expect::Run("left\"#\\n\"right\nleft\"#\\n\"right\n127 A\n"),
+        }],
+    );
+}
+
+#[test]
+fn token_numeric_spelling_radix_tuple_observable_source() {
+    oracle::check(
+        "token-numeric-spelling-radix-tuple-observable-source",
+        &[Case {
+            name: "hex_digits_do_not_become_float_suffixes_or_exponents",
+            source: r####"fn main() {
+    let first: i32 = 0x01_f32;
+    let second: i32 = 0x01_e3;
+    let binary: i32 = 0b____1_0;
+    let octal: i32 = 0o7_0;
+    let floating: f64 = 1_2.5e+1;
+    let pair = (first, second);
+    println!("{} {} {} {} {} {}", pair.0, pair.1, binary, octal, floating, 00042i32);
+}
+"####,
+            expect: Expect::Run("7986 483 2 56 125 42\n"),
+        }],
+    );
+}
+
+#[test]
+fn token_unused_forwarded_float_suffix_type_error_source() {
+    oracle::check(
+        "token-unused-forwarded-float-suffix-type-error-source",
+        &[Case {
+            name: "valid_float_suffix_forwarded_from_literal_macro_is_not_u8",
+            source: r####"macro_rules! literal_value { ($value:literal) => { $value }; }
+fn unused() { let _: u8 = literal_value!(2f32); }
+fn main() {}
+"####,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+fn token_unused_valid_raw_string_type_error_source() {
+    oracle::check(
+        "token-unused-valid-raw-string-type-error-source",
+        &[Case {
+            name: "valid_raw_delimiter_contents_do_not_become_a_boolean",
+            source: r####"fn unused() { let _: bool = r##"left"#\n"right"##; }
+fn main() {}
+"####,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending exact token-rule oracle obligation, unmeasured"]
+fn token_unused_tuple_leading_zero_field_error_source() {
+    oracle::check(
+        "token-unused-tuple-leading-zero-field-error-source",
+        &[Case {
+            name: "tuple_field_uses_literal_spelling_not_integer_value",
+            source: r####"fn unused() {
+    let pair = (11i32, 29i32);
+    let _ = pair.01;
+}
+fn main() {}
+"####,
+            expect: Expect::InvalidAfterParse("E0609"),
+        }],
+    );
+}

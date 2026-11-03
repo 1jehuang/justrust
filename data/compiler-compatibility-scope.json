@@ -109,6 +109,50 @@
                       "test": "native_lexical_categories_do_not_confuse_expression_suffix_semantics"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. Three independent exact-source positives require observable macro suffix consumption, matched raw/cooked escape content and numeric spelling values."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.suffix.validity block SHA256 4748386d9eb84d8eac707d242cef1800b7982ff68afb71b560ee7036f95fbf07; src/tokens.md#lex.token.literal.literal.suffix.intro block SHA256 498c8537fcf4bb23e4d0083d3150d3e344568329a8b62bbfda492cef889f0d42. The original source passes arbitrary suffixed string and integer tokens to literal fragments and a suffixed byte token to tt. Selected transcribers discard those tokens and return observable integers. This tests lexical admission and macro matching without interpreting invalid expression suffixes."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.str-raw.body block SHA256 7a9e5f6991c95dac9c9de77bf40bb8020bfe4d53f53ea2d680cb37b6f71d8cbb; src/tokens.md#lex.token.literal.str-raw.content block SHA256 16f2127bd66fea4c1043e4cc1a03a2ffc14079f56d74bcfca9d1334618ef2dfd; src/tokens.md#lex.token.literal.str.intro block SHA256 df6e833d2d6d0bb30926acca0c48ced907ab266773a6e0860462ee959c9484a2; src/tokens.md#lex.token.literal.char-escape.ascii block SHA256 c7e30ac39981a7f119034043843c28e49f1197ae3c6016bedc2bdfff1ced47ea; src/tokens.md#lex.token.literal.char-escape.unicode block SHA256 9724fd65a1fbb6b7fc90167403e53fdc09eda1b6b90cd57b2b7c8eee1d861fa9. The raw string uses two delimiter hashes but contains a quote followed by only one hash, so that interior sequence must not terminate the token. Raw backslash-n and explicitly escaped cooked spelling print identical bytes. Separate byte and Unicode character escapes print127 and A."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.int.kind-hex block SHA256 6124204945bf3affd9e0b3d3693420df7e789f321fb9273fc7444d5a2b92ba2e; src/tokens.md#lex.token.literal.int.kind-bin block SHA256 d3ee40865ec13975f3e1b81dff103b6e0e7a8c6292d9b808a277b543f437bb32; src/tokens.md#lex.token.literal.int.kind-oct block SHA256 aecdfc3cc1f2ee57b03f28f2a510d71b48f7e4c6d4ee073057c9f6167c60c6e4; src/tokens.md#lex.token.literal.int.kind-dec block SHA256 ac48d3e225e261efb9e38038da2bb75f0b8e4585aa0074ff6471a44ed480937d; src/tokens.md#lex.token.literal.float.form block SHA256 cb620ff8cb3bc2b1da4a4613b80d268305c2f6dc65ee463414fcfe33639cc9ec; src/tokens.md#lex.token.literal.int.tuple-field.eq block SHA256 a03ffe59249779163ebecaa7a89316bcdfb3616522c0d767b347da2d8c0668d7. Hex spellings containing f32/e3-like digit sequences must remain integer digits, yielding7986/483 rather than a float suffix or exponent. Binary/octal separators, decimal leading zeros, a decimal exponent and canonical tuple fields contribute independently visible values."
                 }
               ],
               "layer": "feature",
@@ -124,6 +168,18 @@
                 {
                   "suite": "lexical_tokens",
                   "test": "native_lexical_categories_do_not_confuse_expression_suffix_semantics"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_raw_cooked_hash_escape_observable_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_numeric_spelling_radix_tuple_observable_source"
                 }
               ]
             },
@@ -146,6 +202,50 @@
                       "test": "unused_raw_identifier_type_mismatch_is_semantically_rejected"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_forwarded_float_suffix_type_error_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_valid_raw_string_type_error_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_tuple_leading_zero_field_error_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. All three are InvalidAfterParse: E0308 for legal float-suffixed macro output under u8 expectation, E0308 for valid raw string under bool expectation, E0609 for noncanonical tuple field01. No lexical-invalid source is relabeled semantic."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_forwarded_float_suffix_type_error_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.suffix.validity block SHA256 4748386d9eb84d8eac707d242cef1800b7982ff68afb71b560ee7036f95fbf07; src/tokens.md#lex.token.literal.suffix.parse block SHA256 30a30d0d194a583d2734d829214c1594d53c9530b53ca38532bc6a26542d6838; src/tokens.md#lex.token.literal.int.suffix block SHA256 8264bffcd2bb4ddbfc45054bea10debb44004518d5bad6a80dcd9d1efd9466a5. The token2f32 is lexically valid and a permitted integer-spelled floating expression. The literal macro forwards it unchanged into an unused function where a u8 expectation conflicts with f32. E0308 is a semantic type mismatch after successful source admission, not a malformed suffix or lexical error."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_valid_raw_string_type_error_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.str-raw.body block SHA256 7a9e5f6991c95dac9c9de77bf40bb8020bfe4d53f53ea2d680cb37b6f71d8cbb; src/tokens.md#lex.token.literal.str-raw.content block SHA256 16f2127bd66fea4c1043e4cc1a03a2ffc14079f56d74bcfca9d1334618ef2dfd. The exact valid raw token from the observable boundary scenario is placed under a bool expectation in an unused function. E0308 must arise from the string-versus-bool type conflict after token/source admission. A lexer/parser refusal to handle the raw delimiter is not the requested semantic rejection."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_tuple_leading_zero_field_error_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.int.tuple-field.syntax block SHA256 b6a15ded9b1920b30a28ed345e20f8d1c5af4f60052cdff00bcb8bd3728aebca; src/tokens.md#lex.token.literal.int.tuple-field.eq block SHA256 a03ffe59249779163ebecaa7a89316bcdfb3616522c0d767b347da2d8c0668d7. The tuple projection01 is lexically/syntactically admitted as an integer-shaped index, but exact token spelling cannot resolve to canonical field1. The unused body must be rejected for missing field E0609 after parsing. Normalizing01 to numeric1 and accepting it would be wrong."
                 }
               ],
               "layer": "rejection",
@@ -157,6 +257,18 @@
                 {
                   "suite": "lexical_tokens",
                   "test": "unused_raw_identifier_type_mismatch_is_semantically_rejected"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_unused_forwarded_float_suffix_type_error_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_unused_valid_raw_string_type_error_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_unused_tuple_leading_zero_field_error_source"
                 }
               ]
             },
@@ -170,6 +282,50 @@
                       "test": "byte_values_types_patterns_and_macros_match_stock"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. Bounded lexical tokens interact with macro literal/tt interpretation, raw/cooked string values and tuple/value lookup. No complete cross-feature claim."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.suffix.validity block SHA256 4748386d9eb84d8eac707d242cef1800b7982ff68afb71b560ee7036f95fbf07; src/tokens.md#lex.token.literal.literal.suffix.intro block SHA256 498c8537fcf4bb23e4d0083d3150d3e344568329a8b62bbfda492cef889f0d42. The original source passes arbitrary suffixed string and integer tokens to literal fragments and a suffixed byte token to tt. Selected transcribers discard those tokens and return observable integers. This tests lexical admission and macro matching without interpreting invalid expression suffixes."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.str-raw.body block SHA256 7a9e5f6991c95dac9c9de77bf40bb8020bfe4d53f53ea2d680cb37b6f71d8cbb; src/tokens.md#lex.token.literal.str-raw.content block SHA256 16f2127bd66fea4c1043e4cc1a03a2ffc14079f56d74bcfca9d1334618ef2dfd; src/tokens.md#lex.token.literal.str.intro block SHA256 df6e833d2d6d0bb30926acca0c48ced907ab266773a6e0860462ee959c9484a2; src/tokens.md#lex.token.literal.char-escape.ascii block SHA256 c7e30ac39981a7f119034043843c28e49f1197ae3c6016bedc2bdfff1ced47ea; src/tokens.md#lex.token.literal.char-escape.unicode block SHA256 9724fd65a1fbb6b7fc90167403e53fdc09eda1b6b90cd57b2b7c8eee1d861fa9. The raw string uses two delimiter hashes but contains a quote followed by only one hash, so that interior sequence must not terminate the token. Raw backslash-n and explicitly escaped cooked spelling print identical bytes. Separate byte and Unicode character escapes print127 and A."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.int.kind-hex block SHA256 6124204945bf3affd9e0b3d3693420df7e789f321fb9273fc7444d5a2b92ba2e; src/tokens.md#lex.token.literal.int.kind-bin block SHA256 d3ee40865ec13975f3e1b81dff103b6e0e7a8c6292d9b808a277b543f437bb32; src/tokens.md#lex.token.literal.int.kind-oct block SHA256 aecdfc3cc1f2ee57b03f28f2a510d71b48f7e4c6d4ee073057c9f6167c60c6e4; src/tokens.md#lex.token.literal.int.kind-dec block SHA256 ac48d3e225e261efb9e38038da2bb75f0b8e4585aa0074ff6471a44ed480937d; src/tokens.md#lex.token.literal.float.form block SHA256 cb620ff8cb3bc2b1da4a4613b80d268305c2f6dc65ee463414fcfe33639cc9ec; src/tokens.md#lex.token.literal.int.tuple-field.eq block SHA256 a03ffe59249779163ebecaa7a89316bcdfb3616522c0d767b347da2d8c0668d7. Hex spellings containing f32/e3-like digit sequences must remain integer digits, yielding7986/483 rather than a float suffix or exponent. Binary/octal separators, decimal leading zeros, a decimal exponent and canonical tuple fields contribute independently visible values."
                 }
               ],
               "layer": "interaction",
@@ -177,6 +333,18 @@
                 {
                   "suite": "byte_literals",
                   "test": "byte_values_types_patterns_and_macros_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_raw_cooked_hash_escape_observable_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_numeric_spelling_radix_tuple_observable_source"
                 }
               ]
             },
@@ -190,6 +358,18 @@
                 {
                   "suite": "lexical_tokens",
                   "test": "raw_identifier_observable_values_match_pinned_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_raw_cooked_hash_escape_observable_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_numeric_spelling_radix_tuple_observable_source"
                 }
               ],
               "evidence_notes": [
@@ -205,6 +385,50 @@
                       "test": "raw_identifier_observable_values_match_pinned_stock"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. Exact expected stdout required at workers1/8, with CHECK no image/no codegen and BUILD executable behavior from existing strict oracle."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.suffix.validity block SHA256 4748386d9eb84d8eac707d242cef1800b7982ff68afb71b560ee7036f95fbf07; src/tokens.md#lex.token.literal.literal.suffix.intro block SHA256 498c8537fcf4bb23e4d0083d3150d3e344568329a8b62bbfda492cef889f0d42. The original source passes arbitrary suffixed string and integer tokens to literal fragments and a suffixed byte token to tt. Selected transcribers discard those tokens and return observable integers. This tests lexical admission and macro matching without interpreting invalid expression suffixes."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.str-raw.body block SHA256 7a9e5f6991c95dac9c9de77bf40bb8020bfe4d53f53ea2d680cb37b6f71d8cbb; src/tokens.md#lex.token.literal.str-raw.content block SHA256 16f2127bd66fea4c1043e4cc1a03a2ffc14079f56d74bcfca9d1334618ef2dfd; src/tokens.md#lex.token.literal.str.intro block SHA256 df6e833d2d6d0bb30926acca0c48ced907ab266773a6e0860462ee959c9484a2; src/tokens.md#lex.token.literal.char-escape.ascii block SHA256 c7e30ac39981a7f119034043843c28e49f1197ae3c6016bedc2bdfff1ced47ea; src/tokens.md#lex.token.literal.char-escape.unicode block SHA256 9724fd65a1fbb6b7fc90167403e53fdc09eda1b6b90cd57b2b7c8eee1d861fa9. The raw string uses two delimiter hashes but contains a quote followed by only one hash, so that interior sequence must not terminate the token. Raw backslash-n and explicitly escaped cooked spelling print identical bytes. Separate byte and Unicode character escapes print127 and A."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.int.kind-hex block SHA256 6124204945bf3affd9e0b3d3693420df7e789f321fb9273fc7444d5a2b92ba2e; src/tokens.md#lex.token.literal.int.kind-bin block SHA256 d3ee40865ec13975f3e1b81dff103b6e0e7a8c6292d9b808a277b543f437bb32; src/tokens.md#lex.token.literal.int.kind-oct block SHA256 aecdfc3cc1f2ee57b03f28f2a510d71b48f7e4c6d4ee073057c9f6167c60c6e4; src/tokens.md#lex.token.literal.int.kind-dec block SHA256 ac48d3e225e261efb9e38038da2bb75f0b8e4585aa0074ff6471a44ed480937d; src/tokens.md#lex.token.literal.float.form block SHA256 cb620ff8cb3bc2b1da4a4613b80d268305c2f6dc65ee463414fcfe33639cc9ec; src/tokens.md#lex.token.literal.int.tuple-field.eq block SHA256 a03ffe59249779163ebecaa7a89316bcdfb3616522c0d767b347da2d8c0668d7. Hex spellings containing f32/e3-like digit sequences must remain integer digits, yielding7986/483 rather than a float suffix or exponent. Binary/octal separators, decimal leading zeros, a decimal exponent and canonical tuple fields contribute independently visible values."
                 }
               ]
             }
@@ -970,6 +1194,37 @@
                       "test": "accepts_eager_once_left_to_right"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_valid_raw_string_type_error_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. Only exact raw/cooked content plus byte/char escapes, and a separate valid raw token with incompatible bool expectation. No malformed-string semantic rejection claim."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_raw_cooked_hash_escape_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.str-raw.body block SHA256 7a9e5f6991c95dac9c9de77bf40bb8020bfe4d53f53ea2d680cb37b6f71d8cbb; src/tokens.md#lex.token.literal.str-raw.content block SHA256 16f2127bd66fea4c1043e4cc1a03a2ffc14079f56d74bcfca9d1334618ef2dfd; src/tokens.md#lex.token.literal.str.intro block SHA256 df6e833d2d6d0bb30926acca0c48ced907ab266773a6e0860462ee959c9484a2; src/tokens.md#lex.token.literal.char-escape.ascii block SHA256 c7e30ac39981a7f119034043843c28e49f1197ae3c6016bedc2bdfff1ced47ea; src/tokens.md#lex.token.literal.char-escape.unicode block SHA256 9724fd65a1fbb6b7fc90167403e53fdc09eda1b6b90cd57b2b7c8eee1d861fa9. The raw string uses two delimiter hashes but contains a quote followed by only one hash, so that interior sequence must not terminate the token. Raw backslash-n and explicitly escaped cooked spelling print identical bytes. Separate byte and Unicode character escapes print127 and A."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_valid_raw_string_type_error_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.str-raw.body block SHA256 7a9e5f6991c95dac9c9de77bf40bb8020bfe4d53f53ea2d680cb37b6f71d8cbb; src/tokens.md#lex.token.literal.str-raw.content block SHA256 16f2127bd66fea4c1043e4cc1a03a2ffc14079f56d74bcfca9d1334618ef2dfd. The exact valid raw token from the observable boundary scenario is placed under a bool expectation in an unused function. E0308 must arise from the string-versus-bool type conflict after token/source admission. A lexer/parser refusal to handle the raw delimiter is not the requested semantic rejection."
                 }
               ],
               "layer": "interaction",
@@ -981,6 +1236,14 @@
                 {
                   "suite": "bitwise",
                   "test": "accepts_eager_once_left_to_right"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_raw_cooked_hash_escape_observable_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_unused_valid_raw_string_type_error_source"
                 }
               ]
             },
@@ -1092,6 +1355,37 @@
                       "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_tuple_leading_zero_field_error_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. Canonical tuple fields expose exact numeric values; leading-zero field01 must not normalize to field1 in an unused body. Not broad tuple/aggregate coverage."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_numeric_spelling_radix_tuple_observable_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.int.kind-hex block SHA256 6124204945bf3affd9e0b3d3693420df7e789f321fb9273fc7444d5a2b92ba2e; src/tokens.md#lex.token.literal.int.kind-bin block SHA256 d3ee40865ec13975f3e1b81dff103b6e0e7a8c6292d9b808a277b543f437bb32; src/tokens.md#lex.token.literal.int.kind-oct block SHA256 aecdfc3cc1f2ee57b03f28f2a510d71b48f7e4c6d4ee073057c9f6167c60c6e4; src/tokens.md#lex.token.literal.int.kind-dec block SHA256 ac48d3e225e261efb9e38038da2bb75f0b8e4585aa0074ff6471a44ed480937d; src/tokens.md#lex.token.literal.float.form block SHA256 cb620ff8cb3bc2b1da4a4613b80d268305c2f6dc65ee463414fcfe33639cc9ec; src/tokens.md#lex.token.literal.int.tuple-field.eq block SHA256 a03ffe59249779163ebecaa7a89316bcdfb3616522c0d767b347da2d8c0668d7. Hex spellings containing f32/e3-like digit sequences must remain integer digits, yielding7986/483 rather than a float suffix or exponent. Binary/octal separators, decimal leading zeros, a decimal exponent and canonical tuple fields contribute independently visible values."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_tuple_leading_zero_field_error_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.int.tuple-field.syntax block SHA256 b6a15ded9b1920b30a28ed345e20f8d1c5af4f60052cdff00bcb8bd3728aebca; src/tokens.md#lex.token.literal.int.tuple-field.eq block SHA256 a03ffe59249779163ebecaa7a89316bcdfb3616522c0d767b347da2d8c0668d7. The tuple projection01 is lexically/syntactically admitted as an integer-shaped index, but exact token spelling cannot resolve to canonical field1. The unused body must be rejected for missing field E0609 after parsing. Normalizing01 to numeric1 and accepting it would be wrong."
                 }
               ],
               "layer": "interaction",
@@ -1107,6 +1401,14 @@
                 {
                   "suite": "body_inference",
                   "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_numeric_spelling_radix_tuple_observable_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_unused_tuple_leading_zero_field_error_source"
                 }
               ]
             },
@@ -3394,6 +3696,37 @@
                       "test": "utility_ident_keywords_underscore_and_dollarcrate_identity"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_forwarded_float_suffix_type_error_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker executes ignored cases with --include-ignored against verified pinned stock and native CHECK/BUILD workers1/8. Mapping alone supplies no pass/support or reviewed-rule credit. Arbitrary suffix tokens are discarded by literal/tt matchers in the positive case; a valid f32 suffix is forwarded and then must produce semantic E0308 in an unused function. This is not general macro rejection or hygiene coverage."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.suffix.validity block SHA256 4748386d9eb84d8eac707d242cef1800b7982ff68afb71b560ee7036f95fbf07; src/tokens.md#lex.token.literal.literal.suffix.intro block SHA256 498c8537fcf4bb23e4d0083d3150d3e344568329a8b62bbfda492cef889f0d42. The original source passes arbitrary suffixed string and integer tokens to literal fragments and a suffixed byte token to tt. Selected transcribers discard those tokens and return observable integers. This tests lexical admission and macro matching without interpreting invalid expression suffixes."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "token_unused_forwarded_float_suffix_type_error_source"
+                    }
+                  ],
+                  "note": "Unreviewed bounded rule attribution, not rule-completion credit. Pinned Reference index SHA256 1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85. src/tokens.md#lex.token.literal.suffix.validity block SHA256 4748386d9eb84d8eac707d242cef1800b7982ff68afb71b560ee7036f95fbf07; src/tokens.md#lex.token.literal.suffix.parse block SHA256 30a30d0d194a583d2734d829214c1594d53c9530b53ca38532bc6a26542d6838; src/tokens.md#lex.token.literal.int.suffix block SHA256 8264bffcd2bb4ddbfc45054bea10debb44004518d5bad6a80dcd9d1efd9466a5. The token2f32 is lexically valid and a permitted integer-spelled floating expression. The literal macro forwards it unchanged into an unused function where a u8 expectation conflicts with f32. E0308 is a semantic type mismatch after successful source admission, not a malformed suffix or lexical error."
                 }
               ],
               "layer": "interaction",
@@ -3409,6 +3742,14 @@
                 {
                   "suite": "macro_rules",
                   "test": "utility_ident_keywords_underscore_and_dollarcrate_identity"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_suffix_literal_and_tt_macro_consumption_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "token_unused_forwarded_float_suffix_type_error_source"
                 }
               ]
             },
