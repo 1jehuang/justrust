@@ -66,13 +66,6 @@
               ]
             },
             {
-              "layer": "end_to_end",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "edition2024_tail_expression_temporary_drops_before_local_source"
-                }
-              ],
               "evidence_notes": [
                 {
                   "note": "Pinned stock edition=2024 and native CHECK/BUILD/run at workers 1/8 must produce drop temporary\\ndrop local\\n7\\n: Edition 2024 destroys the tail-expression receiver temporary before the enclosing function local, whereas Edition 2021 drops that local before the temporary. Distinct from existing if-let scope coverage.",
@@ -82,6 +75,13 @@
                       "test": "edition2024_tail_expression_temporary_drops_before_local_source"
                     }
                   ]
+                }
+              ],
+              "layer": "end_to_end",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "edition2024_tail_expression_temporary_drops_before_local_source"
                 }
               ]
             }
@@ -137,6 +137,15 @@
                       "test": "invalid_byte_literals_match_stock"
                     }
                   ]
+                },
+                {
+                  "note": "Bounded unused-body rejection obligation on exact source: fn unused(){ let r#type: bool = 1; let _ = r#type; } fn main(){}. Pinned stock must reject E0308. Strict InvalidAfterParse requires original-source parsing and declaration facts before native semantic rejection in CHECK and BUILD at workers 1/8. Unsupported, resource exhaustion, infrastructure faults and parser-only refusal are not rejection evidence. This obligation requires execution before counting as passing evidence.",
+                  "tests": [
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "unused_raw_identifier_type_mismatch_is_semantically_rejected"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -144,6 +153,10 @@
                 {
                   "suite": "byte_literals",
                   "test": "invalid_byte_literals_match_stock"
+                },
+                {
+                  "suite": "lexical_tokens",
+                  "test": "unused_raw_identifier_type_mismatch_is_semantically_rejected"
                 }
               ]
             },
@@ -169,7 +182,31 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "lexical_tokens",
+                  "test": "original_raw_identifier_corpus_source_matches_pinned_stock"
+                },
+                {
+                  "suite": "lexical_tokens",
+                  "test": "raw_identifier_observable_values_match_pinned_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded exact-source obligations, not broad lexical support: original CASES raw_ident source is unchanged: fn main(){ let r#type = 1; let _ = r#type; }. Pinned stock and native CHECK/BUILD/run at workers 1/8 must succeed with empty stdout. Separate observable raw-keyword binding/value lookup source must print 40 42\\n. CHECK must demand no code generation and publish no image. Parser admission alone does not satisfy either obligation. All original 54 corpus source strings remain byte-identical. These newly added obligations require execution before counting as passing evidence.",
+                  "tests": [
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "original_raw_identifier_corpus_source_matches_pinned_stock"
+                    },
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "raw_identifier_observable_values_match_pinned_stock"
+                    }
+                  ]
+                }
+              ]
             }
           ],
           "id": "source-lexical",
@@ -740,13 +777,6 @@
               ]
             },
             {
-              "layer": "rejection",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "wide_integer_cast_to_bool_unused_rejected_source"
-                }
-              ],
               "evidence_notes": [
                 {
                   "note": "Bounded rejection obligation. Expected stock E0054 because integer-to-bool as-casts are prohibited, including u128. The unused body must receive strict InvalidAfterParse native CHECK/BUILD rejection at workers 1/8. This is one bounded invalid cast, not all wide integer semantics.",
@@ -756,6 +786,13 @@
                       "test": "wide_integer_cast_to_bool_unused_rejected_source"
                     }
                   ]
+                }
+              ],
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "wide_integer_cast_to_bool_unused_rejected_source"
                 }
               ]
             },
@@ -1498,17 +1535,6 @@
               ]
             },
             {
-              "layer": "rejection",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "integer_mixed_signedness_unused_rejected_source"
-                },
-                {
-                  "suite": "conformance_generated",
-                  "test": "integer_float_shift_unused_rejected_source"
-                }
-              ],
               "evidence_notes": [
                 {
                   "note": "Bounded rejection obligations. Expected stock E0308 for implicit u32-to-i32 assignment and E0277 for u32 shifted by f32. Both errors are in unused functions. InvalidAfterParse requires native semantic rejection after original-source parsing and declaration publication at workers 1/8 for CHECK and BUILD. Unsupported/resource/infrastructure failure is not evidence. No full integer coverage asserted.",
@@ -1522,6 +1548,17 @@
                       "test": "integer_float_shift_unused_rejected_source"
                     }
                   ]
+                }
+              ],
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "integer_mixed_signedness_unused_rejected_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "integer_float_shift_unused_rejected_source"
                 }
               ]
             },
@@ -1624,17 +1661,6 @@
               ]
             },
             {
-              "layer": "rejection",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "float_bitwise_unused_rejected_source"
-                },
-                {
-                  "suite": "conformance_generated",
-                  "test": "float_implicit_narrowing_unused_rejected_source"
-                }
-              ],
               "evidence_notes": [
                 {
                   "note": "Bounded rejection obligations. Expected stock E0369 because f64 has no bitwise-and operation and E0308 because f64 does not implicitly narrow to f32. Both unused bodies require strict InvalidAfterParse native CHECK/BUILD rejection at workers 1/8. These two cases do not establish comprehensive float coverage.",
@@ -1648,6 +1674,17 @@
                       "test": "float_implicit_narrowing_unused_rejected_source"
                     }
                   ]
+                }
+              ],
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "float_bitwise_unused_rejected_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "float_implicit_narrowing_unused_rejected_source"
                 }
               ]
             },
@@ -1720,22 +1757,22 @@
         {
           "gates": [
             {
-              "layer": "feature",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "memory_projected_move_remaining_field_drop_matches_stock"
-                }
-              ],
               "evidence_notes": [
                 {
+                  "note": "Bounded non-Copy tuple-field move with remaining-field access and cleanup. Exact stdout remaining 2, drop 1, end, drop 2 (each newline terminated) checks each field drops once. Pinned stock/native CHECK/BUILD/run workers 1/8. Does not establish arbitrary projections or general move semantics.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
                       "test": "memory_projected_move_remaining_field_drop_matches_stock"
                     }
-                  ],
-                  "note": "Bounded non-Copy tuple-field move with remaining-field access and cleanup. Exact stdout remaining 2, drop 1, end, drop 2 (each newline terminated) checks each field drops once. Pinned stock/native CHECK/BUILD/run workers 1/8. Does not establish arbitrary projections or general move semantics."
+                  ]
+                }
+              ],
+              "layer": "feature",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_move_remaining_field_drop_matches_stock"
                 }
               ]
             },
@@ -1760,13 +1797,13 @@
                   ]
                 },
                 {
+                  "note": "Reusing a moved non-Copy tuple field in an uncalled function requires stock E0382. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES publication plus native semantic rejection at CHECK/BUILD workers 1/8. Unsupported/resource/infrastructure failure cannot pass. Covers repeated use of one moved tuple field, not all partial-move diagnostics.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
                       "test": "memory_unused_projected_use_after_move_is_invalid"
                     }
-                  ],
-                  "note": "Reusing a moved non-Copy tuple field in an uncalled function requires stock E0382. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES publication plus native semantic rejection at CHECK/BUILD workers 1/8. Unsupported/resource/infrastructure failure cannot pass. Covers repeated use of one moved tuple field, not all partial-move diagnostics."
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -1797,13 +1834,13 @@
                   ]
                 },
                 {
+                  "note": "Tuple-field move interacts with explicit drop of the moved field and implicit cleanup of the remaining field. Exact stdout remaining 2, drop 1, end, drop 2 (newlines), pinned stock/native CHECK/BUILD/run workers 1/8. Limited to this non-Copy tuple scenario, not arbitrary projections or moves.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
                       "test": "memory_projected_move_remaining_field_drop_matches_stock"
                     }
-                  ],
-                  "note": "Tuple-field move interacts with explicit drop of the moved field and implicit cleanup of the remaining field. Exact stdout remaining 2, drop 1, end, drop 2 (newlines), pinned stock/native CHECK/BUILD/run workers 1/8. Limited to this non-Copy tuple scenario, not arbitrary projections or moves."
+                  ]
                 }
               ],
               "layer": "interaction",
@@ -2067,42 +2104,42 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Direct let borrow of a destructor-bearing temporary extends to block end: exact stdout value 7, end, drop 7 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8 required. No general promotion, nested carrier or Edition 2024 if-let scope claim.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_direct_borrow_temporary_lifetime_extension_matches_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
               "tests": [
                 {
                   "suite": "conformance_generated",
                   "test": "memory_direct_borrow_temporary_lifetime_extension_matches_stock"
                 }
-              ],
-              "evidence_notes": [
-                {
-                  "tests": [
-                    {
-                      "suite": "conformance_generated",
-                      "test": "memory_direct_borrow_temporary_lifetime_extension_matches_stock"
-                    }
-                  ],
-                  "note": "Direct let borrow of a destructor-bearing temporary extends to block end: exact stdout value 7, end, drop 7 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8 required. No general promotion, nested carrier or Edition 2024 if-let scope claim."
-                }
               ]
             },
             {
-              "layer": "rejection",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "memory_unused_call_argument_temporary_escape_is_invalid"
-                }
-              ],
               "evidence_notes": [
                 {
+                  "note": "identity(&Item) cannot extend the borrowed temporary through a call to a later statement. Item has Drop to prevent constant promotion. Requires stock E0716. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES, native semantic rejection CHECK/BUILD workers 1/8. Unsupported/resource/infrastructure cannot pass. Limited to this call-argument temporary escape.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
                       "test": "memory_unused_call_argument_temporary_escape_is_invalid"
                     }
-                  ],
-                  "note": "identity(&Item) cannot extend the borrowed temporary through a call to a later statement. Item has Drop to prevent constant promotion. Requires stock E0716. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES, native semantic rejection CHECK/BUILD workers 1/8. Unsupported/resource/infrastructure cannot pass. Limited to this call-argument temporary escape."
+                  ]
+                }
+              ],
+              "layer": "rejection",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_unused_call_argument_temporary_escape_is_invalid"
                 }
               ]
             },
@@ -2309,62 +2346,62 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Bounded conditional tuple-field initialization tracking: both taken and untaken move paths execute, and cleanup drops only initialized fields. Exact stdout drop 3, tail 4, drop 4, tail 4, drop 3, drop 4 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8 required. No unwind, panic, recursive, enum or arbitrary conditional initialization coverage.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_conditional_projected_move_drop_flags_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
               "tests": [
                 {
                   "suite": "conformance_generated",
                   "test": "memory_conditional_projected_move_drop_flags_match_stock"
                 }
-              ],
-              "evidence_notes": [
-                {
-                  "tests": [
-                    {
-                      "suite": "conformance_generated",
-                      "test": "memory_conditional_projected_move_drop_flags_match_stock"
-                    }
-                  ],
-                  "note": "Bounded conditional tuple-field initialization tracking: both taken and untaken move paths execute, and cleanup drops only initialized fields. Exact stdout drop 3, tail 4, drop 4, tail 4, drop 3, drop 4 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8 required. No unwind, panic, recursive, enum or arbitrary conditional initialization coverage."
-                }
               ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Outer destructor-bearing Watch reads an inner local on implicit scope-exit drop, with no explicit later read needed to keep the referent live. Requires stock E0597. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES and native semantic rejection CHECK/BUILD workers 1/8. No general generic variance, may_dangle or unsafe drop-check coverage. Unsupported/resource/infrastructure cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_unused_drop_check_borrow_escape_is_invalid"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
               "tests": [
                 {
                   "suite": "conformance_generated",
                   "test": "memory_unused_drop_check_borrow_escape_is_invalid"
                 }
-              ],
-              "evidence_notes": [
-                {
-                  "tests": [
-                    {
-                      "suite": "conformance_generated",
-                      "test": "memory_unused_drop_check_borrow_escape_is_invalid"
-                    }
-                  ],
-                  "note": "Outer destructor-bearing Watch reads an inner local on implicit scope-exit drop, with no explicit later read needed to keep the referent live. Requires stock E0597. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES and native semantic rejection CHECK/BUILD workers 1/8. No general generic variance, may_dangle or unsafe drop-check coverage. Unsupported/resource/infrastructure cannot pass."
-                }
               ]
             },
             {
-              "layer": "interaction",
-              "tests": [
-                {
-                  "suite": "conformance_generated",
-                  "test": "memory_conditional_projected_move_drop_flags_match_stock"
-                }
-              ],
               "evidence_notes": [
                 {
+                  "note": "Conditional projected move interacts with explicit moved-value drop and implicit aggregate cleanup. Taken path drops the first field before tail and then the second field; untaken path drops both fields in declaration order after tail. Exact stdout drop 3, tail 4, drop 4, tail 4, drop 3, drop 4 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8. No unwind, panic, recursive, enum or arbitrary conditional initialization coverage.",
                   "tests": [
                     {
                       "suite": "conformance_generated",
                       "test": "memory_conditional_projected_move_drop_flags_match_stock"
                     }
-                  ],
-                  "note": "Conditional projected move interacts with explicit moved-value drop and implicit aggregate cleanup. Taken path drops the first field before tail and then the second field; untaken path drops both fields in declaration order after tail. Exact stdout drop 3, tail 4, drop 4, tail 4, drop 3, drop 4 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8. No unwind, panic, recursive, enum or arbitrary conditional initialization coverage."
+                  ]
+                }
+              ],
+              "layer": "interaction",
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_conditional_projected_move_drop_flags_match_stock"
                 }
               ]
             },
@@ -3377,7 +3414,23 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "macro_repetition_tokens_runtime_order"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "macro_repetition_tokens_runtime_order"
+                    }
+                  ],
+                  "note": "Only comma-separated expr repetition, empty capture and optional trailing comma, transcribed into side-effecting accumulation statements. Exact stdout observes each repeated expression once in source order. No nested repetition, ambiguity, hygiene or arbitrary fragment coverage."
+                }
+              ]
             }
           ],
           "id": "expansion-token-matching",
@@ -3669,19 +3722,61 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "derive_copy_clone_generic_tuple_runtime"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "derive_copy_clone_generic_tuple_runtime"
+                    }
+                  ],
+                  "note": "Only built-in Copy and Clone derives on a generic tuple struct with a Copy bound. Observes cloning, implicit copying and generic duplicate transport. No procedural derive, other built-in derive or general bound inference coverage."
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "derive_copy_noncopy_field_semantic_rejection"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "derive_copy_noncopy_field_semantic_rejection"
+                    }
+                  ],
+                  "note": "Unused tuple struct derives Copy over a Clone-only non-Copy nominal field. Requires pinned stock E0204 and strict InvalidAfterParse semantic native rejection. No general derive diagnostic coverage."
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "derive_copy_clone_generic_tuple_runtime"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "derive_copy_clone_generic_tuple_runtime"
+                }
+              ]
             }
           ],
           "id": "expansion-derives",
@@ -4128,11 +4223,43 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "static_runtime_initializer_semantic_rejection"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "static_runtime_initializer_semantic_rejection"
+                    }
+                  ],
+                  "note": "Only unused immutable scalar static initialized by a non-const function call. Requires pinned stock E0015 and strict InvalidAfterParse native semantic rejection. No static mut, synchronization, address identity or thread-local coverage."
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "const_promoted_static_borrow_runtime"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "const_promoted_static_borrow_runtime"
+                    }
+                  ],
+                  "note": "Only immutable scalar static reads combined with promoted array borrowing, indexing and runtime arithmetic. Exact stdout observes both promoted elements and the static contribution. No static address identity or mutable storage coverage."
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -4269,19 +4396,61 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "const_promoted_static_borrow_runtime"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "const_promoted_static_borrow_runtime"
+                    }
+                  ],
+                  "note": "Only immutable two-element i32 array promotion returned as a static-lifetime reference and observed after the function returns. No address deduplication, mutable promotion, interior mutability or general allocation coverage."
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "const_runtime_call_borrow_semantic_rejection"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "const_runtime_call_borrow_semantic_rejection"
+                    }
+                  ],
+                  "note": "Only an unused const static-lifetime borrow of a non-const call. Requires pinned stock E0015 and InvalidAfterParse semantic native rejection. This invalid const initializer is a promotion eligibility boundary, not coverage of every forbidden promotion."
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "const_promoted_static_borrow_runtime"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "const_promoted_static_borrow_runtime"
+                }
+              ]
             }
           ],
           "id": "const-promotions",
@@ -4851,11 +5020,43 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_result_question_mark_vec_owned_drop_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded Result question-mark obligation with one Vec-owned Drop payload: Err propagation must clean the allocation before the caller observes Err, while Ok reaches the post-question-mark length read and cleans before returning. Literal exact stdout through pinned stock/native CHECK/BUILD/run oracle at workers 1/8. Native prelude scenario, not unchanged upstream library coverage.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_result_question_mark_vec_owned_drop_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_result_unused_return_error_mismatch_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Unused Result-returning function supplies i32 where its declared error is bool. Pinned stock E0308 and strict native InvalidAfterParse obligation, not unsupported-input evidence.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_result_unused_return_error_mismatch_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -4944,11 +5145,43 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_iterator_collect_typed_values_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Mapped i32 range values widen to i64 and collect into an explicitly typed owned Vec. Exact length and every element are observed in order through pinned stock/native CHECK/BUILD/run oracle workers 1/8. Bounded typed collect scenario only.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_collect_typed_values_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_iterator_unused_collect_wrong_type_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Unused function attempts to collect an i32 range into Vec<bool>. Pinned stock E0277 and strict native InvalidAfterParse obligation require item-type checking independently of reachability.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_unused_collect_wrong_type_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -5011,19 +5244,83 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_collection_btree_ordered_shared_borrow_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded BTreeMap feature obligation inserts keys out of order and observes all non-Copy Item payloads through a shared iterator in exact key order, then reads the original map length. Pinned stock/native CHECK/BUILD/run oracle workers 1/8. Does not claim hashing or complete collection support.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_collection_btree_ordered_shared_borrow_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_collection_unused_moved_map_value_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Unused function reuses a non-Copy Item after insertion transfers ownership into BTreeMap. Pinned stock E0382 and strict native InvalidAfterParse obligation, rather than accepting an unresolved-library or unsupported diagnostic.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_collection_unused_moved_map_value_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_collection_btree_ordered_shared_borrow_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "The same bounded ordered-map obligation combines non-Copy aggregate payloads, shared map borrowing, reference tuple destructuring and iteration, followed by reuse of the original map. This mapping adds no independent test count.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_collection_btree_ordered_shared_borrow_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_collection_btree_ordered_shared_borrow_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Complete literal map program has exact stdout 1 10, 2 20, 3 30, len 3 on separate lines and uses the pinned stock/native CHECK/BUILD/run oracle workers 1/8. This is the same obligation as feature/interaction, not a separate program or full upstream std claim.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_collection_btree_ordered_shared_borrow_source"
+                    }
+                  ]
+                }
+              ]
             }
           ],
           "id": "library-collections",
@@ -6113,7 +6410,7 @@
                   "tests": [
                     {
                       "suite": "lexical_tokens",
-                      "test": "valid_lexical_classes_remain_explicit_unsupported_parser_ingress"
+                      "test": "valid_lexical_classes_keep_explicit_parser_ingress_boundaries"
                     },
                     {
                       "suite": "byte_literals",
@@ -6126,7 +6423,7 @@
               "tests": [
                 {
                   "suite": "lexical_tokens",
-                  "test": "valid_lexical_classes_remain_explicit_unsupported_parser_ingress"
+                  "test": "valid_lexical_classes_keep_explicit_parser_ingress_boundaries"
                 },
                 {
                   "suite": "byte_literals",

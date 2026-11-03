@@ -697,3 +697,233 @@ fn main() {}"#,
         }],
     );
 }
+
+// Bounded derive, repetition, promotion and static-initializer obligations.
+#[test]
+fn derive_copy_clone_generic_tuple_runtime() {
+    oracle::check(
+        "derive-copy-clone-generic-tuple-runtime",
+        &[Case {
+            name: "generic_tuple_derives_preserve_copy_and_clone",
+            source: r#"#[derive(Copy, Clone)]
+struct Pair<T: Copy>(T, T);
+fn duplicate<T: Copy>(value: T) -> (T, T) { (value, value) }
+fn main() {
+    let original = Pair(7i32, 9i32);
+    let cloned = original.clone();
+    let (left, right) = duplicate(original);
+    println!("{} {} {} {}", original.0, cloned.1, left.0, right.1);
+}
+"#,
+            expect: Expect::Run("7 9 7 9\n"),
+        }],
+    );
+}
+
+#[test]
+fn derive_copy_noncopy_field_semantic_rejection() {
+    oracle::check(
+        "derive-copy-noncopy-field-semantic-rejection",
+        &[Case {
+            name: "unused_derived_copy_cannot_cover_noncopy_field",
+            source: r#"#[derive(Clone)]
+struct NonCopy(i32);
+#[derive(Copy, Clone)]
+struct Invalid(NonCopy);
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0204"),
+        }],
+    );
+}
+
+#[test]
+fn macro_repetition_tokens_runtime_order() {
+    oracle::check(
+        "macro-repetition-tokens-runtime-order",
+        &[Case {
+            name: "comma_separated_expression_repetition_evaluates_once_in_order",
+            source: r#"macro_rules! accumulate {
+    ($($value:expr),* $(,)?) => {{
+        let mut total = 0i32;
+        $(total += $value;)*
+        total
+    }};
+}
+fn step(value: i32) -> i32 { println!("step {}", value); value }
+fn main() {
+    println!("empty {}", accumulate!());
+    let total = accumulate!(step(2i32), step(3i32), step(5i32),);
+    println!("sum {}", total);
+}
+"#,
+            expect: Expect::Run("empty 0\nstep 2\nstep 3\nstep 5\nsum 10\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "bounded compatibility obligation"]
+fn const_promoted_static_borrow_runtime() {
+    oracle::check(
+        "const-promoted-static-borrow-runtime",
+        &[Case {
+            name: "promoted_array_outlives_function_and_combines_with_static",
+            source: r#"static OFFSET: i32 = 5i32;
+fn promoted() -> &'static [i32; 2] { &[7i32, 9i32] }
+fn main() {
+    let values = promoted();
+    println!("{} {} {}", values[0], values[1], values[0] + OFFSET);
+}
+"#,
+            expect: Expect::Run("7 9 12\n"),
+        }],
+    );
+}
+
+#[test]
+fn const_runtime_call_borrow_semantic_rejection() {
+    oracle::check(
+        "const-runtime-call-borrow-semantic-rejection",
+        &[Case {
+            name: "unused_const_reference_cannot_promote_nonconst_call",
+            source: r#"fn runtime() -> i32 { 7i32 }
+const INVALID: &'static i32 = &runtime();
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0015"),
+        }],
+    );
+}
+
+#[test]
+fn static_runtime_initializer_semantic_rejection() {
+    oracle::check(
+        "static-runtime-initializer-semantic-rejection",
+        &[Case {
+            name: "unused_static_cannot_call_runtime_initializer",
+            source: r#"fn runtime() -> i32 { 9i32 }
+static INVALID: i32 = runtime();
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0015"),
+        }],
+    );
+}
+
+// Bounded library obligations, authored against bd4d7849d; original fixtures unchanged.
+#[test]
+fn library_result_question_mark_vec_owned_drop_source() {
+    oracle::check(
+        "library-result-question-mark-vec-owned-drop-source",
+        &[Case {
+            name: "question_mark_cleans_owned_vec_on_error_and_success",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn step(fail: bool) -> Result<i32, i32> {
+    if fail { Err(9) } else { Ok(4) }
+}
+fn run(fail: bool) -> Result<i32, i32> {
+    let mut owned: Vec<Guard> = Vec::new();
+    owned.push(Guard { n: 7 });
+    let value = step(fail)?;
+    println!("kept {}", owned.len());
+    Ok(value + 1)
+}
+fn main() {
+    match run(true) { Ok(n) => println!("ok {}", n), Err(n) => println!("err {}", n) }
+    match run(false) { Ok(n) => println!("ok {}", n), Err(n) => println!("err {}", n) }
+}
+"#,
+            expect: Expect::Run("drop 7\nerr 9\nkept 1\ndrop 7\nok 5\n"),
+        }],
+    );
+}
+
+#[test]
+fn library_result_unused_return_error_mismatch_source() {
+    oracle::check(
+        "library-result-unused-return-error-mismatch-source",
+        &[Case {
+            name: "unused_result_error_payload_must_match_declared_error",
+            source: r#"fn unused() -> Result<i32, bool> { Err(7i32) }
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+fn library_iterator_collect_typed_values_source() {
+    oracle::check(
+        "library-iterator-collect-typed-values-source",
+        &[Case {
+            name: "mapped_i64_values_collect_into_owned_vector_in_order",
+            source: r#"fn main() {
+    let values: Vec<i64> = (1i32..4i32).map(|n: i32| (n as i64) * 3i64).collect();
+    println!("{} {} {} {}", values.len(), values[0], values[1], values[2]);
+}
+"#,
+            expect: Expect::Run("3 3 6 9\n"),
+        }],
+    );
+}
+
+#[test]
+fn library_iterator_unused_collect_wrong_type_source() {
+    oracle::check(
+        "library-iterator-unused-collect-wrong-type-source",
+        &[Case {
+            name: "unused_i32_iterator_cannot_collect_into_bool_vector",
+            source: r#"fn unused() { let _: Vec<bool> = (0i32..3i32).collect(); }
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0277"),
+        }],
+    );
+}
+
+#[test]
+fn library_collection_btree_ordered_shared_borrow_source() {
+    oracle::check(
+        "library-collection-btree-ordered-shared-borrow-source",
+        &[Case {
+            name: "btree_noncopy_values_are_read_through_shared_ordered_iterator",
+            source: r#"use std::collections::BTreeMap;
+struct Item { n: i64 }
+fn main() {
+    let mut map: BTreeMap<i32, Item> = BTreeMap::new();
+    map.insert(3, Item { n: 30 });
+    map.insert(1, Item { n: 10 });
+    map.insert(2, Item { n: 20 });
+    let shared = &map;
+    for (key, value) in shared.iter() { println!("{} {}", key, value.n); }
+    println!("len {}", map.len());
+}
+"#,
+            expect: Expect::Run("1 10\n2 20\n3 30\nlen 3\n"),
+        }],
+    );
+}
+
+#[test]
+fn library_collection_unused_moved_map_value_source() {
+    oracle::check(
+        "library-collection-unused-moved-map-value-source",
+        &[Case {
+            name: "unused_noncopy_payload_cannot_be_reused_after_map_insert",
+            source: r#"use std::collections::BTreeMap;
+struct Item { n: i32 }
+fn unused() {
+    let value = Item { n: 7 };
+    let mut map: BTreeMap<i32, Item> = BTreeMap::new();
+    map.insert(1, value);
+    let _again = value;
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0382"),
+        }],
+    );
+}

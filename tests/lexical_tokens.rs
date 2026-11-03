@@ -22,6 +22,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 // used by every rerun is printed independently, including hosted pinned nightly.
 const BASELINE_STOCK: &str = "rustc 1.98.1; commit 48a229ceaefd4985c50990b14116b6d856af0985; 2026-09-01; x86_64-unknown-linux-gnu; LLVM 22.1.8";
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/closure_oracle.rs"]
+mod closure_oracle;
+
 struct Case {
     name: &'static str,
     source: &'static str,
@@ -314,9 +318,9 @@ fn native_lexical_categories_do_not_confuse_expression_suffix_semantics() {
 }
 
 #[test]
-fn valid_lexical_classes_remain_explicit_unsupported_parser_ingress() {
-    // These original stock-accepted sources are legal lexical inputs. A bounded
-    // parser refusing them is an Unsupported boundary, not invalid Rust proof.
+fn valid_lexical_classes_keep_explicit_parser_ingress_boundaries() {
+    // Preserve the original stock-accepted sources and classify only evidenced
+    // parser ingress. Full raw-identifier acceptance is tested separately below.
     let names = [
         "unicode_ident",
         "unicode_char",
@@ -335,10 +339,16 @@ fn valid_lexical_classes_remain_explicit_unsupported_parser_ingress() {
         let prepared = prepared_identity(case.source);
         if matches!(
             name,
-            "unicode_char" | "char" | "raw_string" | "byte_hex" | "bytestring" | "raw_bytestring"
+            "unicode_char"
+                | "char"
+                | "raw_string"
+                | "byte_hex"
+                | "bytestring"
+                | "raw_bytestring"
+                | "raw_ident"
         ) {
             justrust_engine::compiler::frontend::parse_prepared(&prepared)
-                .unwrap_or_else(|error| panic!("{name}: character ingress rejected: {error}"));
+                .unwrap_or_else(|error| panic!("{name}: supported ingress rejected: {error}"));
             continue;
         }
         let error = justrust_engine::compiler::frontend::parse_prepared(&prepared)
@@ -1094,4 +1104,49 @@ fn stock_first_lexical_classification_table() {
             }
         }
     }
+}
+
+// Exact-source acceptance is stronger than the parser taxonomy above. These
+// cases use the independent pinned stock compiler, not a native fallback.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn original_raw_identifier_corpus_source_matches_pinned_stock() {
+    let original = CASES.iter().find(|case| case.name == "raw_ident").unwrap();
+    assert!(original.stock_valid);
+    closure_oracle::check(
+        "lexical-original-raw-ident",
+        &[closure_oracle::Case {
+            name: "unchanged_original_raw_ident_corpus_source",
+            source: original.source,
+            expect: closure_oracle::Expect::Run(""),
+        }],
+    );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn raw_identifier_observable_values_match_pinned_stock() {
+    closure_oracle::check(
+        "lexical-observable-raw-ident",
+        &[closure_oracle::Case {
+            name: "raw_keyword_binding_and_value_lookup",
+            source: r#"fn main(){ let r#type = 40i32; let r#match = r#type + 2i32; println!("{} {}", r#type, r#match); }"#,
+            expect: closure_oracle::Expect::Run("40 42\n"),
+        }],
+    );
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[test]
+fn unused_raw_identifier_type_mismatch_is_semantically_rejected() {
+    closure_oracle::check(
+        "lexical-unused-raw-ident-mismatch",
+        &[closure_oracle::Case {
+            name: "unused_raw_keyword_binding_still_requires_type_check",
+            source: "fn unused(){ let r#type: bool = 1; let _ = r#type; } fn main(){}",
+            // Requires original-source parsing and declaration publication.
+            // Unsupported, resource and infrastructure failures do not qualify.
+            expect: closure_oracle::Expect::InvalidAfterParse("E0308"),
+        }],
+    );
 }
