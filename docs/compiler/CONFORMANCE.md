@@ -346,8 +346,13 @@ globally minimal source. This utility does not parse or automatically shrink
 Rust, authenticate tracker evidence, or sandbox checker commands. Attempt and
 wall-time bounds do not bound checker disk use. Use trusted commands and bounded
 input lists. A checker with the wrong stock version cannot establish pinned
-compatibility evidence. Broader generators, automatic candidate generation,
-sustained campaigns and applicable upstream conformance imports remain open.
+compatibility evidence. The ordinary `conformance_program` gate supplies the
+verified stock compiler and Cargo-built native binary to a separate reduction
+smoke test at workers 1 and 8. Direct Python runs skip that smoke test unless
+`JR_REDUCER_STOCK` and `JR_REDUCER_NATIVE` are explicitly supplied; synthetic
+utility checks alone never substitute for it. Broader generators, automatic
+candidate generation, sustained campaigns and applicable upstream conformance
+imports remain open.
 Imported inputs must retain licenses, attribution and pinned source identity.
 
 `tests/conformance_program.rs` integrates manifest validation and adversarial

@@ -1,6 +1,7 @@
 //! The compatibility evidence system is part of the ordinary test gate.
-//! Python uses only the standard library. It never compiles user Rust for the
-//! native compiler and must not turn a green subset into full compatibility.
+//! Python uses only the standard library. The bounded reduction utility has a
+//! separate pinned-stock/current-native smoke test, not compatibility credit.
+//! A green subset must never be presented as full compatibility.
 use std::path::Path;
 use std::process::Command;
 
@@ -221,6 +222,35 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_reconcile_token_rules.py", &["-v"]);
     python("tools/test_bounded_failure_reduce.py", &["-v"]);
     python("tools/compatibility_inventory.py", &[]);
+}
+
+#[test]
+fn bounded_reducer_checks_pinned_stock_and_current_native() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("python3")
+        .arg(root.join("tools/test_bounded_failure_reduce.py"))
+        .args([
+            "ActualReductionTests.test_pinned_stock_current_native_authored_reduction",
+            "-v",
+        ])
+        .env("JR_REDUCER_STOCK", stock_rustc::stock_rustc())
+        .env("JR_REDUCER_NATIVE", env!("CARGO_BIN_EXE_jr-rust"))
+        .env_remove("RUSTC_BOOTSTRAP")
+        .current_dir(root)
+        .output()
+        .expect("bounded reducer acceptance requires Python 3");
+    assert!(
+        output.status.success(),
+        "pinned reduction utility acceptance: {}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("pinned-reducer-acceptance:"),
+        "actual reducer acceptance must execute, not skip: {stdout}"
+    );
+    println!("{stdout}");
 }
 
 #[test]
