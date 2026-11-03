@@ -21,15 +21,15 @@ CLASS_NAMES = {'N':'normative-semantic','G':'grammar','I':'index','X':'cross-ref
 # authored from token-six-oracles.mapping.json, not inferred from test titles.
 # Old mapping fixture hashes and authored program hashes are deliberately absent.
 WITNESS_SOURCE_CONTRACT = {
-    'base_commit': 'd6db78814c8696640c2c170cc0b6ffc3728bd2ca',
+    'base_commit': '21c1b58c5bad87e8302eb4dd9d1aa9b939efe69a',
     'reference_commit': '86635e30bf861a038dc197d7e16fd09e7e514e7a',
     'rule_index_sha256': '1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85',
     'candidate_inventory_sha256': '29e61520b930ee3f15ae005e79e70223e095901fc0f286ac61c82613e2f47a0c',
     'files': {
-        'tests/conformance_generated.rs': '90c30f2dc8c5e9a1ae8146533f90de302819552c9cbcb41d29da4162d74354ec',
+        'tests/conformance_generated.rs': 'ce14d922d1f1ebaac5a6ceede35db40140914836dcd7b09c54ea40f76d8bc315',
         'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
         'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
-        'data/compiler-compatibility-scope.json': 'a1dab0a209d8f034122ef184e3cf5f7723f24023be4915a30797c034ed1b4b88',
+        'data/compiler-compatibility-scope.json': 'c55e48aa9990371a942c7f324e98b68022e260e007c0de079e7d284647aec80f',
     },
 }
 # selector | expectation class | literal rules | candidate aliases | rationale | limits

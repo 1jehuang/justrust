@@ -1441,3 +1441,161 @@ fn main() {}
         }],
     );
 }
+
+// Append only to tests/conformance_generated.rs at frozen 21c1b58c5.
+// Authored expectations, not execution evidence. Each selector is independent.
+#[test]
+fn interaction_generic_owned_option_projected_shared_source() {
+    oracle::check(
+        "interaction-generic-owned-option-projected-shared",
+        &[Case {
+            name: "generic_owned_tuple_shared_projection_then_option_branch_drop",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn identity<T>(value: T) -> T { value }
+fn run(take: bool) {
+    let pair = identity::<(Guard, i32)>((Guard { n: 7 }, 11));
+    let borrowed = &pair.0.n;
+    println!("borrow {} {}", *borrowed, pair.1);
+    let chosen = if take { Some(pair.0) } else { None };
+    match chosen {
+        Some(value) => { println!("some {}", value.n); drop(value); }
+        None => println!("none"),
+    }
+    println!("tail {}", pair.1);
+}
+fn main() { run(true); run(false); }
+"#,
+            expect: Expect::Run(
+                "borrow 7 11\nsome 7\ndrop 7\ntail 11\nborrow 7 11\nnone\ntail 11\ndrop 7\n",
+            ),
+        }],
+    );
+}
+
+#[test]
+fn interaction_generic_projected_owned_replacement_source() {
+    oracle::check(
+        "interaction-generic-projected-owned-replacement",
+        &[Case {
+            name: "generic_mutable_tuple_projection_replacement_drops_old_value_in_each_arm",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn identity<T>(value: T) -> T { value }
+fn replace<T>(place: &mut T, value: T) { *place = value; }
+fn run(left: bool) {
+    let mut pair = identity::<(Guard, i32)>((Guard { n: 3 }, 19));
+    let slot = &mut pair.0;
+    match left {
+        true => replace::<Guard>(slot, Guard { n: 5 }),
+        false => replace::<Guard>(slot, Guard { n: 8 }),
+    }
+    println!("after {} {}", pair.0.n, pair.1);
+}
+fn main() { run(true); run(false); }
+"#,
+            expect: Expect::Run("drop 3\nafter 5 19\ndrop 5\ndrop 3\nafter 8 19\ndrop 8\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending strict generic/projected/drop interaction acceptance"]
+fn interaction_generic_fnonce_projected_borrow_early_return_source() {
+    oracle::check(
+        "interaction-generic-fnonce-projected-borrow-early-return",
+        &[Case {
+            name: "generic_fnonce_moves_guard_with_shared_projection_and_two_return_paths",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn identity<T>(value: T) -> T { value }
+fn apply<F: FnOnce() -> i32>(f: F) -> i32 { f() }
+fn run(early: bool) {
+    let pair = identity::<(i32, i32)>((4, 23));
+    let projected = &pair.0;
+    let guard = Guard { n: 9 };
+    let call = move || {
+        if early { drop(guard); return *projected; }
+        let answer = *projected + guard.n;
+        drop(guard);
+        answer
+    };
+    println!("answer {}", apply(call));
+    println!("sibling {}", pair.1);
+}
+fn main() { run(true); run(false); }
+"#,
+            expect: Expect::Run("drop 9\nanswer 4\nsibling 23\ndrop 9\nanswer 13\nsibling 23\n"),
+        }],
+    );
+}
+
+#[test]
+fn interaction_unused_generic_projected_replacement_type_source() {
+    oracle::check(
+        "interaction-unused-generic-projected-replacement-type",
+        &[Case {
+            name: "unused_explicit_generic_replacement_rejects_wrong_owned_argument",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn replace<T>(place: &mut T, value: T) { *place = value; }
+fn unused(left: bool) {
+    let mut pair = (Guard { n: 3 }, 19i32);
+    let slot = &mut pair.0;
+    if left { replace::<Guard>(slot, 5i32); }
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+fn interaction_unused_generic_owned_move_live_projection_source() {
+    oracle::check(
+        "interaction-unused-generic-owned-move-live-projection",
+        &[Case {
+            name: "unused_generic_owned_tuple_move_conflicts_with_later_projected_read",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn identity<T>(value: T) -> T { value }
+fn unused(take: bool) {
+    let pair = identity::<(Guard, i32)>((Guard { n: 7 }, 11));
+    let borrowed = &pair.0.n;
+    if take { drop(pair.0); }
+    println!("{}", *borrowed);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0505"),
+        }],
+    );
+}
+
+#[test]
+fn interaction_unused_generic_fnonce_conditional_double_move_source() {
+    oracle::check(
+        "interaction-unused-generic-fnonce-conditional-double-move",
+        &[Case {
+            name: "unused_fnonce_conditional_guard_move_cannot_reach_second_drop",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn apply<F: FnOnce() -> i32>(f: F) -> i32 { f() }
+fn unused(early: bool) {
+    let pair = (4i32, 23i32);
+    let projected = &pair.0;
+    let guard = Guard { n: 9 };
+    let call = move || {
+        if early { drop(guard); }
+        drop(guard);
+        *projected
+    };
+    let _ = apply(call);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0382"),
+        }],
+    );
+}

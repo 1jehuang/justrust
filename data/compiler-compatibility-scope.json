@@ -2446,6 +2446,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "memory_projected_unused_string_field_reuse_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_unused_generic_owned_move_live_projection_source"
                 }
               ],
               "evidence_notes": [
@@ -2473,6 +2477,15 @@
                     {
                       "suite": "conformance_generated",
                       "test": "memory_projected_unused_string_field_reuse_source"
+                    }
+                  ]
+                },
+                {
+                  "note": "Authored stock E0505 control: in an unused function, explicit generic identity returns (Guard,i32), a shared borrow of Guard.n remains live across a conditional move/drop of the owning tuple field. This is owner move versus live descendant loan, not duplicate mutable loans, direct assignment versus shared loan, or a borrow issued after a previous move. InvalidAfterParse demands original parse and declarations plus healthy semantic rejection; unsupported/resource/infrastructure refusal cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_unused_generic_owned_move_live_projection_source"
                     }
                   ]
                 }
@@ -2841,6 +2854,15 @@
                       "test": "memory_unused_drop_check_borrow_escape_is_invalid"
                     }
                   ]
+                },
+                {
+                  "note": "Authored stock E0382 control in an uncalled function: a move closure passed to generic FnOnce apply conditionally drops its owned Guard then reaches an unconditional second drop, while also carrying an explicit tuple-field reference. Different from invoking an FnOnce closure twice or unconditional projected use-after-move. InvalidAfterParse remains strict and unchanged. Stock diagnostic code is authored, not measured; native exact code equality is not asserted by this helper.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_unused_generic_fnonce_conditional_double_move_source"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -2848,6 +2870,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "memory_unused_drop_check_borrow_escape_is_invalid"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_unused_generic_fnonce_conditional_double_move_source"
                 }
               ]
             },
@@ -2861,6 +2887,23 @@
                       "test": "memory_conditional_projected_move_drop_flags_match_stock"
                     }
                   ]
+                },
+                {
+                  "note": "Bounded source partitions: explicit generic owned tuple with last-use shared field loan before conditional Option payload move and branch-sensitive remaining-field destruction; generic replacement through a mutable owned tuple projection with observable old-value drop in both arms; generic FnOnce call with explicit shared projection plus owned Drop capture and early-return/fallthrough paths. Both branch inputs execute in each positive case. Existing pairs already overlap these axes, so these are missing higher-order/control-path partitions, not claims of wholly new feature-pair coverage or general drop correctness.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_generic_owned_option_projected_shared_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_generic_projected_owned_replacement_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_generic_fnonce_projected_borrow_early_return_source"
+                    }
+                  ]
                 }
               ],
               "layer": "interaction",
@@ -2868,6 +2911,18 @@
                 {
                   "suite": "conformance_generated",
                   "test": "memory_conditional_projected_move_drop_flags_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_generic_owned_option_projected_shared_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_generic_projected_owned_replacement_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_generic_fnonce_projected_borrow_early_return_source"
                 }
               ]
             },
@@ -2881,6 +2936,23 @@
                       "test": "recursive_typed_boxes_drop_in_place_once_and_preserve_partial_moves"
                     }
                   ]
+                },
+                {
+                  "note": "Three independent literal strict closure_oracle Run cases require pinned stock 1.98.1 and native CHECK/BUILD/run at workers 1/8. CHECK must demand no codegen. Mappings alone establish neither acceptance nor full Rust completion.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_generic_owned_option_projected_shared_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_generic_projected_owned_replacement_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_generic_fnonce_projected_borrow_early_return_source"
+                    }
+                  ]
                 }
               ],
               "layer": "end_to_end",
@@ -2888,6 +2960,18 @@
                 {
                   "suite": "drop_normal",
                   "test": "recursive_typed_boxes_drop_in_place_once_and_preserve_partial_moves"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_generic_owned_option_projected_shared_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_generic_projected_owned_replacement_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_generic_fnonce_projected_borrow_early_return_source"
                 }
               ]
             }
@@ -2957,6 +3041,15 @@
                       "test": "rejects_hard_result_vs_known_argument_conflict"
                     }
                   ]
+                },
+                {
+                  "note": "Authored stock E0308 unused-body control: replace::<Guard> receives a valid &mut tuple.0 projection but an i32 replacement in a conditional arm. Checks explicit type-argument consistency for an owned replacement operation, not generic inference, trait bounds, or Fn return mismatch. The function need not be called or its branch taken. InvalidAfterParse is mandatory; no stock/native execution evidence is supplied.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "interaction_unused_generic_projected_replacement_type_source"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -2972,6 +3065,10 @@
                 {
                   "suite": "generic_inference",
                   "test": "rejects_hard_result_vs_known_argument_conflict"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "interaction_unused_generic_projected_replacement_type_source"
                 }
               ]
             },
@@ -8063,6 +8160,52 @@
           {
             "suite": "conformance_generated",
             "test": "pending_higher_ranked_callable_identity_matches_stock"
+          }
+        ]
+      },
+      {
+        "id": "generic-owned-option-last-use-projected-loan",
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "shared-borrow",
+          "option-match",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "interaction_generic_owned_option_projected_shared_source"
+          }
+        ]
+      },
+      {
+        "id": "generic-owned-projected-replacement-both-arms",
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "mutable-borrow",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "interaction_generic_projected_owned_replacement_source"
+          }
+        ]
+      },
+      {
+        "id": "generic-fnonce-projected-shared-owned-return-paths",
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "shared-borrow",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "conformance_generated",
+            "test": "interaction_generic_fnonce_projected_borrow_early_return_source"
           }
         ]
       }
