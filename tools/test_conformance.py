@@ -291,6 +291,7 @@ class EvidenceTests(unittest.TestCase):
             for filename in ("compiler-compatibility-contract.json",
                              "compiler-language-inventory.json",
                              "compiler-language-reference-rules.json",
+                             "compiler-library-surface-provenance.json",
                              "compiler-library-project-inventory.json"):
                 before = c.source_identity(self.root)
                 path = self.root / "data" / filename

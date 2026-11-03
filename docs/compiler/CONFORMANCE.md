@@ -196,6 +196,18 @@ hash establishes byte consistency, not independent authentication. Ordinary
 metadata validation must not claim that external source bytes were reverified
 when the archive was not supplied.
 
+`data/compiler-library-surface-provenance.json` records bounded pinned library
+source and rustdoc input provenance, not public API coverage. Its link/anchor
+observations include unstable and other-target entries and must not become a
+compatibility denominator. Reproduction commands and tool digests are retained
+in that file. Full downloaded inputs remain external. Ordinary no-network tests
+exercise synthetic rejection controls and explicitly skip unavailable real-input
+fixtures. To repeat the real-input checks, set `JR_COMPAT_LIBRARY_FIXTURES` to
+the acquisition directory containing `pinned-source-final` and
+`pinned-html-final`, then run `tools/test_pinned_acquisition.py` and
+`tools/test_compact_library_surface_provenance.py`. A skipped fixture check is
+not proof of source-byte verification or API completeness.
+
 Undefined behavior is not a runtime-output parity obligation. Unsafe
 preconditions and compiler-enforced restrictions must be tracked separately.
 Where documented behavior permits multiple outcomes, a differential oracle

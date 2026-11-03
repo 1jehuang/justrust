@@ -24,6 +24,8 @@ jobs:
           python3 tools/test_compatibility_scope.py -v
           python3 tools/test_compatibility_inventory.py -v
           python3 tools/test_extract_reference_rules.py -v
+          python3 tools/test_pinned_acquisition.py -v
+          python3 tools/test_compact_library_surface_provenance.py -v
       - name: Validate source-referenced inventory without inferring support
         run: python3 tools/compatibility_inventory.py
       - name: Report declared test obligations including missing coverage

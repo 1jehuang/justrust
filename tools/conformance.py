@@ -164,6 +164,7 @@ def source_identity(root: Path = ROOT) -> dict:
                                 "data/compiler-compatibility-contract.json",
                                 "data/compiler-language-inventory.json",
                                 "data/compiler-language-reference-rules.json",
+                                "data/compiler-library-surface-provenance.json",
                                 "data/compiler-library-project-inventory.json",
                                 ".github/workflows/compiler-conformance.yml"})})
     state = hashlib.sha256()
