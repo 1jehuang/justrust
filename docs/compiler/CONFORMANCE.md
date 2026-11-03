@@ -218,6 +218,27 @@ output is not consumed as compatibility evidence or an API denominator. Run
 to repeat exact-page and corruption controls. Full extracted sidecars are not
 vendored into this repository.
 
+`tools/token_reconciliation_proposals.py` contains explicit, unreviewed
+classifications and missing-test needs for all 115 labeled blocks in the pinned
+token chapter. Generate an exact-source-bound candidate after reproducing the
+Reference inputs:
+
+```sh
+python3 tools/reconcile_token_rules.py generate \
+  --rule-index data/compiler-language-reference-rules.json \
+  --inventory data/compiler-language-inventory.json \
+  --source-root "$REFERENCE_SOURCE_ROOT" \
+  --artifact "$JCODE_SCRATCH_DIR/token-reconciliation.json"
+```
+
+Use `validate` with the same arguments to check a retained candidate. Generation
+requires a fresh artifact path and cannot overwrite source inputs. The validator
+requires all selected rule rows and all 2,850 unselected identities to remain
+accounted for. Its tests reject omissions, foreign mappings and invented review
+or execution credit. Structural validation does not establish that a proposed
+normative interpretation is correct. All 2,965 rule mappings still require
+review, and direct exact tests remain missing from this candidate.
+
 Undefined behavior is not a runtime-output parity obligation. Unsafe
 preconditions and compiler-enforced restrictions must be tracked separately.
 Where documented behavior permits multiple outcomes, a differential oracle
