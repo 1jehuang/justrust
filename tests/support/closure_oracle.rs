@@ -14,6 +14,9 @@ pub mod pinned_stock;
 pub enum Expect {
     Run(&'static str),
     Invalid(&'static str),
+    /// Requires the original input PARSE_FILE fact to have been published.
+    /// A parser rejecting unsupported syntax is not semantic invalid evidence.
+    InvalidAfterParse(&'static str),
 }
 pub struct Case {
     pub name: &'static str,
@@ -136,6 +139,34 @@ pub fn validate_native_rejection(
     Ok(())
 }
 
+pub fn validate_semantic_rejection(
+    failure: &justrust_engine::compiler::Failure,
+) -> Result<(), &'static str> {
+    validate_native_rejection(failure)?;
+    let report = failure
+        .report
+        .as_ref()
+        .ok_or("semantic rejection needs graph evidence")?;
+    let parsed = report
+        .node_ids
+        .iter()
+        .zip(&report.node_evaluations)
+        .any(|(node, (key, _))| {
+            key.kind == 121
+                && key.params == [0]
+                && report
+                    .events
+                    .iter()
+                    .any(|event| event.kind == "publish" && event.node == Some(*node))
+        });
+    if !parsed {
+        return Err(
+            "original source did not finish parsing; parser rejection is not semantic invalid evidence",
+        );
+    }
+    Ok(())
+}
+
 pub fn check(tag: &str, cases: &[Case]) {
     // The hosted bootstrap compiler is not the language oracle. Only the
     // independently pinned stock lookup (JR_STOCK_RUSTC) selects this binary.
@@ -198,7 +229,7 @@ pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
                     case.name
                 );
             }
-            Expect::Invalid(fragment) => {
+            Expect::Invalid(fragment) | Expect::InvalidAfterParse(fragment) => {
                 assert!(
                     !stock.status.success() && stderr.contains(fragment),
                     "{}: expected stock {fragment}: {stderr}",
@@ -259,12 +290,17 @@ pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
                         "{} workers={workers} CHECK={check_only}: native rejected: {error}",
                         case.name
                     ),
-                    (Expect::Invalid(_), Ok(_)) => panic!(
+                    (Expect::Invalid(_) | Expect::InvalidAfterParse(_), Ok(_)) => panic!(
                         "{} workers={workers} CHECK={check_only}: accepted invalid closure",
                         case.name
                     ),
-                    (Expect::Invalid(_), Err(error)) => {
-                        validate_native_rejection(&error).unwrap_or_else(|reason| {
+                    (expect @ (Expect::Invalid(_) | Expect::InvalidAfterParse(_)), Err(error)) => {
+                        let validation = if matches!(expect, Expect::InvalidAfterParse(_)) {
+                            validate_semantic_rejection(&error)
+                        } else {
+                            validate_native_rejection(&error)
+                        };
+                        validation.unwrap_or_else(|reason| {
                             panic!(
                                 "{} workers={workers} CHECK={check_only}: {reason}: {error}",
                                 case.name

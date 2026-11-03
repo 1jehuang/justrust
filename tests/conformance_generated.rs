@@ -193,3 +193,281 @@ probes!(true;
     unused_invalid_04 = 4, unused_invalid_05 = 5,
     unused_invalid_06 = 6, unused_invalid_07 = 7,
 );
+
+// Pending language obligations stay independent of the generated seed corpus.
+// The compatibility tracker includes ignored tests, so Unsupported is a failure,
+// not an accepted substitute for the stock Run/Invalid expectations below.
+#[test]
+#[ignore = "pending native async future creation and unpolled drop acceptance"]
+fn pending_async_block_creation_and_unpolled_drop_match_stock() {
+    oracle::check(
+        "pending-async-unpolled-drop",
+        &[Case {
+            name: "async_move_creation_does_not_poll_and_drop_releases_capture",
+            source: r#"struct Guard { value: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.value); } }
+fn main() {
+    let guard = Guard { value: 7 };
+    let future = async move {
+        let _owner = guard;
+        println!("polled");
+    };
+    println!("created");
+    drop(future);
+    println!("done");
+}
+"#,
+            expect: Expect::Run("created\ndrop 7\ndone\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native unused await-outside-async semantic rejection"]
+fn pending_unused_await_outside_async_is_invalid() {
+    oracle::check(
+        "pending-unused-await-outside-async",
+        &[Case {
+            name: "unused_non_async_function_cannot_await",
+            source: r#"fn unused() {
+    let _value = async { 7i32 }.await;
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0728"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native higher-ranked callable function-item acceptance"]
+fn pending_higher_ranked_callable_identity_matches_stock() {
+    oracle::check(
+        "pending-higher-ranked-callable-identity",
+        &[Case {
+            name: "one_function_item_identity_serves_distinct_borrow_scopes",
+            source: r#"fn identity<'a>(value: &'a i32) -> &'a i32 { value }
+fn use_identity<F>(f: F)
+where F: for<'a> Fn(&'a i32) -> &'a i32 {
+    let outer = 17i32;
+    println!("{}", *f(&outer));
+    {
+        let inner = 25i32;
+        println!("{}", *f(&inner));
+    }
+    println!("{}", *f(&outer));
+}
+fn main() { use_identity(identity); }
+"#,
+            expect: Expect::Run("17\n25\n17\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native unused associated projection Copy obligation rejection"]
+fn pending_unused_associated_required_copy_bound_is_invalid() {
+    oracle::check(
+        "pending-unused-associated-required-copy-bound",
+        &[Case {
+            name: "unused_generic_body_requires_proof_of_projected_copy",
+            source: r#"trait Source { type Item; }
+fn require_copy<T: Copy>(_value: T) {}
+fn unused<S: Source>(value: S::Item) { require_copy(value); }
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0277"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_repr_c_record_size_and_alignment_match_stock() {
+    oracle::check(
+        "runtime-repr-c-record-layout",
+        &[Case {
+            name: "repr_c_u8_u32_u16_size_alignment",
+            source: r#"#[repr(C)]
+struct Record { tag: u8, count: u32, tail: u16 }
+fn main() {
+    let value = Record { tag: 3, count: 257, tail: 513 };
+    let size = std::mem::size_of::<Record>();
+    let alignment = std::mem::align_of::<Record>();
+    assert_eq!(size, 12usize);
+    assert_eq!(alignment, 4usize);
+    assert_eq!(value.tag, 3u8);
+    assert_eq!(value.count, 257u32);
+    assert_eq!(value.tail, 513u16);
+    println!("{} {} {} {} {}", size, alignment, value.tag, value.count, value.tail);
+}"#,
+            expect: Expect::Run("12 4 3 257 513\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn memory_raw_pointer_cast_roundtrip_and_unsafe_write_match_stock() {
+    oracle::check(
+        "memory-raw-pointer-cast-roundtrip",
+        &[Case {
+            name: "mutable_const_mutable_pointer_roundtrip",
+            source: r#"fn main() {
+    let mut value = 7u32;
+    let raw = &mut value as *mut u32;
+    let read_only = raw as *const u32;
+    let restored = read_only as *mut u32;
+    assert!(restored == raw);
+    unsafe {
+        assert_eq!(*read_only, 7u32);
+        *restored = 19u32;
+        assert_eq!(*raw, 19u32);
+    }
+    assert_eq!(value, 19u32);
+    println!("{}", value);
+}"#,
+            expect: Expect::Run("19\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn memory_unused_raw_pointer_write_without_unsafe_is_invalid() {
+    oracle::check(
+        "memory-unused-raw-pointer-write-unsafe-required",
+        &[Case {
+            name: "unused_raw_dereference_requires_unsafe",
+            source: r#"fn unused(raw: *mut u32) {
+    *raw = 19u32;
+}
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0133"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn runtime_atomic_fetch_add_explicit_orderings_match_stock() {
+    oracle::check(
+        "runtime-atomic-fetch-add-orderings",
+        &[Case {
+            name: "single_thread_atomic_fetch_add_previous_values",
+            source: r#"use std::sync::atomic::{AtomicUsize, Ordering};
+fn main() {
+    let value = AtomicUsize::new(7usize);
+    let first = value.fetch_add(3usize, Ordering::AcqRel);
+    let second = value.fetch_add(2usize, Ordering::SeqCst);
+    let current = value.load(Ordering::Acquire);
+    assert_eq!(first, 7usize);
+    assert_eq!(second, 10usize);
+    assert_eq!(current, 12usize);
+    println!("{} {} {}", first, second, current);
+}"#,
+            expect: Expect::Run("7 10 12\n"),
+        }],
+    );
+}
+
+// Independent pending source-native obligations. Unsupported, resource and
+// infrastructure failures are oracle failures, never successful expectations.
+// The scope tracker runs these with --include-ignored.
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn const_generic_array_identity_source() {
+    oracle::check(
+        "const-generic-array-identity-source",
+        &[Case {
+            name: "usize_const_parameter_preserves_array_values_and_length",
+            source: r#"fn identity<const N: usize>(value: [i32; N]) -> [i32; N] { value }
+fn main() {
+    let array = identity::<3>([7i32, 11i32, 24i32]);
+    println!("{} {} {} {}", array.len(), array[0], array[1], array[2]);
+}"#,
+            expect: Expect::Run("3 7 11 24\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn const_generic_wrong_argument_type_source() {
+    oracle::check(
+        "const-generic-wrong-argument-type-source",
+        &[Case {
+            name: "bool_cannot_substitute_usize_const_parameter_even_in_unused_body",
+            source: r#"fn identity<const N: usize>(value: [i32; N]) -> [i32; N] { value }
+fn unused() { let _ = identity::<true>([7i32, 11i32, 24i32]); }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn const_fn_aggregate_initializer_source() {
+    oracle::check(
+        "const-fn-aggregate-initializer-source",
+        &[Case {
+            name: "const_fn_constructs_struct_with_array_and_scalar_fields",
+            source: r#"struct Table { values: [i32; 3], sum: i32 }
+const fn make_table() -> Table {
+    let values = [7i32, 11i32, 24i32];
+    Table { values, sum: values[0] + values[1] + values[2] }
+}
+const TABLE: Table = make_table();
+fn main() {
+    println!("{} {} {} {} {}", TABLE.values.len(), TABLE.values[0], TABLE.values[1], TABLE.values[2], TABLE.sum);
+}"#,
+            expect: Expect::Run("3 7 11 24 42\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native compatibility obligation"]
+fn const_fn_unused_runtime_call_source() {
+    oracle::check(
+        "const-fn-unused-runtime-call-source",
+        &[Case {
+            name: "unused_const_fn_body_cannot_call_non_const_function",
+            source: r#"fn runtime() -> i32 { 42 }
+const fn unused() -> i32 { runtime() }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0015"),
+        }],
+    );
+}
+
+#[test]
+fn semantic_invalid_requires_original_parse_publication() {
+    let syntax = justrust_engine::compiler::compile_observed("fn main(){let = ;}".into(), 1, true)
+        .err()
+        .expect("malformed source must fail");
+    assert!(oracle::validate_semantic_rejection(&syntax).is_err());
+    let mut semantic = justrust_engine::compiler::compile_observed(
+        "fn unused(){let value:i32=true;}fn main(){}".into(),
+        1,
+        true,
+    )
+    .err()
+    .expect("unused type error must fail");
+    oracle::validate_semantic_rejection(&semantic).unwrap();
+    let report = semantic.report.as_mut().unwrap();
+    let root = report
+        .node_ids
+        .iter()
+        .zip(&report.node_evaluations)
+        .find_map(|(node, (key, _))| (key.kind == 121 && key.params == [0]).then_some(*node))
+        .expect("original input parse node");
+    report
+        .events
+        .retain(|event| !(event.kind == "publish" && event.node == Some(root)));
+    assert!(
+        oracle::validate_semantic_rejection(&semantic).is_err(),
+        "other files' parse publications cannot stand in for the original source"
+    );
+}
