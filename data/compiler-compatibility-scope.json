@@ -2122,6 +2122,15 @@
                       "test": "memory_unused_projected_use_after_move_is_invalid"
                     }
                   ]
+                },
+                {
+                  "note": "Existing generated unused body requires E0382 when a closure consuming a non-Copy nominal value is invoked twice; the sibling tuple values do not make the captured item Copy. Every case uses strict InvalidAfterParse: pinned stock classification and healthy native CHECK/BUILD rejection at workers1/8 with original parse/declaration publication. Unsupported, parser-only, resource and infrastructure refusal cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_05"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -2137,6 +2146,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "memory_unused_projected_use_after_move_is_invalid"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_05"
                 }
               ]
             },
@@ -2214,6 +2227,29 @@
                 {
                   "suite": "borrowing",
                   "test": "rejects_invalid_two_mutable_loans"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_02"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_03"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Existing generated unused bodies require E0506 for assigning a captured shared-borrowed local before its closure read, and E0503 for reading a local while a closure retains its mutable loan. These are scalar closure-capture loan partitions, not general region inference. Every case uses strict InvalidAfterParse: pinned stock classification and healthy native CHECK/BUILD rejection at workers1/8 with original parse/declaration publication. Unsupported, parser-only, resource and infrastructure refusal cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_02"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_03"
+                    }
+                  ]
                 }
               ]
             },
@@ -2339,6 +2375,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "region_unused_local_reference_cannot_be_static_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_07"
                 }
               ],
               "evidence_notes": [
@@ -2348,6 +2388,15 @@
                     {
                       "suite": "conformance_generated",
                       "test": "region_unused_local_reference_cannot_be_static_source"
+                    }
+                  ]
+                },
+                {
+                  "note": "Existing generated unused body retains a reference to a block-local generic-identity tuple field in a later closure. Stock E0597 and native semantic rejection are required; the source remains unchanged. Every case uses strict InvalidAfterParse: pinned stock classification and healthy native CHECK/BUILD rejection at workers1/8 with original parse/declaration publication. Unsupported, parser-only, resource and infrastructure refusal cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_07"
                     }
                   ]
                 }
@@ -3050,6 +3099,15 @@
                       "test": "interaction_unused_generic_projected_replacement_type_source"
                     }
                   ]
+                },
+                {
+                  "note": "Existing generated unused universal body calls requires_copy(value) on unconstrained T through a move closure. Stock E0277 and native semantic rejection are required even without an instantiation. No inferred Copy membership is allowed. Every case uses strict InvalidAfterParse: pinned stock classification and healthy native CHECK/BUILD rejection at workers1/8 with original parse/declaration publication. Unsupported, parser-only, resource and infrastructure refusal cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_06"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -3069,6 +3127,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "interaction_unused_generic_projected_replacement_type_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_06"
                 }
               ]
             },
@@ -3759,6 +3821,23 @@
                       "test": "pending_unused_await_outside_async_is_invalid"
                     }
                   ]
+                },
+                {
+                  "note": "Existing generated unused bodies require E0596 for invoking an FnMut closure through an immutable binding, E0525 for supplying an FnMut closure to an Fn bound, and E0382 for calling a consuming FnOnce closure twice. These are bounded callable-trait partitions, not general closure/async semantics. Every case uses strict InvalidAfterParse: pinned stock classification and healthy native CHECK/BUILD rejection at workers1/8 with original parse/declaration publication. Unsupported, parser-only, resource and infrastructure refusal cannot pass.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_01"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_04"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "unused_invalid_05"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -3778,6 +3857,18 @@
                 {
                   "suite": "conformance_generated",
                   "test": "pending_unused_await_outside_async_is_invalid"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_01"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_04"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "unused_invalid_05"
                 }
               ]
             },
