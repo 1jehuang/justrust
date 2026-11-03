@@ -342,8 +342,12 @@ def main(argv=None) -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable layered coverage")
     parser.add_argument("--dry-run", action="store_true", help="show exact track invocations without executing")
     parser.add_argument("--jobs", type=int, default=1, help="track: independent exact-case processes, 1..8")
+    parser.add_argument("--shard", action="append", default=[], metavar="INDEX/COUNT",
+                        help="track only: zero-based partition of sorted area/case-selected IDs")
     args = parser.parse_args(argv)
     try:
+        if args.shard and args.action != "track":
+            raise InvalidEvidence("--shard is only valid with track")
         data = validate(load_json(args.manifest))
         if args.action in {"coverage", "track"}:
             import compatibility_scope

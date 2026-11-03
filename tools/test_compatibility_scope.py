@@ -37,6 +37,106 @@ class ScopeTests(unittest.TestCase):
     def manifest(self):
         return s.case_manifest(self.scope, self.base, c)
 
+    def track(self, shard=(), area=(), cases=(), dry_run=True, out=None):
+        path = self.root / "scope.json"
+        path.write_bytes(c.encoded(self.scope))
+        args = SimpleNamespace(scope=path, action="track", area=list(area),
+                               case=list(cases), shard=list(shard), jobs=1,
+                               target_dir="target/test", dry_run=dry_run,
+                               timeout=10, out=out)
+        output = io.StringIO()
+        with patch.object(c, "ROOT", self.root), contextlib.redirect_stdout(output):
+            result = s.main(args, self.base, c)
+        return result, json.loads(output.getvalue()) if dry_run else output.getvalue()
+
+    def test_shards_are_sorted_disjoint_exhaustive_and_uneven(self):
+        selected = {"case:" + str(index) for index in range(7)}
+        shards = [s.shard_selection(selected, [f"{index}/3"], c) for index in range(3)]
+        self.assertEqual(shards, [sorted(selected)[index::3] for index in range(3)])
+        self.assertEqual([len(part) for part in shards], [3, 2, 2])
+        self.assertEqual(set().union(*map(set, shards)), selected)
+        self.assertEqual(sum(map(len, shards)), len(selected))
+        self.assertEqual(s.shard_selection(selected, [], c), sorted(selected))
+        self.assertEqual(s.shard_selection(selected, ["0/1"], c), sorted(selected))
+        self.assertEqual(s.shard_selection(selected, ["0/100000000000000000000"], c),
+                         [sorted(selected)[0]])
+
+    def test_invalid_shards_rejected_before_output_creation_or_execution(self):
+        invalid = ["", "0", "0/", "/1", "0/0", "-1/2", "0/-2", "2/2", "3/2",
+                   "1.0/2", " 0/2", "0/2 ", "+0/2", "0/2/3", "\u0660/2", "998/999"]
+        for shard in ([value] for value in invalid):
+            out = self.root / "must-not-exist"
+            with self.subTest(shard=shard), patch.object(c, "execute") as execute:
+                with self.assertRaises(c.InvalidEvidence):
+                    self.track(shard=shard, dry_run=False, out=out)
+                self.assertFalse(out.exists())
+                execute.assert_not_called()
+        for shard in (["0/2", "0/2"], ["0/2", "1/2"]):
+            with self.subTest(shard=shard), self.assertRaises(c.InvalidEvidence):
+                self.track(shard=shard)
+        with self.assertRaises(c.InvalidEvidence):
+            s.shard_selection([], [], c)
+
+    def test_sharding_follows_area_case_and_interaction_only_selection(self):
+        (self.root / "tests/sample.rs").write_text(
+            "#[test]\nfn accepts() {}\n#[test]\nfn rejects() {}\n#[test]\nfn combined() {}\n")
+        self.matrix()
+        combined = {"suite": "sample", "test": "combined"}
+        self.scope["interaction_matrix"]["scenarios"][0]["tests"] = [combined]
+        _, original = self.track()
+        _, identity = self.track(shard=["0/1"])
+        self.assertEqual(original, identity)
+        self.assertEqual(len(original["gates"]), 3)
+        _, interaction = self.track(shard=["0/1"], area=["interactions"],
+                                    cases=["sample::combined"])
+        self.assertEqual([row["id"] for row in interaction["gates"]], [s.case_id(combined)])
+        _, filtered = self.track(shard=["1/2"], area=["memory"],
+                                 cases=["sample::rejects", "sample::accepts"])
+        self.assertEqual([row["id"] for row in filtered["gates"]], [s.case_id(self.reject)])
+        with self.assertRaises(c.InvalidEvidence):
+            self.track(shard=["0/1"], area=["memory"], cases=["sample::combined"])
+
+    def test_shard_receipts_union_and_execute_each_case_once_without_retries(self):
+        calls = []
+        def execute(entry, directory, timeout, root):
+            calls.append(entry["id"])
+            payload = b"justrust: ok: 1 test passed in 1s\n"
+            name = entry["id"] + ".log"
+            (directory / name).write_bytes(payload)
+            return {**entry, "returncode": 0, "timed_out": False, "outcome": "passed",
+                    "tests_passed": 1, "log": name, "log_sha256": c.digest(payload)}
+        directories = [self.root / f"shard-{index}" for index in range(2)]
+        with patch.object(c, "execute", side_effect=execute), \
+                patch.object(c, "source_identity", return_value=self.identity), \
+                patch.object(s, "runner_identity", return_value=self.runner):
+            for index, directory in enumerate(directories):
+                result, _ = self.track(shard=[f"{index}/2"], dry_run=False, out=directory)
+                self.assertEqual(result, 0)
+                report = c.load_json(directory / "report.json")
+                self.assertEqual(len(report["selected"]), 1)
+                self.assertEqual(report["source_before"], self.identity)
+                self.assertEqual(report["runner_before"], self.runner)
+        self.assertEqual(sorted(calls), sorted([s.case_id(self.accept), s.case_id(self.reject)]))
+        for directory in directories:
+            self.assertEqual(len(s.evidence(self.scope, self.manifest(), directory,
+                                           self.identity, self.runner, c, self.root)), 1)
+        union = self.summary(directories)
+        self.assertEqual(union, self.summary(directories[::-1]))
+        self.assertEqual(union["gate_counts"]["passed"], 2)
+        self.assertEqual(union["gate_counts"]["untested"], 0)
+
+    def test_failed_and_timed_out_shard_cases_are_never_retried(self):
+        entries = s.shard_selection({"case:a", "case:b", "case:c", "case:d"}, ["1/2"], c)
+        for jobs in (1, 2):
+            calls = []
+            def execute(entry, directory, timeout, root):
+                calls.append(entry)
+                return {"id": entry, "outcome": "timeout" if entry == "case:d" else "failed"}
+            runner = SimpleNamespace(execute=execute, InvalidEvidence=c.InvalidEvidence)
+            results = list(s.execute_cases(entries, self.root, 10, jobs, runner, self.root))
+            self.assertEqual(sorted(calls), entries)
+            self.assertEqual([row["outcome"] for row in results], ["failed", "timeout"])
+
     def report(self, directory="run", states=None):
         states = states or {"accepts": (0, "justrust: ok: 1 test passed in 1s\n")}
         directory = self.root / directory

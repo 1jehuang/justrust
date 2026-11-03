@@ -307,6 +307,25 @@ def execute_cases(entries, directory, timeout, jobs, c, root):
             yield future.result()
 
 
+def shard_selection(selected, shards, c):
+    ordered = sorted(selected)
+    if shards:
+        if len(shards) != 1 or not re.fullmatch(r"[0-9]+/[0-9]+", shards[0]):
+            raise c.InvalidEvidence("--shard requires one INDEX/COUNT value")
+        try:
+            index, count = map(int, shards[0].split("/"))
+        except ValueError:
+            raise c.InvalidEvidence("--shard INDEX/COUNT integers are too large") from None
+        if count < 1 or not 0 <= index < count:
+            raise c.InvalidEvidence("--shard requires COUNT >= 1 and 0 <= INDEX < COUNT")
+        # Position modulo count partitions the exact sorted selection, not suites.
+        ordered = [identifier for position, identifier in enumerate(ordered)
+                   if position % count == index]
+    if not ordered:
+        raise c.InvalidEvidence("selection or shard contains no executable cases")
+    return ordered
+
+
 def main(args, base, c):
     root = c.ROOT
     scope = validate(c.load_json(args.scope), c, root)
@@ -341,9 +360,8 @@ def main(args, base, c):
         if len(requested) != len(args.case) or not requested <= selected:
             raise c.InvalidEvidence("--case must select unique mapped suite::test cases within selected areas")
         selected = requested
-    entries = c.plan(manifest, "full", sorted(selected), args.target_dir)
-    if not selected:
-        raise c.InvalidEvidence("selection contains only missing tests, no executable cases")
+    selected = shard_selection(selected, getattr(args, "shard", []), c)
+    entries = c.plan(manifest, "full", selected, args.target_dir)
     if args.dry_run:
         print(c.encoded({"scope": scope["scope"], "gates": entries}).decode(), end="")
         return 0

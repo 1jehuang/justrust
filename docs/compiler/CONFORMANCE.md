@@ -83,6 +83,9 @@ python3 tools/conformance.py coverage --json
 # Inspect before running. Exact selectors must execute one test, never zero.
 python3 tools/conformance.py track --area interactions --dry-run
 python3 tools/conformance.py track --area memory --dry-run
+# Zero-based exact-case partitions after area/case filters, sorted by selected ID.
+# Shard i/n selects sorted positions i, i+n, ...; empty shards are errors.
+python3 tools/conformance.py track --area memory --shard 0/2 --dry-run
 # All mapped scenarios, or use --area / --case suite::test for a bounded run.
 python3 tools/conformance.py track --timeout 600 \
   --out "$JCODE_SCRATCH_DIR/compatibility-current"

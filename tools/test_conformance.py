@@ -23,6 +23,13 @@ CLIENT_RETRY_LINES = (
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_shard_is_rejected_for_every_other_action_before_io(self):
+        for action in ("validate", "plan", "discover", "run", "assess", "coverage"):
+            with self.subTest(action=action), patch.object(c, "load_json") as load, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(c.main([action, "--shard", "0/2"]), 2)
+                load.assert_not_called()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="conformance-tests-")
         self.addCleanup(self.temp.cleanup)
