@@ -13,6 +13,55 @@ ALIASES = {
 CLASS_NAMES = {'N': 'normative-semantic', 'G': 'grammar', 'I': 'index',
                'X': 'cross-reference', 'E': 'edition-context'}
 
+# Frozen source attribution only. Execution must come from ordinary current
+# authenticated compatibility evidence, never from these authored expectations.
+WITNESS_SOURCE_CONTRACT = {
+    'base_commit': '8708073c0224e972301e9727f167456d1635378f',
+    'reference_commit': '86635e30bf861a038dc197d7e16fd09e7e514e7a',
+    'rule_index_sha256': '1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85',
+    'candidate_inventory_sha256': '29e61520b930ee3f15ae005e79e70223e095901fc0f286ac61c82613e2f47a0c',
+    'selected_rule_rows': 44,
+    'direct_witness_selectors': 6,
+    'files': {
+        'tests/const_source.rs': '11a3ede8565deda463e9880611b78888c96c8e4f9a9deb90d1205511084cf6a8',
+        'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
+        'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
+        'data/compiler-compatibility-scope.json': '8742d0afcf4b29c433380dedf8b006e1f2d64e9abe4f163de235fbfb1eb7d2fb',
+    },
+}
+DIRECT_WITNESSES = (
+    ('scalar_const_wrapping_shift_signed_minimum_pinned_stock_workers1_8', 'positive',
+     ('const-eval.const-expr.evaluation', 'const-eval.const-expr.builtin-arith-logic'),
+     ('legal',),
+     'Original const u8/i8 left shifts discard high bits and the signed minimum initializer contributes observable 0 -128 -128 output.',
+     'Partial scalar const-initializer attribution only. Values do not prove absence of runtime folding, all scalar domains, operators or const contexts. No full-rule credit.'),
+    ('scalar_const_short_circuit_dead_faults_pinned_stock_workers1_8', 'positive',
+     ('const-eval.const-expr.evaluation', 'const-eval.const-expr.builtin-arith-logic'),
+     ('legal', 'control'),
+     'Lazy false-and division by zero and true-or addition overflow yield false true from original const bool initializers without evaluating the dead faults.',
+     'Only lazy boolean operands, no if or match occurs in the source. Values alone cannot prove evaluation timing. Other control flow and fault families remain missing. No full-rule credit.'),
+    ('scalar_const_signed_division_remainder_pinned_stock_workers1_8', 'positive',
+     ('const-eval.const-expr.evaluation', 'const-eval.const-expr.builtin-arith-logic'),
+     ('legal',),
+     'Original i32 const quotient and remainder of -17 by 5 feed a dependent const recomposition with observable -3 -2 -17 output.',
+     'One signed division/remainder input, not all widths, overflow, zero divisors or const contexts. Output alone cannot exclude runtime folding. No full-rule credit.'),
+    ('scalar_const_unused_add_overflow_semantically_rejected_workers1_8', 'semantic-invalid',
+     ('const-eval.const-expr.evaluation', 'const-eval.const-expr.builtin-arith-logic', 'const-eval.const-expr.error'),
+     ('legal', 'error'),
+     'An unused original u8 const initializer evaluates 255u8+1; InvalidAfterParse requires pinned stock E0080 and native semantic rejection rather than parser refusal.',
+     'Only evaluated u8 addition overflow in an unused const item. Bounds faults, other operators and resource/infrastructure outcomes remain separate. No historical pass or full-rule credit.'),
+    ('scalar_const_unused_signed_min_division_semantically_rejected_workers1_8', 'semantic-invalid',
+     ('const-eval.const-expr.evaluation', 'const-eval.const-expr.builtin-arith-logic', 'const-eval.const-expr.error'),
+     ('legal', 'error'),
+     'An unused original i8 const divides -128 by -1; InvalidAfterParse requires pinned stock E0080 and native semantic rejection for the evaluated overflow.',
+     'Only signed-minimum division overflow for i8, not remainder, other widths, indexing or all const contexts. No historical pass or full-rule credit.'),
+    ('scalar_const_unused_wide_shift_semantically_rejected_workers1_8', 'semantic-invalid',
+     ('const-eval.const-expr.evaluation', 'const-eval.const-expr.builtin-arith-logic', 'const-eval.const-expr.error'),
+     ('legal', 'error'),
+     'An unused original u8 const shifts 1u8 by 8; InvalidAfterParse requires pinned stock E0080 and native semantic rejection for the evaluated invalid shift.',
+     'Only the width-equal u8 left-shift boundary, not negative shifts, other widths, indexing or general CTFE. Current authenticated evidence is still required. No full-rule credit.'),
+)
+
 ROWS = r"""
 const-eval|I|Chapter heading introduces the constant evaluation family without a standalone executable contract.|legal|Attribute concrete child rules rather than granting credit for a heading.|No independent invalid program follows from this heading.|Keep runtime and compile-time contexts separate in child-rule coverage.
 const-eval.intro|N X|Defines compile-time expression evaluation and its restricted domain; the definition is not a requirement to evaluate every expression at compile time.|legal|Classify supported constant expressions in genuine const contexts.|Require invalid const operations to fail rather than treating all Rust expressions as constant.|Separate const evaluation from optional runtime folding and source-level legality.

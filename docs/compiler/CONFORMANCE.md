@@ -282,10 +282,17 @@ For the pinned constant-evaluation chapter, add `--profile const-eval` to the
 blocks in `src/const_eval.md`, including the distinction between promotion and
 temporary lifetime extension, evaluated versus skipped faults, target-based
 interpretation, and the specification's unresolved const-function type list.
-The profile retains all 2,921 other rule identities, missing exact-test links,
-and zero review or execution credit. It cannot be used with the token-specific
-witness-link or evidence-assessment actions. Default token artifacts remain
-unchanged, and a candidate from one profile cannot validate as the other.
+The profile retains all 2,921 other rule identities, missing exact-test needs,
+and zero review or execution credit. Its separate `build-witness-links`,
+`validate-witness-links`, and `assess-witness-links` actions use the same explicit
+`--profile const-eval` and a separate external scratch artifact. Six original
+scalar-const selectors have 15 partial links across three rule identities.
+Whole fixture/helper hashes and the pinned single-case literal/body hashes bind
+the sources. These are deliberately narrow: observable positive values do not
+prove evaluation timing, and three unused overflow controls do not establish
+all const-error behavior. All missing needs remain open, even with passing
+current receipts. Default token artifacts remain unchanged, and an artifact
+from one profile cannot validate as the other.
 Both profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 

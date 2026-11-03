@@ -336,8 +336,7 @@ class ConstProfileTests(unittest.TestCase):
 
     def test_const_unsupported_cli_combinations_fail_before_filesystem_access(self):
         output = self.root / 'must-not-exist.json'
-        cases = [(action, []) for action in ('build-witness-links', 'validate-witness-links', 'assess-witness-links')]
-        cases += [(action, [flag, str(self.root)]) for action in ('generate', 'validate')
+        cases = [(action, [flag, str(self.root)]) for action in ('generate', 'validate')
                   for flag in ('--repo-root', '--evidence')]
         for action, extra in cases:
             with self.subTest(action=action, extra=extra), \
@@ -737,7 +736,198 @@ class WitnessObservationTests(WitnessLinkTests):
                 self.assess([directory])
 
 
+class ConstWitnessTests(unittest.TestCase):
+    """Real authored selectors, synthetic pins/receipts, no Rust execution."""
+
+    def setUp(self):
+        import const_reconciliation_proposals as proposals
+        import conformance as c
+        ReconciliationTests.setUp(self)
+        self.repo = self.root / 'repo'
+        (self.repo / 'tests/support').mkdir(parents=True)
+        (self.repo / 'data').mkdir()
+        self.fixture = self.repo / 'tests/const_source.rs'
+        self.fixture.write_bytes((BASE.parent / 'tests/const_source.rs').read_bytes())
+        for name in ('closure_oracle', 'stock_rustc'):
+            (self.repo / ('tests/support/' + name + '.rs')).write_text('// synthetic helper\n')
+        cases = [{'suite': 'const_source', 'test': row[0]} for row in proposals.DIRECT_WITNESSES]
+        self.scope_path = self.repo / 'data/compiler-compatibility-scope.json'
+        self.scope_path.write_text(json.dumps({
+            'schema_version': 1, 'scope': {**SCOPE, 'semantic_inventory': 'incomplete'},
+            'areas': [{'id': 'synthetic', 'title': 'Synthetic', 'requirements': [{
+                'id': 'synthetic-requirement', 'title': 'Synthetic',
+                'gates': [{'layer': layer, 'tests': cases} for layer in
+                          ('feature', 'rejection', 'interaction', 'end_to_end')],
+            }]}],
+        }))
+        candidate = json.loads(self.candidate_path.read_bytes())
+        obligations = candidate['sections'][0]['obligations']
+        obligations.extend({'id': value} for value in proposals.ALIASES.values())
+        obligations.extend({'id': 'synthetic-' + str(i)} for i in range(205 - len(obligations)))
+        self.candidate_path.write_text(json.dumps(candidate))
+        text = ''.join('r[' + line.split('|')[0] + ']\nsynthetic block\n'
+                       for line in proposals.ROWS.strip().splitlines())
+        source = self.root / 'src/const_eval.md'
+        source.write_text(text)
+        index = json.loads(self.index_path.read_bytes())
+        index['provenance']['candidate_inventory_sha256'] = digest(self.candidate_path.read_bytes())
+        index['pages'].append({'path': 'src/const_eval.md', 'sha256': digest(source.read_bytes()),
+                               'url': 'synthetic-const-url', 'rules': parse_markdown(text)[0]})
+        index['pages'][1]['rules'] = [{'label': 'other.' + str(i), 'line': i + 1} for i in range(2805)]
+        index['counts']['unique_rule_labels_total'] = 2965
+        self.index_path.write_text(json.dumps(index))
+        self.pin = copy.deepcopy(proposals.WITNESS_SOURCE_CONTRACT)
+        self.pin.update(reference_commit=index['provenance']['reference_commit'],
+                        rule_index_sha256=digest(self.index_path.read_bytes()),
+                        candidate_inventory_sha256=digest(self.candidate_path.read_bytes()))
+        for path in self.pin['files']:
+            self.pin['files'][path] = digest((self.repo / path).read_bytes())
+        patch = mock.patch.object(proposals, 'WITNESS_SOURCE_CONTRACT', self.pin)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.data = self.build_links()
+        (self.repo / c.MANIFEST).write_text(json.dumps({
+            'schema_version': 1,
+            'contract': {**SCOPE, 'semantic_inventory': 'incomplete',
+                         'oracle': {'verifier': 'tests/support/stock_rustc.rs',
+                                    'release': 'synthetic', 'commit': 'synthetic', 'llvm': 'synthetic'}},
+            'gates': [{'id': 'format', 'kind': 'fmt', 'profiles': ['full']}],
+            'requirements': [{'id': 'partial', 'state': 'partial', 'gates': ['format'],
+                              'remaining': ['all semantic review']}], 'known_gaps': [],
+        }))
+
+    def build_links(self):
+        return reconciliation.build_witness_links(self.index_path, self.candidate_path,
+                                                  self.root, self.repo, profile='const-eval')
+
+    def verify(self, data):
+        return reconciliation.validate_witness_links(data, self.index_path, self.candidate_path,
+                                                     self.root, self.repo, profile='const-eval')
+
+    def assess(self, reports=(), data=None):
+        return reconciliation.assess_witness_links(
+            self.data if data is None else data, self.index_path, self.candidate_path,
+            self.root, self.repo, reports, profile='const-eval')
+
+    def command(self, action, artifact):
+        return [action, '--profile', 'const-eval', '--rule-index', str(self.index_path),
+                '--inventory', str(self.candidate_path), '--source-root', str(self.root),
+                '--repo-root', str(self.repo), '--artifact', str(artifact)]
+
+    test_strict_adversarial_artifact_mutations = WitnessLinkTests.test_strict_adversarial_artifact_mutations
+    test_actual_source_file_changes_fail_even_for_build = WitnessLinkTests.test_actual_source_file_changes_fail_even_for_build
+    test_no_evidence_is_untested_and_zero_credit = WitnessObservationTests.test_no_evidence_is_untested_and_zero_credit
+    test_assess_cli_is_read_only_and_rejects_noncanonical_artifact = WitnessObservationTests.test_assess_cli_is_read_only_and_rejects_noncanonical_artifact
+    test_dispatch_current_identity_dedup_exact_filter_and_conflicts = WitnessObservationTests.test_dispatch_current_identity_dedup_exact_filter_and_conflicts
+    test_all_nonpass_states_preserved_at_evidence_boundary = WitnessObservationTests.test_all_nonpass_states_preserved_at_evidence_boundary
+    test_invalid_artifact_rejected_before_evidence_or_identity = WitnessObservationTests.test_invalid_artifact_rejected_before_evidence_or_identity
+    test_real_evidence_parser_rejects_forged_and_unfinalized_reports = WitnessObservationTests.test_real_evidence_parser_rejects_forged_and_unfinalized_reports
+    test_real_receipt_current_stale_and_tampered_log = WitnessObservationTests.test_real_receipt_current_stale_and_tampered_log
+
+    def test_exact_partial_links_and_extracted_sources(self):
+        self.assertEqual(self.data['reconciliation'], build(self.index_path, self.candidate_path,
+                                                          self.root, profile='const-eval'))
+        summary = self.verify(self.data)
+        self.assertEqual((summary['direct_witness_selectors'], summary['direct_rule_links'],
+                          summary['distinct_direct_rule_identities']), (6, 15, 3))
+        for link in self.data['links']:
+            labels = {row['rule'] for row in link['rule_links']}
+            self.assertNotIn('const-eval.const-expr.if-match', labels)
+            self.assertEqual('const-eval.const-expr.error' in labels,
+                             link['expectation_class'] == 'semantic-invalid')
+            self.assertEqual(link['suite'], 'const_source')
+            self.assertEqual(len(link['source_sha256']), 64)
+        with self.assertRaises(ValueError):
+            reconciliation.validate_witness_links(self.data, self.index_path, self.candidate_path,
+                                                  self.root, self.repo)
+
+    def test_strict_source_extraction_guards(self):
+        raw = self.fixture.read_bytes()
+        for link in self.data['links']:
+            selector, expectation = link['test'], link['expectation_class']
+            wrong_expect = (raw.replace(b'Expect::Run(', b'Expect::InvalidAfterParse(')
+                            if expectation == 'positive' else
+                            raw.replace(b'Expect::InvalidAfterParse("E0080")', b'Expect::Run("E0080")'))
+            for changed in (raw.replace(b'mod scalar_const_differential;', b'mod impostor;'),
+                            wrong_expect, raw.replace(selector.encode(), b'foreign_selector'),
+                            raw.replace(b'source: "const ', b'source: include_str!("const ')):
+                with self.subTest(selector=selector), self.assertRaises(ValueError):
+                    reconciliation.scalar_source_binding(changed, selector, expectation)
+
+    def test_scope_exact_membership_even_after_rebinding_scope_hash(self):
+        scope = json.loads(self.scope_path.read_bytes())
+        for gate in scope['areas'][0]['requirements'][0]['gates']:
+            gate['tests'] = gate['tests'][1:]
+        self.scope_path.write_text(json.dumps(scope))
+        self.pin['files']['data/compiler-compatibility-scope.json'] = digest(self.scope_path.read_bytes())
+        with self.assertRaisesRegex(ValueError, 'exact selector absent'):
+            self.build_links()
+
+    def test_const_forged_extracted_hashes_rejected(self):
+        for field in ('source_sha256', 'selector_body_sha256'):
+            data = copy.deepcopy(self.data)
+            data['links'][0][field] = '0' * 64
+            with self.assertRaisesRegex(ValueError, 'exact authored'):
+                self.verify(data)
+
+    def test_const_stale_index_inventory_page_rejected(self):
+        for path in (self.index_path, self.candidate_path, self.root / 'src/const_eval.md'):
+            before = path.read_bytes()
+            path.write_bytes(before + b'\n')
+            try:
+                with self.assertRaises(ValueError):
+                    self.build_links()
+            finally:
+                path.write_bytes(before)
+
+    def test_const_duplicate_selector_even_after_rebinding_hash(self):
+        selector = self.data['links'][0]['test']
+        self.fixture.write_bytes(self.fixture.read_bytes() + ('\n#[test]\nfn ' + selector + '() {}\n').encode())
+        self.pin['files']['tests/const_source.rs'] = digest(self.fixture.read_bytes())
+        with self.assertRaisesRegex(ValueError, 'duplicate exact top-level selector'):
+            self.build_links()
+
+    def test_const_missing_evidence_never_becomes_pass(self):
+        import conformance as c
+        import compatibility_scope as coverage
+        with mock.patch.object(c, 'source_identity', return_value={}), \
+             mock.patch.object(coverage, 'runner_identity', return_value={}):
+            with self.assertRaises((c.InvalidEvidence, FileNotFoundError)):
+                self.assess([self.root / 'missing-receipt'])
+
+    def test_const_cli_build_generate_alias_and_validate(self):
+        with tempfile.TemporaryDirectory() as external:
+            first, second = Path(external) / 'first.json', Path(external) / 'second.json'
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(self.command('build-witness-links', first))
+                main(self.command('generate-witness-links', second))
+                main(self.command('validate-witness-links', first))
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            with self.assertRaises(FileExistsError):
+                main(self.command('generate-witness-links', first))
+
+
 class FrozenRootWitnessTests(unittest.TestCase):
+    def test_actual_frozen_const_witnesses_if_reference_source_is_supplied(self):
+        source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
+        if not source:
+            self.skipTest('set JUSTRUST_WITNESS_REFERENCE_ROOT for actual pinned-source acceptance')
+        import const_reconciliation_proposals as proposals
+        repo = Path(os.environ.get('JUSTRUST_WITNESS_REPO_ROOT', BASE.parent))
+        index = repo / 'data/compiler-language-reference-rules.json'
+        inventory = repo / 'data/compiler-language-inventory.json'
+        data = reconciliation.build_witness_links(index, inventory, Path(source), repo, profile='const-eval')
+        self.assertEqual(data['source_contract'], proposals.WITNESS_SOURCE_CONTRACT)
+        self.assertEqual(reconciliation.validate_witness_links(data, index, inventory, Path(source),
+                                                              repo, profile='const-eval'), data['summary'])
+        self.assertEqual(data['reconciliation'], build(index, inventory, Path(source), profile='const-eval'))
+        self.assertEqual((data['summary']['direct_witness_selectors'], data['summary']['direct_rule_links'],
+                          data['summary']['distinct_direct_rule_identities']), (6, 15, 3))
+        observations = reconciliation.assess_witness_links(data, index, inventory, Path(source),
+                                                           repo, profile='const-eval')
+        self.assertEqual(observations['summary']['status_counts']['untested'], 6)
+        self.assertEqual(observations['summary']['completed_rules'], 0)
+
     def test_actual_frozen_root_if_reference_source_is_supplied(self):
         source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
         if not source:
@@ -746,6 +936,13 @@ class FrozenRootWitnessTests(unittest.TestCase):
         index = repo / 'data/compiler-language-reference-rules.json'
         inventory = repo / 'data/compiler-language-inventory.json'
         data = reconciliation.build_witness_links(index, inventory, Path(source), repo)
+        self.assertEqual(digest(reconciliation.witness_bytes(data)),
+                         '5a40e33c793183765f3c9bebb5264fbba6307f1125604c02dd6a6e2f7a63f255')
+        self.assertEqual(data, reconciliation.build_witness_links(index, inventory, Path(source),
+                                                                  repo, profile='tokens'))
+        observations = reconciliation.assess_witness_links(data, index, inventory, Path(source), repo)
+        self.assertEqual(digest(reconciliation.witness_bytes(observations)),
+                         '4e41b459f23212abe548389c1f55de89a676d5c56117397f4092144cf1e6f0c5')
         self.assertEqual(data['source_contract'], WITNESS_SOURCE_CONTRACT)
         self.assertEqual(reconciliation.validate_witness_links(data, index, inventory, Path(source), repo), data['summary'])
         self.assertEqual(data['reconciliation'], build(index, inventory, Path(source)))
