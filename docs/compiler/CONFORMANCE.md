@@ -88,6 +88,34 @@ Untriaged candidates may be utilities or unsupported boundaries, not missing
 language features. Neither an empty backlog nor its mapped fraction establishes
 full Rust compatibility.
 
+For a bounded check of actual runnable names, use the existing executor in
+inventory-only listing mode. Explicit suites are required; other coverage/case
+filters are rejected. The target is fixed to `x86_64-unknown-linux-gnu`.
+
+```sh
+python3 tools/conformance.py catalog --suite conformance_generated \
+  --suite source_configuration --dry-run --out "$JCODE_SCRATCH_DIR/catalog-plan"
+python3 tools/conformance.py catalog --suite conformance_generated \
+  --suite source_configuration --timeout 300 \
+  --out "$JCODE_SCRATCH_DIR/test-catalog-current"
+python3 tools/conformance.py assess-catalog \
+  --out "$JCODE_SCRATCH_DIR/test-catalog-current"
+```
+
+`catalog.json` retains source/client/environment identities, exact `--list`
+commands and original hashed logs. Assessment reparses one complete libtest
+listing per suite, including its count footer. Duplicate or truncated names,
+test-execution output and replay diagnostics are not accepted as listings.
+Current names are compared with lexical candidates and mapped selectors;
+`listed_only`, `lexical_only` and `mapped_not_listed` expose differences requiring
+review. Unfinalized or altered receipts are rejected, and stale receipts cannot
+establish current names. Listing exits successfully only when every selected
+suite has a current complete listing and every selected mapped test appears.
+The raw executor deliberately reports these zero-execution invocations as
+`unverified` conformance, while the catalog can report inventory status `listed`.
+Its executed compatibility count is always zero. Catalog receipts are not
+`track` evidence and must not be passed to `coverage --evidence`.
+
 ```sh
 # Inventory and denominator, with missing and unexecuted tests visible.
 python3 tools/conformance.py coverage

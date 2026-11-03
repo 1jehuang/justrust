@@ -355,5 +355,289 @@ class EvidenceTests(unittest.TestCase):
                 self.assertNotEqual(added, c.source_identity(self.root), filename)
 
 
+class CatalogTests(unittest.TestCase):
+    """Libtest enumeration authenticates names, never execution credit."""
+
+    def setUp(self):
+        import compatibility_catalog
+        self.catalog = compatibility_catalog
+        temp = tempfile.TemporaryDirectory(prefix="catalog-tests-")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        (self.root / "tests").mkdir()
+        (self.root / "tests/a.rs").write_text(
+            "#[test]\nfn lexical() {}\n#[test]\nfn absent() {}\n")
+        (self.root / "tests/b.rs").write_text("")
+        self.identity = {"revision": "synthetic", "inputs_sha256": "source"}
+        self.runner = {"executable": "/synthetic/justrust", "sha256": "client"}
+        self.scope = {"areas": [{"requirements": [{"gates": [{"tests": [
+            {"suite": "a", "test": "lexical"},
+            {"suite": "a", "test": "absent"}]}]}]}]}
+        self.text = "lexical: test\nmacro_generated::nested::case: test\n\n2 tests, 0 benchmarks\n"
+
+    def receipt(self, payload=None, code=0, timeout=False):
+        payload = self.text.encode() if payload is None else payload
+        invocation = self.catalog.entry("a", "target/catalog")
+        name = invocation["id"] + ".log"
+        (self.root / name).write_bytes(payload)
+        text = payload.decode(errors="replace")
+        row = {**invocation, "returncode": code, "timed_out": timeout,
+               "seconds": 0.125, "tests_passed": c.test_count(text),
+               "outcome": c.outcome(code, text, "tests", timeout),
+               "log": name, "log_sha256": c.digest(payload)}
+        return {"schema_version": 1, "purpose": self.catalog.PURPOSE,
+                "selected_suites": ["a"], "target_dir": "target/catalog",
+                "integration_suites": ["a", "b"],
+                "source_before": self.identity, "source_after": self.identity,
+                "runner_before": self.runner, "runner_after": self.runner,
+                "results": [row]}
+
+    def assess(self, report):
+        return self.catalog.assess(report, self.root, c, self.root,
+                                   self.scope, self.identity, self.runner)
+
+    def assert_inventory_only(self, result):
+        self.assertEqual(result["executed_compatibility_case_count"], 0)
+        self.assertIs(result["full_rust_support_established"], False)
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertNotIn("selected_gates_passed", result)
+        self.assertNotIn("full_gate_set_passed", result)
+        self.assertNotIn("passed", [row["status"] for row in result["suites"]])
+
+    def test_default_crlf_macro_nested_and_empty_listings(self):
+        for text in (self.text, self.text.replace("\n", "\r\n")):
+            with self.subTest(text=text):
+                self.assertEqual(self.catalog.listing(text, c), {
+                    "tests": ["lexical", "macro_generated::nested::case"], "benchmarks": []})
+        self.assertEqual(self.catalog.listing("0 tests, 0 benchmarks\n", c),
+                         {"tests": [], "benchmarks": []})
+        self.assertEqual(self.catalog.listing("bench: benchmark\n0 tests, 1 benchmark\n", c),
+                         {"tests": [], "benchmarks": ["bench"]})
+
+    def test_missing_duplicate_mismatched_reordered_and_execution_listings_rejected(self):
+        invalid = ["lexical: test\n", self.text + "0 tests, 0 benchmarks\n",
+                   self.text.replace("2 tests", "3 tests"),
+                   "lexical: test\nlexical: test\n2 tests, 0 benchmarks\n",
+                   "2 tests, 0 benchmarks\nlexical: test\nmacro_generated::nested::case: test\n",
+                   "running 0 tests\n0 tests, 0 benchmarks\n",
+                   "justrust: ok: 0 tests passed\n0 tests, 0 benchmarks\n",
+                   "0 tests matched\n" + self.text,
+                   self.text + "test result: ok. 2 passed; 0 failed;\n"]
+        invalid += [marker + "\n" + self.text for marker in CLIENT_RETRY_LINES]
+        for text in invalid:
+            with self.subTest(text=text), self.assertRaises(c.InvalidEvidence):
+                self.catalog.listing(text, c)
+
+    def test_authentic_unverified_log_lists_without_execution_credit(self):
+        report = self.receipt()
+        row = report["results"][0]
+        self.assertEqual(row["outcome"], "unverified")
+        self.assertEqual(row["tests_passed"], 0)
+        result = self.assess(report)
+        self.assert_inventory_only(result)
+        self.assertEqual(result["purpose"], "libtest-selector-catalog-v1")
+        self.assertTrue(result["all_selected_suites_listed"])
+        self.assertFalse(result["all_selected_mapped_tests_listed"])
+        self.assertEqual(result["listed_test_count"], 2)
+        observed = result["suites"][0]
+        self.assertEqual(observed["lexical_only"], ["absent"])
+        self.assertEqual(observed["listed_only"], ["macro_generated::nested::case"])
+        self.assertEqual(observed["mapped_not_listed"], ["absent"])
+
+    def test_zero_suite_is_valid_inventory_not_executed(self):
+        result = self.assess(self.receipt(b"0 tests, 0 benchmarks\n"))
+        self.assertTrue(result["all_selected_suites_listed"])
+        self.assertEqual(result["listed_test_count"], 0)
+        self.assert_inventory_only(result)
+
+    def test_exact_receipt_schema_and_finalization(self):
+        for key in self.receipt():
+            report = self.receipt()
+            del report[key]
+            with self.subTest(missing=key), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+        for key, value in (("extra", True), ("schema_version", True),
+                           ("schema_version", 2), ("purpose", "execution")):
+            report = self.receipt()
+            report[key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+        for key in ("source_before", "source_after", "runner_before", "runner_after"):
+            report = self.receipt()
+            report[key] = None
+            with self.subTest(key=key), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+
+    def test_changed_source_client_and_suite_inventory_are_stale(self):
+        for key in ("source_before", "source_after", "runner_before", "runner_after",
+                    "integration_suites"):
+            report = self.receipt()
+            report[key] = ["different"] if key == "integration_suites" else {"changed": True}
+            result = self.assess(report)
+            self.assertEqual(result["suites"][0]["status"], "stale")
+            self.assertEqual(result["listed_test_count"], 0)
+            self.assertFalse(result["all_selected_suites_listed"])
+            self.assert_inventory_only(result)
+
+    def test_failures_timeout_non_utf8_and_execution_are_not_listed(self):
+        variants = [(self.text.encode(), 101, False, "failed"),
+                    (self.text.encode(), None, True, "timeout"),
+                    (self.text.encode(), None, False, "infrastructure"),
+                    (b"\xff\n" + self.text.encode(), 0, False, "unverified"),
+                    (b"test result: ok. 2 passed;\n", 0, False, "unverified"),
+                    (b"truncated", 0, False, "unverified")]
+        for payload, code, timeout, status in variants:
+            with self.subTest(status=status, payload=payload):
+                result = self.assess(self.receipt(payload, code, timeout))
+                self.assertEqual(result["suites"][0]["status"], status)
+                self.assertEqual(result["listed_test_count"], 0)
+                self.assert_inventory_only(result)
+
+    def test_malformed_boolean_nonfinite_and_negative_process_values(self):
+        for key, value in (("returncode", True), ("timed_out", 0),
+                           ("tests_passed", False), ("seconds", True),
+                           ("seconds", float("nan")), ("seconds", float("inf")),
+                           ("seconds", -1)):
+            report = self.receipt()
+            report["results"][0][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+
+    def test_tamper_unsafe_missing_symlink_and_changed_command_rejected(self):
+        for key, value in (("log", "../catalog-a.log"), ("log", "/catalog-a.log"),
+                           ("log_sha256", "forged"), ("outcome", "passed"),
+                           ("tests_passed", 2), ("kind", "case"),
+                           ("command", ["justrust", "test", "--list"])):
+            report = self.receipt()
+            report["results"][0][key] = value
+            with self.subTest(key=key), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+        report = self.receipt()
+        path = self.root / "catalog-a.log"
+        path.write_text("tampered")
+        with self.assertRaises(c.InvalidEvidence):
+            self.assess(report)
+        report = self.receipt()
+        path.unlink()
+        with self.assertRaises(c.InvalidEvidence):
+            self.assess(report)
+        target = self.root / "original.log"
+        target.write_text(self.text)
+        path.symlink_to(target)
+        with self.assertRaises(c.InvalidEvidence):
+            self.assess(report)
+
+    def test_selection_and_invocation_are_explicit_unique_and_inventory_only(self):
+        for suites in ([], ["a", "a"], ["missing"], "a", [True]):
+            with self.subTest(suites=suites), self.assertRaises(c.InvalidEvidence):
+                self.catalog.selection(suites, c, self.root)
+        self.assertEqual(self.catalog.selection(["b", "a"], c, self.root), ["a", "b"])
+        self.assertEqual(self.catalog.entry("a", "target/catalog")["command"], [
+            "justrust", "test", "--no-fail-fast", "--target-dir", "target/catalog",
+            "--target", "x86_64-unknown-linux-gnu", "--test", "a", "--", "--list", "--include-ignored"])
+
+    def test_catalog_invalid_cli_combinations_before_io(self):
+        invalid = [["catalog"], ["catalog", "--out", "absent"],
+                   ["assess-catalog", "--out", "absent", "--dry-run"]]
+        base = ["catalog", "--out", "absent", "--suite", "a"]
+        invalid += [base + flags for flags in (["--suite", "a"], ["--timeout", "0"],
+            ["--area", "x"], ["--case", "a::x"], ["--gate", "x"],
+            ["--evidence", "x"], ["--jobs", "2"], ["--profile", "full"],
+            ["--shard", "0/2"], ["--require-complete"])]
+        invalid += [[action, "--suite", "a"] for action in (
+            "validate", "plan", "discover", "run", "assess", "track", "coverage", "assess-catalog")]
+        for argv in invalid:
+            with self.subTest(argv=argv), patch.object(c, "load_json") as load, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(c.main(argv), 2)
+                load.assert_not_called()
+
+    def test_valid_catalog_dispatch_preserves_return_codes(self):
+        for action in ("catalog", "assess-catalog"):
+            for code in (0, 1):
+                argv = [action, "--out", "receipt"]
+                if action == "catalog":
+                    argv += ["--suite", "a"]
+                with self.subTest(action=action, code=code), \
+                        patch.object(c, "load_json", return_value={}), \
+                        patch.object(c, "validate", return_value={}), \
+                        patch.object(self.catalog, "main", return_value=code) as dispatch:
+                    self.assertEqual(c.main(argv), code)
+                    self.assertIs(dispatch.call_args.args[2], c)
+
+    def test_process_row_schema_and_duplicate_results_rejected(self):
+        for key in self.receipt()["results"][0]:
+            report = self.receipt()
+            del report["results"][0][key]
+            with self.subTest(missing=key), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+        report = self.receipt()
+        report["results"][0]["support_state"] = "passed"
+        with self.assertRaises(c.InvalidEvidence):
+            self.assess(report)
+        for rows in ([], [None], [self.receipt()["results"][0]] * 2):
+            report = self.receipt()
+            report["results"] = rows
+            with self.subTest(rows=rows), self.assertRaises(c.InvalidEvidence):
+                self.assess(report)
+
+    def test_all_mapped_names_listed_still_yield_zero_execution_credit(self):
+        payload = b"absent: test\nlexical: test\n2 tests, 0 benchmarks\n"
+        result = self.assess(self.receipt(payload))
+        self.assertTrue(result["all_selected_mapped_tests_listed"])
+        self.assert_inventory_only(result)
+
+    def test_main_collects_finalized_before_after_source_and_runner(self):
+        import argparse
+        import compatibility_scope
+        args = argparse.Namespace(action="catalog", out=self.root / "receipt",
+            scope=self.root / "scope.json", suite=["a"], timeout=5,
+            target_dir="target/catalog", dry_run=False)
+        row = self.receipt()["results"][0]
+        def execute(invocation, directory, timeout, root):
+            self.assertEqual(invocation, self.catalog.entry("a", "target/catalog"))
+            self.assertEqual(root, self.root)
+            (directory / row["log"]).write_text(self.text)
+            return row
+        with patch.object(c, "ROOT", self.root), patch.object(c, "load_json", return_value=self.scope), \
+                patch.object(compatibility_scope, "validate", return_value=self.scope), \
+                patch.object(self.catalog, "runner_identity", return_value=self.runner) as runner, \
+                patch.object(c, "source_identity", return_value=self.identity) as identity, \
+                patch.object(c, "execute", side_effect=execute) as process, \
+                contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(self.catalog.main(args, {}, c), 1)
+        self.assertEqual(runner.call_count, 3)
+        self.assertEqual(identity.call_count, 3)
+        process.assert_called_once()
+        report = c.load_json(args.out / "catalog.json")
+        self.assertEqual(report["source_before"], self.identity)
+        self.assertEqual(report["source_after"], self.identity)
+        self.assertEqual(report["runner_before"], self.runner)
+        self.assertEqual(report["runner_after"], self.runner)
+        self.assertEqual(report["results"][0]["outcome"], "unverified")
+
+    def test_dry_run_needs_no_client_source_identity_execution_or_output_directory(self):
+        import argparse
+        import json
+        import compatibility_scope
+        args = argparse.Namespace(action="catalog", out=self.root / "not-created",
+            scope=self.root / "scope.json", suite=["a"], timeout=5,
+            target_dir="target/catalog", dry_run=True)
+        output = io.StringIO()
+        with patch.object(c, "ROOT", self.root), patch.object(c, "load_json", return_value=self.scope), \
+                patch.object(compatibility_scope, "validate", return_value=self.scope), \
+                patch.object(self.catalog, "runner_identity") as runner, \
+                patch.object(c, "source_identity") as identity, patch.object(c, "execute") as execute, \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(self.catalog.main(args, {}, c), 0)
+            runner.assert_not_called()
+            identity.assert_not_called()
+            execute.assert_not_called()
+        self.assertFalse(args.out.exists())
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["executed_compatibility_case_count"], 0)
+        self.assertEqual(result["invocations"], [self.catalog.entry("a", "target/catalog")])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -349,7 +349,8 @@ def assess(data: dict, report: dict, directory: Path, identity: dict, root: Path
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["validate", "plan", "discover", "run", "assess", "coverage", "track"])
+    parser.add_argument("action", choices=["validate", "plan", "discover", "run", "assess", "coverage", "track",
+                                           "catalog", "assess-catalog"])
     parser.add_argument("--manifest", type=Path, default=ROOT / MANIFEST)
     parser.add_argument("--profile", choices=["smoke", "full"], default="smoke")
     parser.add_argument("--gate", action="append", default=[])
@@ -359,6 +360,7 @@ def main(argv=None) -> int:
     parser.add_argument("--scope", type=Path, default=ROOT / "data/compiler-compatibility-scope.json")
     parser.add_argument("--area", action="append", default=[], help="track only these compatibility areas")
     parser.add_argument("--case", action="append", default=[], help="track exact mapped suite::test")
+    parser.add_argument("--suite", action="append", default=[], help="catalog only: explicitly selected integration suite")
     parser.add_argument("--evidence", type=Path, action="append", default=[], help="coverage: retained track directory")
     parser.add_argument("--require-complete", action="store_true",
                         help="coverage only: exit zero only when every mapped exact case has current passing evidence")
@@ -369,11 +371,26 @@ def main(argv=None) -> int:
                         help="track only: zero-based partition of sorted area/case-selected IDs")
     args = parser.parse_args(argv)
     try:
+        catalog = args.action in {"catalog", "assess-catalog"}
+        if args.suite and args.action != "catalog":
+            raise InvalidEvidence("--suite is only valid with catalog")
+        if catalog:
+            if (args.area or args.case or args.gate or args.evidence or args.jobs != 1
+                    or args.profile != "smoke"):
+                raise InvalidEvidence("catalog does not accept execution coverage filters or evidence")
+            if args.out is None or (args.action == "assess-catalog" and args.dry_run):
+                raise InvalidEvidence("catalog actions require --out; assess-catalog cannot --dry-run")
+            if args.action == "catalog" and (not args.suite or len(set(args.suite)) != len(args.suite)
+                                              or args.timeout <= 0):
+                raise InvalidEvidence("catalog requires unique --suite selections and positive timeout")
         if args.shard and args.action != "track":
             raise InvalidEvidence("--shard is only valid with track")
         if args.require_complete and (args.action != "coverage" or not args.evidence):
             raise InvalidEvidence("--require-complete requires coverage with --evidence")
         data = validate(load_json(args.manifest))
+        if catalog:
+            import compatibility_catalog
+            return compatibility_catalog.main(args, data, sys.modules[__name__])
         if args.action in {"coverage", "track"}:
             import compatibility_scope
             return compatibility_scope.main(args, data, sys.modules[__name__])
