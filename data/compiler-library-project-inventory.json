@@ -1,0 +1,954 @@
+{
+  "limitations": [
+    "Candidate obligation inventory only. No exhaustive API coverage, completeness certification, compiler pass state or measured compatibility claim is made.",
+    "Public library API enumeration is still required. Sections below describe representative behavioral families, not an exhaustive list of public items, associated methods, implementations, reexports or target-conditioned APIs.",
+    "Official rolling docs were verified by web on 2026-11-03. core/alloc/std reported 1.99.1 (58cf8f9c3 2026-10-13), whereas data/compiler-conformance.json pins 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. The 1.98.1 std documentation URL could not be fetched. Rolling documentation is discovery evidence only, not proof of pinned API availability.",
+    "Cargo, Reference, rustc and rustdoc rolling documentation has not been reconciled to the pinned compiler release. Newer options, library items and defaults must be checked against pinned sources before becoming release-specific requirements.",
+    "Existing requirement links reference the current eighty-ID scope manifest and indicate relevant obligations only, not satisfied cells. Empty gates and unsupported capabilities remain open.",
+    "Filesystem, privileges, clocks, scheduling, CPU features, native tools, network and dynamic loader conditions require recorded environment fixtures. Environment failures must not be converted into language support or success.",
+    "Undefined behavior is not a differential runtime oracle. Unspecified outputs such as randomized hash iteration, scheduling and unconstrained allocator growth require contract-based comparisons.",
+    "API generation implementation is a reproducible extraction candidate requiring externally supplied authenticated pinned rustdoc JSON. Generating or obtaining that JSON was not performed and stable rustdoc JSON cannot be assumed available.",
+    "Category completeness requires independent review including stable proc_macro APIs, compiler/runtime intrinsics and target-conditioned platform extensions. Reconciliation does not remove any missing obligation."
+  ],
+  "review_status": "unreviewed",
+  "schema_version": 1,
+  "scope": {
+    "edition": "2024",
+    "target": "x86_64-unknown-linux-gnu"
+  },
+  "sections": [
+    {
+      "id": "inventory-surface",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "library-source-core",
+            "library-alloc",
+            "library-std-platform"
+          ],
+          "id": "obligation-surface-enumeration",
+          "test_needs": [
+            "Acquire authenticated target-configured pinned documentation and sources. Walk public reexport paths and primitive/inherent/trait methods, retaining signatures, stability, cfg and source identities. Do not use family counts as API counts.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Enumerate pinned public modules, primitives, functions, types, traits, associated items, macros, reexports and trait implementations separately from representative behavioral families"
+        },
+        {
+          "existing_requirements": [
+            "tooling-conformance",
+            "library-source-core"
+          ],
+          "id": "obligation-surface-pin",
+          "test_needs": [
+            "Verify release and commit against compiler-conformance.json and hash sysroot library sources, rustdoc data and target cfg. Reject version mismatch rather than silently substituting current stable.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Reproduce compiler, library, Cargo and rustdoc identities without treating rolling documentation as the oracle"
+        },
+        {
+          "existing_requirements": [
+            "library-source-core",
+            "library-alloc",
+            "library-std-platform",
+            "runtime-intrinsics"
+          ],
+          "id": "obligation-surface-upstream",
+          "test_needs": [
+            "Compare unchanged upstream library sources and upstream tests with licensed source identities. no_std and no_implicit_prelude clients must use authentic crates, not a synthetic native prelude.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Compile unchanged pinned core, alloc and std and preserve language-item and intrinsic provider contracts"
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "The Rust Core Library; Primitive Types; Modules; Macros",
+          "source": "core-docs"
+        },
+        {
+          "section": "The Rust core allocation and collections library; Boxed values; Reference counted pointers; Atomically reference counted pointers; Collections; Heap interfaces",
+          "source": "alloc-docs"
+        },
+        {
+          "section": "The Rust Standard Library; Containers and collections; Platform abstractions and I/O; Primitive Types; Modules; Macros",
+          "source": "std-docs"
+        },
+        {
+          "section": "Unstable features; JSON output",
+          "source": "rustdoc-surface"
+        }
+      ],
+      "title": "Public API surface accounting still required"
+    },
+    {
+      "id": "inventory-core-values",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "values-integer-semantics",
+            "values-float-semantics",
+            "values-scalar-strings"
+          ],
+          "id": "obligation-core-numeric",
+          "test_needs": [
+            "Exercise all widths, checked/wrapping/saturating/overflowing operations, endian conversion, shifts, NaN/zero/subnormals and Unicode scalar validity without fixing unspecified NaN payloads.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Primitive integer, float, boolean and character methods, conversions and numeric wrappers"
+        },
+        {
+          "existing_requirements": [
+            "values-aggregates",
+            "values-scalar-strings",
+            "memory-projected-loans"
+          ],
+          "id": "obligation-core-slices",
+          "test_needs": [
+            "Check indexing and panic boundaries, UTF-8 boundaries, split/chunk/windows/search/sort behavior, overlap constraints and shared/mutable iterator loans. Preserve unspecified sort tie behavior where applicable.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Arrays, slices, str, ASCII and Unicode access and algorithms"
+        },
+        {
+          "existing_requirements": [
+            "memory-unsafe-validity",
+            "memory-drop-elaboration",
+            "runtime-layout"
+          ],
+          "id": "obligation-core-memory",
+          "test_needs": [
+            "Test initialized valid values, alignment, overlap, zero-sized values, pointer metadata, ownership transfers and exact drop order. Invalid Rust must reject, UB examples are not runtime differential oracles.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "mem, ptr, NonNull, MaybeUninit, ManuallyDrop and layout operations"
+        },
+        {
+          "existing_requirements": [
+            "memory-general-regions",
+            "memory-unsafe-validity",
+            "abstraction-coherence"
+          ],
+          "id": "obligation-core-cell-pin",
+          "test_needs": [
+            "Check runtime borrow failures, guard lifetimes, unsafe access boundaries, Unpin and pinned projection restrictions, Send/Sync acceptance and rejection with unused invalid bodies.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Cell, RefCell, UnsafeCell, pinning and marker/auto-trait contracts"
+        },
+        {
+          "existing_requirements": [
+            "abstraction-method-lookup",
+            "abstraction-coherence",
+            "library-collections"
+          ],
+          "id": "obligation-core-ops-cmp",
+          "test_needs": [
+            "Exercise overloaded operators/indexing, borrowed lookup, total versus partial ordering and conversion errors. Reject missing or mismatched trait implementations without approximating documented laws.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "ops, cmp, convert, borrow, default, hash and range protocols"
+        },
+        {
+          "existing_requirements": [
+            "library-option",
+            "memory-drop-elaboration"
+          ],
+          "id": "obligation-core-option",
+          "test_needs": [
+            "Observe branch effects and FnOnce capture destruction, take/replace/transpose/zip, borrowed variants, panic paths and invalid callback types beyond one bounded lazy-combinator selector.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Option variants, combinators, lazy evaluation and reference projections"
+        },
+        {
+          "existing_requirements": [
+            "library-results",
+            "memory-drop-elaboration"
+          ],
+          "id": "obligation-core-result",
+          "test_needs": [
+            "Observe Ok/Err transformations, error conversion, early exit, residual typing and cleanup for first/middle/final errors. Preserve unused invalid-return rejection.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Result propagation, combinators and fallible collection"
+        },
+        {
+          "existing_requirements": [
+            "library-iterators",
+            "abstraction-method-lookup"
+          ],
+          "id": "obligation-core-iterators",
+          "test_needs": [
+            "Test next/next_back, size_hint lower/upper constraints, non-fused exhaustion, short circuit, exact-size/fused/double-ended traits, adapter side effects, overflow and collection type errors.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Iterator, IntoIterator, adapter and consumer contracts"
+        },
+        {
+          "existing_requirements": [
+            "abstraction-suspended-values",
+            "memory-unsafe-validity"
+          ],
+          "id": "obligation-core-future",
+          "test_needs": [
+            "Use deterministic executor fixtures for wake/clone/drop ownership, pending/ready transitions, pin safety and async cancellation drop. Do not assume an executor exists in std.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Future, task, Waker and pin-dependent polling"
+        },
+        {
+          "id": "obligation-core-any",
+          "title": "Any, TypeId, type_name, hint and runtime type reflection",
+          "existing_requirements": [
+            "library-source-core",
+            "abstraction-coherence"
+          ],
+          "test_needs": [
+            "Check Any lifetime bounds, downcast success/failure and type identity across crates. Type names are diagnostic descriptions, not stable serialization identities. Validate hint preconditions and do not turn unreachable_unchecked UB into an execution oracle.",
+            "Public API item enumeration and per-item stable availability remain separate required work."
+          ]
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "The Rust Core Library; Primitive Types; Modules; Macros",
+          "source": "core-docs"
+        }
+      ],
+      "title": "Core value and memory API families"
+    },
+    {
+      "id": "inventory-allocation",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "runtime-allocation",
+            "library-alloc"
+          ],
+          "id": "obligation-alloc-layout",
+          "test_needs": [
+            "Observe matching alloc/dealloc/realloc layouts, over-alignment, zero-size API preconditions, capacity overflow and allocation error paths using controlled allocators and subprocess isolation.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Global allocation, Layout and allocation failure policies"
+        },
+        {
+          "existing_requirements": [
+            "library-alloc",
+            "memory-drop-elaboration"
+          ],
+          "id": "obligation-alloc-box",
+          "test_needs": [
+            "Check allocation ownership, DST metadata, into_raw/from_raw valid round trips, move/borrow rejection and exactly-once destruction including unwind.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Box ownership, unsized values and raw ownership conversion"
+        },
+        {
+          "existing_requirements": [
+            "library-alloc",
+            "runtime-concurrency"
+          ],
+          "id": "obligation-alloc-shared",
+          "test_needs": [
+            "Check strong/weak lifetimes, cyclic construction, get_mut/make_mut, try_unwrap, cyclic leaks versus destruction, auto traits and thread transfer where allowed.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Rc, Arc, Weak and copy-on-write ownership"
+        },
+        {
+          "existing_requirements": [
+            "library-alloc",
+            "library-collections",
+            "values-scalar-strings"
+          ],
+          "id": "obligation-alloc-vec-string",
+          "test_needs": [
+            "Exercise capacity growth without assuming exact growth factor, reserve failures, drain/splice/retain cleanup, borrowed payload loans, UTF-8 mutations and panic safety.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Vec, String, Cow, ToOwned and UTF-8 ownership"
+        },
+        {
+          "existing_requirements": [
+            "library-collections"
+          ],
+          "id": "obligation-alloc-ordered",
+          "test_needs": [
+            "Check ordering, borrowed lookup, entry API, split/append/drain/range boundaries, wraparound and non-Copy payload cleanup. Keep ordered-map fixture evidence narrow.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "BTreeMap, BTreeSet, BinaryHeap, VecDeque and LinkedList"
+        },
+        {
+          "existing_requirements": [
+            "library-collections",
+            "library-std-platform"
+          ],
+          "id": "obligation-alloc-hash",
+          "test_needs": [
+            "Check Eq/Hash consistency, collisions, borrowed lookup, entry updates and ownership. Compare sets or normalized entries, not unspecified randomized iteration order.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "HashMap, HashSet, hashers and randomized iteration"
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "The Rust core allocation and collections library; Boxed values; Reference counted pointers; Atomically reference counted pointers; Collections; Heap interfaces",
+          "source": "alloc-docs"
+        },
+        {
+          "section": "Correct and Efficient Usage of Collections; Capacity Management; Iterators; Entries",
+          "source": "std-collections-docs"
+        }
+      ],
+      "title": "Allocation and owned API families"
+    },
+    {
+      "id": "inventory-text-errors",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "library-std-platform",
+            "library-source-core"
+          ],
+          "id": "obligation-format-contract",
+          "test_needs": [
+            "Check Display/Debug/custom Formatter, width/precision/alignment/sign/radix, escaped text, sink errors and invalid format arguments at compile time. Float output must follow the pinned documented contract.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "fmt traits, formatting macros and allocation-free sinks"
+        },
+        {
+          "existing_requirements": [
+            "library-std-platform",
+            "library-results"
+          ],
+          "id": "obligation-parse-error",
+          "test_needs": [
+            "Exercise numeric/string parse success/failure, source chains, dynamic errors with Send/Sync bounds and exact types. Only require exact error text where part of the pinned contract.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "FromStr, parsing errors, Error chains and downcasting"
+        },
+        {
+          "existing_requirements": [
+            "source-edition",
+            "source-imports",
+            "expansion-derives",
+            "library-source-core"
+          ],
+          "id": "obligation-prelude-macros",
+          "test_needs": [
+            "Check edition2024 prelude traits, no_std imports, qualified macro calls, derives and include/env/concat/assert families with authenticated source provenance.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Edition preludes, standard macros and reexport reachability"
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "The Rust Core Library; Primitive Types; Modules; Macros",
+          "source": "core-docs"
+        },
+        {
+          "section": "The Rust Standard Library; Containers and collections; Platform abstractions and I/O; Primitive Types; Modules; Macros",
+          "source": "std-docs"
+        }
+      ],
+      "title": "Formatting, parsing and error families"
+    },
+    {
+      "id": "inventory-io-platform",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "library-buffered-bytes",
+            "library-std-platform"
+          ],
+          "id": "obligation-io-read-write",
+          "test_needs": [
+            "Exercise partial operations, EOF, Interrupted, write_all/read_exact, seeking, fill_buf/consume invalidation, flush failures and borrowed reader escape rejection. In-memory reader evidence does not prove OS I/O.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Read, Write, Seek, BufRead, Cursor and buffered I/O"
+        },
+        {
+          "existing_requirements": [
+            "library-std-platform",
+            "runtime-startup-linking"
+          ],
+          "id": "obligation-io-stdio",
+          "test_needs": [
+            "Use subprocess pipes for encoding-independent bytes, buffering, locks, broken pipe, flush and error propagation. Avoid dependence on terminal availability or unspecified interleaving.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "stdin, stdout, stderr, locks and process-visible streams"
+        },
+        {
+          "existing_requirements": [
+            "library-std-platform"
+          ],
+          "id": "obligation-fs-paths",
+          "test_needs": [
+            "Use isolated temporary roots to check open modes, truncation, rename, links/symlinks, canonicalization, non-UTF8 Unix paths, timestamps and errors. Mark filesystem/permission/privilege dependencies rather than fabricating outcomes.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "fs, File, OpenOptions, metadata, permissions, paths and directory entries"
+        },
+        {
+          "existing_requirements": [
+            "library-std-platform",
+            "runtime-startup-linking"
+          ],
+          "id": "obligation-process-env",
+          "test_needs": [
+            "Check argument byte preservation, cwd/env inheritance and overrides, pipes, wait/kill, spawn failures and exit/signal status in controlled subprocesses. Record Linux environment mutation safety obligations.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Command, Child, Stdio, ExitStatus, env and arguments"
+        },
+        {
+          "existing_requirements": [
+            "library-std-platform"
+          ],
+          "id": "obligation-net-services",
+          "test_needs": [
+            "Use loopback for partial reads, timeouts and shutdown, treat DNS and external network as separate environment-dependent cases. Record port/namespace restrictions and do not mark unavailable network tests supported.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "TCP, UDP, IP/socket addresses and address resolution"
+        },
+        {
+          "existing_requirements": [
+            "library-std-platform",
+            "runtime-scalar-c-abi"
+          ],
+          "id": "obligation-time-os",
+          "test_needs": [
+            "Check duration arithmetic/overflow and clock error handling without exact wall-clock assertions. Exercise OsStr/OsString, CString/CStr, fd ownership and Unix extension APIs with controlled native fixtures.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Duration, Instant, SystemTime, Unix extensions and FFI strings"
+        },
+        {
+          "id": "obligation-platform-backtrace",
+          "title": "Backtrace capture and diagnostic platform services",
+          "existing_requirements": [
+            "library-std-platform",
+            "runtime-optimization-debug"
+          ],
+          "test_needs": [
+            "Check enabled/disabled/unsupported capture states with controlled environment and debug settings, avoiding exact frame addresses, symbol paths or formatting not guaranteed by the pinned public contract.",
+            "Public API item enumeration and per-item stable availability remain separate required work."
+          ]
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "The Rust Standard Library; Containers and collections; Platform abstractions and I/O; Primitive Types; Modules; Macros",
+          "source": "std-docs"
+        },
+        {
+          "section": "Read and Write; Seek and BufRead; BufReader and BufWriter; Standard input and output; Platform-specific behavior; I/O Safety",
+          "source": "std-io-docs"
+        }
+      ],
+      "title": "I/O and external environment API families"
+    },
+    {
+      "id": "inventory-concurrency",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "runtime-concurrency"
+          ],
+          "id": "obligation-threads-tls",
+          "test_needs": [
+            "Check borrowed scoped lifetimes, thread return/panic, TLS initialization/destruction and deterministic park/unpark protocols. Do not assert scheduling order or platform stack size not guaranteed by docs.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Threads, scoped threads, joining, parking and thread-local storage"
+        },
+        {
+          "existing_requirements": [
+            "runtime-concurrency",
+            "library-std-platform"
+          ],
+          "id": "obligation-sync-primitives",
+          "test_needs": [
+            "Exercise mutual exclusion, poisoning/recovery, predicate loops under spurious wakeups, initialization panic/reentrancy, channel closure and guard lifetimes with bounded deterministic schedules.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Mutex, RwLock, Condvar, Barrier, Once, OnceLock, LazyLock and channels"
+        },
+        {
+          "existing_requirements": [
+            "runtime-concurrency",
+            "runtime-intrinsics"
+          ],
+          "id": "obligation-atomics-ordering",
+          "test_needs": [
+            "Enumerate target-supported atomic widths and validate legal/illegal orderings. Test publication and compare-exchange failure orders, avoid inferring memory-model correctness from passing stress tests or x86 behavior alone.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Atomic widths, ordering, compare-exchange and fences"
+        },
+        {
+          "existing_requirements": [
+            "runtime-panic",
+            "memory-drop-elaboration"
+          ],
+          "id": "obligation-panic-unwind",
+          "test_needs": [
+            "Compare unwind cleanup and catch payloads in subprocesses, double-panic termination and panic=abort. Preserve UnwindSafe bounds and do not assume abort is catchable.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Panic hooks, payloads, catch_unwind, unwind safety and abort"
+        },
+        {
+          "existing_requirements": [
+            "runtime-startup-linking",
+            "runtime-layout",
+            "runtime-intrinsics"
+          ],
+          "id": "obligation-runtime-platform",
+          "test_needs": [
+            "Exercise main/Termination exit policy, Linux x86-64 calling conventions, TLS, feature detection and codegen feature compatibility. Distinguish host CPU capabilities from baseline target guarantees.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Startup, termination, target features and platform ABI"
+        },
+        {
+          "id": "obligation-platform-arch",
+          "title": "arch intrinsics, SIMD, assembly-facing APIs and C FFI type families",
+          "existing_requirements": [
+            "runtime-intrinsics",
+            "runtime-layout",
+            "runtime-scalar-c-abi"
+          ],
+          "test_needs": [
+            "Inventory target-conditioned core::arch and std::arch APIs separately from baseline CPU support, test valid ABI/signature/layout and target feature gating, and reject mismatched FFI types. Record native CPU capabilities without promoting optional ISA to target baseline.",
+            "Public API item enumeration and per-item stable availability remain separate required work."
+          ]
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "The Rust Core Library; Primitive Types; Modules; Macros",
+          "source": "core-docs"
+        },
+        {
+          "section": "The Rust Standard Library; Containers and collections; Platform abstractions and I/O; Primitive Types; Modules; Macros",
+          "source": "std-docs"
+        },
+        {
+          "section": "Codegen Options; incremental; panic; target-feature",
+          "source": "rustc-options"
+        },
+        {
+          "section": "Memory model for atomic accesses; Portability",
+          "source": "std-atomic-docs"
+        },
+        {
+          "section": "Traits; Functions",
+          "source": "std-panic-docs"
+        }
+      ],
+      "title": "Concurrency, panic and runtime families"
+    },
+    {
+      "id": "inventory-cargo-project",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "project-manifests"
+          ],
+          "id": "obligation-cargo-package",
+          "test_needs": [
+            "Cover virtual/nested workspaces, members/exclude/default-members, inherited package/dependency fields, lib/bin/example/test/bench discovery, editions and rust-version. Reject malformed/conflicting metadata without inventing defaults.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Package and workspace manifests, inheritance and target discovery"
+        },
+        {
+          "existing_requirements": [
+            "project-manifests",
+            "runtime-optimization-debug"
+          ],
+          "id": "obligation-cargo-config",
+          "test_needs": [
+            "Check dev/release/test/bench/custom inheritance, package overrides, panic/overflow/debug settings, config hierarchy, target rustflags, CLI/env precedence and host versus target configuration.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Profiles, configuration, environment and command precedence"
+        },
+        {
+          "existing_requirements": [
+            "project-captured-dependencies",
+            "project-resolution",
+            "tooling-security"
+          ],
+          "id": "obligation-cargo-sources",
+          "test_needs": [
+            "Check renamed/transitive/multiple-version dependencies, patch/source replacement, git revision identities, registry checksums, offline/locked/frozen behavior and authenticated acquisition failure without successful artifacts.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Path, registry and git sources, replacement, patch and authentication"
+        },
+        {
+          "existing_requirements": [
+            "project-resolution"
+          ],
+          "id": "obligation-cargo-lock-resolve",
+          "test_needs": [
+            "Exercise semver ranges, yanked/prerelease/MSRV cases, links uniqueness, cyclic dependencies and lock update policy with pinned registry snapshots. Do not require one arbitrary solution where Cargo permits several.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Version solving, lockfiles and resolver compatibility"
+        },
+        {
+          "existing_requirements": [
+            "project-resolution",
+            "expansion-attributes-cfg"
+          ],
+          "id": "obligation-cargo-features",
+          "test_needs": [
+            "Check resolver versions including edition2024 defaults, dep: and weak dependency features, no-default-features/all-features, workspace selection and target-specific feature activation.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Feature unification, optional edges and host/target/dev separation"
+        },
+        {
+          "existing_requirements": [
+            "expansion-attributes-cfg",
+            "source-external-modules",
+            "source-imports"
+          ],
+          "id": "obligation-cargo-cfg",
+          "test_needs": [
+            "Check target and feature predicates, mutually exclusive paths, path attributes, include-generated modules and invalid unused active modules. Inactive source handling must follow syntax/expansion contracts.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "cfg/cfg_attr, check-cfg, modules and generated source discovery"
+        },
+        {
+          "existing_requirements": [
+            "project-manifests",
+            "runtime-startup-linking",
+            "expansion-proc-macros"
+          ],
+          "id": "obligation-cargo-crate-types",
+          "test_needs": [
+            "Verify crate-type selection and artifacts with separate consumers, host proc-macro compilation, metadata compatibility and invalid combinations. Do not equate a runnable bin with library artifact support.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "bin, lib, rlib, dylib, staticlib, cdylib and proc-macro outputs"
+        },
+        {
+          "existing_requirements": [
+            "project-test-harnesses",
+            "tooling-workflow-performance"
+          ],
+          "id": "obligation-cargo-test-tools",
+          "test_needs": [
+            "Exercise discovery, required features, harness=false, ignored/should_panic/filter behavior, doc-test compilation, JSON compiler diagnostics and failing command exit propagation. Keep conditional stock comparisons distinct from mandatory oracles.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Unit, integration, doc tests, benches and machine-readable CLI behavior"
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "Cargo Reference",
+          "source": "cargo-index"
+        },
+        {
+          "section": "The Manifest Format",
+          "source": "cargo-manifest"
+        },
+        {
+          "section": "Dependency Resolution; Constraints and Heuristics",
+          "source": "cargo-resolver"
+        },
+        {
+          "section": "Conditional compilation; Configuration options",
+          "source": "reference-cfg"
+        },
+        {
+          "section": "Features",
+          "source": "cargo-features-docs"
+        },
+        {
+          "section": "Profiles",
+          "source": "cargo-profiles-docs"
+        },
+        {
+          "section": "Configuration; Hierarchical structure",
+          "source": "cargo-config-docs"
+        }
+      ],
+      "title": "Manifest, dependency and project boundaries"
+    },
+    {
+      "id": "inventory-build-procmacro",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "project-build-scripts",
+            "project-resolution"
+          ],
+          "id": "obligation-build-host-target",
+          "test_needs": [
+            "Use unchanged build.rs with build-dependencies, HOST/TARGET/CARGO_CFG values, OUT_DIR and current directory. Check target artifacts never execute as host programs and failed script exits prevent successful build.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Build script host compilation, target environment and execution"
+        },
+        {
+          "existing_requirements": [
+            "project-build-scripts",
+            "runtime-startup-linking"
+          ],
+          "id": "obligation-build-directives",
+          "test_needs": [
+            "Check rustc-link-lib/search/arg ordering, rustc-cfg/check-cfg/env/flags, metadata/DEP variables, warnings/errors and links overrides. Compare actual linked consumers, not only parsed stdout.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Build script directives, generated inputs and links metadata"
+        },
+        {
+          "existing_requirements": [
+            "project-build-scripts",
+            "tooling-persistence"
+          ],
+          "id": "obligation-build-invalidation",
+          "test_needs": [
+            "Mutate/delete/create tracked files and directories, env values and generated outputs. Verify rerun/default package scanning and downstream invalidation, retaining each exact input/source identity.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Build script rerun-if-changed and rerun-if-env-changed contracts"
+        },
+        {
+          "existing_requirements": [
+            "expansion-proc-macros",
+            "source-provenance"
+          ],
+          "id": "obligation-proc-token-api",
+          "test_needs": [
+            "Enumerate stable proc_macro public API separately. Check punctuation spacing, delimiters, literal round trips and spans with function/attribute/derive clients and compile_error diagnostics.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "proc_macro TokenStream, TokenTree, Literal, Ident, Punct, Group and Span"
+        },
+        {
+          "existing_requirements": [
+            "expansion-proc-macros",
+            "expansion-general-hygiene",
+            "expansion-graph-discovery"
+          ],
+          "id": "obligation-proc-expansion",
+          "test_needs": [
+            "Check cross-crate host execution, helper attributes, generated imports/modules, panic diagnostics and source locations. Include environment/file dependencies and resource limits without presenting sandbox policy as a Rust language guarantee.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Proc-macro execution, hygiene, error reporting and generated declarations"
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "Build Scripts",
+          "source": "cargo-build"
+        },
+        {
+          "section": "Procedural macros; Function-like macros; Derive macros; Attribute macros",
+          "source": "reference-procmacro"
+        },
+        {
+          "section": "Modules; Structs; Enums; Traits; Functions",
+          "source": "proc-macro-docs"
+        }
+      ],
+      "title": "Build scripts and procedural macro boundaries"
+    },
+    {
+      "id": "inventory-link-cache",
+      "obligations": [
+        {
+          "existing_requirements": [
+            "runtime-startup-linking",
+            "runtime-layout",
+            "project-build-scripts"
+          ],
+          "id": "obligation-native-linking",
+          "test_needs": [
+            "Link C fixtures through static/dynamic libraries with symbol visibility, callbacks, exported names, search paths, rpath and link argument ordering. Check missing symbols/libraries and loader failures never release a successful executable.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Native library selection, symbols, search order and ABI"
+        },
+        {
+          "existing_requirements": [
+            "tooling-persistence",
+            "project-captured-dependencies",
+            "runtime-startup-linking"
+          ],
+          "id": "obligation-artifact-identity",
+          "test_needs": [
+            "Vary target, compiler/library version, edition, cfg/features, panic/optimization flags and dependencies. Reject mismatched artifact formats and keep explicitly labeled stock fallback isolated from private artifacts.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Crate identities, metadata and incompatible artifact rejection"
+        },
+        {
+          "existing_requirements": [
+            "tooling-persistence",
+            "tooling-security"
+          ],
+          "id": "obligation-cache-invalidation",
+          "test_needs": [
+            "Compare cold/warm/restarted outputs after source, manifest, lock, build script, proc macro, native library, env and generated-input changes. Include file deletion/rename and same-path changed content, source auth and tenant separation.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Incremental and shared cache correctness across edits"
+        },
+        {
+          "existing_requirements": [
+            "tooling-persistence",
+            "tooling-failure-taxonomy",
+            "tooling-root-gating"
+          ],
+          "id": "obligation-cache-failures",
+          "test_needs": [
+            "Inject partial/corrupt/stale artifacts, failed writes and concurrent builds. Verify no successful artifact on failure and CHECK never demands codegen. Internal graph constraints need their own gate, not a Cargo-doc compatibility claim.",
+            "Expand into pinned API-specific positive, invalid-input and cross-feature cases. Preserve fixture source hashes and rejection guards. Compare CHECK/BUILD/run where applicable at workers 1 and 8 without inferring coverage from a passing representative case."
+          ],
+          "title": "Atomic publication, corruption, cancellation and concurrent cache consumers"
+        }
+      ],
+      "source_refs": [
+        {
+          "section": "Linkage; link.type; link.bin; link.lib; link.dylib; link.staticlib",
+          "source": "reference-linkage"
+        },
+        {
+          "section": "Codegen Options; incremental; panic; target-feature",
+          "source": "rustc-options"
+        },
+        {
+          "section": "Build cache",
+          "source": "cargo-cache"
+        }
+      ],
+      "title": "Native linking, artifact and cache boundaries"
+    }
+  ],
+  "sources": [
+    {
+      "id": "core-docs",
+      "url": "https://doc.rust-lang.org/core/",
+      "version_note": "Rolling official documentation verified 2026-11-03, displayed 1.99.1 (58cf8f9c3 2026-10-13). Not the manifest pinned 1.98.1 oracle."
+    },
+    {
+      "id": "alloc-docs",
+      "url": "https://doc.rust-lang.org/alloc/",
+      "version_note": "Rolling official documentation verified 2026-11-03, displayed 1.99.1 (58cf8f9c3 2026-10-13). Not the manifest pinned 1.98.1 oracle."
+    },
+    {
+      "id": "std-docs",
+      "url": "https://doc.rust-lang.org/std/",
+      "version_note": "Rolling official documentation verified 2026-11-03, displayed 1.99.1 (58cf8f9c3 2026-10-13). Not the manifest pinned 1.98.1 oracle."
+    },
+    {
+      "id": "cargo-index",
+      "url": "https://doc.rust-lang.org/cargo/reference/index.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "cargo-manifest",
+      "url": "https://doc.rust-lang.org/cargo/reference/manifest.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "cargo-resolver",
+      "url": "https://doc.rust-lang.org/cargo/reference/resolver.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "cargo-build",
+      "url": "https://doc.rust-lang.org/cargo/reference/build-scripts.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "cargo-cache",
+      "url": "https://doc.rust-lang.org/cargo/reference/build-cache.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "reference-procmacro",
+      "url": "https://doc.rust-lang.org/reference/procedural-macros.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "reference-linkage",
+      "url": "https://doc.rust-lang.org/reference/linkage.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "reference-cfg",
+      "url": "https://doc.rust-lang.org/reference/conditional-compilation.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "rustc-options",
+      "url": "https://doc.rust-lang.org/rustc/codegen-options/index.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "rustdoc-surface",
+      "url": "https://doc.rust-lang.org/rustdoc/unstable-features.html",
+      "version_note": "Rolling official primary documentation verified 2026-11-03. Exact pinned-release content reconciliation remains required."
+    },
+    {
+      "id": "std-atomic-docs",
+      "url": "https://doc.rust-lang.org/std/sync/atomic/",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "std-io-docs",
+      "url": "https://doc.rust-lang.org/std/io/",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "std-collections-docs",
+      "url": "https://doc.rust-lang.org/std/collections/",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "std-panic-docs",
+      "url": "https://doc.rust-lang.org/std/panic/",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "proc-macro-docs",
+      "url": "https://doc.rust-lang.org/proc_macro/",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "cargo-features-docs",
+      "url": "https://doc.rust-lang.org/cargo/reference/features.html",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "cargo-profiles-docs",
+      "url": "https://doc.rust-lang.org/cargo/reference/profiles.html",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    },
+    {
+      "id": "cargo-config-docs",
+      "url": "https://doc.rust-lang.org/cargo/reference/config.html",
+      "version_note": "Official primary documentation verified by web 2026-11-03. Rolling content, pinned-release reconciliation remains required."
+    }
+  ]
+}

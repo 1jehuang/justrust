@@ -14,6 +14,8 @@ import re
 import shutil
 import time
 
+import compatibility_inventory
+
 LAYERS = ("feature", "rejection", "interaction", "end_to_end")
 SCOPE = Path("data/compiler-compatibility-scope.json")
 
@@ -236,7 +238,12 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
         blockers.append(f"{len(missing)} declared layer obligations have no mapped tests")
     if unmapped:
         blockers.append(f"{len(unmapped)} existing integration suites need coverage triage")
+    try:
+        inventory = compatibility_inventory.load_and_summarize(root)
+    except compatibility_inventory.InvalidInventory as error:
+        raise c.InvalidEvidence(f"compatibility inventory: {error}") from error
     return {"schema_version": 1, "scope": scope["scope"], "source": identity,
+            "semantic_inventory": inventory,
             "full_rust_support_established": False,
             "full_rust_completion_percent": None,
             "measurement_readiness": {
@@ -288,6 +295,7 @@ def render(summary):
     matrix = summary["interaction_matrix"]
     lines.append(f"Systematic bounded feature pairs: {matrix['passing_pairs']}/{matrix['pair_count']} verified; {matrix['missing_pairs']} pairs have no tests. Higher-order scenarios run too, but are not exhaustive.")
     lines.extend([f"{len(summary['unmapped_integration_suites'])} integration suites still need explicit coverage mapping.",
+                  "Source-referenced inventory readiness: " + summary["semantic_inventory"]["readiness"] + ". Inventory links are not executable evidence.",
                   "Scope is incomplete. Use --json for exact missing requirements, case commands and evidence paths."])
     return "\n".join(lines)
 

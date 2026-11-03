@@ -151,6 +151,40 @@ compiler acceptance result. Reports are local/CI evidence, not signed proofs.
 
 ## Discovery and development loop
 
+### Versioned compatibility target
+
+`data/compiler-compatibility-contract.json` defines the target independently of
+the current test inventory: Edition 2024, Linux x86-64, and the exact stock
+compiler verified by `tests/support/stock_rustc.rs`. Language, core/alloc/std,
+project behavior, execution correctness and ecosystem coverage are distinct
+dimensions. Nightly extensions and other targets need separate contracts.
+Changing the oracle requires a new contract identity and fresh measurements.
+
+Source-referenced inventories are discovery work, not passing test evidence.
+References to moving official documentation must disclose that they are not
+frozen documentation for the pinned oracle. Mapping an inventory obligation to
+an existing broad requirement does not establish that all its behavior is
+tested. Inventories remain unreviewed until omissions and version differences
+have been checked, independently of compiler pass rates.
+
+`python3 tools/compatibility_inventory.py` validates both source-referenced
+inventories and the pinned contract, then reports their obligation counts and
+unmapped existing requirements. `conformance.py coverage --json` includes the
+same readiness summary. The inventories are
+`data/compiler-language-inventory.json` and
+`data/compiler-library-project-inventory.json`. Their requirement links are
+triage associations, not direct test links or execution evidence. Every new
+obligation initially lacks direct exact-test evidence, even when its broader
+existing requirement has passing scenarios. Ordinary tests and CI reject
+malformed references, unknown mappings, duplicate identities and an oracle
+contract that disagrees with the actual stock verifier.
+
+Undefined behavior is not a runtime-output parity obligation. Unsafe
+preconditions and compiler-enforced restrictions must be tracked separately.
+Where documented behavior permits multiple outcomes, a differential oracle
+must check the allowed outcomes rather than enshrine an accidental stock
+result. Performance is a separate measurement, not semantic compatibility.
+
 `discover` inventories every integration target and lexical unsupported/ignored/
 wrong-code markers, plus direct stock-oracle selectors needing identity review.
 Selectors can occur inside source strings or intentional bootstrap tests, so

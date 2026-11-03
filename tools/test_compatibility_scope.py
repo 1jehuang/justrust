@@ -15,6 +15,18 @@ import conformance as c
 
 
 class ScopeTests(unittest.TestCase):
+    def test_missing_source_inventory_is_explicit_not_complete(self):
+        summary = self.summary()
+        self.assertEqual(summary["semantic_inventory"]["readiness"], "missing")
+        self.assertIsNone(summary["full_rust_completion_percent"])
+        self.assertFalse(summary["full_rust_support_established"])
+
+    def test_malformed_source_inventory_fails_closed(self):
+        with patch.object(s.compatibility_inventory, "load_and_summarize",
+                          side_effect=s.compatibility_inventory.InvalidInventory("changed oracle")):
+            with self.assertRaisesRegex(c.InvalidEvidence, "changed oracle"):
+                self.summary()
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="compatibility-scope-")
         self.addCleanup(self.temp.cleanup)
