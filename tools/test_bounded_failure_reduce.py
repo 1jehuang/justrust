@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import time
 import unittest
 import bounded_failure_reduce as reducer
 
@@ -114,9 +115,19 @@ class ReductionTests(unittest.TestCase):
         attempt = self.root / 'out/attempt-0000'
         pid = int((attempt / 'child.pid').read_text())
         state = Path(f'/proc/{pid}/stat')
-        # A killed child can remain an init-owned zombie until reaped.
-        if state.exists():
-            self.assertEqual(state.read_text().split()[2], 'Z')
+        # SIGKILL delivery to the descendant is asynchronous even after its
+        # parent was reaped. Require disappearance or a zombie, but allow a
+        # bounded scheduling window rather than asserting on the first tick.
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                status = state.read_text().split()[2]
+            except FileNotFoundError:
+                break
+            if status == 'Z':
+                break
+            self.assertLess(time.monotonic(), deadline, f'descendant {pid} remains {status}')
+            time.sleep(0.01)
         self.assertEqual(json.loads((attempt / 'result.json').read_text())['status'], 'timeout')
 
     def test_tie_order_by_sha_not_input_order(self):
