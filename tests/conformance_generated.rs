@@ -1222,3 +1222,222 @@ fn main() {}
         }],
     );
 }
+
+// Bounded projected-place obligations, pending exact-source stock/native review.
+#[test]
+fn memory_projected_nested_disjoint_mutable_fields_source() {
+    oracle::check(
+        "memory-projected-nested-disjoint-mutable-fields-source",
+        &[Case {
+            name: "nested_named_fields_keep_disjoint_mutable_loans_live",
+            source: r#"struct Inner { left: i32, right: i32 }
+struct Outer { inner: Inner, spare: i32 }
+fn main() {
+    let mut value = Outer { inner: Inner { left: 3, right: 8 }, spare: 17 };
+    let left = &mut value.inner.left;
+    let right = &mut value.inner.right;
+    *left += 4;
+    *right += *left;
+    println!("loans {} {}", *left, *right);
+    value.inner.left += 1;
+    value.inner.right += 2;
+    println!("fields {} {} {}", value.inner.left, value.inner.right, value.spare);
+}
+"#,
+            expect: Expect::Run("loans 7 15\nfields 8 17 17\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native projected-loan compatibility obligation"]
+fn memory_projected_generic_short_reborrow_source() {
+    oracle::check(
+        "memory-projected-generic-short-reborrow-source",
+        &[Case {
+            name: "generic_field_short_reborrow_ends_before_original_handle_reuse",
+            source: r#"struct Slot<T> { value: T, tag: i32 }
+fn field<T>(slot: &mut Slot<T>) -> &mut T { &mut slot.value }
+fn replace_twice<T>(slot: &mut Slot<T>, first: T, second: T) {
+    let field = field(slot);
+    {
+        let short = &mut *field;
+        *short = first;
+    }
+    *field = second;
+}
+fn main() {
+    let mut slot = Slot { value: 3i32, tag: 19 };
+    replace_twice(&mut slot, 7i32, 11i32);
+    println!("{} {}", slot.value, slot.tag);
+}
+"#,
+            expect: Expect::Run("11 19\n"),
+        }],
+    );
+}
+
+#[test]
+fn memory_projected_tuple_explicit_borrows_closure_source() {
+    oracle::check(
+        "memory-projected-tuple-explicit-borrows-closure-source",
+        &[Case {
+            name: "nonmove_closure_uses_explicit_shared_and_mutable_disjoint_tuple_loans",
+            source: r#"fn main() {
+    let mut values = (5i32, 9i32, 23i32);
+    let shared = &values.0;
+    let changed = &mut values.1;
+    {
+        let mut apply = || {
+            println!("before {} {}", *shared, *changed);
+            *changed += *shared;
+            println!("after {} {}", *shared, *changed);
+        };
+        apply();
+    }
+    println!("values {} {} {}", values.0, values.1, values.2);
+}
+"#,
+            expect: Expect::Run("before 5 9\nafter 5 14\nvalues 5 14 23\n"),
+        }],
+    );
+}
+
+#[test]
+fn memory_projected_unused_nested_double_mutable_source() {
+    oracle::check(
+        "memory-projected-unused-nested-double-mutable-source",
+        &[Case {
+            name: "unused_nested_same_field_mutable_loans_both_remain_used",
+            source: r#"struct Inner { left: i32, right: i32 }
+struct Outer { inner: Inner }
+fn unused() {
+    let mut value = Outer { inner: Inner { left: 3, right: 8 } };
+    let first = &mut value.inner.left;
+    let second = &mut value.inner.left;
+    *first += 1;
+    *second += 2;
+    println!("{} {} {}", *first, *second, value.inner.right);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0499"),
+        }],
+    );
+}
+
+#[test]
+fn memory_projected_unused_shared_then_assign_source() {
+    oracle::check(
+        "memory-projected-unused-shared-then-assign-source",
+        &[Case {
+            name: "unused_direct_projected_assignment_conflicts_with_later_shared_read",
+            source: r#"struct Pair { left: i32, right: i32 }
+fn unused() {
+    let mut pair = Pair { left: 5, right: 9 };
+    let shared = &pair.left;
+    pair.right += 1;
+    pair.left = 12;
+    println!("{} {}", *shared, pair.right);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0506"),
+        }],
+    );
+}
+
+#[test]
+fn memory_projected_unused_string_field_reuse_source() {
+    oracle::check(
+        "memory-projected-unused-string-field-reuse-source",
+        &[Case {
+            name: "unused_owned_string_field_move_keeps_sibling_usable_not_moved_field",
+            source: r#"struct Parcel { text: String, number: i32 }
+fn unused() {
+    let parcel = Parcel { text: String::from("cargo"), number: 31 };
+    let moved = parcel.text;
+    println!("{} {}", moved, parcel.number);
+    let reused = &parcel.text;
+    println!("{} {}", reused, parcel.number);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0382"),
+        }],
+    );
+}
+
+// Additional strict semantic obligations remain pending until their original
+// sources pass the independent stock/native oracle, including unused bodies.
+#[test]
+fn region_unused_local_reference_cannot_be_static_source() {
+    oracle::check(
+        "region-unused-local-reference-cannot-be-static-source",
+        &[Case {
+            name: "unused_local_reference_cannot_acquire_static_authority",
+            source: r#"fn unused() -> &'static i32 {
+    let local = 17i32;
+    &local
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0515"),
+        }],
+    );
+}
+
+#[test]
+fn drop_unused_explicit_destructor_call_is_rejected_source() {
+    oracle::check(
+        "drop-unused-explicit-destructor-call-is-rejected-source",
+        &[Case {
+            name: "unused_body_cannot_call_drop_trait_method_explicitly",
+            source: r#"struct Guard { value: i32 }
+impl Drop for Guard {
+    fn drop(&mut self) { println!("drop {}", self.value); }
+}
+fn unused() {
+    let mut guard = Guard { value: 7 };
+    guard.drop();
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0040"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native representation-alignment rejection obligation"]
+fn layout_unused_non_power_of_two_alignment_is_rejected_source() {
+    oracle::check(
+        "layout-unused-non-power-of-two-alignment-is-rejected-source",
+        &[Case {
+            name: "unused_record_alignment_must_be_power_of_two",
+            source: r#"#[repr(align(3))]
+struct Record { value: u8 }
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0589"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native duplicate-inline-module rejection obligation"]
+fn module_unused_duplicate_inline_module_is_rejected_source() {
+    oracle::check(
+        "module-unused-duplicate-inline-module-is-rejected-source",
+        &[Case {
+            name: "unused_owner_cannot_redeclare_inline_module_in_same_namespace",
+            source: r#"mod owner {
+    mod duplicate { pub fn value() -> i32 { 7 } }
+    mod duplicate { pub fn value() -> i32 { 11 } }
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0428"),
+        }],
+    );
+}

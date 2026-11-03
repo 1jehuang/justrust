@@ -472,7 +472,23 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "module_unused_duplicate_inline_module_is_rejected_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "An unused inline owner contains two modules with the same name in one namespace. Requires stock E0428 and strict source/declaration-backed rejection. This covers duplicate module declarations, not all recursion, visibility or module lookup failures.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "module_unused_duplicate_inline_module_is_rejected_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -2319,7 +2335,23 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "region_unused_local_reference_cannot_be_static_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "An uncalled function returns a reference to a local i32 under a static result promise. Requires stock E0515 and strict original-source/declaration publication before native rejection. One local-escape partition only, not general higher-ranked or aggregate-region completeness.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "region_unused_local_reference_cannot_be_static_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -2369,15 +2401,102 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_nested_disjoint_mutable_fields_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_generic_short_reborrow_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded source witness: bounded nested named-struct disjoint mutable field loans, both live together, followed by direct field reuse. Exact expected stdout loans 7 15 / fields 8 17 17, newline terminated. No reference return, dynamic indexing, slice splitting, or general loan support claim.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_nested_disjoint_mutable_fields_source"
+                    }
+                  ]
+                },
+                {
+                  "note": "Bounded source witness: elided single-input generic field<T>(&mut Slot<T>) -> &mut T returns a mutable projected field reference. Caller makes an explicit block-scoped &mut *field reborrow assigned first, then reuses original mutable handle for second assignment. Observable i32 instantiation expects 11 19 with newline. Only this projected reference return partition, not dynamic indices, slice splitting, general escaping references or loop renewal.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_generic_short_reborrow_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_unused_nested_double_mutable_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_unused_shared_then_assign_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_unused_string_field_reuse_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded source witness: unused function with two mutable loans to one nested named field, both subsequently used. The stock oracle requires E0499. Strict InvalidAfterParse must prove original root parse and signatures plus healthy semantic rejection for native CHECK/BUILD at workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_unused_nested_double_mutable_source"
+                    }
+                  ]
+                },
+                {
+                  "note": "Bounded source witness: unused function assigns directly to a projected field while its explicit shared borrow is read later, with independently mutable sibling. The stock oracle requires E0506 for direct assignment rather than a second borrow. Existing strict InvalidAfterParse helper remains unchanged.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_unused_shared_then_assign_source"
+                    }
+                  ]
+                },
+                {
+                  "note": "Bounded source witness: unused function moves owned String named field, reads independent i32 sibling, then attempts an explicit shared borrow of the moved field. Container has no Drop. The stock oracle requires E0382. This tests borrow issuance on a moved projection and complements the existing Item tuple-field reuse case, not general drop or move completeness.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_unused_string_field_reuse_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_tuple_explicit_borrows_closure_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded source witness: non-move closure uses an explicit shared &values.0 and mutable &mut values.1, not an inferred shared capture. Before/after closure output and all three original tuple fields remain observable. Exact expected stdout before 5 9 / after 5 14 / values 5 14 23, each newline terminated. Limited to this disjoint projection and closure interaction.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_tuple_explicit_borrows_closure_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -2389,6 +2508,23 @@
                       "test": "conditional_replacement_workers1_8_check_build_run"
                     }
                   ]
+                },
+                {
+                  "note": "Three original positive programs require pinned stock execution and native CHECK/BUILD/run at workers1/8 with exact stdout. Nested disjoint fields, a generic projected mutable-reference return with explicit short reborrow, and explicit tuple-field loans in a closure are bounded scenarios, not dynamic-index, slice-splitting or general loop-loan support.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_nested_disjoint_mutable_fields_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_generic_short_reborrow_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_tuple_explicit_borrows_closure_source"
+                    }
+                  ]
                 }
               ],
               "layer": "end_to_end",
@@ -2396,6 +2532,18 @@
                 {
                   "suite": "loan_renewal",
                   "test": "conditional_replacement_workers1_8_check_build_run"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_nested_disjoint_mutable_fields_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_generic_short_reborrow_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_tuple_explicit_borrows_closure_source"
                 }
               ]
             }
@@ -2528,7 +2676,23 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "drop_unused_explicit_destructor_call_is_rejected_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "An uncalled function explicitly invokes a user Drop destructor method. Requires stock E0040 and strict semantic rejection, distinct from valid std::mem::drop ownership transfer. Does not establish all destructor ordering or unwind rules.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "drop_unused_explicit_destructor_call_is_rejected_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -4949,7 +5113,23 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "layout_unused_non_power_of_two_alignment_is_rejected_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "An unused record requests repr(align(3)). Requires stock E0589 and strict source/declaration-backed rejection. This is an invalid alignment constraint, not successful repr(C), niche or calling-convention support.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "layout_unused_non_power_of_two_alignment_is_rejected_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "interaction",
