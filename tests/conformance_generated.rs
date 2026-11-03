@@ -485,3 +485,215 @@ fn semantic_invalid_requires_source_and_declaration_publications() {
         "other files' parse publications cannot stand in for the original source"
     );
 }
+
+// Literal memory obligations, independent of the generated seed corpus.
+#[test]
+fn memory_projected_move_remaining_field_drop_matches_stock() {
+    oracle::check(
+        "memory-projected-move-remaining-field-drop",
+        &[Case {
+            name: "moved_tuple_field_and_remaining_field_each_drop_once",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn main() {
+    let pair = (Guard { n: 1 }, Guard { n: 2 });
+    let first = pair.0;
+    println!("remaining {}", pair.1.n);
+    drop(first);
+    println!("end");
+}
+"#,
+            expect: Expect::Run("remaining 2\ndrop 1\nend\ndrop 2\n"),
+        }],
+    );
+}
+
+#[test]
+fn memory_conditional_projected_move_drop_flags_match_stock() {
+    oracle::check(
+        "memory-conditional-projected-move-drop-flags",
+        &[Case {
+            name: "taken_and_untaken_move_paths_drop_only_initialized_fields",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn run(take: bool) {
+    let pair = (Guard { n: 3 }, Guard { n: 4 });
+    if take { let moved = pair.0; drop(moved); }
+    println!("tail {}", pair.1.n);
+}
+fn main() { run(true); run(false); }
+"#,
+            expect: Expect::Run("drop 3\ntail 4\ndrop 4\ntail 4\ndrop 3\ndrop 4\n"),
+        }],
+    );
+}
+
+#[test]
+#[ignore = "pending native direct let borrow temporary lifetime extension obligation"]
+fn memory_direct_borrow_temporary_lifetime_extension_matches_stock() {
+    oracle::check(
+        "memory-direct-borrow-temporary-lifetime-extension",
+        &[Case {
+            name: "borrowed_destructor_temporary_lives_until_enclosing_block_end",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn main() {
+    let borrowed = &Guard { n: 7 };
+    println!("value {}", borrowed.n);
+    println!("end");
+}
+"#,
+            expect: Expect::Run("value 7\nend\ndrop 7\n"),
+        }],
+    );
+}
+
+#[test]
+fn memory_unused_call_argument_temporary_escape_is_invalid() {
+    oracle::check(
+        "memory-unused-call-argument-temporary-escape",
+        &[Case {
+            name: "function_call_does_not_extend_borrowed_temporary_to_next_statement",
+            source: r#"struct Item { n: i32 }
+impl Drop for Item { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn identity<'a>(value: &'a Item) -> &'a Item { value }
+fn unused() {
+    let borrowed = identity(&Item { n: 7 });
+    println!("{}", borrowed.n);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0716"),
+        }],
+    );
+}
+
+#[test]
+fn memory_unused_drop_check_borrow_escape_is_invalid() {
+    oracle::check(
+        "memory-unused-drop-check-borrow-escape",
+        &[Case {
+            name: "destructor_reads_borrow_after_inner_referent_scope_ends",
+            source: r#"struct Watch<'a> { value: &'a i32 }
+impl<'a> Drop for Watch<'a> {
+    fn drop(&mut self) { println!("drop {}", *self.value); }
+}
+fn unused() {
+    let watcher;
+    {
+        let local = 7i32;
+        watcher = Watch { value: &local };
+    }
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0597"),
+        }],
+    );
+}
+
+#[test]
+fn memory_unused_projected_use_after_move_is_invalid() {
+    oracle::check(
+        "memory-unused-projected-use-after-move",
+        &[Case {
+            name: "moving_noncopy_tuple_field_does_not_allow_reusing_that_field",
+            source: r#"struct Item { n: i32 }
+fn consume(value: Item) { println!("{}", value.n); }
+fn unused() {
+    let pair = (Item { n: 7 }, Item { n: 9 });
+    consume(pair.0);
+    consume(pair.0);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0382"),
+        }],
+    );
+}
+
+// Independent edition and numeric obligations.
+#[test]
+fn edition2024_tail_expression_temporary_drops_before_local_source() {
+    oracle::check(
+        "edition2024-tail-expression-temporary-drops-before-local-source",
+        &[Case {
+            name: "edition2024_tail_temporary_drop_precedes_enclosing_local",
+            source: r#"struct Probe { name: &'static str }
+impl Drop for Probe { fn drop(&mut self) { println!("drop {}", self.name); } }
+impl Probe { fn value(&self) -> u32 { 7u32 } }
+fn tail() -> u32 {
+    let _local = Probe { name: "local" };
+    Probe { name: "temporary" }.value()
+}
+fn main() { println!("{}", tail()); }
+"#,
+            expect: Expect::Run("drop temporary\ndrop local\n7\n"),
+        }],
+    );
+}
+
+#[test]
+fn integer_mixed_signedness_unused_rejected_source() {
+    oracle::check(
+        "integer-mixed-signedness-unused-rejected-source",
+        &[Case {
+            name: "unused_u32_cannot_initialize_i32_without_cast",
+            source: r#"fn unused() { let unsigned = 7u32; let _: i32 = unsigned; }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+fn integer_float_shift_unused_rejected_source() {
+    oracle::check(
+        "integer-float-shift-unused-rejected-source",
+        &[Case {
+            name: "unused_integer_cannot_shift_by_float",
+            source: r#"fn unused() { let _ = 7u32 << 1.0f32; }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0277"),
+        }],
+    );
+}
+
+#[test]
+fn wide_integer_cast_to_bool_unused_rejected_source() {
+    oracle::check(
+        "wide-integer-cast-to-bool-unused-rejected-source",
+        &[Case {
+            name: "unused_u128_cannot_cast_to_bool",
+            source: r#"fn unused() { let _ = 1u128 as bool; }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0054"),
+        }],
+    );
+}
+
+#[test]
+fn float_bitwise_unused_rejected_source() {
+    oracle::check(
+        "float-bitwise-unused-rejected-source",
+        &[Case {
+            name: "unused_f64_has_no_bitwise_and",
+            source: r#"fn unused() { let _ = 1.0f64 & 2.0f64; }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0369"),
+        }],
+    );
+}
+
+#[test]
+fn float_implicit_narrowing_unused_rejected_source() {
+    oracle::check(
+        "float-implicit-narrowing-unused-rejected-source",
+        &[Case {
+            name: "unused_f64_cannot_initialize_f32_without_cast",
+            source: r#"fn unused() { let wide = 1.5f64; let _: f32 = wide; }
+fn main() {}"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}

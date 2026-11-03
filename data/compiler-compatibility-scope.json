@@ -28,13 +28,13 @@
             {
               "evidence_notes": [
                 {
+                  "note": "Pinned stable feature-policy obligation: four original non-return-position never-type programs require stock E0658 rejection without changing source bytes or enabling nightly features. This is policy rejection, not positive never-type inference or a semantic body-check proof. The exact progress invocation includes ignored cases; native acceptance cannot count as support.",
                   "tests": [
                     {
                       "suite": "partial_annotations",
                       "test": "stable_never_feature_policy_matches_pinned_stock"
                     }
-                  ],
-                  "note": "Pinned stable feature-policy obligation: four original non-return-position never-type programs require stock E0658 rejection without changing source bytes or enabling nightly features. This is policy rejection, not positive never-type inference or a semantic body-check proof. The exact progress invocation includes ignored cases; native acceptance cannot count as support."
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -67,7 +67,23 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "edition2024_tail_expression_temporary_drops_before_local_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Pinned stock edition=2024 and native CHECK/BUILD/run at workers 1/8 must produce drop temporary\\ndrop local\\n7\\n: Edition 2024 destroys the tail-expression receiver temporary before the enclosing function local, whereas Edition 2021 drops that local before the temporary. Distinct from existing if-let scope coverage.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "edition2024_tail_expression_temporary_drops_before_local_source"
+                    }
+                  ]
+                }
+              ]
             }
           ],
           "id": "source-edition",
@@ -725,7 +741,23 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "wide_integer_cast_to_bool_unused_rejected_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded rejection obligation. Expected stock E0054 because integer-to-bool as-casts are prohibited, including u128. The unused body must receive strict InvalidAfterParse native CHECK/BUILD rejection at workers 1/8. This is one bounded invalid cast, not all wide integer semantics.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "wide_integer_cast_to_bool_unused_rejected_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -1467,7 +1499,31 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "integer_mixed_signedness_unused_rejected_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "integer_float_shift_unused_rejected_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded rejection obligations. Expected stock E0308 for implicit u32-to-i32 assignment and E0277 for u32 shifted by f32. Both errors are in unused functions. InvalidAfterParse requires native semantic rejection after original-source parsing and declaration publication at workers 1/8 for CHECK and BUILD. Unsupported/resource/infrastructure failure is not evidence. No full integer coverage asserted.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "integer_mixed_signedness_unused_rejected_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "integer_float_shift_unused_rejected_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -1569,7 +1625,31 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "float_bitwise_unused_rejected_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "float_implicit_narrowing_unused_rejected_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Bounded rejection obligations. Expected stock E0369 because f64 has no bitwise-and operation and E0308 because f64 does not implicitly narrow to f32. Both unused bodies require strict InvalidAfterParse native CHECK/BUILD rejection at workers 1/8. These two cases do not establish comprehensive float coverage.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "float_bitwise_unused_rejected_source"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "float_implicit_narrowing_unused_rejected_source"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -1641,7 +1721,23 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_move_remaining_field_drop_matches_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_move_remaining_field_drop_matches_stock"
+                    }
+                  ],
+                  "note": "Bounded non-Copy tuple-field move with remaining-field access and cleanup. Exact stdout remaining 2, drop 1, end, drop 2 (each newline terminated) checks each field drops once. Pinned stock/native CHECK/BUILD/run workers 1/8. Does not establish arbitrary projections or general move semantics."
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -1662,6 +1758,15 @@
                       "test": "enum_own_drop_move_is_invalid"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_unused_projected_use_after_move_is_invalid"
+                    }
+                  ],
+                  "note": "Reusing a moved non-Copy tuple field in an uncalled function requires stock E0382. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES publication plus native semantic rejection at CHECK/BUILD workers 1/8. Unsupported/resource/infrastructure failure cannot pass. Covers repeated use of one moved tuple field, not all partial-move diagnostics."
                 }
               ],
               "layer": "rejection",
@@ -1673,6 +1778,10 @@
                 {
                   "suite": "result_map",
                   "test": "enum_own_drop_move_is_invalid"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_unused_projected_use_after_move_is_invalid"
                 }
               ]
             },
@@ -1686,6 +1795,15 @@
                       "test": "structural_enum_partial_moves_match_stock"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_projected_move_remaining_field_drop_matches_stock"
+                    }
+                  ],
+                  "note": "Tuple-field move interacts with explicit drop of the moved field and implicit cleanup of the remaining field. Exact stdout remaining 2, drop 1, end, drop 2 (newlines), pinned stock/native CHECK/BUILD/run workers 1/8. Limited to this non-Copy tuple scenario, not arbitrary projections or moves."
                 }
               ],
               "layer": "interaction",
@@ -1693,6 +1811,10 @@
                 {
                   "suite": "result_map",
                   "test": "structural_enum_partial_moves_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_projected_move_remaining_field_drop_matches_stock"
                 }
               ]
             },
@@ -1946,11 +2068,43 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_direct_borrow_temporary_lifetime_extension_matches_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_direct_borrow_temporary_lifetime_extension_matches_stock"
+                    }
+                  ],
+                  "note": "Direct let borrow of a destructor-bearing temporary extends to block end: exact stdout value 7, end, drop 7 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8 required. No general promotion, nested carrier or Edition 2024 if-let scope claim."
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_unused_call_argument_temporary_escape_is_invalid"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_unused_call_argument_temporary_escape_is_invalid"
+                    }
+                  ],
+                  "note": "identity(&Item) cannot extend the borrowed temporary through a call to a later statement. Item has Drop to prevent constant promotion. Requires stock E0716. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES, native semantic rejection CHECK/BUILD workers 1/8. Unsupported/resource/infrastructure cannot pass. Limited to this call-argument temporary escape."
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -2156,15 +2310,63 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_conditional_projected_move_drop_flags_match_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_conditional_projected_move_drop_flags_match_stock"
+                    }
+                  ],
+                  "note": "Bounded conditional tuple-field initialization tracking: both taken and untaken move paths execute, and cleanup drops only initialized fields. Exact stdout drop 3, tail 4, drop 4, tail 4, drop 3, drop 4 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8 required. No unwind, panic, recursive, enum or arbitrary conditional initialization coverage."
+                }
+              ]
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_unused_drop_check_borrow_escape_is_invalid"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_unused_drop_check_borrow_escape_is_invalid"
+                    }
+                  ],
+                  "note": "Outer destructor-bearing Watch reads an inner local on implicit scope-exit drop, with no explicit later read needed to keep the referent live. Requires stock E0597. InvalidAfterParse requires original root PARSE_FILE and SIGNATURES and native semantic rejection CHECK/BUILD workers 1/8. No general generic variance, may_dangle or unsafe drop-check coverage. Unsupported/resource/infrastructure cannot pass."
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "memory_conditional_projected_move_drop_flags_match_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "memory_conditional_projected_move_drop_flags_match_stock"
+                    }
+                  ],
+                  "note": "Conditional projected move interacts with explicit moved-value drop and implicit aggregate cleanup. Taken path drops the first field before tail and then the second field; untaken path drops both fields in declaration order after tail. Exact stdout drop 3, tail 4, drop 4, tail 4, drop 3, drop 4 (newlines). Pinned stock/native CHECK/BUILD/run workers 1/8. No unwind, panic, recursive, enum or arbitrary conditional initialization coverage."
+                }
+              ]
             },
             {
               "evidence_notes": [
