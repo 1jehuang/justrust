@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Generate/validate a bounded unreviewed pinned-token rule reconciliation.
+"""Generate/validate a bounded unreviewed pinned-page rule reconciliation.
 
-Classifications are explicitly authored in token_reconciliation_proposals.py.
+Token proposals are the unchanged default. The explicit const-eval profile uses
+const_reconciliation_proposals.py and supports only generate/validate.
+Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
 """
@@ -32,7 +34,22 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def load_inputs(index_path, candidate_path, source_root):
+def profile_inputs(profile):
+    """Only explicitly selected pages and authored proposals are admitted."""
+    require(profile in ('tokens', 'const-eval'), 'unknown reconciliation profile')
+    if profile == 'tokens':
+        return SELECTED, ALIASES, CLASS_NAMES, ROWS
+    # Token callers and witness APIs do not depend on the optional module.
+    import const_reconciliation_proposals as proposals
+    return ('src/const_eval.md',), proposals.ALIASES, proposals.CLASS_NAMES, proposals.ROWS
+
+
+def profile_purpose(profile):
+    return 'bounded-' + ('token' if profile == 'tokens' else 'const-eval') + '-rule-reconciliation-candidate'
+
+
+def load_inputs(index_path, candidate_path, source_root, profile='tokens'):
+    selected, _, _, _ = profile_inputs(profile)
     index_bytes, candidate_bytes = index_path.read_bytes(), candidate_path.read_bytes()
     index, candidate = json.loads(index_bytes), json.loads(candidate_bytes)
     require(index['scope'] == candidate['scope'] == SCOPE, 'scope mismatch')
@@ -47,7 +64,7 @@ def load_inputs(index_path, candidate_path, source_root):
     records = {}
     selected_pages = []
     require(not source_root.is_symlink(), 'symlink source root')
-    for path in SELECTED:
+    for path in selected:
         matching = [page for page in pages if page['path'] == path]
         require(len(matching) == 1, 'selected page missing or duplicated in index')
         page = matching[0]
@@ -78,35 +95,37 @@ def load_inputs(index_path, candidate_path, source_root):
     return records, identities, all_obligations, bindings, selected_pages
 
 
-def compute_counts(rows, universe_size):
+def compute_counts(rows, universe_size, profile='tokens'):
+    _, _, class_names, _ = profile_inputs(profile)
     classes = Counter(c for row in rows for c in row['classifications'])
     return {
         'global_rule_identities': universe_size,
         'selected_rule_rows': len(rows),
         'unselected_rule_identities': universe_size - len(rows),
-        'proposed_classification_counts': {c: classes[c] for c in sorted(CLASSES)},
+        'proposed_classification_counts': {c: classes[c] for c in sorted(set(class_names.values()))},
         'reviewed_rule_rows': 0,
         'rows_with_exact_executable_evidence': 0,
     }
 
 
-def build(index_path, candidate_path, source_root):
-    records, identities, obligations, bindings, pages = load_inputs(index_path, candidate_path, source_root)
+def build(index_path, candidate_path, source_root, profile='tokens'):
+    selected_pages, aliases_by_name, class_names, proposals = profile_inputs(profile)
+    records, identities, obligations, bindings, pages = load_inputs(index_path, candidate_path, source_root, profile)
     rows = []
-    for line in ROWS.strip().splitlines():
+    for line in proposals.strip().splitlines():
         fields = line.split('|')
         require(len(fields) == 7, 'proposal requires seven explicit fields')
         label, classes, rationale, aliases, positive, invalid, interaction = fields
-        identity = ('src/tokens.md', label)
+        identity = (selected_pages[0], label)
         require(identity in records, 'foreign proposal rule: ' + label)
-        classifications = [CLASS_NAMES[c] for c in classes.split()]
+        classifications = [class_names[c] for c in classes.split()]
         executable = 'normative-semantic' in classifications or 'grammar' in classifications
         row = {
             'id': 'reconcile-' + re.sub('[^a-z0-9]+', '-', label),
             'page': identity[0], 'rule': label, **records[identity],
             'classifications': classifications,
             'rationale': rationale,
-            'candidate_obligation_ids': [ALIASES[a] for a in aliases.split()],
+            'candidate_obligation_ids': [aliases_by_name[a] for a in aliases.split()],
             'relationship': 'proposed-partial-decomposition' if executable else 'context-only',
             'missing_test_needs': [
                 'positive: Missing direct exact test link. ' + positive,
@@ -116,19 +135,22 @@ def build(index_path, candidate_path, source_root):
             ],
             'review_status': 'unreviewed',
         }
+        if profile == 'const-eval' and executable:
+            row['missing_test_needs'][-1] = (
+                'end-to-end: Missing authored original-source CHECK/BUILD/run or stage-specific rejection witnesses, named test identities, pinned-stock outcomes and immutable receipts at workers1/8. Invalid CTFE, unsupported input, resource limits and infrastructure faults require distinct outcomes; no execution is inferred from legacy IDs.')
         rows.append(row)
     rows.sort(key=lambda r: (r['page'], r['line']))
     selected = {(r['page'], r['rule']) for r in rows}
     result = {
         'schema_version': 1,
         'review_status': 'unreviewed',
-        'purpose': 'bounded-token-rule-reconciliation-candidate',
+        'purpose': profile_purpose(profile),
         'scope': dict(SCOPE),
         'bindings': bindings,
         'selected_pages': pages,
         'rows': rows,
         'unselected_rules': [{'page': page, 'rule': rule} for page, rule in sorted(set(identities) - selected)],
-        'counts': compute_counts(rows, len(identities)),
+        'counts': compute_counts(rows, len(identities), profile),
         'limitations': [
             'All classifications and mappings are proposed interpretations after reading the exact pinned token page. They remain unreviewed by the coordinator and grant no reviewed-readiness credit.',
             'The bounded selection is all115 labeled blocks on src/tokens.md only. All other2850 source identities remain explicitly unselected; none are removed from the2965-label denominator.',
@@ -141,16 +163,22 @@ def build(index_path, candidate_path, source_root):
             'All test needs are explicitly missing direct exact links and measured execution evidence. No Rust builds/tests or compiler executions were performed to produce the reconciliation candidate.',
         ],
     }
-    validate(result, index_path, candidate_path, source_root)
+    if profile == 'const-eval':
+        result['limitations'][:2] = [
+            'All classifications and mappings are proposed interpretations of the exact pinned src/const_eval.md page. They remain unreviewed and grant no reviewed-readiness credit.',
+            f'The bounded selection is all {len(records)} labeled blocks on src/const_eval.md only. All other {len(identities) - len(records)} source identities remain explicitly unselected; none are removed from the {len(identities)}-label denominator.',
+        ]
+    validate(result, index_path, candidate_path, source_root, profile)
     return result
 
 
-def validate(data, index_path, candidate_path, source_root):
+def validate(data, index_path, candidate_path, source_root, profile='tokens'):
+    _, _, class_names, _ = profile_inputs(profile)
     require(isinstance(data, dict) and set(data) == TOP_FIELDS, 'unexpected sidecar fields')
     require(type(data['schema_version']) is int and data['schema_version'] == 1, 'schema version')
     require(data['scope'] == SCOPE and data['review_status'] == 'unreviewed', 'reviewed or foreign scope claim')
-    require(data['purpose'] == 'bounded-token-rule-reconciliation-candidate', 'purpose mismatch')
-    records, identities, obligations, bindings, pages = load_inputs(index_path, candidate_path, source_root)
+    require(data['purpose'] == profile_purpose(profile), 'purpose mismatch')
+    records, identities, obligations, bindings, pages = load_inputs(index_path, candidate_path, source_root, profile)
     require(data['bindings'] == bindings, 'stale source/index/candidate bindings')
     require(data['selected_pages'] == pages, 'selected page binding mismatch')
     require(isinstance(data['rows'], list) and data['rows'], 'rule rows must be a nonempty list')
@@ -167,7 +195,7 @@ def validate(data, index_path, candidate_path, source_root):
         for key, value in records[identity].items():
             require(row[key] == value and type(row[key]) is type(value), 'stale source block binding')
         classifications = row['classifications']
-        require(isinstance(classifications, list) and classifications and all(isinstance(c, str) for c in classifications) and len(set(classifications)) == len(classifications) and set(classifications) <= CLASSES, 'invalid classifications')
+        require(isinstance(classifications, list) and classifications and all(isinstance(c, str) for c in classifications) and len(set(classifications)) == len(classifications) and set(classifications) <= set(class_names.values()), 'invalid classifications')
         require(isinstance(row['rationale'], str) and row['rationale'].strip(), 'missing rationale')
         links = row['candidate_obligation_ids']
         require(isinstance(links, list) and links and all(isinstance(link, str) for link in links) and len(set(links)) == len(links) and set(links) <= obligations, 'foreign or duplicate candidate obligation')
@@ -183,8 +211,13 @@ def validate(data, index_path, candidate_path, source_root):
     require(isinstance(unselected, list) and all(isinstance(r, dict) and set(r) == {'page','rule'} for r in unselected), 'invalid unselected identity')
     expected = [{'page': page, 'rule': rule} for page, rule in sorted(set(identities) - seen)]
     require(unselected == expected, 'omitted duplicate foreign or reordered unselected identities')
-    require(json.dumps(data['counts'], sort_keys=True) == json.dumps(compute_counts(data['rows'], len(identities)), sort_keys=True), 'counts or evidence claim mismatch')
+    require(json.dumps(data['counts'], sort_keys=True) == json.dumps(compute_counts(data['rows'], len(identities), profile), sort_keys=True), 'counts or evidence claim mismatch')
     require(isinstance(data['limitations'], list) and data['limitations'] and all(isinstance(t, str) and t.strip() for t in data['limitations']), 'missing limitations')
+    if profile == 'const-eval':
+        require(data['limitations'][:2] == [
+            'All classifications and mappings are proposed interpretations of the exact pinned src/const_eval.md page. They remain unreviewed and grant no reviewed-readiness credit.',
+            f'The bounded selection is all {len(records)} labeled blocks on src/const_eval.md only. All other {len(identities) - len(records)} source identities remain explicitly unselected; none are removed from the {len(identities)}-label denominator.',
+        ], 'const-eval scope limitations mismatch')
     return data['counts']
 
 
@@ -366,13 +399,20 @@ def assess_witness_links(data, index_path, candidate_path, source_root, repo_roo
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['generate','validate','build-witness-links','validate-witness-links','assess-witness-links'])
+    parser.add_argument('--profile', choices=['tokens', 'const-eval'], default='tokens')
     parser.add_argument('--rule-index', type=Path, required=True)
     parser.add_argument('--inventory', type=Path, required=True)
     parser.add_argument('--source-root', type=Path, required=True)
     parser.add_argument('--artifact', type=Path, required=True)
-    parser.add_argument('--repo-root', type=Path, default=Path(__file__).resolve().parent.parent)
+    parser.add_argument('--repo-root', type=Path)
     parser.add_argument('--evidence', type=Path, action='append', default=[])
     args = parser.parse_args(argv)
+    if args.profile == 'const-eval':
+        require(args.action in ('generate', 'validate'), 'const-eval profile supports generate/validate only')
+        require(args.repo_root is None and not args.evidence,
+                'const-eval profile does not support --repo-root or --evidence')
+    if args.repo_root is None:
+        args.repo_root = Path(__file__).resolve().parent.parent
     require(not args.evidence or args.action == 'assess-witness-links', '--evidence requires assess-witness-links')
     if args.action == 'assess-witness-links':
         artifact = witness_artifact_path(args.artifact, args.repo_root, args.source_root)
@@ -395,12 +435,12 @@ def main(argv=None):
         print(json.dumps(validate_witness_links(data, args.rule_index, args.inventory, args.source_root, args.repo_root), sort_keys=True))
         return
     if args.action == 'generate':
-        data = build(args.rule_index, args.inventory, args.source_root)
+        data = build(args.rule_index, args.inventory, args.source_root, args.profile)
         with args.artifact.open('x', encoding='utf-8') as output:
             output.write(json.dumps(data, indent=2) + '\n')
     else:
         data = json.loads(args.artifact.read_text())
-    print(json.dumps(validate(data, args.rule_index, args.inventory, args.source_root), sort_keys=True))
+    print(json.dumps(validate(data, args.rule_index, args.inventory, args.source_root, args.profile), sort_keys=True))
 
 
 if __name__ == '__main__':

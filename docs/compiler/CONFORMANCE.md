@@ -276,6 +276,19 @@ or execution credit. Structural validation does not establish that a proposed
 normative interpretation is correct. All 2,965 rule mappings still require
 review. The default candidate intentionally contains no direct test links.
 
+For the pinned constant-evaluation chapter, add `--profile const-eval` to the
+`generate` or `validate` command above and use a separate scratch artifact.
+`tools/const_reconciliation_proposals.py` explicitly accounts for all 44 labeled
+blocks in `src/const_eval.md`, including the distinction between promotion and
+temporary lifetime extension, evaluated versus skipped faults, target-based
+interpretation, and the specification's unresolved const-function type list.
+The profile retains all 2,921 other rule identities, missing exact-test links,
+and zero review or execution credit. It cannot be used with the token-specific
+witness-link or evidence-assessment actions. Default token artifacts remain
+unchanged, and a candidate from one profile cannot validate as the other.
+Both profiles refer to the same 2,965-rule universe, not additive language
+denominators. Proposed page decomposition is not tested Rust compatibility.
+
 For the six explicitly authored token witnesses, use `build-witness-links`
 with the same arguments and a new external scratch artifact path. Check that
 separate artifact with `validate-witness-links`. These actions bind the exact

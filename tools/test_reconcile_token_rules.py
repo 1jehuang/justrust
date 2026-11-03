@@ -6,6 +6,8 @@ import io
 import json
 import os
 import tempfile
+import sys
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 from pathlib import Path
@@ -64,6 +66,14 @@ class ReconciliationTests(unittest.TestCase):
         self.assertEqual(counts['unselected_rule_identities'], 2)
         self.assertEqual(counts['reviewed_rule_rows'], 0)
         self.assertEqual(counts['rows_with_exact_executable_evidence'], 0)
+
+    def test_default_token_bytes_are_unchanged_and_const_module_is_optional(self):
+        with mock.patch.dict(sys.modules, {'const_reconciliation_proposals': None}):
+            default = build(self.index_path, self.candidate_path, self.root)
+            explicit = build(self.index_path, self.candidate_path, self.root, profile='tokens')
+        raw = (json.dumps(default, indent=2) + '\n').encode()
+        self.assertEqual(digest(raw), '81bde1dfcdd0542a5dda22960f0a7f82047dfec5c3babca08080c7efe260b35a')
+        self.assertEqual(default, explicit)
 
     def test_omitted_selected_rule(self):
         self.rejected(lambda d: d['rows'].pop(), 'omitted selected')
@@ -191,6 +201,183 @@ class ReconciliationTests(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             main(self.command(output))
         self.assertEqual(before, output.read_bytes())
+
+
+class ConstProfileTests(unittest.TestCase):
+    """Dummy proposals and source exercise structure, not Rust acceptance."""
+
+    def setUp(self):
+        ReconciliationTests.setUp(self)
+        self.proposals = SimpleNamespace(
+            ALIASES={'const': 'synthetic-const'},
+            CLASS_NAMES={'N': 'normative-semantic', 'X': 'cross-reference'},
+            ROWS='const-eval.one|N|Synthetic rationale|const|positive|invalid|interaction\n'
+                 'const-eval.two|X|Synthetic context|const|positive|invalid|interaction')
+        patch = mock.patch.dict(sys.modules, {'const_reconciliation_proposals': self.proposals})
+        patch.start()
+        self.addCleanup(patch.stop)
+        text = 'r[const-eval.one]\nsynthetic one\nr[const-eval.two]\nsynthetic two\n'
+        source = self.root / 'src/const_eval.md'
+        source.write_text(text)
+        candidate = json.loads(self.candidate_path.read_bytes())
+        candidate['sections'][0]['obligations'].append({'id': 'synthetic-const'})
+        self.candidate_path.write_text(json.dumps(candidate))
+        index = json.loads(self.index_path.read_bytes())
+        index['provenance']['candidate_inventory_sha256'] = digest(self.candidate_path.read_bytes())
+        index['pages'].append({'path': 'src/const_eval.md', 'sha256': digest(source.read_bytes()),
+                               'url': 'synthetic-const-url', 'rules': parse_markdown(text)[0]})
+        index['pages'][1]['rules'] = [{'label': 'other.' + str(i), 'line': i + 1} for i in range(2847)]
+        index['counts']['unique_rule_labels_total'] = 2965
+        self.index_path.write_text(json.dumps(index))
+        self.data = self.build_const()
+
+    def build_const(self):
+        return build(self.index_path, self.candidate_path, self.root, profile='const-eval')
+
+    def verify(self, data):
+        return validate(data, self.index_path, self.candidate_path, self.root, profile='const-eval')
+
+    rejected = ReconciliationTests.rejected
+
+    def test_const_selection_global_identity_and_no_credit(self):
+        self.assertEqual(self.data, self.build_const())
+        self.assertEqual(self.verify(self.data)['global_rule_identities'], 2965)
+        self.assertEqual(self.data['counts']['unselected_rule_identities'], 2963)
+        self.assertEqual(self.data['counts']['reviewed_rule_rows'], 0)
+        self.assertEqual(self.data['counts']['rows_with_exact_executable_evidence'], 0)
+        self.assertEqual({row['page'] for row in self.data['rows']}, {'src/const_eval.md'})
+        self.assertIn({'page': 'src/tokens.md', 'rule': 'lex.token'}, self.data['unselected_rules'])
+        self.assertEqual(self.data['purpose'], 'bounded-const-eval-rule-reconciliation-candidate')
+        self.assertNotIn('token', ' '.join(self.data['limitations']))
+        self.assertIn('2965-label denominator', self.data['limitations'][1])
+        records = reconciliation.load_inputs(self.index_path, self.candidate_path, self.root, 'const-eval')[0]
+        self.assertEqual(len(records), 2)
+
+    def test_const_adversarial_rows_bindings_counts_and_scope(self):
+        mutations = [
+            (lambda d: d['rows'].pop(), 'omitted selected'),
+            (lambda d: d['rows'].append(copy.deepcopy(d['rows'][0])), 'duplicate rule'),
+            (lambda d: d['rows'][0].update(rule='lex.token'), 'foreign rule'),
+            (lambda d: d['rows'][0].update(page='src/tokens.md'), 'foreign rule'),
+            (lambda d: d['rows'][0].update(source_block_sha256='0' * 64), 'source block'),
+            (lambda d: d['rows'][0].update(line=True), 'source block'),
+            (lambda d: d['rows'][0].update(candidate_obligation_ids=['foreign']), 'candidate obligation'),
+            (lambda d: d['rows'][0].update(classifications=['index']), 'classifications'),
+            (lambda d: d['bindings'].update(rule_index_sha256='0' * 64), 'bindings'),
+            (lambda d: d['bindings'].update(candidate_inventory_sha256='0' * 64), 'bindings'),
+            (lambda d: d['selected_pages'][0].update(sha256='0' * 64), 'page binding'),
+            (lambda d: d['counts'].update(reviewed_rule_rows=1), 'counts or evidence'),
+            (lambda d: d['counts'].update(rows_with_exact_executable_evidence=1), 'counts or evidence'),
+            (lambda d: d['unselected_rules'].pop(), 'unselected identities'),
+            (lambda d: d.update(purpose='bounded-token-rule-reconciliation-candidate'), 'purpose mismatch'),
+            (lambda d: d['limitations'].__setitem__(0, 'Token-only scope'), 'scope limitations'),
+        ]
+        for mutate, error in mutations:
+            with self.subTest(error=error):
+                self.rejected(mutate, error)
+
+    def test_profiles_cannot_validate_each_others_artifacts(self):
+        token = build(self.index_path, self.candidate_path, self.root)
+        with self.assertRaisesRegex(ValueError, 'purpose mismatch'):
+            self.verify(token)
+        with self.assertRaisesRegex(ValueError, 'purpose mismatch'):
+            validate(self.data, self.index_path, self.candidate_path, self.root)
+        self.assertNotIn('Lexical-invalid', json.dumps(self.data))
+
+    def test_unknown_and_prefix_cli_profiles_are_rejected(self):
+        output = self.root / 'must-not-exist.json'
+        for profile in ('const', 'token', 'unknown'):
+            command = self.command('generate', output)
+            command[command.index('const-eval')] = profile
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(command)
+            self.assertFalse(output.exists())
+
+    def test_const_proposal_completeness_foreign_and_duplicate(self):
+        original = self.proposals.ROWS
+        for rows, error in ((original.splitlines()[0], 'omitted selected'),
+                            (original + '\n' + original.splitlines()[0], 'duplicate rule'),
+                            (original.replace('const-eval.one', 'lex.token'), 'foreign proposal'),
+                            (original + '|extra', 'seven explicit fields')):
+            with self.subTest(error=error), mock.patch.object(self.proposals, 'ROWS', rows):
+                with self.assertRaisesRegex(ValueError, error):
+                    self.build_const()
+
+    def test_const_changed_inputs_and_duplicate_global_labels_rejected(self):
+        for path in (self.index_path, self.candidate_path, self.root / 'src/const_eval.md'):
+            before = path.read_bytes()
+            path.write_bytes(before + b'\n')
+            try:
+                with self.assertRaises(ValueError):
+                    self.verify(self.data)
+            finally:
+                path.write_bytes(before)
+        index = json.loads(self.index_path.read_bytes())
+        index['pages'][1]['rules'][0]['label'] = 'const-eval.one'
+        self.index_path.write_text(json.dumps(index))
+        with self.assertRaisesRegex(ValueError, 'duplicate index rule label'):
+            self.build_const()
+
+    def command(self, action, output):
+        return [action, '--profile', 'const-eval', '--rule-index', str(self.index_path),
+                '--inventory', str(self.candidate_path), '--source-root', str(self.root),
+                '--artifact', str(output)]
+
+    def test_const_cli_generate_validate_exclusive_output(self):
+        output = self.root / 'const.json'
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(self.command('generate', output))
+            main(self.command('validate', output))
+        raw = output.read_bytes()
+        self.assertEqual(json.loads(raw), self.data)
+        with self.assertRaises(FileExistsError):
+            main(self.command('generate', output))
+        self.assertEqual(raw, output.read_bytes())
+
+    def test_const_unsupported_cli_combinations_fail_before_filesystem_access(self):
+        output = self.root / 'must-not-exist.json'
+        cases = [(action, []) for action in ('build-witness-links', 'validate-witness-links', 'assess-witness-links')]
+        cases += [(action, [flag, str(self.root)]) for action in ('generate', 'validate')
+                  for flag in ('--repo-root', '--evidence')]
+        for action, extra in cases:
+            with self.subTest(action=action, extra=extra), \
+                 mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('premature read')), \
+                 mock.patch.object(Path, 'read_text', side_effect=AssertionError('premature read')), \
+                 mock.patch.object(Path, 'open', side_effect=AssertionError('premature open')):
+                with self.assertRaisesRegex(ValueError, 'const-eval profile'):
+                    main(self.command(action, output) + extra)
+            self.assertFalse(output.exists())
+
+    def test_unknown_api_profile_rejected_before_inputs(self):
+        for api, args in ((build, ()), (reconciliation.load_inputs, ()), (validate, (self.data,))):
+            with mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('premature read')):
+                with self.assertRaisesRegex(ValueError, 'unknown reconciliation profile'):
+                    api(*args, self.index_path, self.candidate_path, self.root, profile='foreign')
+
+
+class PinnedConstProfileTests(unittest.TestCase):
+    def test_actual_pinned_const_profile_if_reference_source_is_supplied(self):
+        source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
+        if not source:
+            self.skipTest('set JUSTRUST_WITNESS_REFERENCE_ROOT for pinned-source structural checks')
+        repo = Path(os.environ.get('JUSTRUST_WITNESS_REPO_ROOT', BASE.parent))
+        index = repo / 'data/compiler-language-reference-rules.json'
+        inventory = repo / 'data/compiler-language-inventory.json'
+        data = build(index, inventory, Path(source), profile='const-eval')
+        counts = validate(data, index, inventory, Path(source), profile='const-eval')
+        self.assertEqual((counts['global_rule_identities'], counts['selected_rule_rows'],
+                          counts['unselected_rule_identities']), (2965, 44, 2921))
+        self.assertEqual(counts['reviewed_rule_rows'], 0)
+        self.assertEqual(counts['rows_with_exact_executable_evidence'], 0)
+        self.assertEqual(counts['proposed_classification_counts']['normative-semantic'], 40)
+        self.assertEqual(counts['proposed_classification_counts']['index'], 4)
+        self.assertEqual(data['purpose'], 'bounded-const-eval-rule-reconciliation-candidate')
+        self.assertEqual(data, build(index, inventory, Path(source), profile='const-eval'))
+        self.assertNotIn('Lexical-invalid', json.dumps(data))
+        self.assertNotIn('src/tokens.md only', json.dumps(data))
+        token = build(index, inventory, Path(source))
+        self.assertEqual(digest((json.dumps(token, indent=2) + '\n').encode()),
+                         'ea7fa27afdf901b91464ead14c54883debd091819c25bf02870e7a434ae61785')
 
 
 class WitnessLinkTests(unittest.TestCase):
