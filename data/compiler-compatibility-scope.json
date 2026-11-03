@@ -5269,7 +5269,32 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_vec_unused_truncate_live_element_borrow_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_vec_unused_truncate_live_element_borrow_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Uncalled body retains a shared reference into the vector across truncate(0) and dereferences it afterward. The mutable method receiver conflicts with a still-live element loan. This is a new truncate invalidation scenario, not generic borrowing completeness. Requires pinned stock diagnostic plus strict InvalidAfterParse native CHECK/BUILD rejection at workers 1 and 8, original root parse and declaration publication. Unsupported/resource/infrastructure rejection cannot satisfy this obligation."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_vec_unused_truncate_live_element_borrow_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 b9f9d1d7cd5185b491942602249b6213be7c894693d285f41db73d956b1f9b42. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. alloc/vec/struct.Vec.html#method.truncate page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5. Exact source execution, not literal documentation stability, supplies behavioral evidence."
+                }
+              ]
             },
             {
               "evidence_notes": [
@@ -5281,6 +5306,24 @@
                       "test": "native_heap_exact_swap_preserves_pair_alias_and_mutable_element_origins"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_vec_swap_remove_truncate_owned_drop_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. swap_remove(0) returns Guard1 and moves last Guard3 into its slot; explicit returned-value drop, truncate to one, and final vector drop each destroy exactly one value. No unspecified multi-element destruction order is assumed. Requires authentic pinned stock plus native CHECK/BUILD/run at workers 1 and 8 with literal stdout and CHECK codegen exclusion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_vec_swap_remove_truncate_owned_drop_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 9a7e085db375f20bbb644658fda549b7989edf16ed760f328b8dc12432bee8e9. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. alloc/vec/struct.Vec.html#method.swap_remove page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5; alloc/vec/struct.Vec.html#method.truncate page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ],
               "layer": "interaction",
@@ -5288,6 +5331,10 @@
                 {
                   "suite": "vec_algorithms",
                   "test": "native_heap_exact_swap_preserves_pair_alias_and_mutable_element_origins"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_vec_swap_remove_truncate_owned_drop_source"
                 }
               ]
             },
@@ -5301,6 +5348,24 @@
                       "test": "private_stride_box_initialization_mutation_move_and_drop_match_stock"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_vec_swap_remove_truncate_owned_drop_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. swap_remove(0) returns Guard1 and moves last Guard3 into its slot; explicit returned-value drop, truncate to one, and final vector drop each destroy exactly one value. No unspecified multi-element destruction order is assumed. Requires authentic pinned stock plus native CHECK/BUILD/run at workers 1 and 8 with literal stdout and CHECK codegen exclusion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_vec_swap_remove_truncate_owned_drop_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 9a7e085db375f20bbb644658fda549b7989edf16ed760f328b8dc12432bee8e9. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. alloc/vec/struct.Vec.html#method.swap_remove page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5; alloc/vec/struct.Vec.html#method.truncate page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ],
               "layer": "end_to_end",
@@ -5308,6 +5373,10 @@
                 {
                   "suite": "private_storage_stride",
                   "test": "private_stride_box_initialization_mutation_move_and_drop_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_vec_swap_remove_truncate_owned_drop_source"
                 }
               ]
             }
@@ -5332,6 +5401,30 @@
                 {
                   "suite": "option_map",
                   "test": "option_lazy_combinators_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_option_unused_replace_nested_payload_mismatch_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_option_unused_replace_nested_payload_mismatch_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Uncalled function attempts to replace Option<Result<Guard,i32>> with Ok(bool), violating the existing nested success-payload type. This is method argument typing, not complete Result errors or callback checking. Requires pinned stock diagnostic plus strict InvalidAfterParse native CHECK/BUILD rejection at workers 1 and 8, original root parse and declaration publication. Unsupported/resource/infrastructure rejection cannot satisfy this obligation."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_option_unused_replace_nested_payload_mismatch_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 244e834cb68f611bf6c0fd43ae0faf371292876fc0f5e2b0bedf041dbf5d85a5. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. core/option/enum.Option.html#method.replace page SHA256 984ae53a0a224e47541542ed7efddf3ee98918c16a4e5f03943812b2eca1b735. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ]
             },
@@ -5341,6 +5434,30 @@
                 {
                   "suite": "option_map",
                   "test": "option_lazy_combinators_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_option_replace_take_nested_owned_drop_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_option_replace_take_nested_owned_drop_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Nested Option<Result<Guard,i32>> replacement returns the prior owned value without dropping it until explicit drop; take returns the error and clears the slot; replacement of None installs a new owned payload. This is one exact ownership/cleanup sequence, not general Option/Result combinators. Requires authentic pinned stock plus native CHECK/BUILD/run at workers 1 and 8 with literal stdout and CHECK codegen exclusion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_option_replace_take_nested_owned_drop_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 1597fdc1b7f8172d05287648e0afcab884c20dd1450ce1bf922bb3e4e9d348b3. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. core/option/enum.Option.html#method.replace page SHA256 984ae53a0a224e47541542ed7efddf3ee98918c16a4e5f03943812b2eca1b735; core/option/enum.Option.html#method.take page SHA256 984ae53a0a224e47541542ed7efddf3ee98918c16a4e5f03943812b2eca1b735. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ]
             },
@@ -5350,6 +5467,30 @@
                 {
                   "suite": "option_map",
                   "test": "option_lazy_combinators_match_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_option_replace_take_nested_owned_drop_source"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_option_replace_take_nested_owned_drop_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Nested Option<Result<Guard,i32>> replacement returns the prior owned value without dropping it until explicit drop; take returns the error and clears the slot; replacement of None installs a new owned payload. This is one exact ownership/cleanup sequence, not general Option/Result combinators. Requires authentic pinned stock plus native CHECK/BUILD/run at workers 1 and 8 with literal stdout and CHECK codegen exclusion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_option_replace_take_nested_owned_drop_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 1597fdc1b7f8172d05287648e0afcab884c20dd1450ce1bf922bb3e4e9d348b3. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. core/option/enum.Option.html#method.replace page SHA256 984ae53a0a224e47541542ed7efddf3ee98918c16a4e5f03943812b2eca1b735; core/option/enum.Option.html#method.take page SHA256 984ae53a0a224e47541542ed7efddf3ee98918c16a4e5f03943812b2eca1b735. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ]
             }
@@ -5510,6 +5651,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "library_iterator_unused_collect_wrong_type_source"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_iterator_unused_nth_non_usize_index_source"
                 }
               ],
               "evidence_notes": [
@@ -5521,6 +5666,24 @@
                       "test": "library_iterator_unused_collect_wrong_type_source"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_unused_nth_non_usize_index_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Uncalled owned-vector iterator body supplies bool instead of usize to nth. This exact adapter-index type mismatch remains separate from existing collect element-type mismatch and consumer runtime tests. Requires pinned stock diagnostic plus strict InvalidAfterParse native CHECK/BUILD rejection at workers 1 and 8, original root parse and declaration publication. Unsupported/resource/infrastructure rejection cannot satisfy this obligation."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_unused_nth_non_usize_index_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 e41032cfca751144ce24190794a9b120802266c383b21234b574f4dbe75b9bfb. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. core/iter/trait.Iterator.html#method.nth page SHA256 71ce01f805310b1ef7c9248b6d9a11f4b7f0ff6555154b615f621c44593c11c8. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ]
             },
@@ -5534,6 +5697,24 @@
                       "test": "iterator_zip_matches_stock"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_nth_owned_skipped_drop_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Owned Vec::IntoIter nth(1) discards Guard1, returns Guard2 for explicit drop, then next returns Guard3 for explicit drop and nth(0) observes exhaustion. Existing iterator_consumers_match_stock covers borrowed/copied scalar nth and custom non-fused stopping, not this non-Copy skipped/selected cleanup sequence. Requires authentic pinned stock plus native CHECK/BUILD/run at workers 1 and 8 with literal stdout and CHECK codegen exclusion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_nth_owned_skipped_drop_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 65b99e2edfb60a5309e0758577dd2f195a3952ba0426431af2032bf42efc05d4. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. core/iter/trait.Iterator.html#method.nth page SHA256 71ce01f805310b1ef7c9248b6d9a11f4b7f0ff6555154b615f621c44593c11c8; core/iter/trait.Iterator.html#tymethod.next page SHA256 71ce01f805310b1ef7c9248b6d9a11f4b7f0ff6555154b615f621c44593c11c8; alloc/vec/struct.Vec.html#method.into_iter page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ],
               "layer": "interaction",
@@ -5541,6 +5722,10 @@
                 {
                   "suite": "iterator_fold",
                   "test": "iterator_zip_matches_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_iterator_nth_owned_skipped_drop_source"
                 }
               ]
             },
@@ -5563,6 +5748,24 @@
                       "test": "iterator_sum_matches_stock"
                     }
                   ]
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_nth_owned_skipped_drop_source"
+                    }
+                  ],
+                  "note": "Exact-source obligation whose measured status comes only from revision-bound execution receipts. The tracker includes ignored cases. Owned Vec::IntoIter nth(1) discards Guard1, returns Guard2 for explicit drop, then next returns Guard3 for explicit drop and nth(0) observes exhaustion. Existing iterator_consumers_match_stock covers borrowed/copied scalar nth and custom non-fused stopping, not this non-Copy skipped/selected cleanup sequence. Requires authentic pinned stock plus native CHECK/BUILD/run at workers 1 and 8 with literal stdout and CHECK codegen exclusion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "library_iterator_nth_owned_skipped_drop_source"
+                    }
+                  ],
+                  "note": "Bounded original-source library witness, not complete API coverage. Original source SHA256 65b99e2edfb60a5309e0758577dd2f195a3952ba0426431af2032bf42efc05d4. Pinned stock 1.98.1 commit 48a229ceaefd4985c50990b14116b6d856af0985. core/iter/trait.Iterator.html#method.nth page SHA256 71ce01f805310b1ef7c9248b6d9a11f4b7f0ff6555154b615f621c44593c11c8; core/iter/trait.Iterator.html#tymethod.next page SHA256 71ce01f805310b1ef7c9248b6d9a11f4b7f0ff6555154b615f621c44593c11c8; alloc/vec/struct.Vec.html#method.into_iter page SHA256 e6729f716596a6fe3097c70b44b8cf310ba7284c0d10756cb3b048648c18ccf5. Exact source execution, not literal documentation stability, supplies behavioral evidence."
                 }
               ],
               "layer": "end_to_end",
@@ -5574,6 +5777,10 @@
                 {
                   "suite": "iterator_fold",
                   "test": "iterator_sum_matches_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "library_iterator_nth_owned_skipped_drop_source"
                 }
               ]
             }

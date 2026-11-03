@@ -1039,3 +1039,146 @@ fn main() {}
         }],
     );
 }
+
+// Independent exact original-source library regressions. These bounded
+// ownership and cleanup witnesses do not establish library completeness.
+#[test]
+fn library_option_replace_take_nested_owned_drop_source() {
+    oracle::check(
+        "library-option-replace-take-nested-owned-drop-source",
+        &[Case {
+            name: "replace_returns_old_nested_owned_value_and_take_empties_slot",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn main() {
+    let mut slot: Option<Result<Guard, i32>> = Some(Ok(Guard { n: 7 }));
+    let previous = slot.replace(Err(9));
+    println!("replaced");
+    drop(previous);
+    match slot.take() {
+        Some(Err(code)) => println!("error {}", code),
+        _ => println!("unexpected"),
+    }
+    println!("empty {}", slot.is_none());
+    drop(slot.replace(Ok(Guard { n: 11 })));
+    println!("restored");
+    drop(slot);
+}
+"#,
+            expect: Expect::Run("replaced\ndrop 7\nerror 9\nempty true\nrestored\ndrop 11\n"),
+        }],
+    );
+}
+
+#[test]
+fn library_option_unused_replace_nested_payload_mismatch_source() {
+    oracle::check(
+        "library-option-unused-replace-nested-payload-mismatch-source",
+        &[Case {
+            name: "unused_replace_cannot_change_nested_owned_success_payload_type",
+            source: r#"struct Guard { n: i32 }
+fn unused() {
+    let mut slot: Option<Result<Guard, i32>> = None;
+    let _ = slot.replace(Ok(false));
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
+
+#[test]
+fn library_vec_swap_remove_truncate_owned_drop_source() {
+    oracle::check(
+        "library-vec-swap-remove-truncate-owned-drop-source",
+        &[Case {
+            name: "swap_remove_moves_last_payload_and_truncate_drops_only_discarded_tail",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn main() {
+    let mut values: Vec<Guard> = Vec::new();
+    values.push(Guard { n: 1 });
+    values.push(Guard { n: 2 });
+    values.push(Guard { n: 3 });
+    let removed = values.swap_remove(0usize);
+    println!("removed {} remaining {} {}", removed.n, values[0].n, values[1].n);
+    drop(removed);
+    values.truncate(1usize);
+    println!("kept {} len {}", values[0].n, values.len());
+    drop(values);
+}
+"#,
+            expect: Expect::Run("removed 1 remaining 3 2\ndrop 1\ndrop 2\nkept 3 len 1\ndrop 3\n"),
+        }],
+    );
+}
+
+#[test]
+fn library_vec_unused_truncate_live_element_borrow_source() {
+    oracle::check(
+        "library-vec-unused-truncate-live-element-borrow-source",
+        &[Case {
+            name: "unused_truncate_cannot_invalidate_element_borrow_read_later",
+            source: r#"fn unused() {
+    let mut values: Vec<i32> = Vec::new();
+    values.push(7i32);
+    let borrowed = &values[0];
+    values.truncate(0usize);
+    println!("{}", *borrowed);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0502"),
+        }],
+    );
+}
+
+#[test]
+fn library_iterator_nth_owned_skipped_drop_source() {
+    oracle::check(
+        "library-iterator-nth-owned-skipped-drop-source",
+        &[Case {
+            name: "nth_consumes_skipped_owned_item_and_returns_selected_item_once",
+            source: r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn main() {
+    let mut values: Vec<Guard> = Vec::new();
+    values.push(Guard { n: 1 });
+    values.push(Guard { n: 2 });
+    values.push(Guard { n: 3 });
+    let mut iterator = values.into_iter();
+    match iterator.nth(1usize) {
+        Some(value) => { println!("selected {}", value.n); drop(value); }
+        None => println!("unexpected"),
+    }
+    match iterator.next() {
+        Some(value) => { println!("tail {}", value.n); drop(value); }
+        None => println!("unexpected"),
+    }
+    println!("empty {}", iterator.nth(0usize).is_none());
+}
+"#,
+            expect: Expect::Run("drop 1\nselected 2\ndrop 2\ntail 3\ndrop 3\nempty true\n"),
+        }],
+    );
+}
+
+#[test]
+fn library_iterator_unused_nth_non_usize_index_source() {
+    oracle::check(
+        "library-iterator-unused-nth-non-usize-index-source",
+        &[Case {
+            name: "unused_nth_requires_usize_index_not_bool",
+            source: r#"fn unused() {
+    let mut values: Vec<i32> = Vec::new();
+    values.push(7i32);
+    let mut iterator = values.into_iter();
+    let _ = iterator.nth(true);
+}
+fn main() {}
+"#,
+            expect: Expect::InvalidAfterParse("E0308"),
+        }],
+    );
+}
