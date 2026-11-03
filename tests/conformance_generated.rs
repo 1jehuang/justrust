@@ -1599,3 +1599,381 @@ fn main() {}
         }],
     );
 }
+
+// Scratch-authored append at b3b08baa6. Bounded campaigns, not exhaustive Rust,
+// sustained fuzzing, or failure minimization. Existing fixtures stay unchanged.
+mod bounded_seed_campaign {
+    use super::{Case, Expect, oracle};
+
+    // Literal source identity, independent of environment, scheduling and order.
+    const SEEDS: [u64; 4] = [0x10, 0x21, 0x32, 0x43];
+    const FAMILIES: [&str; 6] = [
+        "owned_option_partial_drop",
+        "scalar_projected_replace",
+        "closure_result_option",
+        "unused_live_projection_assignment",
+        "unused_generic_wrong_argument",
+        "unused_conditional_noncopy_move",
+    ];
+
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    enum Outcome {
+        Run(String),
+        InvalidAfterParse(&'static str),
+    }
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct Generated {
+        source: String,
+        expected: Outcome,
+    }
+
+    // Finite grammar: each seed selects if vs match and true/false call order,
+    // not just constants. Every valid program calls both paths exactly once.
+    // Three scalar operands in 1..=13, only addition (at most 26), two calls,
+    // no recursion/loops/unsafe/heap input. Invalid bodies remain uncalled and
+    // retain a live loan, explicit type mismatch, or conditional owned move.
+    fn values(seed: u64) -> (i32, i32, i32) {
+        (
+            (seed % 13 + 1) as i32,
+            (seed.rotate_left(7) % 13 + 1) as i32,
+            (seed.rotate_left(11) % 13 + 1) as i32,
+        )
+    }
+    fn branch(seed: u64, yes: &str, no: &str) -> String {
+        if seed & 1 == 0 {
+            format!("if flag {{ {yes} }} else {{ {no} }}")
+        } else {
+            format!("match flag {{ true => {{ {yes} }}, false => {{ {no} }} }}")
+        }
+    }
+    fn order(seed: u64) -> [bool; 2] {
+        if seed & 2 == 0 {
+            [true, false]
+        } else {
+            [false, true]
+        }
+    }
+    fn generate(family: usize, seed: u64) -> Generated {
+        assert!(family < FAMILIES.len(), "strict family guard");
+        let (a, b, c) = values(seed);
+        let flags = order(seed);
+        let calls = format!("fn main() {{ run({}); run({}); }}\n", flags[0], flags[1]);
+        let identity = "fn identity<T>(value: T) -> T { value }\n";
+        let guard = "struct Guard { n: i32 }\nimpl Drop for Guard { fn drop(&mut self) { println!(\"drop {}\", self.n); } }\n";
+        match family {
+            0 => {
+                let choose = branch(seed, "Some(pair.0)", "None");
+                let source = format!(
+                    "{guard}{identity}fn run(flag: bool) {{\nlet pair = identity::<(Guard, i32)>((Guard {{ n: {a} }}, {b}));\nlet borrowed = &pair.0.n; println!(\"borrow {{}} {{}}\", *borrowed, pair.1);\nlet chosen = {choose};\nmatch chosen {{ Some(value) => {{ println!(\"some {{}}\", value.n); drop(value); }}, None => println!(\"none\"), }}\nprintln!(\"tail {{}}\", pair.1);\n}}\n{calls}"
+                );
+                let mut stdout = String::new();
+                for flag in flags {
+                    stdout.push_str(&format!("borrow {a} {b}\n"));
+                    if flag {
+                        stdout.push_str(&format!("some {a}\ndrop {a}\ntail {b}\n"));
+                    } else {
+                        stdout.push_str(&format!("none\ntail {b}\ndrop {a}\n"));
+                    }
+                }
+                Generated {
+                    source,
+                    expected: Outcome::Run(stdout),
+                }
+            }
+            1 => {
+                let choose = branch(
+                    seed,
+                    &format!("replace::<i32>(slot, {b});"),
+                    &format!("replace::<i32>(slot, {c});"),
+                );
+                let source = format!(
+                    "{identity}fn replace<T>(place: &mut T, value: T) {{ *place = value; }}\nfn run(flag: bool) {{ let mut pair = identity::<(i32, i32)>(({a}, {a})); let slot = &mut pair.0; {choose}; println!(\"after {{}} {{}}\", pair.0, pair.1); }}\n{calls}"
+                );
+                let stdout = flags
+                    .iter()
+                    .map(|flag| format!("after {} {a}\n", if *flag { b } else { c }))
+                    .collect::<String>();
+                Generated {
+                    source,
+                    expected: Outcome::Run(stdout),
+                }
+            }
+            2 => {
+                let choose = branch(
+                    seed,
+                    &format!("Ok::<i32, i32>({a} + {b})"),
+                    &format!("Err::<i32, i32>({c})"),
+                );
+                let source = format!(
+                    "fn run(flag: bool) {{ let call = || {{ {choose} }}; let value = match call() {{ Ok(n) => Some(n), Err(_) => None }}; match value {{ Some(n) => println!(\"some {{}}\", n), None => println!(\"none\"), }} }}\n{calls}"
+                );
+                let stdout = flags
+                    .iter()
+                    .map(|flag| {
+                        if *flag {
+                            format!("some {}\n", a + b)
+                        } else {
+                            "none\n".into()
+                        }
+                    })
+                    .collect::<String>();
+                Generated {
+                    source,
+                    expected: Outcome::Run(stdout),
+                }
+            }
+            3 => {
+                let choose = branch(seed, &format!("pair.0 = {b};"), &format!("pair.0 = {c};"));
+                Generated {
+                    source: format!(
+                        "fn unused(flag: bool) {{ let mut pair = ({a}i32, {b}i32); let borrowed = &pair.0; {choose}; println!(\"{{}}\", *borrowed); }}\nfn main() {{}}\n"
+                    ),
+                    expected: Outcome::InvalidAfterParse("E0506"),
+                }
+            }
+            4 => {
+                let choose = branch(
+                    seed,
+                    &format!("replace::<i32>(slot, {b}i32);"),
+                    "replace::<i32>(slot, false);",
+                );
+                Generated {
+                    source: format!(
+                        "fn replace<T>(place: &mut T, value: T) {{ *place = value; }}\nfn unused(flag: bool) {{ let mut pair = ({a}i32, {c}i32); let slot = &mut pair.0; {choose}; }}\nfn main() {{}}\n"
+                    ),
+                    expected: Outcome::InvalidAfterParse("E0308"),
+                }
+            }
+            5 => {
+                let choose = branch(
+                    seed,
+                    "drop(value);",
+                    &format!("println!(\"keep {{}}\", {b}i32 + {c}i32);"),
+                );
+                Generated {
+                    source: format!(
+                        "{guard}{identity}fn unused(flag: bool) {{ let value = identity::<Guard>(Guard {{ n: {a} }}); {choose}; drop(value); }}\nfn main() {{}}\n"
+                    ),
+                    expected: Outcome::InvalidAfterParse("E0382"),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    // One attempt per seed, including after an earlier panic. No retries and no
+    // success masking. Generic harness permits pure panic-aggregation testing.
+    fn attempt_all<F>(family: usize, mut attempt: F) -> Vec<String>
+    where
+        F: FnMut(u64, &Generated),
+    {
+        let mut failures = Vec::new();
+        for seed in SEEDS {
+            let mut reproduction = format!("grammar={} seed={seed:#018x}", FAMILIES[family]);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let generated = generate(family, seed);
+                reproduction.push_str(&format!(
+                    "\nexpected={:?}\nsource:\n{}",
+                    generated.expected, generated.source
+                ));
+                eprintln!("{reproduction}");
+                attempt(seed, &generated);
+            }));
+            if let Err(payload) = result {
+                let detail = payload
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .unwrap_or("non-string panic");
+                failures.push(format!("{reproduction}\noracle panic: {detail}"));
+            }
+        }
+        failures
+    }
+    pub(super) fn campaign(family: usize) {
+        let failures = attempt_all(family, |seed, generated| {
+            let tag = format!("bounded-seed-{}-{seed:016x}", FAMILIES[family]);
+            // closure_oracle requires process-lifetime strings. At most four
+            // cases per literal selector. No weakening of pinned stock/native
+            // CHECK/BUILD/run or worker 1/8 and invalid graph-evidence gates.
+            let source = Box::leak(generated.source.clone().into_boxed_str());
+            let name = Box::leak(tag.clone().into_boxed_str());
+            let expect = match &generated.expected {
+                Outcome::Run(stdout) => Expect::Run(Box::leak(stdout.clone().into_boxed_str())),
+                Outcome::InvalidAfterParse(code) => Expect::InvalidAfterParse(code),
+            };
+            oracle::check(
+                &tag,
+                &[Case {
+                    name,
+                    source,
+                    expect,
+                }],
+            );
+        });
+        assert!(
+            failures.is_empty(),
+            "{} of four seeds failed, all four attempted, no retry:\n{}",
+            failures.len(),
+            failures.join("\n\n")
+        );
+    }
+
+    pub(super) fn deterministic_bytes_independent_order_and_finite_operands() {
+        for family in 0..FAMILIES.len() {
+            let forward: Vec<_> = SEEDS.iter().map(|&seed| generate(family, seed)).collect();
+            for index in (0..4).rev() {
+                // Interleave another family to expose accidental shared state.
+                let _ = generate((family + 1) % FAMILIES.len(), SEEDS[(index + 1) % 4]);
+                assert_eq!(forward[index], generate(family, SEEDS[index]));
+                for value in [
+                    values(SEEDS[index]).0,
+                    values(SEEDS[index]).1,
+                    values(SEEDS[index]).2,
+                ] {
+                    assert!((1..=13).contains(&value));
+                }
+            }
+            assert!(forward[0].source.contains("if flag"));
+            assert!(forward[1].source.contains("match flag"));
+            assert_ne!(forward[0].source, forward[1].source);
+            assert_eq!(order(SEEDS[0]), [true, false]);
+            assert_eq!(order(SEEDS[2]), [false, true]);
+        }
+        for seed in [0, 1, 13, u64::MAX, 1 << 63] {
+            let (a, b, c) = values(seed);
+            assert!([a, b, c].iter().all(|n| (1..=13).contains(n)));
+        }
+        assert!(std::panic::catch_unwind(|| generate(6, SEEDS[0])).is_err());
+    }
+
+    pub(super) fn expected_output_and_strict_invalid_contract() {
+        // Independently authored goldens for seed 0x10: (a,b,c) = (4,8,9).
+        assert_eq!(
+            SEEDS.map(values),
+            [(4, 8, 9), (8, 13, 11), (12, 5, 13), (3, 10, 2)]
+        );
+        assert_eq!(
+            generate(0, 0x10).expected,
+            Outcome::Run(
+                "borrow 4 8\nsome 4\ndrop 4\ntail 8\nborrow 4 8\nnone\ntail 8\ndrop 4\n".into()
+            )
+        );
+        assert_eq!(
+            generate(1, 0x10).expected,
+            Outcome::Run("after 8 4\nafter 9 4\n".into())
+        );
+        assert_eq!(
+            generate(2, 0x10).expected,
+            Outcome::Run("some 12\nnone\n".into())
+        );
+        for (index, expected) in [
+            "after 8 4\nafter 9 4\n",
+            "after 13 8\nafter 11 8\n",
+            "after 13 12\nafter 5 12\n",
+            "after 2 3\nafter 10 3\n",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                generate(1, SEEDS[index]).expected,
+                Outcome::Run((*expected).into())
+            );
+            let (_, b, c) = values(SEEDS[index]);
+            assert_ne!(b, c, "replacement paths must remain observable");
+        }
+        for (index, expected) in [
+            "some 12\nnone\n",
+            "some 21\nnone\n",
+            "none\nsome 17\n",
+            "none\nsome 13\n",
+        ]
+        .iter()
+        .enumerate()
+        {
+            assert_eq!(
+                generate(2, SEEDS[index]).expected,
+                Outcome::Run((*expected).into())
+            );
+        }
+        for seed in SEEDS {
+            for (family, code, marker) in [
+                (3, "E0506", "*borrowed"),
+                (4, "E0308", "replace::<i32>(slot, false)"),
+                (5, "E0382", "drop(value)"),
+            ] {
+                let generated = generate(family, seed);
+                assert_eq!(generated.expected, Outcome::InvalidAfterParse(code));
+                assert!(generated.source.contains("fn unused(flag: bool)"));
+                assert!(generated.source.ends_with("fn main() {}\n"));
+                assert!(generated.source.contains(marker));
+                assert!(!generated.source.contains("unused(true)"));
+            }
+        }
+    }
+
+    pub(super) fn panic_aggregation_attempts_all_four_without_retry() {
+        let mut visited = Vec::new();
+        let failures = attempt_all(0, |seed, _| {
+            visited.push(seed);
+            panic!("synthetic harness failure {seed}");
+        });
+        assert_eq!(visited, SEEDS);
+        assert_eq!(failures.len(), 4);
+        for (failure, seed) in failures.iter().zip(SEEDS) {
+            assert!(failure.contains(&format!("seed={seed:#018x}")));
+            assert!(failure.contains("expected=Run"));
+            assert!(failure.contains("source:\n"));
+            assert!(failure.contains("synthetic harness failure"));
+        }
+        let mut mixed = Vec::new();
+        let failures = attempt_all(1, |seed, _| {
+            mixed.push(seed);
+            if seed == SEEDS[0] || seed == SEEDS[2] {
+                panic!("mixed failure");
+            }
+        });
+        assert_eq!(mixed, SEEDS);
+        assert_eq!(failures.len(), 2);
+        assert!(attempt_all(2, |_, _| {}).is_empty());
+    }
+}
+
+#[test]
+fn campaign_seed_generator_deterministic_independent_bounded() {
+    bounded_seed_campaign::deterministic_bytes_independent_order_and_finite_operands();
+}
+#[test]
+fn campaign_seed_generator_expected_output_strict_invalid() {
+    bounded_seed_campaign::expected_output_and_strict_invalid_contract();
+}
+#[test]
+fn campaign_seed_generator_panic_all_four_no_retry() {
+    bounded_seed_campaign::panic_aggregation_attempts_all_four_without_retry();
+}
+
+#[test]
+fn campaign_seed_owned_option_partial_drop() {
+    bounded_seed_campaign::campaign(0);
+}
+#[test]
+fn campaign_seed_scalar_projected_replace() {
+    bounded_seed_campaign::campaign(1);
+}
+#[test]
+fn campaign_seed_closure_result_option() {
+    bounded_seed_campaign::campaign(2);
+}
+#[test]
+fn campaign_seed_unused_live_projection_assignment() {
+    bounded_seed_campaign::campaign(3);
+}
+#[test]
+fn campaign_seed_unused_generic_wrong_argument() {
+    bounded_seed_campaign::campaign(4);
+}
+#[test]
+fn campaign_seed_unused_conditional_noncopy_move() {
+    bounded_seed_campaign::campaign(5);
+}

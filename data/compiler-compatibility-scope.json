@@ -2131,6 +2131,15 @@
                       "test": "unused_invalid_05"
                     }
                   ]
+                },
+                {
+                  "note": "Unused function conditionally drops a non-Copy Guard then unconditionally drops it again, requiring stock E0382 and native InvalidAfterParse rejection for each of four seeds. if/match variants retain the same live invalid obligation. Authenticated execution is required.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_unused_conditional_noncopy_move"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -2150,6 +2159,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "unused_invalid_05"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_unused_conditional_noncopy_move"
                 }
               ]
             },
@@ -2172,6 +2185,15 @@
                       "test": "memory_projected_move_remaining_field_drop_matches_stock"
                     }
                   ]
+                },
+                {
+                  "note": "Owned tuple field conditionally moves into Option after final shared projected read, with both paths observing exact partial-drop timing and remaining scalar sibling. Four immutable bounded seeds, not all move/drop semantics. Strict oracle execution is required.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_owned_option_partial_drop"
+                    }
+                  ]
                 }
               ],
               "layer": "interaction",
@@ -2183,6 +2205,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "memory_projected_move_remaining_field_drop_matches_stock"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_owned_option_partial_drop"
                 }
               ]
             },
@@ -2235,6 +2261,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "unused_invalid_03"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_unused_live_projection_assignment"
                 }
               ],
               "evidence_notes": [
@@ -2250,6 +2280,15 @@
                       "test": "unused_invalid_03"
                     }
                   ]
+                },
+                {
+                  "note": "Unused function retains &pair.0 across conditional assignment to pair.0 and reads the shared loan afterward. Four immutable seeds require stock E0506 and native InvalidAfterParse semantic rejection at workers 1/8. No unsupported or resource failure accepted. Authenticated execution is required.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_unused_live_projection_assignment"
+                    }
+                  ]
                 }
               ]
             },
@@ -2263,6 +2302,19 @@
                       "test": "accepts_explicit_shared_reborrow"
                     }
                   ]
+                },
+                {
+                  "note": "Bounded last-use shared projection before owned move, and mutable scalar field projection through generic replacement followed by sibling reads. Both control-flow paths run for all four seeds. Not full local borrow conformance. Authenticated execution is required.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_owned_option_partial_drop"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_scalar_projected_replace"
+                    }
+                  ]
                 }
               ],
               "layer": "interaction",
@@ -2274,6 +2326,14 @@
                 {
                   "suite": "borrowing",
                   "test": "accepts_explicit_shared_reborrow"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_owned_option_partial_drop"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_scalar_projected_replace"
                 }
               ]
             },
@@ -3108,6 +3168,15 @@
                       "test": "unused_invalid_06"
                     }
                   ]
+                },
+                {
+                  "note": "Four unused-body explicit replace::<i32> mismatches passing bool require stock E0308 and native InvalidAfterParse rejection at workers 1/8. Valid i32 alternative path cannot hide the uncalled invalid item. Not campaign infrastructure rejection or general generics coverage. Authenticated execution is required.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_unused_generic_wrong_argument"
+                    }
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -3131,6 +3200,10 @@
                 {
                   "suite": "conformance_generated",
                   "test": "unused_invalid_06"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_unused_generic_wrong_argument"
                 }
               ]
             },
@@ -3144,6 +3217,19 @@
                       "test": "accepts_multiple_nominal_specializations"
                     }
                   ]
+                },
+                {
+                  "note": "Bounded generic identity instantiated with owned tuple and scalar tuple, plus generic replace instantiated with i32 at mutable projection. Four fixed grammar/operand seeds per selector, both valid paths called. Not general generic functions or type-system completeness. Strict stock/native execution is required.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_owned_option_partial_drop"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_scalar_projected_replace"
+                    }
+                  ]
                 }
               ],
               "layer": "interaction",
@@ -3151,6 +3237,14 @@
                 {
                   "suite": "generics",
                   "test": "accepts_multiple_nominal_specializations"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_owned_option_partial_drop"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_scalar_projected_replace"
                 }
               ]
             },
@@ -7558,7 +7652,39 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_generator_deterministic_independent_bounded"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_generator_expected_output_strict_invalid"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_generator_panic_all_four_no_retry"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Pure utility-only partial obligations: immutable seed inputs, deterministic bytes independent of family execution order, bounded operands, explicit expected output and InvalidAfterParse variants, and synthetic panic aggregation visiting every seed exactly once. These tests do not execute compiler acceptance and do not establish sustained generation, differential fuzzing, campaign-infrastructure rejection coverage, or failure-preserving minimization. Keep tooling-systematic-campaigns rejection and end_to_end empty.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_generator_deterministic_independent_bounded"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_generator_expected_output_strict_invalid"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_generator_panic_all_four_no_retry"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "rejection",
@@ -7566,7 +7692,63 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_owned_option_partial_drop"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_scalar_projected_replace"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_closure_result_option"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_unused_live_projection_assignment"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_unused_generic_wrong_argument"
+                },
+                {
+                  "suite": "conformance_generated",
+                  "test": "campaign_seed_unused_conditional_noncopy_move"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "note": "Six bounded four-seed grammar campaigns, not sustained generation or minimization. Each literal selector invokes the existing strict pinned closure_oracle once per immutable seed, catches per-seed panic, continues all four, and fails finally if any failed, without retry. if/match syntax and both path call orders vary alongside finite scalar operands. Valid programs exercise pinned stock/native CHECK/BUILD/run workers 1/8. Unused invalid bodies require InvalidAfterParse semantic rejection, never unsupported/resource/infrastructure substitution. Semantic invalid source programs are not rejection coverage of campaign infrastructure. Passing evidence requires authenticated pinned stock/native execution of every seed.",
+                  "tests": [
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_owned_option_partial_drop"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_scalar_projected_replace"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_closure_result_option"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_unused_live_projection_assignment"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_unused_generic_wrong_argument"
+                    },
+                    {
+                      "suite": "conformance_generated",
+                      "test": "campaign_seed_unused_conditional_noncopy_move"
+                    }
+                  ]
+                }
+              ]
             },
             {
               "layer": "end_to_end",
