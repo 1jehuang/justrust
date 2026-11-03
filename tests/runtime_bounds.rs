@@ -1,6 +1,8 @@
 //! Original indexing locations and actual unsigned operands reach the native
 //! abort diagnostic. The oracle and native executable use identical abort policy.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[path = "support/stock_rustc.rs"]
+mod stock_rustc;
 use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 
@@ -31,6 +33,7 @@ fn source_bounds_match_stock(selected: &str) {
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
+    let mut matched = false;
     for (name, source) in [
         (
             "associated_const_slice_index",
@@ -108,11 +111,34 @@ fn source_bounds_match_stock(selected: &str) {
         if name != selected {
             continue;
         }
-        eprintln!("bounds case {name}: stock + 3 opt modes x workers 1/8");
+        matched = true;
+        eprintln!(
+            "bounds case {name}: pinned stock CHECK/BUILD + 3 native opt modes x CHECK/BUILD/run x workers 1/8"
+        );
         let path = dir.join(format!("{name}.rs"));
         std::fs::write(&path, source).unwrap();
+        let metadata = dir.join(format!("stock-check-{name}.rmeta"));
+        let check = Command::new(stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args([
+                "--edition=2024",
+                "-Cpanic=abort",
+                "-Coverflow-checks=yes",
+                "--emit=metadata",
+            ])
+            .arg(&path)
+            .arg("-o")
+            .arg(&metadata)
+            .output()
+            .unwrap();
+        assert!(check.status.success(), "stock CHECK {name}: {check:?}");
+        assert!(
+            metadata.is_file(),
+            "stock CHECK produced no metadata: {name}"
+        );
         let stock = dir.join(format!("stock-{name}"));
-        let build = Command::new("rustc")
+        let build = Command::new(stock_rustc::stock_rustc())
+            .env_remove("RUSTC_BOOTSTRAP")
             .args(["--edition=2024", "-Cpanic=abort", "-Coverflow-checks=yes"])
             .arg(&path)
             .arg("-o")
@@ -124,9 +150,29 @@ fn source_bounds_match_stock(selected: &str) {
         for mode in ["off", "adaptive", "final"] {
             for workers in [1, 8] {
                 let native = dir.join(format!("native-{name}-{mode}-{workers}"));
+                let check_directory = dir.join(format!("check-{name}-{mode}-{workers}"));
+                std::fs::create_dir(&check_directory).unwrap();
+                let check = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+                    .current_dir(&check_directory)
+                    .arg(&path)
+                    .args(["--edition", "2024", "--check", "--opt", mode, "--workers"])
+                    .arg(workers.to_string())
+                    .output()
+                    .unwrap();
+                assert!(
+                    check.status.success(),
+                    "native CHECK {name}/{mode}/{workers}: {check:?}"
+                );
+                assert!(
+                    std::fs::read_dir(&check_directory)
+                        .unwrap()
+                        .next()
+                        .is_none(),
+                    "native CHECK published output: {name}/{mode}/{workers}"
+                );
                 let build = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
                     .arg(&path)
-                    .args(["--opt", mode, "--workers"])
+                    .args(["--edition", "2024", "--opt", mode, "--workers"])
                     .arg(workers.to_string())
                     .arg("-o")
                     .arg(&native)
@@ -138,38 +184,78 @@ fn source_bounds_match_stock(selected: &str) {
         }
     }
     std::fs::remove_dir_all(dir).unwrap();
+    assert!(matched, "unknown bounds source case: {selected}");
 }
 
-macro_rules! bounds_case {
-    ($test:ident, $case:literal) => {
-        #[test]
-        fn $test() {
-            source_bounds_match_stock($case);
-        }
-    };
+#[test]
+fn source_bounds_associated_const_slice_index() {
+    source_bounds_match_stock("associated_const_slice_index");
 }
-
-bounds_case!(
-    source_bounds_associated_const_slice_index,
-    "associated_const_slice_index"
-);
-bounds_case!(source_bounds_receiver, "receiver");
-bounds_case!(source_bounds_borrow, "borrow");
-bounds_case!(source_bounds_mutborrow, "mutborrow");
-bounds_case!(source_bounds_write, "write");
-bounds_case!(source_bounds_slicewrite, "slicewrite");
-bounds_case!(source_bounds_nestedborrow, "nestedborrow");
-bounds_case!(source_bounds_nestedwrite, "nestedwrite");
-bounds_case!(source_bounds_constant_slicewrite, "constant_slicewrite");
-bounds_case!(
-    source_bounds_constant_slicecompound,
-    "constant_slicecompound"
-);
-bounds_case!(source_bounds_nestedwrite_outer, "nestedwrite_outer");
-bounds_case!(source_bounds_constant_sliceborrow, "constant_sliceborrow");
-bounds_case!(source_bounds_noncopy_mutborrow, "noncopy_mutborrow");
-bounds_case!(source_bounds_format_slice, "format_slice");
-bounds_case!(source_bounds_format_constant_slice, "format_constant_slice");
-bounds_case!(source_bounds_remaining_ignored, "ignored");
-bounds_case!(source_bounds_remaining_array, "array");
-bounds_case!(source_bounds_remaining_slice, "slice");
+#[test]
+fn source_bounds_receiver() {
+    source_bounds_match_stock("receiver");
+}
+#[test]
+fn source_bounds_borrow() {
+    source_bounds_match_stock("borrow");
+}
+#[test]
+fn source_bounds_mutborrow() {
+    source_bounds_match_stock("mutborrow");
+}
+#[test]
+fn source_bounds_write() {
+    source_bounds_match_stock("write");
+}
+#[test]
+fn source_bounds_slicewrite() {
+    source_bounds_match_stock("slicewrite");
+}
+#[test]
+fn source_bounds_nestedborrow() {
+    source_bounds_match_stock("nestedborrow");
+}
+#[test]
+fn source_bounds_nestedwrite() {
+    source_bounds_match_stock("nestedwrite");
+}
+#[test]
+fn source_bounds_constant_slicewrite() {
+    source_bounds_match_stock("constant_slicewrite");
+}
+#[test]
+fn source_bounds_constant_slicecompound() {
+    source_bounds_match_stock("constant_slicecompound");
+}
+#[test]
+fn source_bounds_nestedwrite_outer() {
+    source_bounds_match_stock("nestedwrite_outer");
+}
+#[test]
+fn source_bounds_constant_sliceborrow() {
+    source_bounds_match_stock("constant_sliceborrow");
+}
+#[test]
+fn source_bounds_noncopy_mutborrow() {
+    source_bounds_match_stock("noncopy_mutborrow");
+}
+#[test]
+fn source_bounds_format_slice() {
+    source_bounds_match_stock("format_slice");
+}
+#[test]
+fn source_bounds_format_constant_slice() {
+    source_bounds_match_stock("format_constant_slice");
+}
+#[test]
+fn source_bounds_remaining_ignored() {
+    source_bounds_match_stock("ignored");
+}
+#[test]
+fn source_bounds_remaining_array() {
+    source_bounds_match_stock("array");
+}
+#[test]
+fn source_bounds_remaining_slice() {
+    source_bounds_match_stock("slice");
+}

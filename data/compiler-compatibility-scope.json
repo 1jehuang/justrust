@@ -5698,6 +5698,83 @@
                       "test": "thread_panicking_workers1_8_matches_stock_during_normal_and_panic_cleanup"
                     }
                   ]
+                },
+                {
+                  "note": "Bounded exact-source obligation for the 18 existing runtime_bounds source_bounds_* selectors, not a pass/support assertion. Verified pinned stock metadata CHECK and BUILD use Edition 2024, panic=abort and overflow-checks=yes with RUSTC_BOOTSTRAP removed. Output-free native CHECK uses --check without -o in an independently empty working directory and must leave that directory empty, then BUILD/run at workers 1/8 in off/adaptive/final modes must match stock runtime SIGABRT and exact stdout/stderr after normalization of only the observed main-thread PID. The unchanged embedded programs cover bounds diagnostic index locations and actual unsigned index/length operands (including usize::MAX), receiver/index evaluation, shared/mutable and non-Copy borrows, array/slice reads and writes, constant/associated-constant indices, nested indexing, assignment/compound-assignment evaluation ordering and formatting arguments. Abort-only bounds behavior, not unwind/cleanup or general panic safety and not semantic-invalid rejection. Mapping supplies no measured status or reviewed-rule credit.",
+                  "tests": [
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_associated_const_slice_index"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_receiver"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_borrow"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_mutborrow"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_write"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_slicewrite"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_nestedborrow"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_nestedwrite"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_constant_slicewrite"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_constant_slicecompound"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_nestedwrite_outer"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_constant_sliceborrow"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_noncopy_mutborrow"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_format_slice"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_format_constant_slice"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_remaining_ignored"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_remaining_array"
+                    },
+                    {
+                      "suite": "runtime_bounds",
+                      "test": "source_bounds_remaining_slice"
+                    }
+                  ]
                 }
               ],
               "layer": "end_to_end",
@@ -5705,6 +5782,78 @@
                 {
                   "suite": "panic",
                   "test": "thread_panicking_workers1_8_matches_stock_during_normal_and_panic_cleanup"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_associated_const_slice_index"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_receiver"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_borrow"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_mutborrow"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_write"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_slicewrite"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_nestedborrow"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_nestedwrite"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_constant_slicewrite"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_constant_slicecompound"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_nestedwrite_outer"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_constant_sliceborrow"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_noncopy_mutborrow"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_format_slice"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_format_constant_slice"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_remaining_ignored"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_remaining_array"
+                },
+                {
+                  "suite": "runtime_bounds",
+                  "test": "source_bounds_remaining_slice"
                 }
               ]
             }

@@ -29,7 +29,7 @@ WITNESS_SOURCE_CONTRACT = {
         'tests/conformance_generated.rs': '1288003e8f18f47e93ca06d7292288c51ea64e56028e7ca1e9d696548e2485e6',
         'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
         'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
-        'data/compiler-compatibility-scope.json': '5a20919c47a3b536a67c9b8bbbc8265e18483af6bf27062b7ba8e6ae67484e85',
+        'data/compiler-compatibility-scope.json': '16c95306744d5848c6c890d8d3085b993ab43c6802383d405f948262ea072d30',
     },
 }
 # selector | expectation class | literal rules | candidate aliases | rationale | limits
