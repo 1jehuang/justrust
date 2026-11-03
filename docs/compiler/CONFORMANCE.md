@@ -320,10 +320,34 @@ regression is still an open compatibility gap.
 
 `tests/conformance_generated.rs` supplies bounded deterministic cross-feature
 programs with reproducible case identities and pinned stock/native comparisons.
-It supplements, rather than replaces, unchanged real crates. Retain minimized
-reproductions when generation finds a new failure. Its finite generator is not
-an exhaustive grammar, fuzzer or soundness proof. Broader generators, automated
-minimization and applicable upstream conformance imports remain explicit work.
+Its six seeded families attempt all four fixed seeds without retries, retain
+seed/expected-output/full-source diagnostics, and fail if any attempt fails.
+Three separate utility tests check generation and failure retention, not Rust
+compatibility. It supplements, rather than replaces, unchanged real crates.
+Its finite generator is not an exhaustive grammar, fuzzer or soundness proof.
+
+`tools/bounded_failure_reduce.py` compares explicitly authored candidate files
+using a trusted checker command, retaining the original source and every
+attempt. For example:
+
+```bash
+python3 tools/bounded_failure_reduce.py \
+  --original original.rs --candidate smaller.rs \
+  --scratch-root "$JCODE_SCRATCH_DIR" --output "$JCODE_SCRATCH_DIR/new-reduction" \
+  --max-attempts 8 --timeout 30 -- python3 /absolute/path/checker.py
+```
+
+The checker receives the attempted source path as its last argument. It must
+validate stock acceptance and emit the exact JSON protocol described by the
+tool's `--help`. Only the baseline's exact failure classification is retained.
+Timeouts, malformed results, changed classifications and modified inputs do not
+preserve a failure. Results describe the **best observed reproducer**, never a
+globally minimal source. This utility does not parse or automatically shrink
+Rust, authenticate tracker evidence, or sandbox checker commands. Attempt and
+wall-time bounds do not bound checker disk use. Use trusted commands and bounded
+input lists. A checker with the wrong stock version cannot establish pinned
+compatibility evidence. Broader generators, automatic candidate generation,
+sustained campaigns and applicable upstream conformance imports remain open.
 Imported inputs must retain licenses, attribution and pinned source identity.
 
 `tests/conformance_program.rs` integrates manifest validation and adversarial
