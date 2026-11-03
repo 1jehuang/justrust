@@ -453,7 +453,33 @@ fn semantic_invalid_requires_source_and_declaration_publications() {
     .expect("unused type error must fail");
 
     assert!(oracle::validate_semantic_rejection(&syntax).is_err());
+    oracle::validate_rejection_evidence(&syntax, false).unwrap();
+    let gap = oracle::validate_rejection_evidence(&syntax, true).unwrap_err();
+    assert_eq!(gap.annotation(), "semantic-stage-unproven");
+    assert!(matches!(
+        gap,
+        oracle::RejectionEvidenceGap::SemanticStageUnproven(_)
+    ));
+    assert_eq!(
+        gap.reason(),
+        oracle::validate_semantic_rejection(&syntax).unwrap_err()
+    );
     oracle::validate_semantic_rejection(&semantic).unwrap();
+    oracle::validate_rejection_evidence(&semantic, true).unwrap();
+    semantic.resource_usage.poisoned = true;
+    for require_semantic in [false, true] {
+        let gap = oracle::validate_rejection_evidence(&semantic, require_semantic).unwrap_err();
+        assert_eq!(gap.annotation(), "rejection-proof-unproven");
+        assert_eq!(
+            gap.reason(),
+            "poisoned resource ledger is not semantic rejection"
+        );
+        assert!(matches!(
+            gap,
+            oracle::RejectionEvidenceGap::UnhealthyRejection(_)
+        ));
+    }
+    semantic.resource_usage.poisoned = false;
     let report = semantic.report.as_mut().unwrap();
     let declarations = report
         .node_ids
@@ -469,6 +495,12 @@ fn semantic_invalid_requires_source_and_declaration_publications() {
         oracle::validate_semantic_rejection(&semantic).is_err(),
         "header parsing alone is insufficient"
     );
+    assert_eq!(
+        oracle::validate_rejection_evidence(&semantic, true)
+            .unwrap_err()
+            .annotation(),
+        "semantic-stage-unproven"
+    );
     semantic.report.as_mut().unwrap().events = events;
     let report = semantic.report.as_mut().unwrap();
     let root = report
@@ -483,6 +515,14 @@ fn semantic_invalid_requires_source_and_declaration_publications() {
     assert!(
         oracle::validate_semantic_rejection(&semantic).is_err(),
         "other files' parse publications cannot stand in for the original source"
+    );
+    semantic.report.as_mut().unwrap().capture_complete = false;
+    assert_eq!(
+        oracle::validate_rejection_evidence(&semantic, true)
+            .unwrap_err()
+            .annotation(),
+        "rejection-proof-unproven",
+        "unhealthy capture takes precedence over a missing stage witness"
     );
 }
 

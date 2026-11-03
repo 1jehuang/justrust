@@ -15,6 +15,101 @@ import conformance as c
 
 
 class ScopeTests(unittest.TestCase):
+    def test_timeout_infrastructure_and_unverified_logs_never_annotate_failures(self):
+        marker = "[justrust-conformance-failure:v1] invalid-source-accepted\n"
+        for status, code, timed_out in (("timeout", 101, True),
+                                         ("infrastructure", None, False),
+                                         ("unverified", 0, False)):
+            directory, report = self.report(status, {"accepts": (code, marker)})
+            report["results"][0].update(timed_out=timed_out, outcome=status)
+            self.save(directory, report)
+            result = self.summary([directory])
+            self.assertEqual(result["exact_case_counts"][status], 1)
+            self.assertEqual(sum(result["failed_case_annotations"].values()), 0)
+            case = result["areas"][0]["requirements"][0]["gates"][0]["tests"][0]
+            self.assertNotIn("failure_annotation", case)
+            rendered = s.render(result)
+            self.assertIn(status + ": 1", rendered)
+            self.assertLess(rendered.index("Failure annotations"), rendered.index("AREA /"))
+
+    def test_annotations_are_rederived_not_trusted_report_fields(self):
+        marker = "[justrust-conformance-failure:v1] valid-source-rejected\n"
+        for name, text, expected in (("marked", marker, "valid-source-rejected"),
+                                     ("legacy", "legacy failure", "unannotated")):
+            directory, report = self.report(name, {"accepts": (101, text)})
+            report["failed_case_annotations"] = {"invalid-source-accepted": 999}
+            report["results"][0]["failure_annotation"] = "invalid-source-accepted"
+            self.save(directory, report)
+            result = self.summary([directory])
+            self.assertEqual(result["failed_case_annotations"][expected], 1)
+            self.assertEqual(sum(result["failed_case_annotations"].values()), 1)
+            observed = result["areas"][0]["requirements"][0]["gates"][0]["tests"][0]
+            self.assertEqual(observed["failure_annotation"], expected)
+            self.assertEqual(observed["evidence"][0]["failure_annotation"], expected)
+            self.assertEqual(observed["status"], "failed")
+        log = directory / report["results"][0]["log"]
+        log.write_text(marker)
+        with self.assertRaises(c.InvalidEvidence):
+            self.summary([directory])
+
+    def test_success_stale_and_conflicting_markers_are_not_current_annotations(self):
+        marker = "[justrust-conformance-failure:v1] semantic-stage-unproven\n"
+        passed, _ = self.report("passed-marked", {"accepts": (0, marker + "justrust: ok: 1 test passed\n")})
+        stale, report = self.report("stale-marked", {"accepts": (101, marker)})
+        report["source_before"] = {"revision": "old"}
+        self.save(stale, report)
+        failed, _ = self.report("failed-marked", {"accepts": (101, marker)})
+        for reports, status in (([passed], "passed"), ([stale], "stale"),
+                                ([passed, failed, stale], "conflicting"),
+                                ([failed, passed], "conflicting"), ([passed, stale], "passed")):
+            result = self.summary(reports)
+            self.assertEqual(result["exact_case_counts"][status], 1)
+            self.assertEqual(sum(result["failed_case_annotations"].values()), 0)
+            case = result["areas"][0]["requirements"][0]["gates"][0]["tests"][0]
+            self.assertNotIn("failure_annotation", case)
+            for attempt in case["evidence"]:
+                if attempt["status"] != "failed":
+                    self.assertNotIn("failure_annotation", attempt)
+        legacy, _ = self.report("current-legacy", {"accepts": (101, "legacy")})
+        result = self.summary([legacy, stale])
+        self.assertEqual(result["failed_case_annotations"]["unannotated"], 1)
+        self.assertEqual(result["failed_case_annotations"]["semantic-stage-unproven"], 0)
+
+    def test_annotation_disagreement_and_legacy_attempts_are_unannotated(self):
+        prefix = "[justrust-conformance-failure:v1] "
+        marked, _ = self.report("marked", {"accepts": (101, prefix + "valid-source-rejected\n")})
+        other, _ = self.report("other", {"accepts": (101, prefix + "invalid-source-accepted\n")})
+        legacy, _ = self.report("legacy", {"accepts": (101, "legacy")})
+        for reports in ([marked, other], [other, marked], [marked, legacy]):
+            result = self.summary(reports)
+            self.assertEqual(result["exact_case_counts"]["failed"], 1)
+            self.assertEqual(result["failed_case_annotations"]["unannotated"], 1)
+            self.assertEqual(sum(result["failed_case_annotations"].values()), 1)
+        self.assertEqual(self.summary([marked, marked])["failed_case_annotations"]["valid-source-rejected"], 1)
+
+    def test_unique_counts_include_interaction_only_and_deduplicate_gate_mappings(self):
+        self.matrix()
+        combined = {"suite": "sample", "test": "combined"}
+        self.scope["interaction_matrix"]["scenarios"][0]["tests"] = [combined]
+        original = self.scope["areas"][0]["requirements"][0]
+        original["gates"][2]["tests"] = [self.accept]
+        another = copy.deepcopy(original)
+        another["id"] = "duplicate-mapping"
+        self.scope["areas"][0]["requirements"].append(another)
+        directory, _ = self.report(states={
+            "accepts": (101, "[justrust-conformance-failure:v1] valid-source-rejected\n"),
+            "combined": (101, "[justrust-conformance-failure:v1] rejection-proof-unproven\n")})
+        result = self.summary([directory])
+        self.assertEqual(sum(result["exact_case_counts"].values()), 3)
+        self.assertEqual(result["exact_case_counts"]["failed"], 2)
+        self.assertEqual(result["exact_case_counts"]["untested"], 1)
+        self.assertEqual(result["gate_counts"]["failed"], 4)
+        self.assertEqual(result["failed_case_annotations"]["valid-source-rejected"], 1)
+        self.assertEqual(result["failed_case_annotations"]["rejection-proof-unproven"], 1)
+        rendered = s.render(result)
+        self.assertIn("Unique exact tests: 3; passed: 0; failed: 2", rendered)
+        self.assertIn("diagnostic only, not proof or outcome changes", rendered)
+
     def test_missing_source_inventory_is_explicit_not_complete(self):
         summary = self.summary()
         self.assertEqual(summary["semantic_inventory"]["readiness"], "missing")

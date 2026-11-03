@@ -23,6 +23,26 @@ CLIENT_RETRY_LINES = (
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_failure_annotations_require_whole_whitelisted_lines(self):
+        prefix = "[justrust-conformance-failure:v1] "
+        for annotation in c.FAILURE_ANNOTATIONS:
+            marker = prefix + annotation
+            for text in (marker, marker + "\n", "noise\n" + marker + "\r\n", marker + "\n" + marker):
+                with self.subTest(text=text):
+                    self.assertEqual(c.failure_annotation(text), annotation)
+            for text in (" " + marker, marker + " ", "panic: " + marker,
+                         marker + " details", marker.upper(), prefix + "unknown",
+                         marker.replace(":v1", ":v2"), "noise\u2028" + marker,
+                         '"' + marker + '"', marker + "\x1b[0m"):
+                with self.subTest(text=text):
+                    self.assertEqual(c.failure_annotation(text), "unannotated")
+            for code, expected in ((0, "passed"), (101, "failed")):
+                self.assertEqual(c.outcome(code, marker + "\njustrust: ok: 1 test passed\n", "case"), expected)
+            self.assertEqual(c.outcome(0, marker, "case"), "unverified")
+        self.assertEqual(c.failure_annotation("legacy failure"), "unannotated")
+        self.assertEqual(c.failure_annotation("\n".join(prefix + value for value in c.FAILURE_ANNOTATIONS)),
+                         "unannotated")
+
     def test_shard_is_rejected_for_every_other_action_before_io(self):
         for action in ("validate", "plan", "discover", "run", "assess", "coverage"):
             with self.subTest(action=action), patch.object(c, "load_json") as load, \

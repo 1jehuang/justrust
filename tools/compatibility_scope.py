@@ -161,6 +161,8 @@ def evidence(scope, manifest, directory, identity, runner, c, root):
             raise c.InvalidEvidence(f"inconsistent evidence for {entry['id']}")
         results[entry["id"]] = {"status": "stale" if stale else measured,
                                   "report": str(directory / "report.json"), "log": str(log)}
+        if not stale and measured == "failed":
+            results[entry["id"]]["failure_annotation"] = c.failure_annotation(text)
     return results
 
 
@@ -181,8 +183,14 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
         states = set(current)
         status = ("conflicting" if len(states) > 1 else current[0] if current
                   else "stale" if attempts else "untested")
-        return {**case, "status": status, "evidence": attempts,
-                "command": c.command({"kind": "case", **case}, "target/justrust-slots/0")}
+        result = {**case, "status": status, "evidence": attempts,
+                  "command": c.command({"kind": "case", **case}, "target/justrust-slots/0")}
+        if status == "failed":
+            annotations = {row["failure_annotation"] for row in attempts
+                           if row["status"] == "failed"}
+            result["failure_annotation"] = (next(iter(annotations)) if len(annotations) == 1
+                                            else "unannotated")
+        return result
     def gate_status(cases):
         states = {row["status"] for row in cases}
         precedence = ("conflicting", "failed", "timeout", "infrastructure", "unverified",
@@ -221,6 +229,16 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
         status = "missing" if not matching or any(not row["tests"] for row in matching) else gate_status(cases)
         matrix_pairs.append({"features": list(pair), "status": status,
                              "scenarios": [row["id"] for row in matching]})
+    # Count the unique manifest, not repeated gate mappings. This also includes
+    # cases mapped exclusively through interaction-matrix scenarios.
+    exact_cases = [observe({"suite": gate["suite"], "test": gate["test"]})
+                   for gate in manifest["gates"]]
+    exact_case_counts = {status: sum(row["status"] == status for row in exact_cases)
+                         for status in counts}
+    failed_case_annotations = {annotation: sum(
+        row.get("failure_annotation") == annotation for row in exact_cases
+        if row["status"] == "failed")
+        for annotation in (*c.FAILURE_ANNOTATIONS, "unannotated")}
     total = sum(counts.values())
     layer_counts = {layer: {status: sum(gate["status"] == status for area in areas
                                       for requirement in area["requirements"] for gate in requirement["gates"]
@@ -257,6 +275,8 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
             "missing_test_obligations": missing,
             "metric": "passing declared test obligations, not percent of the Rust language",
             "declared_gate_count": total, "gate_counts": counts,
+            "exact_case_counts": exact_case_counts,
+            "failed_case_annotations": failed_case_annotations,
             "passing_declared_gates_percent": round(100 * counts["passed"] / total, 2),
             "missing_test_gates": counts["missing"], "by_layer": layer_counts,
             "requirements_with_all_declared_gates_passed": sum(row["all_declared_gates_passed"]
@@ -285,6 +305,12 @@ def render(summary):
              f"{counts['passed']}/{summary['declared_gate_count']} declared gates verified ({summary['passing_declared_gates_percent']}%). NOT percentage of all Rust.",
              f"Missing tests: {counts['missing']}; untested: {counts['untested']}; stale: {counts['stale']}; failed: {counts['failed']}; conflicts: {counts['conflicting']}.",
              "AREA / feature / rejection / interaction / end-to-end (passed/declared)"]
+    exact = summary["exact_case_counts"]
+    lines[5:5] = [
+        f"Unique exact tests: {sum(exact.values())}; passed: {exact['passed']}; failed: {exact['failed']}; untested: {exact['untested']}; stale: {exact['stale']}; conflicts: {exact['conflicting']}; timeout: {exact['timeout']}; infrastructure: {exact['infrastructure']}; unverified: {exact['unverified']}.",
+        "Failure annotations (diagnostic only, not proof or outcome changes): "
+        + ", ".join(f"{key}: {value}" for key, value in summary["failed_case_annotations"].items()) + ".",
+    ]
     for area in summary["areas"]:
         cells = []
         for layer in LAYERS:

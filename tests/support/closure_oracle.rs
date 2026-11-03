@@ -180,6 +180,46 @@ pub fn validate_semantic_rejection(
     Ok(())
 }
 
+/// A failed witness is not necessarily wrong compiler behavior. In particular,
+/// a correct early rejection can lack the facts required by a semantic witness.
+/// These labels are diagnostic annotations only. They never make a test pass.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RejectionEvidenceGap {
+    UnhealthyRejection(&'static str),
+    SemanticStageUnproven(&'static str),
+}
+
+impl RejectionEvidenceGap {
+    pub fn annotation(self) -> &'static str {
+        match self {
+            Self::UnhealthyRejection(_) => "rejection-proof-unproven",
+            Self::SemanticStageUnproven(_) => "semantic-stage-unproven",
+        }
+    }
+
+    pub fn reason(self) -> &'static str {
+        match self {
+            Self::UnhealthyRejection(reason) | Self::SemanticStageUnproven(reason) => reason,
+        }
+    }
+}
+
+pub fn validate_rejection_evidence(
+    failure: &justrust_engine::compiler::Failure,
+    require_semantic_stage: bool,
+) -> Result<(), RejectionEvidenceGap> {
+    validate_native_rejection(failure).map_err(RejectionEvidenceGap::UnhealthyRejection)?;
+    if require_semantic_stage {
+        validate_semantic_rejection(failure)
+            .map_err(RejectionEvidenceGap::SemanticStageUnproven)?;
+    }
+    Ok(())
+}
+
+fn annotate_failure(label: &str) {
+    eprintln!("[justrust-conformance-failure:v1] {label}");
+}
+
 pub fn check(tag: &str, cases: &[Case]) {
     // The hosted bootstrap compiler is not the language oracle. Only the
     // independently pinned stock lookup (JR_STOCK_RUSTC) selects this binary.
@@ -299,24 +339,31 @@ pub fn check_with_compiler(tag: &str, cases: &[Case], compiler: &Path) {
                             );
                         }
                     }
-                    (Expect::Run(_), Err(error)) => panic!(
-                        "{} workers={workers} CHECK={check_only}: native rejected: {error}",
-                        case.name
-                    ),
-                    (Expect::Invalid(_) | Expect::InvalidAfterParse(_), Ok(_)) => panic!(
-                        "{} workers={workers} CHECK={check_only}: accepted invalid closure",
-                        case.name
-                    ),
+                    (Expect::Run(_), Err(error)) => {
+                        annotate_failure("valid-source-rejected");
+                        panic!(
+                            "{} workers={workers} CHECK={check_only}: native rejected: {error}",
+                            case.name
+                        );
+                    }
+                    (Expect::Invalid(_) | Expect::InvalidAfterParse(_), Ok(_)) => {
+                        annotate_failure("invalid-source-accepted");
+                        panic!(
+                            "{} workers={workers} CHECK={check_only}: accepted invalid closure",
+                            case.name
+                        );
+                    }
                     (expect @ (Expect::Invalid(_) | Expect::InvalidAfterParse(_)), Err(error)) => {
-                        let validation = if matches!(expect, Expect::InvalidAfterParse(_)) {
-                            validate_semantic_rejection(&error)
-                        } else {
-                            validate_native_rejection(&error)
-                        };
-                        validation.unwrap_or_else(|reason| {
+                        validate_rejection_evidence(
+                            &error,
+                            matches!(expect, Expect::InvalidAfterParse(_)),
+                        )
+                        .unwrap_or_else(|gap| {
+                            annotate_failure(gap.annotation());
                             panic!(
-                                "{} workers={workers} CHECK={check_only}: {reason}: {error}",
-                                case.name
+                                "{} workers={workers} CHECK={check_only}: {}: {error}",
+                                case.name,
+                                gap.reason()
                             )
                         });
                         assert!(!image.exists(), "rejection wrote an image");

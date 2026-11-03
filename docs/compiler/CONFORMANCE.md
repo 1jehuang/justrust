@@ -119,6 +119,18 @@ body parsing is lazy. These are necessary admission checks, not a claim that
 every native diagnostic is already typed or matches stock exactly. Neither ignored nor
 expected-unsupported tests count as feature support.
 
+Coverage also counts unique exact tests separately from layer gates, so a test
+mapped to several gates is not counted as several independent executions.
+Failed differential tests can emit versioned, diagnostic-only annotations:
+`valid-source-rejected`, `invalid-source-accepted`, `semantic-stage-unproven`,
+and `rejection-proof-unproven`. A stage witness can fail even when an early
+diagnostic correctly rejects invalid Rust. A rejected valid source can reflect
+unsupported input or resource exhaustion rather than wrong-code behavior.
+These log annotations are triage leads, not authenticated diagnostic categories
+or compatibility proof. They never turn a failed test green. Stale, conflicting,
+and successful executions do not supply current failed-case annotations, and
+unannotated failures remain explicit rather than being guessed from prose.
+
 Reports separately expose **test-mapping coverage** (declared layer obligations
 with exact tests), **verified test obligations** (current passing evidence), and
 **full Rust completion** (unavailable while the semantic inventory is incomplete).

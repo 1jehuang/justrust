@@ -231,6 +231,22 @@ def client_retried_failures(text: str) -> bool:
     return any(re.fullmatch(marker, line) for line in text.splitlines() for marker in markers)
 
 
+FAILURE_ANNOTATIONS = (
+    "valid-source-rejected", "invalid-source-accepted",
+    "semantic-stage-unproven", "rejection-proof-unproven",
+)
+
+
+def failure_annotation(text: str) -> str:
+    """Diagnostic only. Ambiguous or legacy logs remain explicitly unannotated."""
+    markers = {"[justrust-conformance-failure:v1] " + value: value
+               for value in FAILURE_ANNOTATIONS}
+    # Split only on LF, accepting CRLF, not arbitrary Unicode line separators.
+    found = {markers[line.removesuffix("\r")] for line in text.split("\n")
+             if line.removesuffix("\r") in markers}
+    return next(iter(found)) if len(found) == 1 else "unannotated"
+
+
 def outcome(returncode: int | None, text: str, kind: str, timed_out: bool = False) -> str:
     if timed_out:
         return "timeout"
