@@ -6,6 +6,7 @@ Missing tests are obligations too. No hand-maintained support/pass states exist.
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import itertools
 import os
 from pathlib import Path
@@ -66,6 +67,12 @@ def validate(scope, c, root):
                 raise c.InvalidEvidence(f"requirement needs all four coverage layers: {requirement['id']}")
             for gate in gates:
                 check_tests(gate.get("tests"))
+                for note in gate.get("evidence_notes", []):
+                    if not isinstance(note, dict) or not isinstance(note.get("note"), str) or not note["note"].strip():
+                        raise c.InvalidEvidence("mapping evidence note needs a nonempty rationale")
+                    check_tests(note.get("tests"))
+                    if not note["tests"] or any(case not in gate["tests"] for case in note["tests"]):
+                        raise c.InvalidEvidence("mapping evidence note must refer to tests in its gate")
     c.unique_ids(requirements, "requirement")
     matrix = scope.get("interaction_matrix")
     if matrix is not None:
@@ -193,7 +200,8 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
                     cases.append(observe(case))
                 status = gate_status(cases)
                 counts[status] += 1
-                gates.append({"layer": gate["layer"], "status": status, "tests": cases})
+                gates.append({"layer": gate["layer"], "status": status, "tests": cases,
+                              "evidence_notes": gate.get("evidence_notes", [])})
             requirements.append({"id": requirement["id"], "title": requirement["title"],
                                  "all_declared_gates_passed": all(row["status"] == "passed" for row in gates),
                                  "gates": gates})
@@ -217,8 +225,29 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
                                       if gate["layer"] == layer) for status in counts} for layer in LAYERS}
     pairs = sorted({pair for values in test_requirements.values()
                     for pair in itertools.combinations(sorted(values), 2)})
+    missing = [{"area": area["id"], "requirement": requirement["id"],
+                "title": requirement["title"], "layer": gate["layer"]}
+               for area in areas for requirement in area["requirements"] for gate in requirement["gates"]
+               if not gate["tests"]]
+    mapped = total - len(missing)
+    unmapped = sorted(set(c.integration_suites(root)) - used_suites)
+    blockers = ["semantic inventory has not been established as complete"]
+    if missing:
+        blockers.append(f"{len(missing)} declared layer obligations have no mapped tests")
+    if unmapped:
+        blockers.append(f"{len(unmapped)} existing integration suites need coverage triage")
     return {"schema_version": 1, "scope": scope["scope"], "source": identity,
             "full_rust_support_established": False,
+            "full_rust_completion_percent": None,
+            "measurement_readiness": {
+                "can_estimate_full_rust_completion": False, "blockers": blockers,
+                "mapped_gate_count": mapped, "declared_gate_count": total,
+                "mapped_declared_gates_percent": round(100 * mapped / total, 2),
+                "mapped_exact_test_count": len(manifest["gates"]),
+                "mapped_integration_suite_count": len(used_suites),
+                "discovered_integration_suite_count": len(c.integration_suites(root)),
+            },
+            "missing_test_obligations": missing,
             "metric": "passing declared test obligations, not percent of the Rust language",
             "declared_gate_count": total, "gate_counts": counts,
             "passing_declared_gates_percent": round(100 * counts["passed"] / total, 2),
@@ -226,7 +255,7 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
             "requirements_with_all_declared_gates_passed": sum(row["all_declared_gates_passed"]
                                                                for area in areas for row in area["requirements"]),
             "areas": areas,
-            "unmapped_integration_suites": sorted(set(c.integration_suites(root)) - used_suites),
+            "unmapped_integration_suites": unmapped,
             "interaction_matrix": {"axes": matrix.get("axes", []), "scenarios": scenarios,
                                    "pairs": matrix_pairs, "pair_count": len(matrix_pairs),
                                    "passing_pairs": sum(row["status"] == "passed" for row in matrix_pairs),
@@ -242,7 +271,10 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
 
 def render(summary):
     counts = summary["gate_counts"]
+    readiness = summary["measurement_readiness"]
     lines = ["Rust compatibility test coverage (edition 2024, Linux x86-64)",
+             "Full Rust completion percentage: unavailable (semantic inventory incomplete).",
+             f"Test-mapping coverage: {readiness['mapped_gate_count']}/{readiness['declared_gate_count']} declared layer obligations ({readiness['mapped_declared_gates_percent']}%); {readiness['mapped_exact_test_count']} exact tests.",
              f"{counts['passed']}/{summary['declared_gate_count']} declared gates verified ({summary['passing_declared_gates_percent']}%). NOT percentage of all Rust.",
              f"Missing tests: {counts['missing']}; untested: {counts['untested']}; stale: {counts['stale']}; failed: {counts['failed']}; conflicts: {counts['conflicting']}.",
              "AREA / feature / rejection / interaction / end-to-end (passed/declared)"]
@@ -260,6 +292,21 @@ def render(summary):
     return "\n".join(lines)
 
 
+def execute_cases(entries, directory, timeout, jobs, c, root):
+    if not isinstance(jobs, int) or isinstance(jobs, bool) or not 1 <= jobs <= 8:
+        raise c.InvalidEvidence("track --jobs must be between 1 and 8")
+    if jobs == 1:
+        for entry in entries:
+            yield c.execute(entry, directory, timeout, root)
+        return
+    # Commands/logs remain independent and no failed case is retried. Ordered
+    # consumption preserves deterministic report identity despite completion order.
+    with ThreadPoolExecutor(max_workers=jobs) as pool:
+        futures = [pool.submit(c.execute, entry, directory, timeout, root) for entry in entries]
+        for future in futures:
+            yield future.result()
+
+
 def main(args, base, c):
     root = c.ROOT
     scope = validate(c.load_json(args.scope), c, root)
@@ -272,6 +319,9 @@ def main(args, base, c):
         summary = summarize(scope, manifest, args.evidence, identity, runner, c, root)
         print(c.encoded(summary).decode() if args.json else render(summary))
         return 0
+    jobs = getattr(args, "jobs", 1)
+    if not isinstance(jobs, int) or isinstance(jobs, bool) or not 1 <= jobs <= 8:
+        raise c.InvalidEvidence("track --jobs must be between 1 and 8")
     known = {area["id"] for area in scope["areas"]} | {"interactions"}
     if set(args.area) - known or len(args.area) != len(set(args.area)):
         raise c.InvalidEvidence("unknown or duplicate selected areas")
@@ -308,8 +358,8 @@ def main(args, base, c):
               "source_before": before, "runner_before": before_runner,
               "integration_suites": c.integration_suites(root), "results": [],
               "started_unix": time.time()}
-    for entry in entries:
-        report["results"].append(c.execute(entry, args.out, args.timeout, root))
+    for result in execute_cases(entries, args.out, args.timeout, jobs, c, root):
+        report["results"].append(result)
         (args.out / "report.json").write_bytes(c.encoded(report))
     report["source_after"] = c.source_identity(root)
     report["runner_after"] = runner_identity(c)

@@ -68,6 +68,45 @@ class ScopeTests(unittest.TestCase):
     def save(self, directory, report):
         (directory / "report.json").write_bytes(c.encoded(report))
 
+    def test_parallel_execution_preserves_order_failures_and_concurrency_bound(self):
+        import threading
+        import time
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+        def execute(entry, directory, timeout, root):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            time.sleep(0.02 if entry != 0 else 0.04)
+            with lock:
+                active -= 1
+            return {"id": entry, "exit_code": 1 if entry == 1 else 0}
+        runner = SimpleNamespace(execute=execute, InvalidEvidence=c.InvalidEvidence)
+        results = list(s.execute_cases(list(range(6)), self.root, 10, 2, runner, self.root))
+        self.assertEqual([row["id"] for row in results], list(range(6)))
+        self.assertEqual([row["exit_code"] for row in results], [0, 1, 0, 0, 0, 0])
+        self.assertEqual(peak, 2)
+        self.assertEqual(active, 0)
+
+    def test_invalid_parallel_limits_are_not_silently_clamped(self):
+        for jobs in (0, -1, 9, True, 1.5, "2"):
+            with self.subTest(jobs=jobs), self.assertRaises(c.InvalidEvidence):
+                list(s.execute_cases([], self.root, 10, jobs, c, self.root))
+
+    def test_evidence_notes_are_scoped_to_exact_gate_tests_and_reported(self):
+        gate = self.scope["areas"][0]["requirements"][0]["gates"][0]
+        gate["evidence_notes"] = [{"tests": [self.accept], "note": "One narrow scenario, not all moves."}]
+        s.validate(self.scope, c, self.root)
+        self.assertEqual(self.summary()["areas"][0]["requirements"][0]["gates"][0]["evidence_notes"], gate["evidence_notes"])
+        for note in ({"tests": [self.reject], "note": "foreign gate"},
+                     {"tests": [], "note": "unbound claim"},
+                     {"tests": [self.accept], "note": " "}):
+            gate["evidence_notes"] = [note]
+            with self.assertRaises(c.InvalidEvidence):
+                s.validate(self.scope, c, self.root)
+
     def test_missing_and_unexecuted_obligations_stay_in_denominator(self):
         s.validate(self.scope, c, self.root)
         result = self.summary()
@@ -76,6 +115,32 @@ class ScopeTests(unittest.TestCase):
         self.assertEqual(result["gate_counts"]["untested"], 2)
         self.assertEqual(result["passing_declared_gates_percent"], 0)
         self.assertFalse(result["full_rust_support_established"])
+
+    def test_readiness_counts_mapping_without_claiming_implementation(self):
+        result = self.summary()
+        readiness = result["measurement_readiness"]
+        self.assertEqual(readiness["mapped_gate_count"], 2)
+        self.assertEqual(readiness["mapped_declared_gates_percent"], 50)
+        self.assertEqual(readiness["mapped_exact_test_count"], 2)
+        self.assertFalse(readiness["can_estimate_full_rust_completion"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertEqual([row["layer"] for row in result["missing_test_obligations"]],
+                         ["interaction", "end_to_end"])
+        directory, _ = self.report()
+        measured = self.summary([directory])
+        self.assertEqual(measured["measurement_readiness"], readiness)
+        self.assertEqual(measured["passing_declared_gates_percent"], 25)
+
+    def test_all_declared_cells_green_does_not_certify_a_complete_inventory(self):
+        for gate in self.scope["areas"][0]["requirements"][0]["gates"]:
+            gate["tests"] = [self.accept]
+        directory, _ = self.report()
+        result = self.summary([directory])
+        self.assertEqual(result["passing_declared_gates_percent"], 100)
+        self.assertEqual(result["measurement_readiness"]["mapped_declared_gates_percent"], 100)
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertFalse(result["measurement_readiness"]["can_estimate_full_rust_completion"])
+        self.assertIn("unavailable", s.render(result))
 
     def test_exact_case_success_is_not_entire_requirement_support(self):
         directory, _ = self.report()

@@ -341,6 +341,7 @@ def main(argv=None) -> int:
     parser.add_argument("--evidence", type=Path, action="append", default=[], help="coverage: retained track directory")
     parser.add_argument("--json", action="store_true", help="machine-readable layered coverage")
     parser.add_argument("--dry-run", action="store_true", help="show exact track invocations without executing")
+    parser.add_argument("--jobs", type=int, default=1, help="track: independent exact-case processes, 1..8")
     args = parser.parse_args(argv)
     try:
         data = validate(load_json(args.manifest))

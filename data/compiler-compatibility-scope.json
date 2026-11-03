@@ -6,16 +6,48 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial lexical edition evidence: guarded strings/hash pairs reject as Syntax in E2024 and lex in E2021. No full edition or target coverage asserted.",
+                  "tests": [
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "guarded_strings_have_explicit_edition_specific_lexical_outcomes"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "lexical_tokens",
+                  "test": "guarded_strings_have_explicit_edition_specific_lexical_outcomes"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial Edition 2024 scenario: chained Option/tuple binding scopes, conditions, while loops and invalid else-scope/value-break cases use pinned stock Run/Invalid oracle.",
+                  "tests": [
+                    {
+                      "suite": "let_chains",
+                      "test": "let_chains_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "let_chains",
+                  "test": "let_chains_match_stock"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -28,16 +60,80 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial lexer-only evidence: exact raw/Unicode identifiers, literal spelling/suffix/hash ranges, punctuation spacing and tuple dots, plus fixed 23 lexical accept/31 Syntax reject corpus. Expression-invalid suffixes explicitly remain lexical successes, not compiler acceptance.",
+                  "tests": [
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "literal_spellings_suffix_ranges_and_raw_hashes_are_preserved"
+                    },
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "spacing_lifetime_and_tuple_dot_transport_are_exact"
+                    },
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "native_lexical_categories_do_not_confuse_expression_suffix_semantics"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "lexical_tokens",
+                  "test": "literal_spellings_suffix_ranges_and_raw_hashes_are_preserved"
+                },
+                {
+                  "suite": "lexical_tokens",
+                  "test": "spacing_lifetime_and_tuple_dot_transport_are_exact"
+                },
+                {
+                  "suite": "lexical_tokens",
+                  "test": "native_lexical_categories_do_not_confuse_expression_suffix_semantics"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict pinned stock Invalid oracle checks malformed byte escapes, empty/multichar/non-ASCII literals and suffixes, plus type errors; native rejection cannot be unsupported and cannot emit an image. Partial lexical rejection evidence.",
+                  "tests": [
+                    {
+                      "suite": "byte_literals",
+                      "test": "invalid_byte_literals_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "byte_literals",
+                  "test": "invalid_byte_literals_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial byte-token interaction with rigid u8 values, range patterns, arrays, borrows and literal/tt macro forwarding. Every valid case requires native and pinned-stock runtime success.",
+                  "tests": [
+                    {
+                      "suite": "byte_literals",
+                      "test": "byte_values_types_patterns_and_macros_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "byte_literals",
+                  "test": "byte_values_types_patterns_and_macros_match_stock"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -50,11 +146,34 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Additional bounded inline-module scenarios exercise relative/self/super aliases and disjoint type/value namespaces through successful CHECK/BUILD/run at workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "modules",
+                      "test": "module_and_function_import_aliases_and_relative_uses"
+                    },
+                    {
+                      "suite": "modules",
+                      "test": "same_spelling_module_and_function_use_separate_namespaces"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
               "tests": [
                 {
                   "suite": "modules",
                   "test": "cross_module_recursion_and_forward_declarations"
+                },
+                {
+                  "suite": "modules",
+                  "test": "module_and_function_import_aliases_and_relative_uses"
+                },
+                {
+                  "suite": "modules",
+                  "test": "same_spelling_module_and_function_use_separate_namespaces"
                 }
               ]
             },
@@ -63,11 +182,26 @@
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial inline/external nesting interaction: both outer.rs and outer/mod.rs layouts contain inline descendants whose external children execute together.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "external_nested_and_inline_module_directories"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
               "tests": [
                 {
                   "suite": "modules",
                   "test": "nested_inline_modules_paths_and_distinct_canonical_names"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "external_nested_and_inline_module_directories"
                 }
               ]
             },
@@ -87,20 +221,92 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial discovery evidence for flat and directory modules and nested inline/external layouts. These positive bodies require native success, not unsupported rejection. Path-attribute support remains unproven.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "external_flat_and_directory_modules_build_and_check"
+                    },
+                    {
+                      "suite": "external_modules",
+                      "test": "external_nested_and_inline_module_directories"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "external_modules",
+                  "test": "external_flat_and_directory_modules_build_and_check"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "external_nested_and_inline_module_directories"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial source discovery plus import/privacy interactions: cross-file ancestor access and grouped self/module/function aliases execute with exact expected stdout. Grouped fixture additionally runs stock edition 2021, not an Edition 2024 oracle.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "external_modules_share_import_resolution_and_ancestor_privacy"
+                    },
+                    {
+                      "suite": "external_modules",
+                      "test": "grouped_imports_preserve_external_module_loading_and_aliases"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "external_modules",
+                  "test": "external_modules_share_import_resolution_and_ancestor_privacy"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "grouped_imports_preserve_external_module_loading_and_aliases"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real native CHECK/BUILD/run at workers 1/8 for external source trees and restricted sibling scopes. Restricted fixture also executes stock edition 2021. Partial discovery/visibility scenarios only.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "external_flat_and_directory_modules_build_and_check"
+                    },
+                    {
+                      "suite": "external_modules",
+                      "test": "restricted_visibility_preserves_external_lexical_scopes"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "external_modules",
+                  "test": "external_flat_and_directory_modules_build_and_check"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "restricted_visibility_preserves_external_lexical_scopes"
+                }
+              ]
             }
           ],
           "id": "source-external-modules",
@@ -109,20 +315,124 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial grouped/glob/namespace evidence. Grouped suite first classifies every source with stock and then strictly requires valid native CHECK/BUILD/run at workers 1/8. Glob test has native CHECK and fixed stdout, not a live stock invocation.",
+                  "tests": [
+                    {
+                      "suite": "grouped_imports",
+                      "test": "grouped_native_after_complete_stock_oracle"
+                    },
+                    {
+                      "suite": "glob_imports",
+                      "test": "glob_imports_match_stock"
+                    },
+                    {
+                      "suite": "modules",
+                      "test": "same_spelling_module_and_function_use_separate_namespaces"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "grouped_imports",
+                  "test": "grouped_native_after_complete_stock_oracle"
+                },
+                {
+                  "suite": "glob_imports",
+                  "test": "glob_imports_match_stock"
+                },
+                {
+                  "suite": "modules",
+                  "test": "same_spelling_module_and_function_use_separate_namespaces"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict mixed-corpus tests: stock-invalid grouped/private/unresolved/collision imports and invalid restricted scopes must reject without unsupported diagnostics or output artifacts. Does not claim complete namespace rejection coverage.",
+                  "tests": [
+                    {
+                      "suite": "grouped_imports",
+                      "test": "grouped_native_after_complete_stock_oracle"
+                    },
+                    {
+                      "suite": "restricted_visibility",
+                      "test": "native_after_complete_stock_oracle"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "grouped_imports",
+                  "test": "grouped_native_after_complete_stock_oracle"
+                },
+                {
+                  "suite": "restricted_visibility",
+                  "test": "native_after_complete_stock_oracle"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial import/discovery/privacy interaction over real external files and lexical ancestors, with exact output checks. Neither test proves block-local item or complete reexport resolution.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "grouped_imports_preserve_external_module_loading_and_aliases"
+                    },
+                    {
+                      "suite": "external_modules",
+                      "test": "external_modules_share_import_resolution_and_ancestor_privacy"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "external_modules",
+                  "test": "grouped_imports_preserve_external_module_loading_and_aliases"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "external_modules_share_import_resolution_and_ancestor_privacy"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "CHECK/BUILD/run with no CHECK image and exact runtime output at workers 1/8. Grouped test also runs the complete independent stock corpus first. Partial import scenarios, not all-feature completeness.",
+                  "tests": [
+                    {
+                      "suite": "grouped_imports",
+                      "test": "grouped_native_after_complete_stock_oracle"
+                    },
+                    {
+                      "suite": "modules",
+                      "test": "module_and_function_import_aliases_and_relative_uses"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "grouped_imports",
+                  "test": "grouped_native_after_complete_stock_oracle"
+                },
+                {
+                  "suite": "modules",
+                  "test": "module_and_function_import_aliases_and_relative_uses"
+                }
+              ]
             }
           ],
           "id": "source-imports",
@@ -131,20 +441,92 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial pub(self)/pub(super)/pub(crate)/pub(in ancestor) declaration, field and alias scenarios. Valid cases require stock and native runtime success; invalid cases cannot pass as unsupported.",
+                  "tests": [
+                    {
+                      "suite": "restricted_visibility",
+                      "test": "native_after_complete_stock_oracle"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "restricted_visibility",
+                  "test": "native_after_complete_stock_oracle"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Stock-invalid accesses, illegal scope restrictions and unused invalid imports must produce native non-unsupported errors with no image in CHECK and BUILD at workers 1/8. Bounded fixture corpus only.",
+                  "tests": [
+                    {
+                      "suite": "restricted_visibility",
+                      "test": "native_after_complete_stock_oracle"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "restricted_visibility",
+                  "test": "native_after_complete_stock_oracle"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial visibility interaction across external module files: restricted struct fields/sibling readers and ancestor-private functions. Native CHECK/BUILD/run required; restricted fixture has additional stock edition 2021 execution.",
+                  "tests": [
+                    {
+                      "suite": "external_modules",
+                      "test": "restricted_visibility_preserves_external_lexical_scopes"
+                    },
+                    {
+                      "suite": "external_modules",
+                      "test": "external_modules_share_import_resolution_and_ancestor_privacy"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "external_modules",
+                  "test": "restricted_visibility_preserves_external_lexical_scopes"
+                },
+                {
+                  "suite": "external_modules",
+                  "test": "external_modules_share_import_resolution_and_ancestor_privacy"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Existing mixed corpus uses real stock classification, native CHECK/BUILD at workers 1/8 and executable stdout/ELF checks for valid cases. Partial lexical visibility evidence only.",
+                  "tests": [
+                    {
+                      "suite": "restricted_visibility",
+                      "test": "native_after_complete_stock_oracle"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "restricted_visibility",
+                  "test": "native_after_complete_stock_oracle"
+                }
+              ]
             }
           ],
           "id": "source-visibility",
@@ -153,16 +535,56 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial source-location evidence: UTF-8/CRLF/EOF projections, foreign-view/invalid UTF-8 boundary protection and exact doc original spans. Does not establish stable item identity or general macro expansion provenance.",
+                  "tests": [
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "identity_projection_keeps_unicode_crlf_and_eof_original_locations"
+                    },
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "documentation_is_audited_once_without_reintroducing_attributes"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "lexical_tokens",
+                  "test": "identity_projection_keeps_unicode_crlf_and_eof_original_locations"
+                },
+                {
+                  "suite": "lexical_tokens",
+                  "test": "documentation_is_audited_once_without_reintroducing_attributes"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual frontend Syntax error for non-ASCII byte string preserves the entire Unicode character, original child path and line/column after Unicode plus CRLF. Partial diagnostic/provenance interaction, not stock-differential semantic rejection.",
+                  "tests": [
+                    {
+                      "suite": "lexical_tokens",
+                      "test": "invalid_byte_unicode_has_full_character_original_child_span"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "lexical_tokens",
+                  "test": "invalid_byte_unicode_has_full_character_original_child_span"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -199,8 +621,32 @@
               ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Bounded i8 interaction evidence: signed extrema/sign extension/truncation across ten integer cast targets and mixed-width struct/array/reference/enum transport. Existing i8 feature/rejection/end-to-end selectors retained.",
+                  "tests": [
+                    {
+                      "suite": "integer_casts",
+                      "test": "accepts_matrix_from_i8"
+                    },
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_mixed_integer_scalar_leaf_transport"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_casts",
+                  "test": "accepts_matrix_from_i8"
+                },
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_mixed_integer_scalar_leaf_transport"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -218,20 +664,108 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial wide-value scenarios: i128 minimum/u128 maximum transport/comparison, 300u128 truncation to u8, signed/unsigned bitwise and 100-bit shifts. Does not establish full wide arithmetic, all casts or compound-assignment order.",
+                  "tests": [
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_integer_128_types"
+                    },
+                    {
+                      "suite": "integer_casts",
+                      "test": "accepts_integer128_cast"
+                    },
+                    {
+                      "suite": "bitwise",
+                      "test": "accepts_integer128_bitwise"
+                    },
+                    {
+                      "suite": "shifts",
+                      "test": "accepts_integer128_shifts"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_integer_128_types"
+                },
+                {
+                  "suite": "integer_casts",
+                  "test": "accepts_integer128_cast"
+                },
+                {
+                  "suite": "bitwise",
+                  "test": "accepts_integer128_bitwise"
+                },
+                {
+                  "suite": "shifts",
+                  "test": "accepts_integer128_shifts"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial cast/context interactions: mutating source evaluated once before narrowing to u8, plus i8 extrema conversions into signed/unsigned target widths. Assignment-place ordering remains uncovered.",
+                  "tests": [
+                    {
+                      "suite": "integer_casts",
+                      "test": "accepts_once_evaluation"
+                    },
+                    {
+                      "suite": "integer_casts",
+                      "test": "accepts_matrix_from_i8"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_casts",
+                  "test": "accepts_once_evaluation"
+                },
+                {
+                  "suite": "integer_casts",
+                  "test": "accepts_matrix_from_i8"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real native CHECK/BUILD/run at workers 1/8 with no CHECK image and exact stdout for two bounded wide integer scenarios. Historical stock-classified fixtures, not a fresh stock rerun in these test bodies.",
+                  "tests": [
+                    {
+                      "suite": "integer_casts",
+                      "test": "accepts_integer128_cast"
+                    },
+                    {
+                      "suite": "shifts",
+                      "test": "accepts_integer128_shifts"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_casts",
+                  "test": "accepts_integer128_cast"
+                },
+                {
+                  "suite": "shifts",
+                  "test": "accepts_integer128_shifts"
+                }
+              ]
             }
           ],
           "id": "values-wide-and-casts",
@@ -282,20 +816,116 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial scalar evidence: all 256 hex byte values and escaped/ASCII rigid u8 literals use strict pinned stock runtime oracle; boolean eager truth tables require native success. General char/str/string/byte-string coercions remain open.",
+                  "tests": [
+                    {
+                      "suite": "byte_literals",
+                      "test": "byte_values_types_patterns_and_macros_match_stock"
+                    },
+                    {
+                      "suite": "byte_literals",
+                      "test": "every_hex_byte_matches_stock"
+                    },
+                    {
+                      "suite": "bitwise",
+                      "test": "accepts_boolean_eager_truth_tables"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "byte_literals",
+                  "test": "byte_values_types_patterns_and_macros_match_stock"
+                },
+                {
+                  "suite": "byte_literals",
+                  "test": "every_hex_byte_matches_stock"
+                },
+                {
+                  "suite": "bitwise",
+                  "test": "accepts_boolean_eager_truth_tables"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict stock-invalid byte typing, malformed literals, array element mismatch, wrong char pattern, negation and unused invalid function rejection. Native unsupported diagnostics and emitted images fail the oracle.",
+                  "tests": [
+                    {
+                      "suite": "byte_literals",
+                      "test": "invalid_byte_literals_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "byte_literals",
+                  "test": "invalid_byte_literals_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial byte/pattern/macro/borrow interactions plus side-effecting boolean bitwise operands prove eager single evaluation left-to-right, using exact runtime output. Not complete scalar/string support.",
+                  "tests": [
+                    {
+                      "suite": "byte_literals",
+                      "test": "byte_values_types_patterns_and_macros_match_stock"
+                    },
+                    {
+                      "suite": "bitwise",
+                      "test": "accepts_eager_once_left_to_right"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "byte_literals",
+                  "test": "byte_values_types_patterns_and_macros_match_stock"
+                },
+                {
+                  "suite": "bitwise",
+                  "test": "accepts_eager_once_left_to_right"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real native CHECK/BUILD/run at workers 1/8, with no CHECK image and exact stdout, for bounded boolean truth-table/evaluation-order scenarios. No claim of complete string-literal support.",
+                  "tests": [
+                    {
+                      "suite": "bitwise",
+                      "test": "accepts_boolean_eager_truth_tables"
+                    },
+                    {
+                      "suite": "bitwise",
+                      "test": "accepts_eager_once_left_to_right"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "bitwise",
+                  "test": "accepts_boolean_eager_truth_tables"
+                },
+                {
+                  "suite": "bitwise",
+                  "test": "accepts_eager_once_left_to_right"
+                }
+              ]
             }
           ],
           "id": "values-scalar-strings",
@@ -304,20 +934,124 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial aggregate construction/projection evidence: nested fixed arrays/repeats and nested nominal-struct/tuple destructuring with a mutable binding. No claim for all enum forms, unions, DSTs or updates.",
+                  "tests": [
+                    {
+                      "suite": "arrays",
+                      "test": "accepts_nested_array_values"
+                    },
+                    {
+                      "suite": "patterns",
+                      "test": "accepts_nested_struct_tuple_patterns"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "arrays",
+                  "test": "accepts_nested_array_values"
+                },
+                {
+                  "suite": "patterns",
+                  "test": "accepts_nested_struct_tuple_patterns"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial strict stock-invalid aggregate cases: mixed byte/u16 array elements, generic aggregate leaf mismatch and distinct same-spelling nominal types. Shared oracle rejects unsupported-as-invalid and forbids failure artifacts.",
+                  "tests": [
+                    {
+                      "suite": "byte_literals",
+                      "test": "invalid_byte_literals_match_stock"
+                    },
+                    {
+                      "suite": "partial_annotations",
+                      "test": "partial_annotations_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "byte_literals",
+                  "test": "invalid_byte_literals_match_stock"
+                },
+                {
+                  "suite": "partial_annotations",
+                  "test": "partial_annotations_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial aggregate interactions with source-order side effects, mixed-width struct/enum/reference transport and field/block/trait-method array-to-slice coercion. Last test compares actual stock runtime and native CHECK/BUILD/run at workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "arrays",
+                      "test": "accepts_literal_source_order"
+                    },
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_mixed_integer_scalar_leaf_transport"
+                    },
+                    {
+                      "suite": "body_inference",
+                      "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "arrays",
+                  "test": "accepts_literal_source_order"
+                },
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_mixed_integer_scalar_leaf_transport"
+                },
+                {
+                  "suite": "body_inference",
+                  "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real native CHECK/BUILD/run with ELF checks, no CHECK image and exact stdout at workers 1/8 for bounded nested-array and element evaluation-order scenarios.",
+                  "tests": [
+                    {
+                      "suite": "arrays",
+                      "test": "accepts_nested_array_values"
+                    },
+                    {
+                      "suite": "arrays",
+                      "test": "accepts_literal_source_order"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "arrays",
+                  "test": "accepts_nested_array_values"
+                },
+                {
+                  "suite": "arrays",
+                  "test": "accepts_literal_source_order"
+                }
+              ]
             }
           ],
           "id": "values-aggregates",
@@ -326,20 +1060,116 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial nested irrefutable struct/tuple pattern semantics and single initializer evaluation, including mutable bindings. No assertion of full refutable/or/range/ref/@/slice/guard/exhaustiveness coverage.",
+                  "tests": [
+                    {
+                      "suite": "patterns",
+                      "test": "accepts_nested_struct_tuple_patterns"
+                    },
+                    {
+                      "suite": "patterns",
+                      "test": "accepts_pattern_initializer_evaluated_once"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "patterns",
+                  "test": "accepts_nested_struct_tuple_patterns"
+                },
+                {
+                  "suite": "patterns",
+                  "test": "accepts_pattern_initializer_evaluated_once"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial strict rejection: six product-pattern holes/unresolved dead-body cases explicitly forbid unsupported diagnostics in native CHECK; byte-pattern type mismatch uses a live pinned stock Invalid oracle. Pattern-usefulness classifications are frozen in its cases, not live stock in this selected test.",
+                  "tests": [
+                    {
+                      "suite": "pattern_usefulness",
+                      "test": "actual_holes_and_dead_body_obligations_are_ordinary_invalid_not_capability_boundaries"
+                    },
+                    {
+                      "suite": "byte_literals",
+                      "test": "invalid_byte_literals_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "pattern_usefulness",
+                  "test": "actual_holes_and_dead_body_obligations_are_ordinary_invalid_not_capability_boundaries"
+                },
+                {
+                  "suite": "byte_literals",
+                  "test": "invalid_byte_literals_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial patterns/control-flow/inference interaction: chained Option/tuple bindings and scope failures, Option assignment/pop/trait-reference matching and nested generic returns. Valid programs must run, unsupported rejection never passes.",
+                  "tests": [
+                    {
+                      "suite": "let_chains",
+                      "test": "let_chains_match_stock"
+                    },
+                    {
+                      "suite": "body_inference",
+                      "test": "patterns_assignments_and_returns_solve_nominal_parameters"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "let_chains",
+                  "test": "let_chains_match_stock"
+                },
+                {
+                  "suite": "body_inference",
+                  "test": "patterns_assignments_and_returns_solve_nominal_parameters"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CHECK/BUILD/run at workers 1/8 with exact stdout and no CHECK executable for bounded destructuring/evaluation-order scenarios. Does not prove all pattern forms.",
+                  "tests": [
+                    {
+                      "suite": "patterns",
+                      "test": "accepts_nested_struct_tuple_patterns"
+                    },
+                    {
+                      "suite": "patterns",
+                      "test": "accepts_pattern_initializer_evaluated_once"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "patterns",
+                  "test": "accepts_nested_struct_tuple_patterns"
+                },
+                {
+                  "suite": "patterns",
+                  "test": "accepts_pattern_initializer_evaluated_once"
+                }
+              ]
             }
           ],
           "id": "values-patterns",
@@ -348,20 +1178,116 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial control-flow evidence: value-producing labeled loops/blocks, labeled while/break/continue, and Edition 2024 if/while let chains compared with stock execution. Full divergence/expression typing remains broader.",
+                  "tests": [
+                    {
+                      "suite": "labels",
+                      "test": "labeled_loops_while_and_blocks_produce_values"
+                    },
+                    {
+                      "suite": "let_chains",
+                      "test": "let_chains_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "labels",
+                  "test": "labeled_loops_while_and_blocks_produce_values"
+                },
+                {
+                  "suite": "let_chains",
+                  "test": "let_chains_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict live pinned-stock Invalid cases reject escaped chain bindings, value breaks from while and inhabited values returned from never-return functions. Shared oracle rejects unsupported boundaries and failure images.",
+                  "tests": [
+                    {
+                      "suite": "let_chains",
+                      "test": "let_chains_match_stock"
+                    },
+                    {
+                      "suite": "partial_annotations",
+                      "test": "partial_annotations_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "let_chains",
+                  "test": "let_chains_match_stock"
+                },
+                {
+                  "suite": "partial_annotations",
+                  "test": "partial_annotations_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial conditional/eager evaluation evidence across side-effecting boolean operators, destructuring initialization and chained binding predicates/loops. Narrow scenarios do not imply all evaluation-order rules.",
+                  "tests": [
+                    {
+                      "suite": "bitwise",
+                      "test": "accepts_eager_once_left_to_right"
+                    },
+                    {
+                      "suite": "patterns",
+                      "test": "accepts_pattern_initializer_evaluated_once"
+                    },
+                    {
+                      "suite": "let_chains",
+                      "test": "let_chains_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "bitwise",
+                  "test": "accepts_eager_once_left_to_right"
+                },
+                {
+                  "suite": "patterns",
+                  "test": "accepts_pattern_initializer_evaluated_once"
+                },
+                {
+                  "suite": "let_chains",
+                  "test": "let_chains_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real stock runtime plus native CHECK/BUILD/run at workers 1/8 for nested labeled loops/blocks and while exits, checking exact success output and no CHECK image. Partial label scenario only.",
+                  "tests": [
+                    {
+                      "suite": "labels",
+                      "test": "labeled_loops_while_and_blocks_produce_values"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "labels",
+                  "test": "labeled_loops_while_and_blocks_produce_values"
+                }
+              ]
             }
           ],
           "id": "values-control-flow",
@@ -370,20 +1296,116 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial bidirectional/later-use inference, generic placeholder/never-position annotations and numeric float inference. All positives require executable success; partial_annotations uses pinned nightly oracle for never positions, as declared by its harness.",
+                  "tests": [
+                    {
+                      "suite": "body_inference",
+                      "test": "later_receiver_uses_solve_generic_bindings"
+                    },
+                    {
+                      "suite": "partial_annotations",
+                      "test": "partial_annotations_match_stock"
+                    },
+                    {
+                      "suite": "floats",
+                      "test": "omitted_generic_float_inference_and_canonical_clone"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "body_inference",
+                  "test": "later_receiver_uses_solve_generic_bindings"
+                },
+                {
+                  "suite": "partial_annotations",
+                  "test": "partial_annotations_match_stock"
+                },
+                {
+                  "suite": "floats",
+                  "test": "omitted_generic_float_inference_and_canonical_clone"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict pinned-stock Invalid cases include mismatched annotated leaves/owners, distinct nominal identities, illegal signature holes, excess impl-trait type arguments and never-return mismatch. Native unsupported cannot count as rejection success.",
+                  "tests": [
+                    {
+                      "suite": "partial_annotations",
+                      "test": "partial_annotations_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "partial_annotations",
+                  "test": "partial_annotations_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial inference/coercion/pattern/trait interactions over array-backed slices and Option/Vec/reference results; compares real stock runtime and native CHECK/BUILD/run at workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "body_inference",
+                      "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                    },
+                    {
+                      "suite": "body_inference",
+                      "test": "patterns_assignments_and_returns_solve_nominal_parameters"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "body_inference",
+                  "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                },
+                {
+                  "suite": "body_inference",
+                  "test": "patterns_assignments_and_returns_solve_nominal_parameters"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual stock executable versus native CHECK/BUILD/run status/stdout comparison at workers 1/8, with no CHECK image, for bounded generic later-use and slice-coercion cases.",
+                  "tests": [
+                    {
+                      "suite": "body_inference",
+                      "test": "later_receiver_uses_solve_generic_bindings"
+                    },
+                    {
+                      "suite": "body_inference",
+                      "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "body_inference",
+                  "test": "later_receiver_uses_solve_generic_bindings"
+                },
+                {
+                  "suite": "body_inference",
+                  "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+                }
+              ]
             }
           ],
           "id": "values-inference",
@@ -392,20 +1414,100 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial primitive semantics: u64 extrema/arithmetic and comparisons, i128/u128 extrema transport, plus source-backed i8 overflow trap and pre-trap stdout. Does not claim all widths or every overflow profile.",
+                  "tests": [
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_u64_bounds_arithmetic_not_transport"
+                    },
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_integer_128_types"
+                    },
+                    {
+                      "suite": "integer_types",
+                      "test": "traps_i8_add_overflow"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_u64_bounds_arithmetic_not_transport"
+                },
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_integer_128_types"
+                },
+                {
+                  "suite": "integer_types",
+                  "test": "traps_i8_add_overflow"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial mixed-width struct/array/reference/enum transport and signed-extrema cast matrix. These bounded interactions do not establish all integer semantics.",
+                  "tests": [
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_mixed_integer_scalar_leaf_transport"
+                    },
+                    {
+                      "suite": "integer_casts",
+                      "test": "accepts_matrix_from_i8"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_mixed_integer_scalar_leaf_transport"
+                },
+                {
+                  "suite": "integer_casts",
+                  "test": "accepts_matrix_from_i8"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CHECK/BUILD/run at workers 1/8 with image checks and exact normal/trap status plus stdout. Stock classification is recorded in existing fixtures, not freshly rerun by these bodies.",
+                  "tests": [
+                    {
+                      "suite": "integer_types",
+                      "test": "accepts_u64_bounds_arithmetic_not_transport"
+                    },
+                    {
+                      "suite": "integer_types",
+                      "test": "traps_i8_add_overflow"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "integer_types",
+                  "test": "accepts_u64_bounds_arithmetic_not_transport"
+                },
+                {
+                  "suite": "integer_types",
+                  "test": "traps_i8_add_overflow"
+                }
+              ]
             }
           ],
           "id": "values-integer-semantics",
@@ -414,20 +1516,100 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial f32/f64 semantics beyond existing IEEE scenario: saturation into ten non-128 integer types, finite/truncation/NaN/inf cases, integer rounding and width conversions, defaulting and generic inference. Does not cover every float rule or i128/u128 casts.",
+                  "tests": [
+                    {
+                      "suite": "floats",
+                      "test": "saturating_float_casts_to_every_integer_type"
+                    },
+                    {
+                      "suite": "floats",
+                      "test": "integer_to_float_rounding_and_width_conversions"
+                    },
+                    {
+                      "suite": "floats",
+                      "test": "omitted_generic_float_inference_and_canonical_clone"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "saturating_float_casts_to_every_integer_type"
+                },
+                {
+                  "suite": "floats",
+                  "test": "integer_to_float_rounding_and_width_conversions"
+                },
+                {
+                  "suite": "floats",
+                  "test": "omitted_generic_float_inference_and_canonical_clone"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Partial float/generic Clone/tuple/defaulting and numeric cast interactions, comparing executable stock results and native CHECK/BUILD/run at workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "floats",
+                      "test": "omitted_generic_float_inference_and_canonical_clone"
+                    },
+                    {
+                      "suite": "floats",
+                      "test": "integer_to_float_rounding_and_width_conversions"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "omitted_generic_float_inference_and_canonical_clone"
+                },
+                {
+                  "suite": "floats",
+                  "test": "integer_to_float_rounding_and_width_conversions"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real stock execution followed by native CHECK/BUILD/run at workers 1/8 with exact float-oracle stdout and no CHECK image for bounded conversions. Full float compatibility is not inferred.",
+                  "tests": [
+                    {
+                      "suite": "floats",
+                      "test": "saturating_float_casts_to_every_integer_type"
+                    },
+                    {
+                      "suite": "floats",
+                      "test": "integer_to_float_rounding_and_width_conversions"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "floats",
+                  "test": "saturating_float_casts_to_every_integer_type"
+                },
+                {
+                  "suite": "floats",
+                  "test": "integer_to_float_rounding_and_width_conversions"
+                }
+              ]
             }
           ],
           "id": "values-float-semantics",
@@ -447,15 +1629,76 @@
             },
             {
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "borrowing",
+                  "test": "rejects_invalid_mutable_reference_moved_carrier"
+                },
+                {
+                  "suite": "result_map",
+                  "test": "enum_own_drop_move_is_invalid"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "borrowing",
+                      "test": "rejects_invalid_mutable_reference_moved_carrier"
+                    }
+                  ],
+                  "note": "E0382 stock-classified invalid reuse of moved mutable reference. Native CHECK/BUILD rejection at workers 1/8. Not positive execution evidence."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "enum_own_drop_move_is_invalid"
+                    }
+                  ],
+                  "note": "Pinned stock E0509 and native semantic rejection of payload move from enum implementing Drop, via closure_oracle. No valid unsupported case is relabeled invalid."
+                }
+              ]
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "result_map",
+                  "test": "structural_enum_partial_moves_match_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "structural_enum_partial_moves_match_stock"
+                    }
+                  ],
+                  "note": "Pinned live stock and native CHECK/BUILD/run at workers 1/8 compare enum partial/complete moves, reassignment, nested payload cleanup and exact destructor order."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "borrowing",
+                  "test": "accepts_mutable_reference_move"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "borrowing",
+                      "test": "accepts_mutable_reference_move"
+                    }
+                  ],
+                  "note": "Mutable reference carrier moves to a second binding, writes through it and observes owner value 7. Native CHECK/BUILD/run at workers 1/8 against frozen stock-classified stdout, not a live stock invocation."
+                }
+              ]
             }
           ],
           "id": "memory-moves",
@@ -487,6 +1730,21 @@
                 {
                   "suite": "borrowing",
                   "test": "accepts_disjoint_struct_fields"
+                },
+                {
+                  "suite": "borrowing",
+                  "test": "accepts_explicit_shared_reborrow"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "borrowing",
+                      "test": "accepts_explicit_shared_reborrow"
+                    }
+                  ],
+                  "note": "Shared child reads precede mutable parent reuse, output 10. Frozen stock-classified stdout with native CHECK/BUILD/run at workers 1/8."
                 }
               ]
             },
@@ -496,6 +1754,21 @@
                 {
                   "suite": "borrowing",
                   "test": "accepts_shared_nll_last_use"
+                },
+                {
+                  "suite": "borrowing",
+                  "test": "accepts_mutable_nll_last_use"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "borrowing",
+                      "test": "accepts_mutable_nll_last_use"
+                    }
+                  ],
+                  "note": "Frozen stock-classified mutable loan last use allows later owner read, output 7. Native CHECK/BUILD/run at workers 1/8."
                 }
               ]
             }
@@ -583,7 +1856,23 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "loan_renewal",
+                  "test": "conditional_replacement_workers1_8_check_build_run"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "loan_renewal",
+                      "test": "conditional_replacement_workers1_8_check_build_run"
+                    }
+                  ],
+                  "note": "Loop-carried mutable carrier conditionally renewed, CHECK has no image and BUILD/run prints 2 at workers 1/8. This focused test has asserted expected output, not its own live stock invocation; it does not establish general projected/slice loan support."
+                }
+              ]
             }
           ],
           "id": "memory-projected-loans",
@@ -601,11 +1890,69 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "temp_places",
+                  "test": "value_then_carrier_then_index_order_matches_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "temp_places",
+                      "test": "value_then_carrier_then_index_order_matches_stock"
+                    }
+                  ],
+                  "note": "Frozen rustc 1.98.1 fixture stdout establishes RHS value then temporary-rooted carrier then index ordering. Native CHECK/BUILD/run workers 1/8, no live stock for this selector."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "drop_normal",
+                  "test": "if_let_scrutinee_temporaries_follow_stock_2024_order"
+                },
+                {
+                  "suite": "temp_places",
+                  "test": "rhs_reads_precede_carrier_borrow"
+                },
+                {
+                  "suite": "temp_places",
+                  "test": "runtime_index_compound_traps_after_value_carrier_and_index"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "drop_normal",
+                      "test": "if_let_scrutinee_temporaries_follow_stock_2024_order"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle asserts Edition 2024 then/else/match scrutinee temporary destructor order. No claim for all promotion or lifetime extension."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "temp_places",
+                      "test": "rhs_reads_precede_carrier_borrow"
+                    }
+                  ],
+                  "note": "Frozen stock fixture: RHS reads/mutations precede mutable carrier creation across scalar and array-field assignment. Native CHECK/BUILD/run workers 1/8."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "temp_places",
+                      "test": "runtime_index_compound_traps_after_value_carrier_and_index"
+                    }
+                  ],
+                  "note": "Live pinned stock/native builds and execution compare stdout, SIGABRT and normalized bounds diagnostics after value/carrier/index evaluation, workers 1/8. Negative process exit is required runtime behavior, not unsupported-source rejection."
+                }
+              ]
             }
           ],
           "id": "memory-temporaries",
@@ -632,6 +1979,21 @@
                 {
                   "suite": "drop_normal",
                   "test": "explicit_drop_function_matches_stock"
+                },
+                {
+                  "suite": "drop_normal",
+                  "test": "manually_drop_preserves_payload_moves_borrows_and_explicit_cleanup"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "drop_normal",
+                      "test": "manually_drop_preserves_payload_moves_borrows_and_explicit_cleanup"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks suppression of implicit Drop, into_inner moves, shared/mutable payload borrows and explicit unsafe cleanup plus invalid controls. Bounded ManuallyDrop semantics only."
                 }
               ]
             },
@@ -641,6 +2003,30 @@
                 {
                   "suite": "drop_normal",
                   "test": "explicit_drop_function_matches_stock"
+                },
+                {
+                  "suite": "drop_normal",
+                  "test": "typed_box_cleanup_preserves_original_address_and_drop_order"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "drop_normal",
+                      "test": "typed_box_cleanup_preserves_original_address_and_drop_order"
+                    }
+                  ],
+                  "note": "Pinned stock/native CHECK/BUILD/run checks original allocation addresses and exact destructor count/order, closure-held boxes and zero-sized payloads. Does not establish complete allocator behavior."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "drop_normal",
+                      "test": "explicit_drop_function_matches_stock"
+                    }
+                  ],
+                  "note": "Preserves existing selector. Pinned stock/native explicit drop, tuple/string/reference/closure cleanup and borrowed destructor temporaries, with move-after-drop and live-borrow invalid controls."
                 }
               ]
             }
@@ -686,7 +2072,23 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "drop_normal",
+                  "test": "recursive_typed_boxes_drop_in_place_once_and_preserve_partial_moves"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "drop_normal",
+                      "test": "recursive_typed_boxes_drop_in_place_once_and_preserve_partial_moves"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks recursive nodes original addresses, one destructor per node and mutually recursive aggregate remaining-path cleanup after partial move."
+                }
+              ]
             }
           ],
           "id": "memory-drop-elaboration",
@@ -701,20 +2103,124 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CHECK/BUILD/run at workers 1 and 8, exact stdout and ELF checks. Covers rigid forwarding, same-instance recursion, distinct nominal specializations. These focused legacy tests use literal runtime expectations, not live stock invocation. Not a complete universal-template semantic inventory.",
+                  "tests": [
+                    {
+                      "suite": "generics",
+                      "test": "accepts_explicit_generic_forwarding"
+                    },
+                    {
+                      "suite": "generics",
+                      "test": "accepts_exact_self_recursion"
+                    },
+                    {
+                      "suite": "generics",
+                      "test": "accepts_multiple_nominal_specializations"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "generics",
+                  "test": "accepts_explicit_generic_forwarding"
+                },
+                {
+                  "suite": "generics",
+                  "test": "accepts_exact_self_recursion"
+                },
+                {
+                  "suite": "generics",
+                  "test": "accepts_multiple_nominal_specializations"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Exact invalid programs: unused generic double move, u8/u16 argument contradiction, annotated result/argument contradiction. Legacy native helper requires exit 1, nonempty nonpanic diagnostic and no executable in CHECK/BUILD at workers 1/8, but does not independently exclude Unsupported. Stronger typed invalid differential coverage is supplied by the associated and generic-trait-method tests below, not implied for these helpers.",
+                  "tests": [
+                    {
+                      "suite": "generic_inference",
+                      "test": "rejects_unused_universal_duplicate_body"
+                    },
+                    {
+                      "suite": "generic_inference",
+                      "test": "rejects_contradictory_known_argument_types"
+                    },
+                    {
+                      "suite": "generic_inference",
+                      "test": "rejects_hard_result_vs_known_argument_conflict"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "generic_inference",
+                  "test": "rejects_unused_universal_duplicate_body"
+                },
+                {
+                  "suite": "generic_inference",
+                  "test": "rejects_contradictory_known_argument_types"
+                },
+                {
+                  "suite": "generic_inference",
+                  "test": "rejects_hard_result_vs_known_argument_conflict"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "One generic identity instantiated with Wrap<i32> and Wrap<u64>, retaining maximum u64 payload.",
+                  "tests": [
+                    {
+                      "suite": "generics",
+                      "test": "accepts_multiple_nominal_specializations"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "generics",
+                  "test": "accepts_multiple_nominal_specializations"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual native CLI CHECK, BUILD and executable run at workers 1/8. Literal expected output only, not a live stock differential.",
+                  "tests": [
+                    {
+                      "suite": "generics",
+                      "test": "accepts_explicit_generic_forwarding"
+                    },
+                    {
+                      "suite": "generics",
+                      "test": "accepts_exact_self_recursion"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "generics",
+                  "test": "accepts_explicit_generic_forwarding"
+                },
+                {
+                  "suite": "generics",
+                  "test": "accepts_exact_self_recursion"
+                }
+              ]
             }
           ],
           "id": "abstraction-generic-functions",
@@ -723,20 +2229,140 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Inspected source covers required make/consume/value methods, static plus consuming methods, Self substitution in a generic impl, and generic identity required/default methods. Generic-method helper performs live stock build/run plus native CHECK/BUILD/run at workers 1/8. Legacy traits tests are native CLI with fixed stdout. Not full trait semantics.",
+                  "tests": [
+                    {
+                      "suite": "traits",
+                      "test": "accepts_required_static_value_and_root_self_return"
+                    },
+                    {
+                      "suite": "traits",
+                      "test": "accepts_multiple_required_methods_exact_signatures"
+                    },
+                    {
+                      "suite": "traits",
+                      "test": "accepts_generic_impl_signature_substitution"
+                    },
+                    {
+                      "suite": "generic_trait_methods",
+                      "test": "method_and_owner_binders_stay_distinct"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "traits",
+                  "test": "accepts_required_static_value_and_root_self_return"
+                },
+                {
+                  "suite": "traits",
+                  "test": "accepts_multiple_required_methods_exact_signatures"
+                },
+                {
+                  "suite": "traits",
+                  "test": "accepts_generic_impl_signature_substitution"
+                },
+                {
+                  "suite": "generic_trait_methods",
+                  "test": "method_and_owner_binders_stay_distinct"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Unused impl member omissions and parameter/receiver mismatches are exact negative sources, with legacy native exit/artifact checks. Generic-method differential test adds strict typed invalid rejection for wrong result, stricter Copy bound, method binder arity, unused default body mismatch, projected supertrait/default-body double move and call arity. Its helper rejects Unsupported/resource/infrastructure substitutes.",
+                  "tests": [
+                    {
+                      "suite": "traits",
+                      "test": "rejects_invalid_unused_impl_missing_required_item"
+                    },
+                    {
+                      "suite": "traits",
+                      "test": "rejects_invalid_unused_impl_parameter_mismatch"
+                    },
+                    {
+                      "suite": "traits",
+                      "test": "rejects_invalid_unused_impl_receiver_kind_mismatch"
+                    },
+                    {
+                      "suite": "generic_trait_methods",
+                      "test": "invalid_signatures_bounds_arity_and_unused_bodies_reject"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "traits",
+                  "test": "rejects_invalid_unused_impl_missing_required_item"
+                },
+                {
+                  "suite": "traits",
+                  "test": "rejects_invalid_unused_impl_parameter_mismatch"
+                },
+                {
+                  "suite": "traits",
+                  "test": "rejects_invalid_unused_impl_receiver_kind_mismatch"
+                },
+                {
+                  "suite": "generic_trait_methods",
+                  "test": "invalid_signatures_bounds_arity_and_unused_bodies_reject"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Nested W<W<S>> conditional Value implementation with generic UFCS consumer, plus required/default generic methods. These are bounded actual source interactions.",
+                  "tests": [
+                    {
+                      "suite": "traits",
+                      "test": "accepts_nested_generic_nominal_conditional_dispatch"
+                    },
+                    {
+                      "suite": "generic_trait_methods",
+                      "test": "method_and_owner_binders_stay_distinct"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "traits",
+                  "test": "accepts_nested_generic_nominal_conditional_dispatch"
+                },
+                {
+                  "suite": "generic_trait_methods",
+                  "test": "method_and_owner_binders_stay_distinct"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Live stock build/run compared with native CHECK/BUILD/run at workers 1/8. Stock helper does not separately run metadata CHECK for valid cases.",
+                  "tests": [
+                    {
+                      "suite": "generic_trait_methods",
+                      "test": "method_and_owner_binders_stay_distinct"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "generic_trait_methods",
+                  "test": "method_and_owner_binders_stay_distinct"
+                }
+              ]
             }
           ],
           "id": "abstraction-trait-methods",
@@ -745,20 +2371,124 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Associated-types selector has a bounded frozen 40-source partition, 28 runtime and 12 Invalid, with no Unsupported acceptance category. Includes closed signatures, same-Self distinct trait arguments, nested projections, missing/duplicate members and bad assignments. It invokes live stock build/run or diagnostic oracle, then native CHECK/BUILD/run workers 1/8 with PATH/RUSTC fallback blocked. Applied declaration bound adds Factory<i32>::Output: Read<i32,Item=i32>. This does not imply general GAT or recursive solver support.",
+                  "tests": [
+                    {
+                      "suite": "associated_types",
+                      "test": "native_associated_types_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "associated_declaration_bounds",
+                      "test": "applied_bound_carries_ordered_arguments_and_associated_equalities"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_types",
+                  "test": "native_associated_types_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "associated_declaration_bounds",
+                  "test": "applied_bound_carries_ordered_arguments_and_associated_equalities"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict Invalid controls, not valid-unsupported acceptance. Associated-types native suite explicitly forbids unsupported diagnostics and output artifacts. Focused helpers independently reject invalid stock metadata and validate native typed failures for unsatisfied declared membership/equality, wrong trait argument, unused generic assignments, and unproved RHS Copy.",
+                  "tests": [
+                    {
+                      "suite": "associated_types",
+                      "test": "native_associated_types_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "associated_declaration_bounds",
+                      "test": "unused_assignments_cannot_evade_declared_membership_or_equalities"
+                    },
+                    {
+                      "suite": "associated_declaration_bounds",
+                      "test": "associated_copy_equality_does_not_grant_rhs_parameter_copy"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_types",
+                  "test": "native_associated_types_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "associated_declaration_bounds",
+                  "test": "unused_assignments_cannot_evade_declared_membership_or_equalities"
+                },
+                {
+                  "suite": "associated_declaration_bounds",
+                  "test": "associated_copy_equality_does_not_grant_rhs_parameter_copy"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Source implements Factory<i32> and Factory<bool> for one Source with different associated types and sums 19+23. Ordered trait actuals and associated-member bounds are exercised through actual method dispatch.",
+                  "tests": [
+                    {
+                      "suite": "associated_declaration_bounds",
+                      "test": "closed_declared_projection_keeps_same_self_trait_arguments_distinct"
+                    },
+                    {
+                      "suite": "associated_declaration_bounds",
+                      "test": "applied_bound_carries_ordered_arguments_and_associated_equalities"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_declaration_bounds",
+                  "test": "closed_declared_projection_keeps_same_self_trait_arguments_distinct"
+                },
+                {
+                  "suite": "associated_declaration_bounds",
+                  "test": "applied_bound_carries_ordered_arguments_and_associated_equalities"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual stock/native execution and native CHECK/BUILD workers 1/8, no synthetic graph fixture credited as end-to-end.",
+                  "tests": [
+                    {
+                      "suite": "associated_types",
+                      "test": "native_associated_types_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "associated_declaration_bounds",
+                      "test": "closed_declared_projection_keeps_same_self_trait_arguments_distinct"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_types",
+                  "test": "native_associated_types_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "associated_declaration_bounds",
+                  "test": "closed_declared_projection_keeps_same_self_trait_arguments_distinct"
+                }
+              ]
             }
           ],
           "id": "abstraction-associated-types",
@@ -767,20 +2497,84 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Only associated-constant subset: default/override values, qualified/implicit generic uses, associated declared result types, same Self with different Per<T> values. Includes strict unused declaration failures. Lifetime/const generic parameters, generic defaults and GATs remain unestablished by this overlay. Original broad title/denominator must remain unchanged.",
+                  "tests": [
+                    {
+                      "suite": "associated_constants",
+                      "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_constants",
+                  "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Live stock diagnostic categories E0046/E0326/E0308/E0438 for unused missing member, declared type mismatch, initializer type mismatch and foreign member. Native CHECK/BUILD workers 1/8 forbids unsupported and images.",
+                  "tests": [
+                    {
+                      "suite": "associated_constants",
+                      "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_constants",
+                  "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Per<Unit> and Per<Larger> associated constant outputs u8/u16 through one generic inherent method retain trait argument identity. Not blanket evidence for other generic parameter families.",
+                  "tests": [
+                    {
+                      "suite": "associated_constants",
+                      "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_constants",
+                  "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Stock build/run differential and native CLI CHECK/BUILD/run workers 1/8 for the finite associated-constant corpus only.",
+                  "tests": [
+                    {
+                      "suite": "associated_constants",
+                      "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_constants",
+                  "test": "associated_constant_declarations_and_unused_errors_match_stock"
+                }
+              ]
             }
           ],
           "id": "abstraction-generic-parameters",
@@ -789,12 +2583,52 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Narrow positive coherence control: one source trait has disjoint concrete A/B implementations. Native CHECK/BUILD/run workers 1/8. Cross-crate orphan rules, recursive solving, auto traits and negative impl inventory is not established.",
+                  "tests": [
+                    {
+                      "suite": "traits",
+                      "test": "accepts_distinct_nominal_implementors_same_trait"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "traits",
+                  "test": "accepts_distinct_nominal_implementors_same_trait"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Exact same-type duplicate and W<T>/W<i32> overlap controls. Native exit 1/nonpanic/artifact-free CHECK/BUILD workers 1/8. Legacy helper does not forbid Unsupported or run stock, so these must not be described as strict differential rejection or complete cross-crate coherence.",
+                  "tests": [
+                    {
+                      "suite": "traits",
+                      "test": "rejects_invalid_duplicate_same_trait_same_type_impl"
+                    },
+                    {
+                      "suite": "traits",
+                      "test": "rejects_invalid_overlapping_generic_concrete_impl"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "traits",
+                  "test": "rejects_invalid_duplicate_same_trait_same_type_impl"
+                },
+                {
+                  "suite": "traits",
+                  "test": "rejects_invalid_overlapping_generic_concrete_impl"
+                }
+              ]
             },
             {
               "layer": "interaction",
@@ -811,20 +2645,84 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Token<u8>/Token<u64> same-name methods, full-width values and receiver/argument/callee stdout order. Live stock build/run and native CHECK/BUILD/run workers 1/8. This covers only inherent receiver selection, not trait autoderef/operator/index/dyn unsizing inventory.",
+                  "tests": [
+                    {
+                      "suite": "associated_items",
+                      "test": "disjoint_inherent_receiver_arguments_preserve_native_selection_and_order"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_items",
+                  "test": "disjoint_inherent_receiver_arguments_preserve_native_selection_and_order"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Strict stock metadata/native typed Invalid controls for concrete bool receiver without method and unused rigid Token<T> receiver. Unsupported/resource/infrastructure failures cannot satisfy the helper.",
+                  "tests": [
+                    {
+                      "suite": "associated_items",
+                      "test": "disjoint_inherent_receiver_filter_cannot_select_wrong_or_unknown_arguments"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_items",
+                  "test": "disjoint_inherent_receiver_filter_cannot_select_wrong_or_unknown_arguments"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Disjoint Token<(T,u8)>/Token<(T,u64)> impls, moving first tuple field through generic callers and summing 19+23. Stock/native execution and CHECK/BUILD workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "associated_items",
+                      "test": "disjoint_inherent_receiver_filter_keeps_rigid_generic_arguments"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_items",
+                  "test": "disjoint_inherent_receiver_filter_keeps_rigid_generic_arguments"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual stock image execution compared with native images at workers 1/8, plus native no-codegen CHECK.",
+                  "tests": [
+                    {
+                      "suite": "associated_items",
+                      "test": "disjoint_inherent_receiver_arguments_preserve_native_selection_and_order"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "associated_items",
+                  "test": "disjoint_inherent_receiver_arguments_preserve_native_selection_and_order"
+                }
+              ]
             }
           ],
           "id": "abstraction-method-lookup",
@@ -875,20 +2773,124 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Finite all-valid-or-Invalid callable corpora, no Unsupported expectation credited. Immediate closures cover argument effects, loans and moves; shared scalar captures cover nesting, shadowing and capture loans; function item values cover Fn/FnMut/FnOnce and associated/primitive method items. Does not establish arbitrary captures, function pointers, impl Trait, async/await or generators. Existing abstraction-closure-parameters selector is untouched.",
+                  "tests": [
+                    {
+                      "suite": "closures",
+                      "test": "immediate_noncapturing_closures_match_stock"
+                    },
+                    {
+                      "suite": "closures",
+                      "test": "shared_scalar_parameter_captures_match_stock"
+                    },
+                    {
+                      "suite": "closures",
+                      "test": "function_item_values_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "immediate_noncapturing_closures_match_stock"
+                },
+                {
+                  "suite": "closures",
+                  "test": "shared_scalar_parameter_captures_match_stock"
+                },
+                {
+                  "suite": "closures",
+                  "test": "function_item_values_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Live pinned stock diagnostic fragments plus native BUILD rejection excluding unsupported, panic and output image. Invalid callable argument/output, unused body type/move errors, double moves and conflicting loans. Shared oracle does not independently run native CHECK for each invalid case.",
+                  "tests": [
+                    {
+                      "suite": "closures",
+                      "test": "immediate_noncapturing_closures_match_stock"
+                    },
+                    {
+                      "suite": "closures",
+                      "test": "shared_scalar_parameter_captures_match_stock"
+                    },
+                    {
+                      "suite": "closures",
+                      "test": "function_item_values_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "immediate_noncapturing_closures_match_stock"
+                },
+                {
+                  "suite": "closures",
+                  "test": "shared_scalar_parameter_captures_match_stock"
+                },
+                {
+                  "suite": "closures",
+                  "test": "function_item_values_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Nested capture environments, lexical shadowing, argument evaluation order and loan conflicts, plus function items passed to callable-bound generic functions and copied-iterator fold.",
+                  "tests": [
+                    {
+                      "suite": "closures",
+                      "test": "shared_scalar_parameter_captures_match_stock"
+                    },
+                    {
+                      "suite": "closures",
+                      "test": "function_item_values_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "shared_scalar_parameter_captures_match_stock"
+                },
+                {
+                  "suite": "closures",
+                  "test": "function_item_values_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Pinned stock BUILD/run and native CLI BUILD/run for whole cases, with an additional explicit workers 1/8 native execution control. Do not infer workers 1/8 CHECK coverage from the common legacy oracle.",
+                  "tests": [
+                    {
+                      "suite": "closures",
+                      "test": "function_item_values_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "closures",
+                  "test": "function_item_values_match_stock"
+                }
+              ]
             }
           ],
           "id": "abstraction-suspended-values",
@@ -903,16 +2905,112 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Direct lexer/grouping/compile_rules/expand_rules utility assertions only: ordered selection, logical token boundaries, literal signs, empty/nested/zipped repetitions. Not native source admission or executable evidence.",
+                  "tests": [
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_ordered_arms_and_lazy_selected_transcriber_commit"
+                    },
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_logical_tt_operators_lifetimes_groups_and_tuple_boundaries"
+                    },
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_literal_fragment_signs_are_syntax_not_negation_semantics"
+                    },
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_repetitions_preserve_empty_nested_and_zipped_cardinality"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_ordered_arms_and_lazy_selected_transcriber_commit"
+                },
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_logical_tt_operators_lifetimes_groups_and_tuple_boundaries"
+                },
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_literal_fragment_signs_are_syntax_not_negation_semantics"
+                },
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_repetitions_preserve_empty_nested_and_zipped_cardinality"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Typed Syntax, NoMatch and Ambiguous assertions cover unequal zip, invalid depth/no-variable repetition, cardinality and committed transcriber failure. Utility invalid-input evidence, not source CHECK/BUILD rejection.",
+                  "tests": [
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_repetition_errors_and_ambiguity_are_not_fallbacks"
+                    },
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_ordered_arms_and_lazy_selected_transcriber_commit"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_repetition_errors_and_ambiguity_are_not_fallbacks"
+                },
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_ordered_arms_and_lazy_selected_transcriber_commit"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real utility compositions forward captured tokens between expansions, preserve parent provenance, distinguish opaque literals from transparent tt/ident, and inspect special dollar-crate identity. No cross-crate source or general hygiene claim.",
+                  "tests": [
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_forwarded_literal_is_opaque_but_tt_and_ident_are_transparent"
+                    },
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_prefix_minus_before_opaque_literal_checks_original_sign"
+                    },
+                    {
+                      "suite": "macro_rules",
+                      "test": "utility_ident_keywords_underscore_and_dollarcrate_identity"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_forwarded_literal_is_opaque_but_tt_and_ident_are_transparent"
+                },
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_prefix_minus_before_opaque_literal_checks_original_sign"
+                },
+                {
+                  "suite": "macro_rules",
+                  "test": "utility_ident_keywords_underscore_and_dollarcrate_identity"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -925,20 +3023,92 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Only Runtime cases count positively: five original-source local capture/binder/shadowing scenarios. Stock-valid unsupported recursion/block-item cases and stock-only lexical controls are explicitly skipped by native loop.",
+                  "tests": [
+                    {
+                      "suite": "source_macros",
+                      "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "source_macros",
+                  "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Seven Invalid cases require exit 1, nonempty diagnostic, no unsupported classification, no panic and no image in CHECK/BUILD at workers 1/8. Includes definition/invocation order, missing capture/helper, scope escape, cfg exclusion and no matching arm. Unsupported/resource controls do not count.",
+                  "tests": [
+                    {
+                      "suite": "source_macros",
+                      "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "source_macros",
+                  "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Local source macros combine lexical anchors, call-site captured identifiers and generated binders. Item selector establishes parsing of original helper/import-alias/nominal-type combinations only, not checking or runtime by itself.",
+                  "tests": [
+                    {
+                      "suite": "source_macros",
+                      "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "item_source_macros",
+                      "test": "generated_function_original_helper_alias_and_nominal_sources_parse_before_checking"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "source_macros",
+                  "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "item_source_macros",
+                  "test": "generated_function_original_helper_alias_and_nominal_sources_parse_before_checking"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Re-establishes stock classifications, runs CLI CHECK and BUILD at workers 1/8 with rustc/PATH disabled, executes ELF images and compares exact expected stdout. Stock lookup uses RUSTC/default rustc and prints version, not pinned identity verification.",
+                  "tests": [
+                    {
+                      "suite": "source_macros",
+                      "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "source_macros",
+                  "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+                }
+              ]
             }
           ],
           "id": "expansion-source-hygiene",
@@ -947,20 +3117,116 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Bounded subsets only: eleven Runtime nested-expression cases include terminating token munching, opacity, redefinition and two definition anchors. Exported original declarations cover same-crate root export, dollar-crate helper and textual/root namespace distinction. No cross-crate dollar-crate or complete general hygiene evidence.",
+                  "tests": [
+                    {
+                      "suite": "nested_source_macros",
+                      "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "item_source_macros",
+                      "test": "exported_original_declarations_stock_native_check_build_workers1_8"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "nested_source_macros",
+                  "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "item_source_macros",
+                  "test": "exported_original_declarations_stock_native_check_build_workers1_8"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Four Syntax and one Type case are ordinary invalid evidence, including opaque forwarding mismatch and first-arm type failure without fallback. Parser pins SourceErrorKind::Syntax versus Limit. Unbounded recursion is a resource boundary, not invalid-Rust parity or positive support.",
+                  "tests": [
+                    {
+                      "suite": "nested_source_macros",
+                      "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "nested_source_macros",
+                      "test": "nested_source_errors_keep_typed_resource_and_syntax_categories_and_committed_arm"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "nested_source_macros",
+                  "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "nested_source_macros",
+                  "test": "nested_source_errors_keep_typed_resource_and_syntax_categories_and_committed_arm"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Nested invocations combine capture hygiene and declaration-order lookup. Sibling generated functions have distinct name spans/lexical scopes with shared expansion provenance and retained original source; this latter selector is parser metadata evidence only.",
+                  "tests": [
+                    {
+                      "suite": "nested_source_macros",
+                      "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "item_source_macros",
+                      "test": "zero_and_sibling_products_share_provenance_not_function_identity_or_source_copies"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "nested_source_macros",
+                  "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "item_source_macros",
+                  "test": "zero_and_sibling_products_share_provenance_not_function_identity_or_source_copies"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CLI CHECK/BUILD at workers 1/8, tool fallback disabled, ELF execution and exact stdout for positive cases. Nested stock lookup prints actual RUSTC/default version without identity pin. Export selector uses verified pinned stock. Export negative cases assert exit/no image but lack strict nonsemantic-failure guard, so are not selected as rejection evidence.",
+                  "tests": [
+                    {
+                      "suite": "nested_source_macros",
+                      "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    },
+                    {
+                      "suite": "item_source_macros",
+                      "test": "exported_original_declarations_stock_native_check_build_workers1_8"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "nested_source_macros",
+                  "test": "native_nested_source_macros_workers1_8_check_build_no_compiler_fallback"
+                },
+                {
+                  "suite": "item_source_macros",
+                  "test": "exported_original_declarations_stock_native_check_build_workers1_8"
+                }
+              ]
             }
           ],
           "id": "expansion-general-hygiene",
@@ -969,20 +3235,68 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Only disabled original-source undefined item invocation: CHECK succeeds at workers 1/8, retains one original source and no executable. Not general attributes/cfg_attr or generated disabled modules.",
+                  "tests": [
+                    {
+                      "suite": "item_source_macros",
+                      "test": "inactive_item_macro_needs_no_lookup_and_keeps_one_original_source"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "item_source_macros",
+                  "test": "inactive_item_macro_needs_no_lookup_and_keeps_one_original_source"
+                }
+              ]
             },
             {
               "layer": "rejection",
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Positive inactive_undefined_item_invocation combines cfg removal with macro lookup. Runtime item cases also combine generated functions with aliases, nominal types, generics and siblings. Seven Unsupported outcomes are explicitly excluded from positive evidence.",
+                  "tests": [
+                    {
+                      "suite": "item_source_macros",
+                      "test": "native_item_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "item_source_macros",
+                  "test": "native_item_source_macros_workers1_8_check_build_no_compiler_fallback"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Only Runtime inactive_undefined_item_invocation supplies cfg-specific CHECK/BUILD/ELF-run evidence at workers 1/8 against verified pinned stock. Generated false-cfg module remains Unsupported and supplies no support evidence.",
+                  "tests": [
+                    {
+                      "suite": "item_source_macros",
+                      "test": "native_item_source_macros_workers1_8_check_build_no_compiler_fallback"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "item_source_macros",
+                  "test": "native_item_source_macros_workers1_8_check_build_no_compiler_fallback"
+                }
+              ]
             }
           ],
           "id": "expansion-attributes-cfg",
@@ -1063,16 +3377,104 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Typed evaluator API arithmetic, bit semantics and boundary assertions. i8 oracle here is bootstrap checked arithmetic, not external stock differential. These selectors do not establish source-native CTFE or end-to-end execution.",
+                  "tests": [
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "fixed_width_signed_and_unsigned_boundaries"
+                    },
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "checked_i8_arithmetic_matches_bootstrap_integer_semantics"
+                    },
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "shifts_use_rhs_type_check_count_and_preserve_rust_bit_semantics"
+                    },
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "comparisons_and_bitwise_boolean_and_integer_operations"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "fixed_width_signed_and_unsigned_boundaries"
+                },
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "checked_i8_arithmetic_matches_bootstrap_integer_semantics"
+                },
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "shifts_use_rhs_type_check_count_and_preserve_rust_bit_semantics"
+                },
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "comparisons_and_bitwise_boolean_and_integer_operations"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "API rejects type-invalid unary/mixed-width arenas with Type, distinguishes arithmetic evaluation failures/E0080. This is evaluator rejection only, not invalid-source acceptance coverage.",
+                  "tests": [
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "type_errors_are_distinct_from_ctfe_failures"
+                    },
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "fixed_width_signed_and_unsigned_boundaries"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "type_errors_are_distinct_from_ctfe_failures"
+                },
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "fixed_width_signed_and_unsigned_boundaries"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "API logical control combines skipped reference/evaluation dependencies with unconditional body/type validation, including E0015 and unreachable division by zero. Not a native source workflow.",
+                  "tests": [
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "short_circuit_skips_value_dependency_but_not_body_validation"
+                    },
+                    {
+                      "suite": "const_eval_scalar",
+                      "test": "logical_short_circuit_skips_evaluation_errors_but_not_type_errors"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "short_circuit_skips_value_dependency_but_not_body_validation"
+                },
+                {
+                  "suite": "const_eval_scalar",
+                  "test": "logical_short_circuit_skips_evaluation_errors_but_not_type_errors"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -1085,20 +3487,148 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Original scalar source covers shifts, signed minimum, named const reads and short circuit. General constants asserts fixed expected outputs for immutable static, const-fn calls, arrays/structs/str, inline const and array lengths; despite its name that test has no live stock invocation.",
+                  "tests": [
+                    {
+                      "suite": "const_source",
+                      "test": "original_scalar_const_check_and_native_execution_workers1_8"
+                    },
+                    {
+                      "suite": "const_items",
+                      "test": "general_constants_match_stock_output"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_source",
+                  "test": "original_scalar_const_check_and_native_execution_workers1_8"
+                },
+                {
+                  "suite": "const_items",
+                  "test": "general_constants_match_stock_output"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Unused const bodies/effects require stock E0015 and native E0015 in CHECK/BUILD at workers 1/8, with graph codegen guards where report exists. Initializer test checks semantic diagnostic substrings at workers 1/8 in CHECK only, not a live stock comparison or full nonsemantic guard. Constraint helper additionally applies validate_native_rejection, rejects unsupported/resource/infrastructure/incomplete analysis, and checks no BUILD/OBJECT publication.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "unused_const_bodies_check_all_calls_before_codegen"
+                    },
+                    {
+                      "suite": "const_items",
+                      "test": "const_foreign_calls_and_output_are_rejected"
+                    },
+                    {
+                      "suite": "const_source",
+                      "test": "unused_initializer_faults_and_call_categories_are_not_runtime_aliases"
+                    },
+                    {
+                      "suite": "const_constraints",
+                      "test": "const_constrained_items_reject_incompatible_stores_even_in_unused_bodies"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "unused_const_bodies_check_all_calls_before_codegen"
+                },
+                {
+                  "suite": "const_items",
+                  "test": "const_foreign_calls_and_output_are_rejected"
+                },
+                {
+                  "suite": "const_source",
+                  "test": "unused_initializer_faults_and_call_categories_are_not_runtime_aliases"
+                },
+                {
+                  "suite": "const_constraints",
+                  "test": "const_constrained_items_reject_incompatible_stores_even_in_unused_bodies"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Block-local consts combine order/shadowing, methods/modules and array lengths, with strict closure oracle rejection guards. Qualified imported const-fn source returns 42 against stock; separate direct literal-panic arm permits Unsupported and is not positive support. Named usize constants constrain range/index inference through CHECK/BUILD/run at workers 1/8.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "block_local_const_items_match_stock"
+                    },
+                    {
+                      "suite": "const_items",
+                      "test": "valid_const_calls_and_literal_panic_keep_stock_behavior"
+                    },
+                    {
+                      "suite": "const_constraints",
+                      "test": "named_and_qualified_usize_constants_constrain_range_items"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "block_local_const_items_match_stock"
+                },
+                {
+                  "suite": "const_items",
+                  "test": "valid_const_calls_and_literal_panic_keep_stock_behavior"
+                },
+                {
+                  "suite": "const_constraints",
+                  "test": "named_and_qualified_usize_constants_constrain_range_items"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Live verified pinned stock and native CHECK/BUILD/run at workers 1/8 for the positive block-local, qualified-call and usize-range sources. Closure/iterator helpers require CHECK no executable and no codegen demand. Direct-panic Unsupported alternative contributes nothing.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "block_local_const_items_match_stock"
+                    },
+                    {
+                      "suite": "const_items",
+                      "test": "valid_const_calls_and_literal_panic_keep_stock_behavior"
+                    },
+                    {
+                      "suite": "const_constraints",
+                      "test": "named_and_qualified_usize_constants_constrain_range_items"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "block_local_const_items_match_stock"
+                },
+                {
+                  "suite": "const_items",
+                  "test": "valid_const_calls_and_literal_panic_keep_stock_behavior"
+                },
+                {
+                  "suite": "const_constraints",
+                  "test": "named_and_qualified_usize_constants_constrain_range_items"
+                }
+              ]
             }
           ],
           "id": "const-source-items",
@@ -1111,8 +3641,32 @@
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Stock E0493 for unused generic destruction and E0015 for foreign/output/overloaded-operation effects matched by native CHECK/BUILD workers 1/8. Destructor test also has positive runtime generic move/Copy controls, not aggregate/reference CTFE proof.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "unused_const_generic_destructors_are_not_runtime_only_checks"
+                    },
+                    {
+                      "suite": "const_items",
+                      "test": "const_foreign_calls_and_output_are_rejected"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "unused_const_generic_destructors_are_not_runtime_only_checks"
+                },
+                {
+                  "suite": "const_items",
+                  "test": "const_foreign_calls_and_output_are_rejected"
+                }
+              ]
             },
             {
               "layer": "interaction",
@@ -1129,8 +3683,24 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Only immutable scalar static S=7 read at runtime, CHECK/BUILD/run workers 1/8 with fixed expected stdout. No mutable-static support, address identity or live stock oracle in this selector.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "general_constants_match_stock_output"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "general_constants_match_stock_output"
+                }
+              ]
             },
             {
               "layer": "rejection",
@@ -1141,8 +3711,24 @@
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Narrow immutable scalar static case reaches CHECK/BUILD/native execution workers 1/8. Fixed expected output only, not a live stock comparison. Mutable-static expected-unsupported tests are deliberately absent.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "general_constants_match_stock_output"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "general_constants_match_stock_output"
+                }
+              ]
             }
           ],
           "id": "const-static-storage",
@@ -1159,8 +3745,32 @@
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Array-length expression and named-constant range inference subsets only. Neither selector proves const generic parameter substitution or general evaluatability.",
+                  "tests": [
+                    {
+                      "suite": "const_items",
+                      "test": "general_constants_match_stock_output"
+                    },
+                    {
+                      "suite": "const_constraints",
+                      "test": "named_and_qualified_usize_constants_constrain_range_items"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_items",
+                  "test": "general_constants_match_stock_output"
+                },
+                {
+                  "suite": "const_constraints",
+                  "test": "named_and_qualified_usize_constants_constrain_range_items"
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -1199,8 +3809,32 @@
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "CHECK workers 1/8 rejects direct/mutual and short-circuit-hidden const cycles with E0391, preserves partial typed-body publication and withholds qualified-body success. usize test also asserts E0391 for unused mutual cycle in CHECK/BUILD workers 1/8, alongside arithmetic/type diagnostics; it has no live stock invocation despite its name.",
+                  "tests": [
+                    {
+                      "suite": "const_source",
+                      "test": "qualification_cycles_reject_even_skipped_references_and_preserve_partial_body_gate"
+                    },
+                    {
+                      "suite": "const_source",
+                      "test": "usize_constant_faults_match_stock_categories_even_when_unused"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "const_source",
+                  "test": "qualification_cycles_reject_even_skipped_references_and_preserve_partial_body_gate"
+                },
+                {
+                  "suite": "const_source",
+                  "test": "usize_constant_faults_match_stock_categories_even_when_unused"
+                }
+              ]
             },
             {
               "layer": "interaction",
@@ -1242,6 +3876,17 @@
                   "suite": "native_c_abi",
                   "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
                 }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "native_c_abi",
+                      "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
+                    }
+                  ],
+                  "note": "Preserves existing selector: real compiled C object and pinned stock/native CHECK/BUILD/run workers 1/8 compare repr(C) integer/f32 arrays through imports, exports and callbacks."
+                }
               ]
             },
             {
@@ -1250,6 +3895,34 @@
                 {
                   "suite": "native_c_abi",
                   "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
+                },
+                {
+                  "suite": "native_c_abi",
+                  "test": "wide_private_frame_addresses_survive_c_import_export_and_callbacks"
+                },
+                {
+                  "suite": "native_c_abi",
+                  "test": "real_c_imports_exports_callbacks_and_native_library_match_stock_at_workers_1_8"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "native_c_abi",
+                      "test": "wide_private_frame_addresses_survive_c_import_export_and_callbacks"
+                    }
+                  ],
+                  "note": "Real C object and pinned stock/native workers 1/8 check u128 frame alignment, address reads and reentrant imports/exports/callbacks. Bounded C ABI coverage, not all conventions."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "native_c_abi",
+                      "test": "real_c_imports_exports_callbacks_and_native_library_match_stock_at_workers_1_8"
+                    }
+                  ],
+                  "note": "Compiles oracle.c and unchanged program.rs, compares stock/native executable output, libc labs, scalar/mixed/nested aggregates, stack arguments and callbacks; emitted native object is also linked from a C main at workers 1/8."
                 }
               ]
             }
@@ -1261,7 +3934,23 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "object_layout",
+                  "test": "all_scalar_layouts_match_bootstrap_rust_not_private_carriers"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "object_layout",
+                      "test": "all_scalar_layouts_match_bootstrap_rust_not_private_carriers"
+                    }
+                  ],
+                  "note": "UNIT-LEVEL ONLY: direct layout calculator versus bootstrap Rust size_of/align_of controls for scalar/nested arrays. Not native compiler end-to-end or a native interaction scenario."
+                }
+              ]
             },
             {
               "layer": "rejection",
@@ -1273,7 +3962,36 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "target_alignment",
+                  "test": "semantic_reference_metadata_matches_stock"
+                },
+                {
+                  "suite": "target_alignment",
+                  "test": "semantic_scalar_cell_metadata_matches_stored_scalar"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "target_alignment",
+                      "test": "semantic_reference_metadata_matches_stock"
+                    }
+                  ],
+                  "note": "Pinned stock/native CHECK/BUILD/run workers 1/8 compare size_of reference/str/slice/trait-object metadata, pointers and arrays of references. Does not prove all DST operations or repr/niche layouts."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "target_alignment",
+                      "test": "semantic_scalar_cell_metadata_matches_stored_scalar"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle compares Cell scalar size/alignment and array size, then asserts CHECK demands no backend kinds. Bounded layout facts, not general repr support."
+                }
+              ]
             }
           ],
           "id": "runtime-layout",
@@ -1283,7 +4001,23 @@
           "gates": [
             {
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "runtime_realloc",
+                  "test": "raw_resize_failure_preserves_allocation"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "runtime_realloc",
+                      "test": "raw_resize_failure_preserves_allocation"
+                    }
+                  ],
+                  "note": "Native BUILD/run workers 1/8 checks compiler-specific raw_realloc failure preserves original bytes, growth, shrink and free. No stock counterpart and no CHECK in this selector, so feature-only evidence, not Rust-standard API equivalence."
+                }
+              ]
             },
             {
               "layer": "rejection",
@@ -1295,7 +4029,23 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "runtime_realloc",
+                  "test": "collection_growth_preserves_values"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "runtime_realloc",
+                      "test": "collection_growth_preserves_values"
+                    }
+                  ],
+                  "note": "Live PATH rustc oracle (not version-pinned in this test) and native BUILD/run workers 1/8 compare 10000 integers, 30000-byte String and owning Vec<String> across page growth. Does not execute CHECK or establish all allocator failure/overalignment semantics."
+                }
+              ]
             }
           ],
           "id": "runtime-allocation",
@@ -1313,7 +4063,23 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "native_c_abi",
+                  "test": "captured_native_link_ignores_ambient_path_driver_specs_and_library_environment"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "native_c_abi",
+                      "test": "captured_native_link_ignores_ambient_path_driver_specs_and_library_environment"
+                    }
+                  ],
+                  "note": "Native workers 1/8 link real libc labs and run with asserted output under baseline/poisoned driver environment, asserting byte-identical images and no poisoned tool execution. No independent live stock oracle in this selector."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
@@ -1335,11 +4101,43 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "iterator_fold",
+                  "test": "zero_step_panics_like_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "iterator_fold",
+                      "test": "zero_step_panics_like_stock"
+                    }
+                  ],
+                  "note": "Live JUSTRUST_REAL_RUSTC/PATH stock abort build and native CHECK/BUILD/run workers 1/8 require step_by(0) panic and exactly before stdout. Stock identity is not pinned here. Not positive support for unsupported Rust."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "panic",
+                  "test": "thread_panicking_workers1_8_matches_stock_during_normal_and_panic_cleanup"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "panic",
+                      "test": "thread_panicking_workers1_8_matches_stock_during_normal_and_panic_cleanup"
+                    }
+                  ],
+                  "note": "Pinned stock -Cpanic=abort versus native CHECK/BUILD/run workers 1/8 compares panicking() before normal/panic Drop, stdout and required code/signal. Abort-specific contract, no claim of general unwind/catch support."
+                }
+              ]
             }
           ],
           "id": "runtime-panic",
@@ -1451,11 +4249,43 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "vec_algorithms",
+                  "test": "native_heap_exact_swap_preserves_pair_alias_and_mutable_element_origins"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "vec_algorithms",
+                      "test": "native_heap_exact_swap_preserves_pair_alias_and_mutable_element_origins"
+                    }
+                  ],
+                  "note": "Live pinned stock/native oracle checks Vec<&str> swaps with static/local owners, self-swap and Vec<&mut i32> element-origin preservation, plus invalid escape/alias controls. Bounded native library scenario, not full upstream alloc."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "private_storage_stride",
+                  "test": "private_stride_box_initialization_mutation_move_and_drop_match_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "private_storage_stride",
+                      "test": "private_stride_box_initialization_mutation_move_and_drop_match_stock"
+                    }
+                  ],
+                  "note": "Bounded native Box initialization, as_ref/as_mut mutation, whole-owner move and scope cleanup compared with pinned stock at CHECK/BUILD/run workers 1/8. This is not proof of complete upstream alloc source integration."
+                }
+              ]
             }
           ],
           "id": "library-alloc",
@@ -1515,11 +4345,82 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "result_map",
+                  "test": "result_lazy_combinators_match_stock"
+                },
+                {
+                  "suite": "result_map",
+                  "test": "result_vec_short_circuit"
+                },
+                {
+                  "suite": "result_map",
+                  "test": "result_vec_non_copy_drops"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "result_lazy_combinators_match_stock"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks selected Result branches and FnOnce capture destructor order, plus invalid callback result/error types. Bounded native prelude implementation, not upstream std completion."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "result_vec_short_circuit"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks fallible collection stops polling on first/middle Err, with exact poll output and returned error."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "result_vec_non_copy_drops"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle compares iterator and non-Copy payload destruction on Err and successful Vec collection. Does not claim all fallible collections."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "result_map",
+                  "test": "unchanged_error_handling_program_matches_stock"
+                },
+                {
+                  "suite": "result_map",
+                  "test": "result_vec_all_ok_and_empty"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "unchanged_error_handling_program_matches_stock"
+                    }
+                  ],
+                  "note": "Unmodified full_programs/15_error_handling.rs is Expect::Run, with exact stdout and pinned stock/native CHECK/BUILD/run workers 1/8. Preserve known valid15 failure as a failure, never omit or classify unsupported as passing."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "result_map",
+                      "test": "result_vec_all_ok_and_empty"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle compares collected all-Ok integer range and empty range Vec lengths/elements, CHECK/BUILD/run workers 1/8."
+                }
+              ]
             }
           ],
           "id": "library-results",
@@ -1537,11 +4438,56 @@
             },
             {
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "iterator_fold",
+                  "test": "iterator_zip_matches_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "iterator_fold",
+                      "test": "iterator_zip_matches_stock"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks copied integer/char tuple zip, IntoIterator conversion timing, unequal lengths and exact poll order plus invalid item/escape controls."
+                }
+              ]
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "iterator_fold",
+                  "test": "iterator_bounded_adapters_match_stock"
+                },
+                {
+                  "suite": "iterator_fold",
+                  "test": "iterator_sum_matches_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "iterator_fold",
+                      "test": "iterator_bounded_adapters_match_stock"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks rev/skip/step_by/take chains, non-fused inputs, zero take and large steps, plus invalid borrowed escape."
+                },
+                {
+                  "tests": [
+                    {
+                      "suite": "iterator_fold",
+                      "test": "iterator_sum_matches_stock"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle checks bounded integer widths, floating sum/product/negative zero and custom Sum implementation. Native prelude scenarios only, no complete core/alloc/std claim."
+                }
+              ]
             }
           ],
           "id": "library-iterators",
@@ -1595,6 +4541,21 @@
                 {
                   "suite": "std_io",
                   "test": "buffered_static_producers_preserve_source_regions"
+                },
+                {
+                  "suite": "std_io",
+                  "test": "buffered_byte_readers_match_stock"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "std_io",
+                      "test": "buffered_byte_readers_match_stock"
+                    }
+                  ],
+                  "note": "Pinned stock/native oracle expects in-memory slice Read/BufRead, BufReader fill_buf/consume, inferred mutable forwarding and io::Result question-mark behavior plus invalid controls. Include known std_io failure unchanged, never count it as passing unsupported. No filesystem/network/full std claim."
                 }
               ]
             },
@@ -1604,6 +4565,17 @@
                 {
                   "suite": "std_io",
                   "test": "buffered_static_producers_preserve_source_regions"
+                }
+              ],
+              "evidence_notes": [
+                {
+                  "tests": [
+                    {
+                      "suite": "std_io",
+                      "test": "buffered_static_producers_preserve_source_regions"
+                    }
+                  ],
+                  "note": "Preserves original failing selector: pinned stock/native oracle expects named BufReader input/result positive execution and semantic invalid-region/escape/owner-loan rejection. Existing std_io failure remains visible."
                 }
               ]
             }
@@ -1642,20 +4614,108 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Workspace members, binary selection, release build and unit/integration harness output, plus dev/release/checked-release/custom profile inheritance and actual overflow/debug-assertion runtime policies. Workspace stock test comparison is conditional on available successful stock output, profile oracle is mandatory. Configuration precedence beyond these cases remains incomplete.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                    },
+                    {
+                      "suite": "project_configuration",
+                      "test": "default_and_custom_profile_runtime_policies_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                },
+                {
+                  "suite": "project_configuration",
+                  "test": "default_and_custom_profile_runtime_policies_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Invalid edition 2099 is stock metadata rejected and native check/build/run exit 101 workers 1/8. Project negative corpus asserts exact manifest parse/name/missing path/unpinned registry diagnostics and compile failure propagation. This latter native-only test is not proof of general dependency resolution.",
+                  "tests": [
+                    {
+                      "suite": "project_configuration",
+                      "test": "invalid_editions_are_rejected_by_both_clis"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "invalid_projects_are_rejected_explicitly"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "project_configuration",
+                  "test": "invalid_editions_are_rejected_by_both_clis"
+                },
+                {
+                  "suite": "projects",
+                  "test": "invalid_projects_are_rejected_explicitly"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Dev debug assertions disabled versus test profile enabled, real #[test] execution, stock comparison, workers 1/8 and mutually exclusive --release/--profile rejection.",
+                  "tests": [
+                    {
+                      "suite": "project_configuration",
+                      "test": "test_profile_overrides_dev_and_conflicting_selection_is_rejected"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "project_configuration",
+                  "test": "test_profile_overrides_dev_and_conflicting_selection_is_rejected"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Real native workspace CLI check/build/run/test and profile-specific execution. Not merely manifest loader inspection.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                    },
+                    {
+                      "suite": "project_configuration",
+                      "test": "default_and_custom_profile_runtime_policies_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                },
+                {
+                  "suite": "project_configuration",
+                  "test": "default_and_custom_profile_runtime_policies_match_stock"
+                }
+              ]
             }
           ],
           "id": "project-manifests",
@@ -1664,20 +4724,124 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual immutable native namespace CLI check/build/run at workers 1/8. Sibling app/dep/leaf sources compare with stock Cargo run, registry app/dep/leaf compare with independently built stock images and invoke native with tool-less PATH. Single-package child module is a separate namespace control. Bounded capture cases only, not arbitrary Cargo compatibility.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "authenticated_registry_capture_checks_builds_runs_transitively_without_tar"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "ordinary_cli_captures_one_namespace_for_check_build_and_run"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                },
+                {
+                  "suite": "projects",
+                  "test": "authenticated_registry_capture_checks_builds_runs_transitively_without_tar"
+                },
+                {
+                  "suite": "projects",
+                  "test": "ordinary_cli_captures_one_namespace_for_check_build_and_run"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Post-success mutation deletes child source or replaces it with a symlink and requires failed native acquisition without invented Finished. Sibling case adds unused invalid leaf body checked at workers 1/8. Acquisition rejection is not language Invalid proof.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "ordinary_cli_captures_one_namespace_for_check_build_and_run"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                },
+                {
+                  "suite": "projects",
+                  "test": "ordinary_cli_captures_one_namespace_for_check_build_and_run"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Transitive source graphs, external leaf module, unrelated dangling sibling/cache symlinks and registry authentication/capture with no tar/gzip/checksum utilities available to native invocation.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "authenticated_registry_capture_checks_builds_runs_transitively_without_tar"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                },
+                {
+                  "suite": "projects",
+                  "test": "authenticated_registry_capture_checks_builds_runs_transitively_without_tar"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CLI CHECK/BUILD/run at workers 1/8 with stock-produced runtime oracle and immutable-capture diagnostic, not discovery-only evidence.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "authenticated_registry_capture_checks_builds_runs_transitively_without_tar"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "sibling_path_dependencies_are_captured_for_cli_check_build_run"
+                },
+                {
+                  "suite": "projects",
+                  "test": "authenticated_registry_capture_checks_builds_runs_transitively_without_tar"
+                }
+              ]
             }
           ],
           "id": "project-captured-dependencies",
@@ -1686,20 +4850,100 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Active unix optional path edge enables selected dependency feature despite an inactive duplicate cfg(any()) edge, compared with stock Cargo stdout and native CHECK/run workers 1/8. Inactive Windows registry/build edges and nonselected dev edges do not demand unavailable sources. No claim of complete version/lock/feature resolver.",
+                  "tests": [
+                    {
+                      "suite": "target_dependencies",
+                      "test": "selected_platform_edge_and_feature_match_stock"
+                    },
+                    {
+                      "suite": "target_dependencies",
+                      "test": "inactive_registry_and_build_edges_do_not_demand_sources"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "target_dependencies",
+                  "test": "selected_platform_edge_and_feature_match_stock"
+                },
+                {
+                  "suite": "target_dependencies",
+                  "test": "inactive_registry_and_build_edges_do_not_demand_sources"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CLI exit 101 with exact checksum failure or uncached locked version diagnostics after controlled lock mutations. Infrastructure/source-authentication failures are not passed off as invalid Rust or successful feature support.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "locked_registry_dependency_reports_checksum_mismatch_explicitly"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "locked_registry_dependency_rejects_mismatched_lock_entries"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "locked_registry_dependency_reports_checksum_mismatch_explicitly"
+                },
+                {
+                  "suite": "projects",
+                  "test": "locked_registry_dependency_rejects_mismatched_lock_entries"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Combines duplicate dependency alias across active/inactive target cfg, optional edge activation, default feature propagation, dependency cfg-selected body and inactive compile_error source.",
+                  "tests": [
+                    {
+                      "suite": "target_dependencies",
+                      "test": "selected_platform_edge_and_feature_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "target_dependencies",
+                  "test": "selected_platform_edge_and_feature_match_stock"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Actual stock Cargo run and native CLI CHECK/run at workers 1/8. Native run builds an executable, but this test does not separately issue build.",
+                  "tests": [
+                    {
+                      "suite": "target_dependencies",
+                      "test": "selected_platform_edge_and_feature_match_stock"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "target_dependencies",
+                  "test": "selected_platform_edge_and_feature_match_stock"
+                }
+              ]
             }
           ],
           "id": "project-resolution",
@@ -1712,8 +4956,24 @@
               "tests": []
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "BOUNDARY ONLY: inspected implementation calls manifest::load and rejects malformed cfg, crate/profile-based target selectors and active unix build-dependencies. It does not execute build.rs or a native CLI. There is no demonstrated build-script execution, generated-input/directive/rerun/native-library ordering support here, so feature/interaction/end_to_end remain unfilled.",
+                  "tests": [
+                    {
+                      "suite": "target_dependencies",
+                      "test": "malformed_conditions_and_active_build_scripts_reject"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "target_dependencies",
+                  "test": "malformed_conditions_and_active_build_scripts_reject"
+                }
+              ]
             },
             {
               "layer": "interaction",
@@ -1730,20 +4990,108 @@
         {
           "gates": [
             {
+              "evidence_notes": [
+                {
+                  "note": "Native --tests workspace discovery and lib harness: passing/failing/ignored/should_panic, captured failure stdout, exact 101 exit, substring filter and --ignored. Unit/integration paths covered, doc tests/benches/full isolation inventory not established.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "failing_tests_report_like_libtest_and_exit_101"
+                    }
+                  ]
+                }
+              ],
               "layer": "feature",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                },
+                {
+                  "suite": "projects",
+                  "test": "failing_tests_report_like_libtest_and_exit_101"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Runtime test failure must fail the command with exit 101 and real libtest-style failure summary. This is harness failure behavior, not compiler Invalid rejection.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "failing_tests_report_like_libtest_and_exit_101"
+                    }
+                  ]
+                }
+              ],
               "layer": "rejection",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "failing_tests_report_like_libtest_and_exit_101"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Failure capture plus filters/ignored/should_panic, ordinary library CHECK excludes test bodies, test profile overrides dev for actual test execution.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "failing_tests_report_like_libtest_and_exit_101"
+                    },
+                    {
+                      "suite": "project_configuration",
+                      "test": "test_profile_overrides_dev_and_conflicting_selection_is_rejected"
+                    }
+                  ]
+                }
+              ],
               "layer": "interaction",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "failing_tests_report_like_libtest_and_exit_101"
+                },
+                {
+                  "suite": "project_configuration",
+                  "test": "test_profile_overrides_dev_and_conflicting_selection_is_rejected"
+                }
+              ]
             },
             {
+              "evidence_notes": [
+                {
+                  "note": "Native CLI discovers/builds/runs actual tests and checks status/output. Workspace comparison normalizes test order against stock Cargo when successful stock output is available. These selectors do not prove doc-test or bench support.",
+                  "tests": [
+                    {
+                      "suite": "projects",
+                      "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                    },
+                    {
+                      "suite": "projects",
+                      "test": "failing_tests_report_like_libtest_and_exit_101"
+                    }
+                  ]
+                }
+              ],
               "layer": "end_to_end",
-              "tests": []
+              "tests": [
+                {
+                  "suite": "projects",
+                  "test": "workspace_check_build_run_and_test_match_stock_cargo"
+                },
+                {
+                  "suite": "projects",
+                  "test": "failing_tests_report_like_libtest_and_exit_101"
+                }
+              ]
             }
           ],
           "id": "project-test-harnesses",
@@ -2065,6 +5413,54 @@
       {
         "id": "owned-drop",
         "title": "Owned Guard with source Drop and observable normal-scope destruction"
+      },
+      {
+        "id": "integer-values",
+        "title": "Fixed-width integer values and arithmetic"
+      },
+      {
+        "id": "float-values",
+        "title": "Floating-point values and arithmetic"
+      },
+      {
+        "id": "array-values",
+        "title": "Fixed arrays and slice coercion scenarios"
+      },
+      {
+        "id": "enum-patterns",
+        "title": "Enum payload matching"
+      },
+      {
+        "id": "module-paths",
+        "title": "Original modules and imported paths"
+      },
+      {
+        "id": "trait-dispatch",
+        "title": "Selected trait method dispatch"
+      },
+      {
+        "id": "associated-projection",
+        "title": "Associated type projection scenarios"
+      },
+      {
+        "id": "const-evaluation",
+        "title": "Source constant evaluation"
+      },
+      {
+        "id": "source-macro",
+        "title": "Original source macro expansion"
+      },
+      {
+        "id": "native-ffi",
+        "title": "Native foreign-function calls"
+      },
+      {
+        "id": "error-propagation",
+        "title": "Result error propagation"
+      },
+      {
+        "id": "heap-allocation",
+        "title": "Native heap-backed values"
       }
     ],
     "scenarios": [
@@ -2132,11 +5528,11 @@
         ]
       },
       {
-        "id": "generated-valid-12",
         "features": [
           "mutable-borrow",
           "nested-closure"
         ],
+        "id": "generated-valid-12",
         "tests": [
           {
             "suite": "conformance_generated",
@@ -2145,11 +5541,11 @@
         ]
       },
       {
-        "id": "generated-valid-13",
         "features": [
           "mutable-borrow",
           "owned-drop"
         ],
+        "id": "generated-valid-13",
         "tests": [
           {
             "suite": "conformance_generated",
@@ -2158,12 +5554,12 @@
         ]
       },
       {
-        "id": "generated-valid-14",
         "features": [
           "tuple-values",
           "shared-borrow",
           "mutable-borrow"
         ],
+        "id": "generated-valid-14",
         "tests": [
           {
             "suite": "conformance_generated",
@@ -2172,16 +5568,365 @@
         ]
       },
       {
-        "id": "generated-valid-15",
         "features": [
           "tuple-values",
           "shared-borrow",
           "owned-drop"
         ],
+        "id": "generated-valid-15",
         "tests": [
           {
             "suite": "conformance_generated",
             "test": "valid_15"
+          }
+        ]
+      },
+      {
+        "features": [
+          "integer-values",
+          "array-values",
+          "enum-patterns",
+          "shared-borrow"
+        ],
+        "id": "source-values-mixed-width-enum-array-borrow",
+        "note": "Struct i8/u64/i16 extrema pass through relay, array, shared field borrows and payload-enum match, with exact successful CHECK/BUILD/run output at workers 1/8.",
+        "tests": [
+          {
+            "suite": "integer_types",
+            "test": "accepts_mixed_integer_scalar_leaf_transport"
+          }
+        ]
+      },
+      {
+        "features": [
+          "integer-values",
+          "tuple-values",
+          "array-values",
+          "shared-borrow"
+        ],
+        "id": "source-values-u64-tuple-array-borrow",
+        "note": "u64 extrema and arithmetic are asserted through an array, tuple and shared tuple reference. CHECK/BUILD/run requires exact success output at workers 1/8.",
+        "tests": [
+          {
+            "suite": "integer_types",
+            "test": "accepts_u64_bounds_arithmetic_not_transport"
+          }
+        ]
+      },
+      {
+        "features": [
+          "float-values",
+          "tuple-values",
+          "trait-dispatch",
+          "shared-borrow"
+        ],
+        "id": "source-values-float-tuple-clone",
+        "note": "f32/f64 values are compared after explicit Clone trait calls on shared scalar and tuple references, plus generic twice tuple arithmetic. Real stock/native runtime and CHECK/BUILD at workers 1/8.",
+        "tests": [
+          {
+            "suite": "floats",
+            "test": "omitted_generic_float_inference_and_canonical_clone"
+          }
+        ]
+      },
+      {
+        "features": [
+          "integer-values",
+          "array-values",
+          "trait-dispatch",
+          "shared-borrow"
+        ],
+        "id": "source-values-array-slice-trait-coercion",
+        "note": "u8 array fields and a trait method returning a shared array reference coerce to shared slices whose lengths are printed and compared to stock. Native CHECK/BUILD/run at workers 1/8.",
+        "tests": [
+          {
+            "suite": "body_inference",
+            "test": "expected_slice_coercions_do_not_equate_array_and_slice_shapes"
+          }
+        ]
+      },
+      {
+        "features": [
+          "integer-values",
+          "tuple-values"
+        ],
+        "id": "source-values-nested-struct-tuple-destructuring",
+        "note": "Nested nominal structs and tuple fields destructure into integers including one mutable binding. Arithmetic result 22 controls exact CHECK/BUILD/run output at workers 1/8.",
+        "tests": [
+          {
+            "suite": "patterns",
+            "test": "accepts_nested_struct_tuple_patterns"
+          }
+        ]
+      },
+      {
+        "features": [
+          "module-paths",
+          "integer-values"
+        ],
+        "id": "source-values-external-grouped-import-integers",
+        "note": "External module/function aliases from grouped imports must sum to 21 and print exact output. Native CHECK/BUILD/run at workers 1/8 plus stock edition 2021 execution.",
+        "tests": [
+          {
+            "suite": "external_modules",
+            "test": "grouped_imports_preserve_external_module_loading_and_aliases"
+          }
+        ]
+      },
+      {
+        "features": [
+          "integer-values",
+          "source-macro"
+        ],
+        "id": "source-values-byte-macro-forwarding",
+        "note": "The macro_literal_and_tt_forwarding program asserts expanded and literal/tt-forwarded bytes as exact u8 values with a strict pinned stock/native runtime oracle. Other programs in this top-level test do not imply extra axes.",
+        "tests": [
+          {
+            "suite": "byte_literals",
+            "test": "byte_values_types_patterns_and_macros_match_stock"
+          }
+        ]
+      },
+      {
+        "features": [
+          "generic-identity",
+          "integer-values"
+        ],
+        "id": "generic-identity-nominal-widths",
+        "tests": [
+          {
+            "suite": "generics",
+            "test": "accepts_multiple_nominal_specializations"
+          }
+        ]
+      },
+      {
+        "features": [
+          "trait-dispatch",
+          "associated-projection",
+          "integer-values"
+        ],
+        "id": "associated-declaration-trait-actuals",
+        "tests": [
+          {
+            "suite": "associated_declaration_bounds",
+            "test": "applied_bound_carries_ordered_arguments_and_associated_equalities"
+          },
+          {
+            "suite": "associated_declaration_bounds",
+            "test": "closed_declared_projection_keeps_same_self_trait_arguments_distinct"
+          }
+        ]
+      },
+      {
+        "features": [
+          "generic-identity",
+          "tuple-values",
+          "integer-values"
+        ],
+        "id": "rigid-tuple-owner-identity",
+        "tests": [
+          {
+            "suite": "associated_items",
+            "test": "disjoint_inherent_receiver_filter_keeps_rigid_generic_arguments"
+          }
+        ]
+      },
+      {
+        "features": [
+          "nested-closure",
+          "integer-values"
+        ],
+        "id": "nested-scalar-capture-values",
+        "tests": [
+          {
+            "suite": "closures",
+            "test": "shared_scalar_parameter_captures_match_stock"
+          }
+        ]
+      },
+      {
+        "features": [
+          "trait-dispatch",
+          "heap-allocation",
+          "integer-values"
+        ],
+        "id": "function-item-callable-vector-fold",
+        "tests": [
+          {
+            "suite": "closures",
+            "test": "function_item_values_match_stock"
+          }
+        ]
+      },
+      {
+        "features": [
+          "source-macro",
+          "integer-values"
+        ],
+        "id": "expansion-local-capture-binder-values",
+        "tests": [
+          {
+            "suite": "source_macros",
+            "test": "native_source_macros_workers1_8_check_build_no_compiler_fallback"
+          }
+        ]
+      },
+      {
+        "features": [
+          "source-macro",
+          "module-paths",
+          "integer-values"
+        ],
+        "id": "expansion-generated-module-functions-values",
+        "tests": [
+          {
+            "suite": "item_source_macros",
+            "test": "native_item_source_macros_workers1_8_check_build_no_compiler_fallback"
+          }
+        ]
+      },
+      {
+        "features": [
+          "source-macro",
+          "module-paths",
+          "integer-values"
+        ],
+        "id": "expansion-root-export-defining-module-helper",
+        "tests": [
+          {
+            "suite": "item_source_macros",
+            "test": "exported_original_declarations_stock_native_check_build_workers1_8"
+          }
+        ]
+      },
+      {
+        "features": [
+          "const-evaluation",
+          "array-values",
+          "module-paths",
+          "integer-values"
+        ],
+        "id": "const-block-local-array-module-values",
+        "tests": [
+          {
+            "suite": "const_items",
+            "test": "block_local_const_items_match_stock"
+          }
+        ]
+      },
+      {
+        "features": [
+          "const-evaluation",
+          "module-paths",
+          "integer-values"
+        ],
+        "id": "const-qualified-call-alias-values",
+        "tests": [
+          {
+            "suite": "const_items",
+            "test": "valid_const_calls_and_literal_panic_keep_stock_behavior"
+          }
+        ]
+      },
+      {
+        "features": [
+          "const-evaluation",
+          "module-paths",
+          "integer-values"
+        ],
+        "id": "const-qualified-usize-range-values",
+        "tests": [
+          {
+            "suite": "const_constraints",
+            "test": "named_and_qualified_usize_constants_constrain_range_items"
+          }
+        ]
+      },
+      {
+        "id": "drop-manually-payload-borrows",
+        "features": [
+          "integer-values",
+          "shared-borrow",
+          "mutable-borrow",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "drop_normal",
+            "test": "manually_drop_preserves_payload_moves_borrows_and_explicit_cleanup"
+          }
+        ]
+      },
+      {
+        "id": "enum-partial-drop",
+        "features": [
+          "integer-values",
+          "enum-patterns",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "result_map",
+            "test": "structural_enum_partial_moves_match_stock"
+          }
+        ]
+      },
+      {
+        "id": "if-let-temporary-drop",
+        "features": [
+          "integer-values",
+          "option-match",
+          "owned-drop"
+        ],
+        "tests": [
+          {
+            "suite": "drop_normal",
+            "test": "if_let_scrutinee_temporaries_follow_stock_2024_order"
+          }
+        ]
+      },
+      {
+        "id": "temporary-array-carrier",
+        "features": [
+          "integer-values",
+          "array-values",
+          "mutable-borrow"
+        ],
+        "tests": [
+          {
+            "suite": "temp_places",
+            "test": "value_then_carrier_then_index_order_matches_stock"
+          }
+        ]
+      },
+      {
+        "id": "c-abi-packed-values",
+        "features": [
+          "integer-values",
+          "float-values",
+          "array-values",
+          "native-ffi"
+        ],
+        "tests": [
+          {
+            "suite": "native_c_abi",
+            "test": "narrow_scalar_array_imports_exports_and_callbacks_match_stock"
+          }
+        ]
+      },
+      {
+        "id": "box-read-write-owner",
+        "features": [
+          "integer-values",
+          "heap-allocation",
+          "shared-borrow",
+          "mutable-borrow"
+        ],
+        "tests": [
+          {
+            "suite": "private_storage_stride",
+            "test": "private_stride_box_initialization_mutation_move_and_drop_match_stock"
           }
         ]
       }

@@ -90,7 +90,13 @@ python3 tools/conformance.py coverage \
   --evidence "$JCODE_SCRATCH_DIR/compatibility-current"
 ```
 
-Use a new output directory per run. Run on a stable source state. `track` uses
+Use a new output directory per run. Run on a stable source state. `track --jobs 2`
+runs at most two independent exact-case processes concurrently (allowed range
+1 through 8, default 1), keeping separate full logs, every failure, and deterministic
+receipt ordering. There are no retries. Gate `evidence_notes` retain reviewed
+limitations such as utility-only assertions, narrow positive partitions, fixed
+expected outputs rather than live stock comparison, and incomplete language coverage.
+A green mapped scenario does not discharge those broader limitations. `track` uses
 the installed stable justrust client, preserves exact commands and full logs,
 and binds results to the manifest, source revision/input digest, client binary
 and relevant environment. `coverage --evidence DIR` recomputes results from
@@ -105,7 +111,14 @@ scenario can be marked as a known gap in the ordinary regression suite while
 remaining an actual failing test in progress runs. Neither ignored nor
 expected-unsupported tests count as feature support.
 
-The displayed percentage is **passing declared test obligations**, not percent
+Reports separately expose **test-mapping coverage** (declared layer obligations
+with exact tests), **verified test obligations** (current passing evidence), and
+**full Rust completion** (unavailable while the semantic inventory is incomplete).
+`measurement_readiness` and `missing_test_obligations` provide a machine-readable
+work queue. Merely adding mappings cannot improve verified support; merely
+running tests cannot make an incomplete inventory complete.
+
+The displayed test-pass percentage is **passing declared test obligations**, not percent
 of all Rust. Missing layers stay in the denominator. A requirement only has all
 declared gates green when every mapped case in all four layers passes. A green
 row proves its precise test scenarios, not every semantic rule implied by its
