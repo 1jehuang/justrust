@@ -19,15 +19,7 @@ jobs:
       - name: Validate requirement and acceptance mapping
         run: python3 tools/conformance.py validate
       - name: Reject malformed and false-success evidence
-        run: |
-          python3 tools/test_conformance.py -v
-          python3 tools/test_compatibility_scope.py -v
-          python3 tools/test_compatibility_inventory.py -v
-          python3 tools/test_extract_reference_rules.py -v
-          python3 tools/test_pinned_acquisition.py -v
-          python3 tools/test_compact_library_surface_provenance.py -v
-          python3 tools/test_classify_proc_macro_details.py -v
-          python3 tools/test_reconcile_token_rules.py -v
+        run: python3 -m unittest discover -s tools -p 'test_*.py' -v
       - name: Validate source-referenced inventory without inferring support
         run: python3 tools/compatibility_inventory.py
       - name: Report declared test obligations including missing coverage

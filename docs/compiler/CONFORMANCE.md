@@ -76,6 +76,18 @@ when tests are missing. There are no manually maintained passing/support states.
 An unsupported-valid rejection test must never be mapped as feature acceptance.
 The original broad full-suite gates remain available independently.
 
+`coverage --json` also exposes `selector_reconciliation_backlog`: sorted suites
+and lexical test candidates, their source lines, explicit requirement/layer and
+interaction-scenario memberships, and unmapped candidates. This includes tests
+inside a partly mapped suite, which a suite-only backlog hides. The discovery
+reuses literal `#[test]` leads and the existing `conformance_generated` `probes!`
+convention, not Rust parsing or authenticated libtest enumeration. Comments,
+embedded source, nested modules, conditional attributes and other macros require
+review. No ignore, execution, semantic eligibility or passing state is inferred.
+Untriaged candidates may be utilities or unsupported boundaries, not missing
+language features. Neither an empty backlog nor its mapped fraction establishes
+full Rust compatibility.
+
 ```sh
 # Inventory and denominator, with missing and unexecuted tests visible.
 python3 tools/conformance.py coverage

@@ -15,6 +15,141 @@ import conformance as c
 
 
 class ScopeTests(unittest.TestCase):
+    def backlog(self):
+        return s.selector_backlog(self.scope, c, self.root)
+
+    def assert_backlog_counts(self, row, discovered, mapped):
+        self.assertEqual(row["discovered_selector_count"], discovered)
+        self.assertEqual(row["mapped_selector_count"], mapped)
+        self.assertEqual(row["untriaged_selector_count"], discovered - mapped)
+
+    def test_selector_backlog_keeps_unmapped_tests_in_partly_mapped_suite(self):
+        (self.root / "tests/sample.rs").write_text(
+            "#[test]\nfn accepts() {}\n#[test]\nfn rejects() {}\n"
+            "#[cfg(feature = \"optional\")]\n#[test]\n#[ignore]\nfn untriaged() {}\n")
+        result = self.backlog()
+        self.assertEqual(result["discovery_kind"], "lexical-candidates-not-libtest-enumeration")
+        self.assertTrue(result["limitations"])
+        self.assertTrue(all(isinstance(note, str) and note.strip() for note in result["limitations"]))
+        limitations = " ".join(result["limitations"]).lower()
+        for term in ("lexical", "cfg", "macros", "evidence"):
+            self.assertIn(term, limitations)
+        self.assert_backlog_counts(result, 3, 2)
+        suite, = result["suites"]
+        self.assertEqual(suite["suite"], "sample")
+        self.assertEqual(suite["source_file"], "tests/sample.rs")
+        self.assert_backlog_counts(suite, 3, 2)
+        self.assertEqual(suite["selectors"], [
+            {"test": "accepts", "line": 2, "discovery": "literal-test", "mapped": True,
+             "obligations": [{"area": "memory", "requirement": "moves", "layer": "feature"}],
+             "interaction_scenarios": []},
+            {"test": "rejects", "line": 4, "discovery": "literal-test", "mapped": True,
+             "obligations": [{"area": "memory", "requirement": "moves", "layer": "rejection"}],
+             "interaction_scenarios": []},
+            {"test": "untriaged", "line": 8, "discovery": "literal-test", "mapped": False,
+             "obligations": [], "interaction_scenarios": []}])
+
+    def test_selector_backlog_scenario_only_and_duplicate_gate_memberships(self):
+        (self.root / "tests/sample.rs").write_text(
+            "#[test]\nfn accepts() {}\n#[test]\nfn rejects() {}\n#[test]\nfn combined() {}\n")
+        self.matrix()
+        combined = {"suite": "sample", "test": "combined"}
+        scenarios = self.scope["interaction_matrix"]["scenarios"]
+        scenarios[0]["tests"] = [combined]
+        scenarios.append({"id": "another-combination", "features": ["drop", "generic"],
+                          "tests": [combined, self.accept]})
+        requirement = self.scope["areas"][0]["requirements"][0]
+        requirement["gates"][2]["tests"] = [self.accept]
+        duplicate = copy.deepcopy(requirement)
+        duplicate["id"] = "another-requirement"
+        self.scope["areas"][0]["requirements"].append(duplicate)
+        result = self.backlog()
+        self.assert_backlog_counts(result, 3, 3)
+        rows = {row["test"]: row for row in result["suites"][0]["selectors"]}
+        self.assertEqual(rows["accepts"]["obligations"], [
+            {"area": "memory", "requirement": requirement_id, "layer": layer}
+            for requirement_id in ("another-requirement", "moves")
+            for layer in ("feature", "interaction")])
+        self.assertEqual(rows["accepts"]["interaction_scenarios"], ["another-combination"])
+        self.assertEqual(rows["combined"]["obligations"], [])
+        self.assertEqual(rows["combined"]["interaction_scenarios"],
+                         ["another-combination", "borrow-generic"])
+        self.assertIs(rows["combined"]["mapped"], True)
+
+    def test_selector_backlog_includes_empty_suites_excludes_nested_files_and_deduplicates(self):
+        (self.root / "tests/aaa_empty.rs").write_text("fn helper() {}\n")
+        (self.root / "tests/support").mkdir()
+        (self.root / "tests/support/sample.rs").write_text("#[test]\nfn nested_only() {}\n")
+        (self.root / "tests/sample.rs").write_text(
+            "#[test]\nfn accepts() {}\n#[test]\nfn rejects() {}\n"
+            "#[test]\nfn accepts() {}\n")
+        # Exercise the actual lexical scanner, including duplicate selector leads.
+        leads = c.discover(self.root)["source_test_functions"]
+        self.assertEqual(sum(row["test"] == "accepts" for row in leads), 2)
+        self.assertIn("nested_only", [row["test"] for row in leads])
+        result = self.backlog()
+        self.assert_backlog_counts(result, 2, 2)
+        self.assertEqual([row["suite"] for row in result["suites"]], ["aaa_empty", "sample"])
+        self.assert_backlog_counts(result["suites"][0], 0, 0)
+        self.assertEqual(result["suites"][0]["selectors"], [])
+        self.assertEqual([row["test"] for row in result["suites"][1]["selectors"]],
+                         ["accepts", "rejects"])
+
+    def test_selector_backlog_macro_probes_match_existing_validation_discovery(self):
+        (self.root / "tests/conformance_generated.rs").write_text(
+            "probes!(false;\n    valid_01 = 1,\n    valid_00 = 0,\n);\n"
+            "probes!(true; invalid_00 = 0,);\n"
+            "probes!(other; not_a_probe = 0,);\n")
+        (self.root / "tests/other.rs").write_text("probes!(false; foreign_probe = 0,);\n")
+        case = {"suite": "conformance_generated", "test": "valid_00"}
+        self.scope["areas"][0]["requirements"][0]["gates"][2]["tests"] = [case]
+        s.validate(self.scope, c, self.root)
+        result = self.backlog()
+        self.assert_backlog_counts(result, 5, 3)
+        generated, other, sample = result["suites"]
+        self.assertEqual([row["suite"] for row in result["suites"]],
+                         ["conformance_generated", "other", "sample"])
+        self.assert_backlog_counts(generated, 3, 1)
+        self.assertEqual([row["test"] for row in generated["selectors"]],
+                         ["invalid_00", "valid_00", "valid_01"])
+        self.assertEqual([row["line"] for row in generated["selectors"]], [5, 3, 2])
+        self.assertTrue(all(row["discovery"] == "probes-macro" for row in generated["selectors"]))
+        self.assertEqual(other["selectors"], [])
+
+    def test_selector_backlog_is_deterministic_read_only_and_never_evidence(self):
+        self.matrix()
+        scope_before = copy.deepcopy(self.scope)
+        files_before = {str(path.relative_to(self.root)): path.read_bytes()
+                        for path in self.root.rglob("*") if path.is_file()}
+        with patch.object(c, "execute", side_effect=AssertionError("backlog must not execute")), \
+                patch.object(s, "evidence", side_effect=AssertionError("backlog must not read evidence")), \
+                patch.object(s, "runner_identity", side_effect=AssertionError("no executable identity")):
+            first = self.backlog()
+            self.assertEqual(first, self.backlog())
+            self.scope["areas"][0]["requirements"][0]["gates"].reverse()
+            self.assertEqual(first, self.backlog())
+            self.scope["areas"][0]["requirements"][0]["gates"].reverse()
+        self.assertEqual(self.scope, scope_before)
+        self.assertEqual(files_before, {str(path.relative_to(self.root)): path.read_bytes()
+                                      for path in self.root.rglob("*") if path.is_file()})
+        def no_evidence_fields(value):
+            if isinstance(value, dict):
+                for key, child in value.items():
+                    self.assertNotIn(key, {"status", "outcome", "passed", "tests_passed", "evidence",
+                                           "ignored", "conditional", "enabled", "executed"})
+                    self.assertNotIn("percent", key)
+                    no_evidence_fields(child)
+            elif isinstance(value, list):
+                for child in value:
+                    no_evidence_fields(child)
+        no_evidence_fields(first)
+
+    def test_selector_backlog_missing_mapped_candidate_fails_closed(self):
+        self.scope["areas"][0]["requirements"][0]["gates"][0]["tests"] = [
+            {"suite": "sample", "test": "missing"}]
+        with self.assertRaises(c.InvalidEvidence):
+            self.backlog()
+
     def assert_campaign(self, result, statuses):
         ids = [row["id"] for row in self.manifest()["gates"]]
         self.assertEqual(set(ids), set(statuses))
@@ -225,6 +360,8 @@ class ScopeTests(unittest.TestCase):
 
     def test_unique_counts_include_interaction_only_and_deduplicate_gate_mappings(self):
         self.matrix()
+        with (self.root / "tests/sample.rs").open("a") as source:
+            source.write("#[test]\nfn combined() {}\n")
         combined = {"suite": "sample", "test": "combined"}
         self.scope["interaction_matrix"]["scenarios"][0]["tests"] = [combined]
         original = self.scope["areas"][0]["requirements"][0]

@@ -21,6 +21,76 @@ LAYERS = ("feature", "rejection", "interaction", "end_to_end")
 SCOPE = Path("data/compiler-compatibility-scope.json")
 
 
+def selector_candidates(c, root):
+    """Existing lexical leads, not a Rust parser or libtest enumeration."""
+    candidates = {}
+    for row in c.discover(root)["source_test_functions"]:
+        path = Path(row["file"])
+        if path.parent != Path("tests"):
+            continue
+        key = (path.stem, row["test"])
+        candidate = {"test": row["test"], "line": row["line"],
+                     "discovery": "literal-test"}
+        if key not in candidates or row["line"] < candidates[key]["line"]:
+            candidates[key] = candidate
+    generated = root / "tests/conformance_generated.rs"
+    if generated.is_file():
+        source = generated.read_text()
+        for block in re.finditer(r"(?m)^probes!\((?:true|false);(.*?)\);", source, re.S):
+            for match in re.finditer(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\d+", block.group(1)):
+                name = match.group(1)
+                key = ("conformance_generated", name)
+                candidates.setdefault(key, {"test": name,
+                    "line": source.count("\n", 0, block.start(1) + match.start(1)) + 1,
+                    "discovery": "probes-macro"})
+    return candidates
+
+
+def selector_backlog(scope, c, root):
+    """Expose unmapped tests even inside suites that already have mappings.
+
+    This deliberately records no execution, ignore, semantic or review status.
+    Attributes, cfg and macros require separate Rust-aware/libtest review.
+    """
+    candidates = selector_candidates(c, root)
+    obligations = {}
+    scenarios = {}
+    for area in scope["areas"]:
+        for requirement in area["requirements"]:
+            for gate in requirement["gates"]:
+                for case in gate["tests"]:
+                    key = (case["suite"], case["test"])
+                    obligations.setdefault(key, set()).add((area["id"], requirement["id"], gate["layer"]))
+    for scenario in scope.get("interaction_matrix", {}).get("scenarios", []):
+        for case in scenario["tests"]:
+            key = (case["suite"], case["test"])
+            scenarios.setdefault(key, set()).add(scenario["id"])
+    mapped = set(obligations) | set(scenarios)
+    if not mapped <= set(candidates):
+        raise c.InvalidEvidence("mapped selector missing from lexical reconciliation inventory")
+    suites = []
+    for suite in sorted(c.integration_suites(root)):
+        selectors = []
+        for key in sorted(key for key in candidates if key[0] == suite):
+            selectors.append({**candidates[key], "mapped": key in mapped,
+                "obligations": [{"area": area, "requirement": requirement, "layer": layer}
+                                for area, requirement, layer in sorted(obligations.get(key, set()))],
+                "interaction_scenarios": sorted(scenarios.get(key, set()))})
+        count = sum(row["mapped"] for row in selectors)
+        suites.append({"suite": suite, "source_file": f"tests/{suite}.rs",
+            "discovered_selector_count": len(selectors), "mapped_selector_count": count,
+            "untriaged_selector_count": len(selectors) - count, "selectors": selectors})
+    return {"discovery_kind": "lexical-candidates-not-libtest-enumeration",
+        "discovered_selector_count": sum(row["discovered_selector_count"] for row in suites),
+        "mapped_selector_count": sum(row["mapped_selector_count"] for row in suites),
+        "untriaged_selector_count": sum(row["untriaged_selector_count"] for row in suites),
+        "suites": suites,
+        "limitations": ["Lexical candidates may occur in comments, source strings, nested modules or disabled cfg branches; they are not authenticated runnable exact selectors.",
+                        "Only literal test leads and the existing conformance_generated probes! convention are discovered; other macros and dependency tests are not enumerated.",
+                        "Mapped means explicit gate or interaction membership only, not reviewed coverage, executable evidence, passing behavior or full Rust progress.",
+                        "Untriaged selectors can be utilities, unsupported boundaries or duplicate scenarios. They require source-level review before mapping."]}
+
+
 def validate(scope, c, root):
     if not isinstance(scope, dict) or scope.get("schema_version") != 1:
         raise c.InvalidEvidence("unsupported compatibility scope schema")
@@ -32,16 +102,7 @@ def validate(scope, c, root):
     c.unique_ids(scope.get("areas"), "area")
     requirements = []
     suites = set(c.integration_suites(root))
-    discovered = {(Path(row["file"]).stem, row["test"])
-                  for row in c.discover(root)["source_test_functions"]
-                  if Path(row["file"]).parent == Path("tests")}
-    # The existing differential suite declares independent cases with probes!.
-    # This is lexical discovery only. Actual evidence still requires exactly one executed test.
-    generated = root / "tests/conformance_generated.rs"
-    if generated.is_file():
-        for block in re.findall(r"(?m)^probes!\((?:true|false);(.*?)\);", generated.read_text(), re.S):
-            for name in re.findall(r"\b([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*\d+", block):
-                discovered.add(("conformance_generated", name))
+    discovered = set(selector_candidates(c, root))
     def check_tests(tests):
         if not isinstance(tests, list):
             raise c.InvalidEvidence("tests must be an array, including explicit empty gaps")
@@ -346,6 +407,7 @@ def summarize(scope, manifest, reports, identity, runner, c, root):
                                                                for area in areas for row in area["requirements"]),
             "areas": areas,
             "unmapped_integration_suites": unmapped,
+            "selector_reconciliation_backlog": selector_backlog(scope, c, root),
             "interaction_matrix": {"axes": matrix.get("axes", []), "scenarios": scenarios,
                                    "combination_accounting": combination_accounting,
                                    "pairs": matrix_pairs, "pair_count": len(matrix_pairs),
@@ -393,6 +455,7 @@ def render(summary):
         lines.append(f"Combinatorial {name}: {partition['total_combinations']} total; {partition['authored_combinations']} authored; {partition['missing_combinations_count']} missing (unauthored). Authored statuses: {states}.")
     lines.append(accounting["note"])
     lines.extend([f"{len(summary['unmapped_integration_suites'])} integration suites still need explicit coverage mapping.",
+                  f"Lexical selector reconciliation backlog: {summary['selector_reconciliation_backlog']['untriaged_selector_count']} untriaged of {summary['selector_reconciliation_backlog']['discovered_selector_count']} candidates, including unmapped tests inside partly mapped suites. Not execution or semantic coverage.",
                   "Source-referenced inventory readiness: " + summary["semantic_inventory"]["readiness"] + ". Inventory links are not executable evidence.",
                   "Scope is incomplete. Use --json for exact missing requirements, case commands and evidence paths."])
     return "\n".join(lines)
