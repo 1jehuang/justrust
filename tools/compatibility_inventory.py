@@ -7,6 +7,7 @@ validation remains the responsibility of compatibility_scope.py and conformance.
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import hashlib
 import io
 import json
@@ -476,9 +477,137 @@ def reference_readiness(root, *, data=_ABSENT, candidate_path=None, contract=Non
                                     source_archive=source_archive, submodule_proof=submodule_proof)
 
 
+LIBRARY_PROVENANCE = "data/compiler-library-surface-provenance.json"
+LIBRARY_TOOLS = ("acquire_pinned_library_sources.py", "acquire_pinned_api_html.py",
+                 "compact_library_surface_provenance.py")
+LIBRARY_FIELDS = ("schema_version", "review_status", "scope", "inventory_kind", "source_identity",
+                  "artifacts", "observations", "pages", "reproduction", "limitations", "review_needs")
+
+
+def validate_library_surface_provenance(root: Path, data=_ABSENT, *, contract=None):
+    """Validate compact acquisition metadata, never a library API denominator.
+
+    Recorded HTML/source sidecars remain external inputs. Only local reproduction
+    tool bytes and metadata consistency are rechecked here, not remote content.
+    """
+    root = Path(root)
+    data = load(root / LIBRARY_PROVENANCE) if data is _ABSENT else data
+    fields(data, LIBRARY_FIELDS, "library_provenance")
+    require(type(data["schema_version"]) is int and data["schema_version"] == 1,
+            "library_provenance: schema_version must be 1")
+    require(data["review_status"] == "unreviewed" and data["scope"] == CONTRACT,
+            "library_provenance: unreviewed scope mismatch")
+    require(data["inventory_kind"] == "pinned-library-source-and-documentation-input-provenance",
+            "library_provenance: input provenance is not API coverage")
+    strings(data["limitations"], "library_provenance.limitations", True)
+    strings(data["review_needs"], "library_provenance.review_needs", True)
+    contract = contract if contract is not None else load(root / "data/compiler-compatibility-contract.json")
+    validate_contract(contract, read_verifier(root / "tests/support/stock_rustc.rs"))
+    identity = data["source_identity"]
+    fields(identity, ("commit", "release", "repository", "official_documentation_root", "root_tree_sha1",
+                      "library_tree_sha1", "source_index_content_sha256", "verification"), "library_provenance.source_identity")
+    require(identity["commit"] == contract["oracle"]["commit"] and identity["release"] == contract["oracle"]["release"],
+            "library_provenance: stable oracle release/commit mismatch")
+    base = "https://doc.rust-lang.org/" + identity["release"] + "/"
+    require(identity["repository"] == "https://github.com/rust-lang/rust"
+            and identity["official_documentation_root"] == base,
+            "library_provenance: official pinned repository and documentation URLs required")
+    for name in ("root_tree_sha1", "library_tree_sha1"):
+        exact_hex(identity[name], 40, "library_provenance." + name)
+    exact_hex(identity["source_index_content_sha256"], 64, "source_index_content_sha256")
+    text(identity["verification"], "source_identity.verification")
+    artifact_names = {"pinned-html-link-anchor-candidate": "pinned-html-api-index.json",
+                      "pinned-library-source-path-index": "library-source-index.json"}
+    artifacts, filenames = {}, set()
+    for artifact in rows(data["artifacts"], "library_provenance.artifacts"):
+        fields(artifact, ("id", "filename", "content_sha256", "byte_length", "role"), "library_provenance.artifact")
+        ident = text(artifact["id"], "artifact.id")
+        require(ident in artifact_names and ident not in artifacts, "library_provenance: duplicate or unknown artifact ID")
+        require(artifact["filename"] == artifact_names[ident] and artifact["filename"] not in filenames,
+                "library_provenance: unexpected or duplicate artifact filename")
+        filenames.add(artifact["filename"])
+        exact_hex(artifact["content_sha256"], 64, "artifact.content_sha256")
+        positive_integer(artifact["byte_length"], "artifact.byte_length")
+        text(artifact["role"], "artifact.role")
+        artifacts[ident] = artifact
+    require(set(artifacts) == set(artifact_names), "library_provenance: exactly two external artifacts required")
+    require(artifacts["pinned-library-source-path-index"]["content_sha256"] == identity["source_index_content_sha256"],
+            "library_provenance: source artifact hash disagrees with source identity")
+    pages, versions = set(), set()
+    for page in rows(data["pages"], "library_provenance.pages"):
+        fields(page, ("path", "url", "rustdoc_version", "content_sha256", "byte_length"), "library_provenance.page")
+        path = text(page["path"], "library_provenance.page.path")
+        parts = PurePosixPath(path)
+        require(not parts.is_absolute() and parts.as_posix() == path and '..' not in parts.parts
+                and len(parts.parts) >= 2 and parts.parts[0] in {"core", "alloc", "std", "proc_macro"}
+                and re.fullmatch(r"[A-Za-z0-9_./-]+\.html", path) is not None,
+                "library_provenance.page: canonical crate HTML path required")
+        require(path not in pages, "library_provenance: duplicate page path")
+        pages.add(path)
+        require(page["url"] == base + path, "library_provenance.page: official versioned URL mismatch")
+        exact_hex(page["content_sha256"], 64, "page.content_sha256")
+        positive_integer(page["byte_length"], "page.byte_length")
+        marker = text(page["rustdoc_version"], "page.rustdoc_version")
+        prefix = identity["release"] + " (" + identity["commit"][:9] + " "
+        require(marker.startswith(prefix) and re.fullmatch(re.escape(prefix) + r"[0-9]{4}-[0-9]{2}-[0-9]{2}\)", marker),
+                "library_provenance.page: rustdoc release/commit marker mismatch")
+        try:
+            date.fromisoformat(marker[len(prefix):-1])
+        except ValueError as exc:
+            raise InvalidInventory("library_provenance.page: malformed rustdoc date") from exc
+        versions.add(marker)
+    require(len(versions) == 1, "library_provenance: inconsistent rustdoc version markers")
+    required = {crate + "/" + name for crate in ("core", "alloc", "std", "proc_macro") for name in ("index.html", "all.html")}
+    require(required <= pages, "library_provenance: eight crate index/all pages required")
+    observations = data["observations"]
+    fields(observations, ("downloaded_page_records", "literal_index_link_anchor_candidate_records",
+                          "missing_detail_page_records", "interpretation"), "library_provenance.observations")
+    for name in ("downloaded_page_records", "literal_index_link_anchor_candidate_records", "missing_detail_page_records"):
+        require(type(observations[name]) is int and observations[name] >= 0,
+                "library_provenance: nonnegative observed record counts required")
+    require(observations["downloaded_page_records"] == len(pages), "library_provenance: downloaded page count mismatch")
+    require(observations["missing_detail_page_records"] <= observations["literal_index_link_anchor_candidate_records"],
+            "library_provenance: missing detail records exceed observed candidate records")
+    text(observations["interpretation"], "observations.interpretation")
+    reproduction = data["reproduction"]
+    fields(reproduction, ("tools", "working_directory", "commands", "requirements"), "library_provenance.reproduction")
+    text(reproduction["working_directory"], "reproduction.working_directory")
+    strings(reproduction["commands"], "reproduction.commands", True)
+    strings(reproduction["requirements"], "reproduction.requirements", True)
+    tools = set()
+    for tool in rows(reproduction["tools"], "reproduction.tools"):
+        fields(tool, ("filename", "content_sha256"), "reproduction.tool")
+        filename = text(tool["filename"], "reproduction.tool.filename")
+        require(filename in LIBRARY_TOOLS and filename not in tools, "library_provenance: duplicate or unexpected reproduction tool")
+        tools.add(filename)
+        exact_hex(tool["content_sha256"], 64, "reproduction.tool.content_sha256")
+        require(tool["content_sha256"] == sha256(file_bytes(root / "tools" / filename)),
+                "library_provenance: reproduction tool bytes changed: " + filename)
+    require(tools == set(LIBRARY_TOOLS), "library_provenance: exactly three reproduction tools required")
+    return {"readiness": "review-required", "review_status": "unreviewed",
+            "inventory_kind": data["inventory_kind"], "full_rust_completion_percent": None,
+            "api_denominator": None, "observations": dict(observations), "external_artifacts": len(artifacts),
+            "required_index_pages": len(required), "locally_bound_reproduction_tools": len(tools),
+            "external_source_byte_verification": "not_reverified_in_this_run",
+            "limitations": ["Input provenance only, not a stable public target API denominator or executable evidence.",
+                            "Literal links, anchors, downloaded pages and missing records are not API or support counts.",
+                            "External artifact hashes and recorded page metadata are not source-byte authentication."]}
+
+
+def library_surface_readiness(root, *, data=_ABSENT, contract=None):
+    if data is _ABSENT and not (Path(root) / LIBRARY_PROVENANCE).is_file():
+        return {"readiness": "missing", "review_status": "unreviewed", "missing_files": [LIBRARY_PROVENANCE],
+                "full_rust_completion_percent": None, "api_denominator": None,
+                "limitations": ["Library acquisition input provenance is missing and does not establish API readiness."]}
+    return validate_library_surface_provenance(root, data, contract=contract)
+
+
 def load_and_summarize(root: Path):
     """Return honest missing readiness for partial fixtures, reject malformed present inputs."""
     root = Path(root)
+    library_data = load(root / LIBRARY_PROVENANCE) if (root / LIBRARY_PROVENANCE).is_file() else _ABSENT
+    if library_data is not _ABSENT:
+        fields(library_data, LIBRARY_FIELDS, "library_provenance")
     reference_data = load(root / REFERENCE_RULES) if (root / REFERENCE_RULES).is_file() else _ABSENT
     if reference_data is not _ABSENT:
         fields(reference_data, ("schema_version", "review_status", "scope", "provenance", "counts",
@@ -506,14 +635,20 @@ def load_and_summarize(root: Path):
         return {"schema_version": 1, "scope": CONTRACT, "readiness": "missing",
                 "review_status": "unreviewed", "missing_files": missing,
                 "full_rust_completion_percent": None,
-                "inventory_readiness_blockers": missing + ([REFERENCE_RULES] if reference_data is _ABSENT else []),
+                "inventory_readiness_blockers": missing + ([REFERENCE_RULES] if reference_data is _ABSENT else [])
+                                                + ([LIBRARY_PROVENANCE] if library_data is _ABSENT else []),
                 "reference_rules": {"readiness": "missing" if reference_data is _ABSENT else "blocked-by-missing-inputs",
                                     "full_rust_completion_percent": None},
+                "library_surface_inputs": {"readiness": "missing" if library_data is _ABSENT else "blocked-by-missing-inputs",
+                                               "full_rust_completion_percent": None, "api_denominator": None},
                 "limitations": ["Missing inventory inputs cannot establish executable evidence or full compatibility."]}
     result = summarize([present[name] for name in names[2:4]], present[names[1]])
     result.update(contract_id=contract["contract_id"], readiness="unreviewed", missing_files=[])
     result["reference_rules"] = reference_readiness(root, data=reference_data, contract=contract)
-    result["inventory_readiness_blockers"] = ([REFERENCE_RULES] if result["reference_rules"]["readiness"] == "missing" else [])
+    result["library_surface_inputs"] = library_surface_readiness(root, data=library_data, contract=contract)
+    result["inventory_readiness_blockers"] = [path for name, path in (("reference_rules", REFERENCE_RULES),
+                                            ("library_surface_inputs", LIBRARY_PROVENANCE))
+                                            if result[name]["readiness"] == "missing"]
     return result
 
 
@@ -527,6 +662,7 @@ def main(argv=None):
     parser.add_argument("--reference-rules", type=Path)
     parser.add_argument("--source-archive", type=Path)
     parser.add_argument("--submodule-proof", type=Path)
+    parser.add_argument("--library-surface-provenance", type=Path)
     args = parser.parse_args(argv)
     args.scope = args.scope or args.root / "data/compiler-compatibility-scope.json"
     args.inventory = args.inventory or [args.root / "data/compiler-language-inventory.json",
@@ -542,7 +678,12 @@ def main(argv=None):
             args.root, data=load(args.reference_rules) if args.reference_rules else _ABSENT,
             candidate_path=next((path for path in args.inventory if path.name == "compiler-language-inventory.json"), None),
             contract=contract, source_archive=args.source_archive, submodule_proof=args.submodule_proof)
-        report["inventory_readiness_blockers"] = ([REFERENCE_RULES] if report["reference_rules"]["readiness"] == "missing" else [])
+        report["library_surface_inputs"] = library_surface_readiness(
+            args.root, data=load(args.library_surface_provenance) if args.library_surface_provenance else _ABSENT,
+            contract=contract)
+        report["inventory_readiness_blockers"] = [path for name, path in (("reference_rules", REFERENCE_RULES),
+                                                ("library_surface_inputs", LIBRARY_PROVENANCE))
+                                                if report[name]["readiness"] == "missing"]
     except InvalidInventory as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2

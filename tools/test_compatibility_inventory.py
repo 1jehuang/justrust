@@ -411,12 +411,12 @@ class ReferenceRulesTests(unittest.TestCase):
         extra["sections"][0]["obligations"][0]["id"] = "library-extra"
         (self.root / "data/compiler-library-project-inventory.json").write_text(json.dumps(extra), encoding="utf-8")
         missing = inventory.load_and_summarize(self.root)
-        self.assertEqual(missing["inventory_readiness_blockers"], [inventory.REFERENCE_RULES])
+        self.assertEqual(missing["inventory_readiness_blockers"], [inventory.REFERENCE_RULES, inventory.LIBRARY_PROVENANCE])
         reference_path = self.root / inventory.REFERENCE_RULES
         reference_path.write_text(json.dumps(self.data), encoding="utf-8")
         result = inventory.load_and_summarize(self.root)
         self.assertEqual(result["reference_rules"]["counts"]["unique_rule_labels_total"], 2)
-        self.assertEqual(result["inventory_readiness_blockers"], [])
+        self.assertEqual(result["inventory_readiness_blockers"], [inventory.LIBRARY_PROVENANCE])
         command = [sys.executable, inventory.__file__, "--root", str(self.root)]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -475,6 +475,227 @@ class ReferenceRulesTests(unittest.TestCase):
         self.archive.write_bytes(b"bad archive")
         with self.assertRaises(inventory.InvalidInventory):
             self.validate(source_archive=self.archive)
+
+
+class LibraryProvenanceTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / "data").mkdir()
+        (self.root / "tests/support").mkdir(parents=True)
+        (self.root / "tools").mkdir()
+        (self.root / "data/compiler-compatibility-contract.json").write_text(json.dumps(contract_fixture()), encoding="utf-8")
+        (self.root / "tests/support/stock_rustc.rs").write_text(VERIFIER, encoding="utf-8")
+        tools = []
+        for name in inventory.LIBRARY_TOOLS:
+            raw = ("# Synthetic non-executed reproduction tool " + name + "\n").encode()
+            (self.root / "tools" / name).write_bytes(raw)
+            tools.append({"filename": name, "content_sha256": inventory.sha256(raw)})
+        base = "https://doc.rust-lang.org/1.98.1/"
+        self.data = {"schema_version": 1, "review_status": "unreviewed", "scope": dict(inventory.CONTRACT),
+                     "inventory_kind": "pinned-library-source-and-documentation-input-provenance",
+                     "source_identity": {"commit": "a" * 40, "release": "1.98.1",
+                         "repository": "https://github.com/rust-lang/rust", "official_documentation_root": base,
+                         "root_tree_sha1": "b" * 40, "library_tree_sha1": "c" * 40,
+                         "source_index_content_sha256": "d" * 64, "verification": "Synthetic acquisition record"},
+                     "artifacts": [{"id": "pinned-html-link-anchor-candidate", "filename": "pinned-html-api-index.json",
+                         "content_sha256": "e" * 64, "byte_length": 100, "role": "External observed records"},
+                         {"id": "pinned-library-source-path-index", "filename": "library-source-index.json",
+                         "content_sha256": "d" * 64, "byte_length": 120, "role": "External source record"}],
+                     "observations": {"downloaded_page_records": 8, "literal_index_link_anchor_candidate_records": 10,
+                         "missing_detail_page_records": 6, "interpretation": "These observed records are not API counts."},
+                     "pages": [{"path": crate + "/" + page, "url": base + crate + "/" + page,
+                         "rustdoc_version": "1.98.1 (aaaaaaaaa 2026-09-01)", "content_sha256": "f" * 64,
+                         "byte_length": 42} for crate in ("core", "alloc", "std", "proc_macro")
+                         for page in ("index.html", "all.html")],
+                     "reproduction": {"tools": tools, "working_directory": "Synthetic tools directory",
+                         "commands": ["Synthetic non-executed reproduction command"], "requirements": ["External source bytes"]},
+                     "limitations": ["Input provenance, not API coverage"], "review_needs": ["API identity and semantics review"]}
+
+    def validate(self, data=inventory._ABSENT):
+        return inventory.validate_library_surface_provenance(self.root, self.data if data is inventory._ABSENT else data)
+
+    def reject(self, data):
+        with self.assertRaises(inventory.InvalidInventory):
+            self.validate(data)
+
+    def test_summary_is_only_input_provenance(self):
+        result = self.validate()
+        self.assertEqual(result["readiness"], "review-required")
+        self.assertEqual(result["observations"]["downloaded_page_records"], 8)
+        self.assertEqual(result["external_artifacts"], 2)
+        self.assertEqual(result["locally_bound_reproduction_tools"], 3)
+        self.assertEqual(result["required_index_pages"], 8)
+        self.assertIsNone(result["api_denominator"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertEqual(result["external_source_byte_verification"], "not_reverified_in_this_run")
+        self.assertNotIn("supported", result)
+
+    def test_exact_schema_and_no_manual_states(self):
+        paths = [(), ("scope",), ("source_identity",), ("artifacts", 0), ("observations",),
+                 ("pages", 0), ("reproduction",), ("reproduction", "tools", 0)]
+        for path in paths:
+            obj = self.data
+            for part in path:
+                obj = obj[part]
+            for name in obj:
+                altered = copy.deepcopy(self.data)
+                target = altered
+                for part in path:
+                    target = target[part]
+                del target[name]
+                with self.subTest(path=path, missing=name):
+                    self.reject(altered)
+            for name in ("passing", "support", "execution_status"):
+                altered = copy.deepcopy(self.data)
+                target = altered
+                for part in path:
+                    target = target[part]
+                target[name] = "passed"
+                with self.subTest(path=path, extra=name):
+                    self.reject(altered)
+
+    def test_pin_and_official_url_mismatches(self):
+        for name, bad in (("release", "1.99.0"), ("commit", "f" * 40),
+                          ("repository", "https://github.com/other/rust"),
+                          ("official_documentation_root", "https://doc.rust-lang.org/stable/"),
+                          ("root_tree_sha1", "main"), ("library_tree_sha1", "A" * 40),
+                          ("source_index_content_sha256", "e" * 64), ("verification", "")):
+            altered = copy.deepcopy(self.data)
+            altered["source_identity"][name] = bad
+            with self.subTest(name=name):
+                self.reject(altered)
+        for url in ("http://doc.rust-lang.org/1.98.1/core/index.html", "https://evil.test/core/index.html",
+                    "https://doc.rust-lang.org.evil.test/1.98.1/core/index.html", "https://doc.rust-lang.org/stable/core/index.html"):
+            altered = copy.deepcopy(self.data)
+            altered["pages"][0]["url"] = url
+            self.reject(altered)
+
+    def test_required_eight_pages_and_unique_paths(self):
+        for index in range(8):
+            altered = copy.deepcopy(self.data)
+            altered["pages"].pop(index)
+            altered["observations"]["downloaded_page_records"] = 7
+            with self.subTest(index=index):
+                self.reject(altered)
+        altered = copy.deepcopy(self.data)
+        altered["pages"].append(copy.deepcopy(altered["pages"][0]))
+        altered["observations"]["downloaded_page_records"] = 9
+        self.reject(altered)
+        for path in ("../core/index.html", "core/../core/index.html", "/core/index.html", "core//index.html",
+                     "core/index.html#anchor", "other/index.html", "core/index.txt"):
+            altered = copy.deepcopy(self.data)
+            altered["pages"][0]["path"] = path
+            altered["pages"][0]["url"] = "https://doc.rust-lang.org/1.98.1/" + path
+            self.reject(altered)
+
+    def test_rustdoc_version_markers(self):
+        for marker in ("1.99.0 (aaaaaaaaa 2026-09-01)", "1.98.1 (bbbbbbbbb 2026-09-01)",
+                       "1.98.1 (aaaaaaaaa 2026-02-31)", "1.98.1 (aaaaaaaaa 2026-09-02)", "", 4):
+            altered = copy.deepcopy(self.data)
+            altered["pages"][0]["rustdoc_version"] = marker
+            with self.subTest(marker=marker):
+                self.reject(altered)
+
+    def test_hashes_lengths_and_observed_count_types(self):
+        for path, field in ((("pages", 0), "content_sha256"), (("artifacts", 0), "content_sha256"),
+                            (("pages", 0), "byte_length"), (("artifacts", 0), "byte_length")):
+            for bad in (None, "", True, -1, 0, 1.0):
+                altered = copy.deepcopy(self.data)
+                target = altered
+                for part in path:
+                    target = target[part]
+                target[field] = bad
+                self.reject(altered)
+        for name in ("downloaded_page_records", "literal_index_link_anchor_candidate_records", "missing_detail_page_records"):
+            for bad in (True, -1, 1.0, "1"):
+                altered = copy.deepcopy(self.data)
+                altered["observations"][name] = bad
+                self.reject(altered)
+        altered = copy.deepcopy(self.data)
+        altered["observations"]["downloaded_page_records"] = 9
+        self.reject(altered)
+        altered = copy.deepcopy(self.data)
+        altered["observations"]["missing_detail_page_records"] = 11
+        self.reject(altered)
+
+    def test_artifact_identity_and_hash_linkage(self):
+        for artifacts in (self.data["artifacts"][:1], self.data["artifacts"] * 2):
+            altered = copy.deepcopy(self.data)
+            altered["artifacts"] = artifacts
+            self.reject(altered)
+        for name, bad in (("id", "unexpected"), ("filename", "../pinned-html-api-index.json")):
+            altered = copy.deepcopy(self.data)
+            altered["artifacts"][0][name] = bad
+            self.reject(altered)
+        altered = copy.deepcopy(self.data)
+        altered["artifacts"][1]["content_sha256"] = "e" * 64
+        self.reject(altered)
+
+    def test_exact_three_tool_bytes_bound(self):
+        for tools in (self.data["reproduction"]["tools"][:2], self.data["reproduction"]["tools"] * 2):
+            altered = copy.deepcopy(self.data)
+            altered["reproduction"]["tools"] = tools
+            self.reject(altered)
+        altered = copy.deepcopy(self.data)
+        altered["reproduction"]["tools"][0]["filename"] = "../acquire_pinned_library_sources.py"
+        self.reject(altered)
+        altered = copy.deepcopy(self.data)
+        altered["reproduction"]["tools"][0]["content_sha256"] = "a" * 64
+        self.reject(altered)
+        for name in inventory.LIBRARY_TOOLS:
+            path = self.root / "tools" / name
+            original = path.read_bytes()
+            path.write_bytes(original + b"# drift\n")
+            self.reject(self.data)
+            path.write_bytes(original)
+        (self.root / "tools" / inventory.LIBRARY_TOOLS[0]).unlink()
+        self.reject(self.data)
+
+    def test_unreviewed_limitations_and_scope(self):
+        for name, bad in (("schema_version", True), ("schema_version", 1.0), ("review_status", "reviewed"),
+                          ("inventory_kind", "complete-api-inventory"), ("limitations", []),
+                          ("limitations", [" "]), ("review_needs", []), ("scope", {"edition": "2021"})):
+            altered = copy.deepcopy(self.data)
+            altered[name] = bad
+            self.reject(altered)
+        self.reject(None)
+
+    def test_missing_and_malformed_root_metadata(self):
+        result = inventory.library_surface_readiness(self.root)
+        self.assertEqual(result["readiness"], "missing")
+        self.assertEqual(result["missing_files"], [inventory.LIBRARY_PROVENANCE])
+        self.assertIsNone(result["api_denominator"])
+        path = self.root / inventory.LIBRARY_PROVENANCE
+        for raw in ("{", "null", "[]", '{"schema_version":1,"schema_version":1}'):
+            path.write_text(raw, encoding="utf-8")
+            with self.assertRaises(inventory.InvalidInventory):
+                inventory.library_surface_readiness(self.root)
+            with self.assertRaises(inventory.InvalidInventory):
+                inventory.load_and_summarize(self.root)
+
+    def test_summary_loader_and_cli(self):
+        candidate = fixture()
+        extra = fixture()
+        extra["sections"][0]["obligations"][0]["id"] = "library-extra"
+        for name, value in (("compiler-compatibility-scope.json", scope_fixture()),
+                            ("compiler-language-inventory.json", candidate),
+                            ("compiler-library-project-inventory.json", extra),
+                            ("compiler-library-surface-provenance.json", self.data)):
+            (self.root / "data" / name).write_text(json.dumps(value), encoding="utf-8")
+        result = inventory.load_and_summarize(self.root)
+        self.assertEqual(result["library_surface_inputs"]["observations"]["downloaded_page_records"], 8)
+        self.assertEqual(result["inventory_readiness_blockers"], [inventory.REFERENCE_RULES])
+        command = [sys.executable, inventory.__file__, "--root", str(self.root)]
+        process = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIsNone(json.loads(process.stdout)["library_surface_inputs"]["api_denominator"])
+        (self.root / inventory.LIBRARY_PROVENANCE).write_text("null", encoding="utf-8")
+        process = subprocess.run(command, capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(process.stdout, "")
+        self.assertIn("error", json.loads(process.stderr))
 
 
 if __name__ == "__main__":
