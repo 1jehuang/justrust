@@ -379,6 +379,247 @@ class PinnedConstProfileTests(unittest.TestCase):
                          'ea7fa27afdf901b91464ead14c54883debd091819c25bf02870e7a434ae61785')
 
 
+class UnsafeProfileTests(unittest.TestCase):
+    """Synthetic structural controls, never executable Rust evidence."""
+
+    def setUp(self):
+        import unsafe_reconciliation_proposals as proposals
+        self.proposals = proposals
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'src').mkdir()
+        self.candidate_path = self.root / 'candidate.json'
+        self.candidate_path.write_text(json.dumps({
+            'scope': SCOPE, 'sections': [{'obligations': [
+                {'id': name} for name in sorted(set(proposals.ALIASES.values()))]}]}))
+        pages = []
+        for page, prefix in zip(proposals.SELECTED, ('unsafe', 'safety')):
+            labels = [line.split('|')[0] for line in proposals.ROWS.strip().splitlines()
+                      if line.split('|')[0].split('.')[0] == prefix]
+            text = ''.join('r[' + label + ']\nsynthetic block\n' for label in labels)
+            path = self.root / page
+            path.write_text(text)
+            pages.append({'path': page, 'sha256': digest(path.read_bytes()),
+                          'url': 'synthetic-' + prefix, 'rules': parse_markdown(text)[0]})
+        pages.append({'path': 'src/other.md', 'rules': [
+            {'label': 'other.' + str(i), 'line': i + 1} for i in range(2938)]})
+        self.index_path = self.root / 'index.json'
+        self.index_path.write_text(json.dumps({
+            'scope': SCOPE, 'pages': pages, 'unlinked_markdown_files': [],
+            'counts': {'unique_rule_labels_total': 2965},
+            'provenance': {'compiler_commit': '1' * 40, 'reference_commit': '2' * 40,
+                           'source_archive_sha256': '3' * 64,
+                           'candidate_inventory_sha256': digest(self.candidate_path.read_bytes())}}))
+        self.data = self.build_unsafe()
+
+    def build_unsafe(self):
+        return build(self.index_path, self.candidate_path, self.root, profile='unsafe')
+
+    def verify(self, data):
+        return validate(data, self.index_path, self.candidate_path, self.root, profile='unsafe')
+
+    rejected = ReconciliationTests.rejected
+
+    def command(self, action, output):
+        return [action, '--profile', 'unsafe', '--rule-index', str(self.index_path),
+                '--inventory', str(self.candidate_path), '--source-root', str(self.root),
+                '--artifact', str(output)]
+
+    def test_all_labels_on_both_pages_deterministic_and_zero_credit(self):
+        self.assertEqual(self.data, self.build_unsafe())
+        counts = self.verify(self.data)
+        self.assertEqual((counts['global_rule_identities'], counts['selected_rule_rows'],
+                          counts['unselected_rule_identities']), (2965, 27, 2938))
+        self.assertEqual(counts['reviewed_rule_rows'], 0)
+        self.assertEqual(counts['rows_with_exact_executable_evidence'], 0)
+        self.assertEqual(counts['proposed_classification_counts']['index'], 5)
+        self.assertEqual(counts['proposed_classification_counts']['normative-semantic'], 22)
+        self.assertEqual([sum(row['page'] == page for row in self.data['rows'])
+                          for page in self.proposals.SELECTED], [16, 11])
+        self.assertTrue(all(row['review_status'] == 'unreviewed' for row in self.data['rows']))
+
+    def test_missing_duplicate_foreign_stale_source_and_category_controls(self):
+        mutations = [
+            (lambda d: d['rows'].pop(), 'omitted selected'),
+            (lambda d: d['rows'].append(copy.deepcopy(d['rows'][0])), 'duplicate rule'),
+            (lambda d: d['rows'][0].update(rule='other.0'), 'foreign rule'),
+            (lambda d: d['rows'][0].update(page='src/unsafety.md'), 'foreign rule'),
+            (lambda d: d['rows'][0].update(line=True), 'source block'),
+            (lambda d: d['rows'][0].update(end_line=999), 'source block'),
+            (lambda d: d['rows'][0].update(source_block_sha256='0' * 64), 'source block'),
+            (lambda d: d['selected_pages'][1].update(sha256='0' * 64), 'page binding'),
+            (lambda d: d['bindings'].update(rule_index_sha256='0' * 64), 'bindings'),
+            (lambda d: d['bindings'].update(candidate_inventory_sha256='0' * 64), 'bindings'),
+            (lambda d: d['rows'][0].update(candidate_obligation_ids=['foreign']), 'candidate obligation'),
+            (lambda d: d['rows'][0]['candidate_obligation_ids'].append(d['rows'][0]['candidate_obligation_ids'][0]), 'candidate obligation'),
+            (lambda d: d['rows'][0].update(classifications=['grammar']), 'classifications'),
+            (lambda d: d['rows'][0].update(rationale='invented'), 'authored'),
+            (lambda d: d['rows'][0].update(id='invented'), 'row ID'),
+            (lambda d: d['rows'][0]['missing_test_needs'].__setitem__(0, 'positive: done'), 'authored'),
+            (lambda d: d['rows'][0].update(review_status='reviewed'), 'reviewed row'),
+            (lambda d: d['counts'].update(reviewed_rule_rows=1), 'counts or evidence'),
+            (lambda d: d['counts'].update(rows_with_exact_executable_evidence=1), 'counts or evidence'),
+            (lambda d: d['unselected_rules'].pop(), 'unselected identities'),
+            (lambda d: d['unselected_rules'].append(d['unselected_rules'][0]), 'unselected identities'),
+            (lambda d: d['unselected_rules'][0].update(rule='foreign'), 'unselected identities'),
+            (lambda d: d['limitations'].__setitem__(0, 'Full unsafe support'), 'scope limitations'),
+        ]
+        for mutate, error in mutations:
+            with self.subTest(error=error):
+                self.rejected(mutate, error)
+        # Even a known category with internally consistent counts/relationship
+        # cannot silently reclassify the authored heading as semantic.
+        changed = copy.deepcopy(self.data)
+        changed['rows'][0].update(classifications=['normative-semantic'],
+                                  relationship='proposed-partial-decomposition')
+        changed['counts'] = reconciliation.compute_counts(changed['rows'], 2965, 'unsafe')
+        with self.assertRaisesRegex(ValueError, 'authored'):
+            self.verify(changed)
+        changed = copy.deepcopy(self.data)
+        changed['rows'][0]['candidate_obligation_ids'] = [self.proposals.ALIASES['union']]
+        with self.assertRaisesRegex(ValueError, 'authored'):
+            self.verify(changed)
+
+    def test_proposal_completeness_and_identity_controls(self):
+        original = self.proposals.ROWS
+        for rows, error in ((original.strip().splitlines()[0], 'omitted selected'),
+                            (original.strip() + '\n' + original.strip().splitlines()[0], 'duplicate rule'),
+                            (original.replace('unsafe|I|', 'foreign|I|'), 'foreign proposal'),
+                            (original.strip() + '|extra', 'seven explicit fields')):
+            with self.subTest(error=error), mock.patch.object(self.proposals, 'ROWS', rows):
+                with self.assertRaisesRegex(ValueError, error):
+                    self.build_unsafe()
+
+    def test_changed_sources_index_and_inventory_rejected(self):
+        for path in (self.index_path, self.candidate_path,
+                     *(self.root / page for page in self.proposals.SELECTED)):
+            before = path.read_bytes()
+            path.write_bytes(before + b'\n')
+            try:
+                with self.assertRaises(ValueError):
+                    self.verify(self.data)
+            finally:
+                path.write_bytes(before)
+        index = json.loads(self.index_path.read_bytes())
+        index['pages'][2]['rules'][0]['label'] = 'unsafe'
+        self.index_path.write_text(json.dumps(index))
+        with self.assertRaisesRegex(ValueError, 'duplicate index rule label'):
+            self.build_unsafe()
+
+    def test_selected_page_missing_duplicate_and_index_line_controls(self):
+        original = self.index_path.read_bytes()
+        for mutate, error in (
+                (lambda i: i['pages'].pop(0), 'index total mismatch'),
+                (lambda i: i['pages'].append(copy.deepcopy(i['pages'][0])), 'duplicate index rule identity'),
+                (lambda i: i['pages'][1]['rules'][0].update(line=2), 'labels/lines mismatch')):
+            index = json.loads(original)
+            mutate(index)
+            self.index_path.write_text(json.dumps(index))
+            try:
+                with self.assertRaisesRegex(ValueError, error):
+                    self.build_unsafe()
+            finally:
+                self.index_path.write_bytes(original)
+
+    def test_cli_generate_validate_exclusive_and_cross_profile_controls(self):
+        output = self.root / 'unsafe.json'
+        with contextlib.redirect_stdout(io.StringIO()):
+            main(self.command('generate', output))
+            main(self.command('validate', output))
+        raw = output.read_bytes()
+        self.assertEqual(json.loads(raw), self.data)
+        with self.assertRaises(FileExistsError):
+            main(self.command('generate', output))
+        self.assertEqual(raw, output.read_bytes())
+        for profile in ('tokens', 'const-eval'):
+            with self.assertRaisesRegex(ValueError, 'purpose mismatch'):
+                validate(self.data, self.index_path, self.candidate_path, self.root, profile)
+        for profile in ('unsafety', 'unsafe-keyword', 'unknown'):
+            command = self.command('generate', self.root / 'absent')
+            command[command.index('unsafe')] = profile
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(command)
+
+    def test_unsupported_cli_and_witness_api_rejected_before_io(self):
+        output = self.root / 'absent'
+        actions = ('generate-witness-links', 'build-witness-links',
+                   'validate-witness-links', 'assess-witness-links')
+        cases = [(action, []) for action in actions]
+        cases += [(action, [flag, str(self.root)]) for action in ('generate', 'validate')
+                  for flag in ('--repo-root', '--evidence')]
+        for action, extra in cases:
+            with self.subTest(action=action, extra=extra), \
+                 mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('premature read')), \
+                 mock.patch.object(Path, 'read_text', side_effect=AssertionError('premature read')), \
+                 mock.patch.object(Path, 'open', side_effect=AssertionError('premature open')), \
+                 mock.patch.object(Path, 'is_symlink', side_effect=AssertionError('premature stat')):
+                with self.assertRaisesRegex(ValueError, 'unsafe profile'):
+                    main(self.command(action, output) + extra)
+        with mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('premature read')):
+            with self.assertRaisesRegex(ValueError, 'unsafe profile'):
+                reconciliation.build_witness_links(self.index_path, self.candidate_path,
+                                                   self.root, self.root, 'unsafe')
+        self.assertFalse(output.exists())
+
+
+class PinnedUnsafeProfileTests(unittest.TestCase):
+    def test_actual_pinned_generation_and_exact_original_bindings(self):
+        source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
+        if not source:
+            self.skipTest('set JUSTRUST_WITNESS_REFERENCE_ROOT for pinned-source structural checks')
+        repo = Path(os.environ.get('JUSTRUST_WITNESS_REPO_ROOT', BASE.parent))
+        index = repo / 'data/compiler-language-reference-rules.json'
+        inventory = repo / 'data/compiler-language-inventory.json'
+        source = Path(source)
+        data = build(index, inventory, source, 'unsafe')
+        counts = validate(data, index, inventory, source, 'unsafe')
+        self.assertEqual((counts['global_rule_identities'], counts['selected_rule_rows'],
+                          counts['unselected_rule_identities']), (2965, 27, 2938))
+        self.assertEqual(counts['reviewed_rule_rows'], 0)
+        self.assertEqual(counts['rows_with_exact_executable_evidence'], 0)
+        self.assertEqual(data, build(index, inventory, source, 'unsafe'))
+        self.assertEqual(data['bindings']['reference_commit'], '86635e30bf861a038dc197d7e16fd09e7e514e7a')
+        # Frozen main5912cf49d legacy artifacts, including JSON formatting.
+        # Optional unsafe proposals must not be imported by old profiles.
+        with mock.patch.dict(sys.modules, {'unsafe_reconciliation_proposals': None}):
+            for profile, expected in (
+                    ('tokens', 'ea7fa27afdf901b91464ead14c54883debd091819c25bf02870e7a434ae61785'),
+                    ('const-eval', '0ce718c6e2834b6c518ff43f2fed2b5de72fd75eccf01d4611c3217cbdf053c2')):
+                legacy = build(index, inventory, source, profile)
+                self.assertEqual(digest((json.dumps(legacy, indent=2) + '\n').encode()), expected)
+        candidates = {o['id'] for section in json.loads(inventory.read_bytes())['sections']
+                      for o in section['obligations']}
+        selected = set()
+        for page in data['selected_pages']:
+            raw = (source / page['path']).read_bytes()
+            self.assertEqual(page['sha256'], digest(raw))
+            rules = parse_markdown(raw.decode())[0]
+            lines = raw.splitlines(keepends=True)
+            rows = [row for row in data['rows'] if row['page'] == page['path']]
+            self.assertEqual([row['rule'] for row in rows], [rule['label'] for rule in rules])
+            for position, (rule, row) in enumerate(zip(rules, rows)):
+                end = rules[position + 1]['line'] - 1 if position + 1 < len(rules) else len(lines)
+                self.assertEqual((row['line'], row['end_line']), (rule['line'], end))
+                self.assertEqual(row['source_block_sha256'], digest(b''.join(lines[rule['line'] - 1:end])))
+                self.assertTrue(set(row['candidate_obligation_ids']) <= candidates)
+                selected.add((row['page'], row['rule']))
+        unselected = {(row['page'], row['rule']) for row in data['unselected_rules']}
+        original = json.loads(index.read_bytes())
+        universe = {(page['path'], rule['label']) for page in
+                    original['pages'] + original['unlinked_markdown_files'] for rule in page['rules']}
+        self.assertFalse(selected & unselected)
+        self.assertEqual(selected | unselected, universe)
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'unsafe.json'
+            command = ['--profile', 'unsafe', '--rule-index', str(index), '--inventory', str(inventory),
+                       '--source-root', str(source), '--artifact', str(artifact)]
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(['generate', *command])
+                main(['validate', *command])
+            self.assertEqual(json.loads(artifact.read_bytes()), data)
+
+
 class WitnessLinkTests(unittest.TestCase):
     """Synthetic contracts exercise structure, never normative rule review."""
 

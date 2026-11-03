@@ -3,6 +3,7 @@
 
 Token proposals are the unchanged default. The explicit const-eval profile uses
 const_reconciliation_proposals.py, including explicit partial witness links.
+The unsafe profile covers both pinned unsafe pages and is generate/validate only.
 Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
@@ -36,16 +37,19 @@ def require(condition, message):
 
 def profile_inputs(profile):
     """Only explicitly selected pages and authored proposals are admitted."""
-    require(profile in ('tokens', 'const-eval'), 'unknown reconciliation profile')
+    require(profile in ('tokens', 'const-eval', 'unsafe'), 'unknown reconciliation profile')
     if profile == 'tokens':
         return SELECTED, ALIASES, CLASS_NAMES, ROWS
+    if profile == 'unsafe':
+        import unsafe_reconciliation_proposals as proposals
+        return proposals.SELECTED, proposals.ALIASES, proposals.CLASS_NAMES, proposals.ROWS
     # Token callers and witness APIs do not depend on the optional module.
     import const_reconciliation_proposals as proposals
     return ('src/const_eval.md',), proposals.ALIASES, proposals.CLASS_NAMES, proposals.ROWS
 
 
 def profile_purpose(profile):
-    return 'bounded-' + ('token' if profile == 'tokens' else 'const-eval') + '-rule-reconciliation-candidate'
+    return 'bounded-' + ('token' if profile == 'tokens' else profile) + '-rule-reconciliation-candidate'
 
 
 def load_inputs(index_path, candidate_path, source_root, profile='tokens'):
@@ -117,6 +121,10 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
         require(len(fields) == 7, 'proposal requires seven explicit fields')
         label, classes, rationale, aliases, positive, invalid, interaction = fields
         identity = (selected_pages[0], label)
+        if profile == 'unsafe':
+            matches = [key for key in records if key[1] == label]
+            require(len(matches) == 1, 'foreign proposal rule: ' + label)
+            identity = matches[0]
         require(identity in records, 'foreign proposal rule: ' + label)
         classifications = [class_names[c] for c in classes.split()]
         executable = 'normative-semantic' in classifications or 'grammar' in classifications
@@ -138,6 +146,9 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
         if profile == 'const-eval' and executable:
             row['missing_test_needs'][-1] = (
                 'end-to-end: Missing authored original-source CHECK/BUILD/run or stage-specific rejection witnesses, named test identities, pinned-stock outcomes and immutable receipts at workers1/8. Invalid CTFE, unsupported input, resource limits and infrastructure faults require distinct outcomes; no execution is inferred from legacy IDs.')
+        if profile == 'unsafe':
+            import unsafe_reconciliation_proposals as unsafe_proposals
+            row['missing_test_needs'][-1] = unsafe_proposals.END_TO_END
         rows.append(row)
     rows.sort(key=lambda r: (r['page'], r['line']))
     selected = {(r['page'], r['rule']) for r in rows}
@@ -168,6 +179,9 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
             'All classifications and mappings are proposed interpretations of the exact pinned src/const_eval.md page. They remain unreviewed and grant no reviewed-readiness credit.',
             f'The bounded selection is all {len(records)} labeled blocks on src/const_eval.md only. All other {len(identities) - len(records)} source identities remain explicitly unselected; none are removed from the {len(identities)}-label denominator.',
         ]
+    if profile == 'unsafe':
+        import unsafe_reconciliation_proposals as unsafe_proposals
+        result['limitations'] = list(unsafe_proposals.LIMITATIONS)
     validate(result, index_path, candidate_path, source_root, profile)
     return result
 
@@ -218,6 +232,33 @@ def validate(data, index_path, candidate_path, source_root, profile='tokens'):
             'All classifications and mappings are proposed interpretations of the exact pinned src/const_eval.md page. They remain unreviewed and grant no reviewed-readiness credit.',
             f'The bounded selection is all {len(records)} labeled blocks on src/const_eval.md only. All other {len(identities) - len(records)} source identities remain explicitly unselected; none are removed from the {len(identities)}-label denominator.',
         ], 'const-eval scope limitations mismatch')
+    if profile == 'unsafe':
+        import unsafe_reconciliation_proposals as proposals
+        require(len(identities) == 2965 and len(records) == 27,
+                'unsafe pinned denominator mismatch')
+        require(Counter(page for page, _ in records) == Counter(dict(zip(proposals.SELECTED, (16, 11)))),
+                'unsafe selected page cardinality mismatch')
+        authored = {}
+        for line in proposals.ROWS.strip().splitlines():
+            fields = line.split('|')
+            require(len(fields) == 7, 'proposal requires seven explicit fields')
+            label, classes, rationale, aliases, positive, invalid, interaction = fields
+            require(label not in authored, 'duplicate unsafe proposal rule')
+            authored[label] = (
+                [proposals.CLASS_NAMES[c] for c in classes.split()], rationale,
+                [proposals.ALIASES[a] for a in aliases.split()],
+                ['positive: Missing direct exact test link. ' + positive,
+                 'invalid: Missing direct exact test link. ' + invalid,
+                 'interaction: Missing direct exact test link. ' + interaction,
+                 proposals.END_TO_END])
+        require(set(authored) == {label for _, label in records}, 'unsafe authored selection mismatch')
+        for row in data['rows']:
+            require((row['classifications'], row['rationale'], row['candidate_obligation_ids'],
+                     row['missing_test_needs']) == authored[row['rule']],
+                    'unsafe authored classification or proposal mismatch')
+            require(row['id'] == 'reconcile-' + re.sub('[^a-z0-9]+', '-', row['rule']),
+                    'unsafe authored row ID mismatch')
+        require(data['limitations'] == list(proposals.LIMITATIONS), 'unsafe scope limitations mismatch')
     return data['counts']
 
 
@@ -236,6 +277,7 @@ def witness_bytes(data):
 
 
 def witness_profile(profile):
+    require(profile != 'unsafe', 'unsafe profile supports generate/validate only')
     profile_inputs(profile)
     if profile == 'tokens':
         return WITNESS_SOURCE_CONTRACT, DIRECT_WITNESSES, ALIASES, 'conformance_generated', 'tests/conformance_generated.rs'
@@ -435,7 +477,7 @@ def assess_witness_links(data, index_path, candidate_path, source_root, repo_roo
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['generate','validate','generate-witness-links','build-witness-links','validate-witness-links','assess-witness-links'])
-    parser.add_argument('--profile', choices=['tokens', 'const-eval'], default='tokens')
+    parser.add_argument('--profile', choices=['tokens', 'const-eval', 'unsafe'], default='tokens')
     parser.add_argument('--rule-index', type=Path, required=True)
     parser.add_argument('--inventory', type=Path, required=True)
     parser.add_argument('--source-root', type=Path, required=True)
@@ -443,6 +485,11 @@ def main(argv=None):
     parser.add_argument('--repo-root', type=Path)
     parser.add_argument('--evidence', type=Path, action='append', default=[])
     args = parser.parse_args(argv)
+    if args.profile == 'unsafe':
+        require(args.action in ('generate', 'validate'),
+                'unsafe profile supports generate/validate only')
+        require(args.repo_root is None and not args.evidence,
+                'unsafe profile does not support --repo-root or --evidence')
     if args.profile == 'const-eval' and args.action in ('generate', 'validate'):
         require(args.repo_root is None and not args.evidence,
                 'const-eval profile does not support --repo-root or --evidence')
