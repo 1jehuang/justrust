@@ -1,8 +1,7 @@
 //! Original-source scalar const M1 workflow gates. Not full Rust const support.
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use justrust_engine::compiler;
-#[path = "support/stock_rustc.rs"]
-mod stock_rustc;
+use scalar_const_differential::pinned_stock as stock_rustc;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
@@ -347,4 +346,86 @@ fn usize_constant_faults_match_stock_categories_even_when_unused() {
             }
         }
     }
+}
+
+#[allow(dead_code)]
+#[path = "support/closure_oracle.rs"]
+mod scalar_const_differential;
+
+#[test]
+fn scalar_const_wrapping_shift_signed_minimum_pinned_stock_workers1_8() {
+    use scalar_const_differential::{Case, Expect};
+    scalar_const_differential::check(
+        "scalar_const_wrapping_shift",
+        &[Case {
+            name: "scalar_const_wrapping_shift",
+            source: "const U:u8=128u8<<1;const S:i8=64i8<<1;const MIN:i8=-128;fn main(){println!(\"{} {} {}\",U,S,MIN);}",
+            expect: Expect::Run("0 -128 -128\n"),
+        }],
+    );
+}
+
+#[test]
+fn scalar_const_short_circuit_dead_faults_pinned_stock_workers1_8() {
+    use scalar_const_differential::{Case, Expect};
+    scalar_const_differential::check(
+        "scalar_const_short_circuit",
+        &[Case {
+            name: "scalar_const_short_circuit",
+            source: "const A:bool=false&&(1u8/0==0);const B:bool=true||(255u8+1==0);fn main(){println!(\"{} {}\",A,B);}",
+            expect: Expect::Run("false true\n"),
+        }],
+    );
+}
+
+#[test]
+fn scalar_const_signed_division_remainder_pinned_stock_workers1_8() {
+    use scalar_const_differential::{Case, Expect};
+    scalar_const_differential::check(
+        "scalar_const_signed_division",
+        &[Case {
+            name: "scalar_const_signed_division",
+            source: "const Q:i32=-17/5;const R:i32=-17%5;const X:i32=Q*5+R;fn main(){println!(\"{} {} {}\",Q,R,X);}",
+            expect: Expect::Run("-3 -2 -17\n"),
+        }],
+    );
+}
+
+#[test]
+fn scalar_const_unused_add_overflow_semantically_rejected_workers1_8() {
+    use scalar_const_differential::{Case, Expect};
+    scalar_const_differential::check(
+        "scalar_const_unused_add_overflow",
+        &[Case {
+            name: "scalar_const_unused_add_overflow",
+            source: "const BAD:u8=255u8+1;fn main(){}",
+            expect: Expect::InvalidAfterParse("E0080"),
+        }],
+    );
+}
+
+#[test]
+fn scalar_const_unused_signed_min_division_semantically_rejected_workers1_8() {
+    use scalar_const_differential::{Case, Expect};
+    scalar_const_differential::check(
+        "scalar_const_unused_signed_min_division",
+        &[Case {
+            name: "scalar_const_unused_signed_min_division",
+            source: "const BAD:i8=-128i8/-1;fn main(){}",
+            expect: Expect::InvalidAfterParse("E0080"),
+        }],
+    );
+}
+
+#[test]
+fn scalar_const_unused_wide_shift_semantically_rejected_workers1_8() {
+    use scalar_const_differential::{Case, Expect};
+    scalar_const_differential::check(
+        "scalar_const_unused_wide_shift",
+        &[Case {
+            name: "scalar_const_unused_wide_shift",
+            source: "const BAD:u8=1u8<<8;fn main(){}",
+            expect: Expect::InvalidAfterParse("E0080"),
+        }],
+    );
 }

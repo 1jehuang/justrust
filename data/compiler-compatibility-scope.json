@@ -4679,6 +4679,14 @@
                       "test": "fixed_width_signed_and_unsigned_boundaries"
                     }
                   ]
+                },
+                {
+                  "note": "Three independent original unused const initializers require live pinned stock E0080 and healthy native semantic rejection in CHECK/BUILD at workers 1 and 8 after original source and complete declaration publication. They cover u8 addition overflow, signed minimum divided by minus one, and a shift count equal to the left operand width; unsupported/resource/infrastructure failures cannot satisfy these selectors.",
+                  "tests": [
+                    {"suite": "const_source", "test": "scalar_const_unused_add_overflow_semantically_rejected_workers1_8"},
+                    {"suite": "const_source", "test": "scalar_const_unused_signed_min_division_semantically_rejected_workers1_8"},
+                    {"suite": "const_source", "test": "scalar_const_unused_wide_shift_semantically_rejected_workers1_8"}
+                  ]
                 }
               ],
               "layer": "rejection",
@@ -4690,6 +4698,18 @@
                 {
                   "suite": "const_eval_scalar",
                   "test": "fixed_width_signed_and_unsigned_boundaries"
+                },
+                {
+                  "suite": "const_source",
+                  "test": "scalar_const_unused_add_overflow_semantically_rejected_workers1_8"
+                },
+                {
+                  "suite": "const_source",
+                  "test": "scalar_const_unused_signed_min_division_semantically_rejected_workers1_8"
+                },
+                {
+                  "suite": "const_source",
+                  "test": "scalar_const_unused_wide_shift_semantically_rejected_workers1_8"
                 }
               ]
             },
@@ -4723,7 +4743,21 @@
             },
             {
               "layer": "end_to_end",
-              "tests": []
+              "evidence_notes": [
+                {
+                  "note": "Three original scalar const programs use live exact pinned stock plus native CHECK/BUILD/run at workers 1 and 8. Observable outputs cover truncating fixed-width left shifts and signed minimum, short-circuit suppression of dead arithmetic faults, and signed division/remainder truncation toward zero. These bounded cases do not establish aggregate CTFE, arbitrary const fn evaluation, all scalar operators or full const support.",
+                  "tests": [
+                    {"suite": "const_source", "test": "scalar_const_wrapping_shift_signed_minimum_pinned_stock_workers1_8"},
+                    {"suite": "const_source", "test": "scalar_const_short_circuit_dead_faults_pinned_stock_workers1_8"},
+                    {"suite": "const_source", "test": "scalar_const_signed_division_remainder_pinned_stock_workers1_8"}
+                  ]
+                }
+              ],
+              "tests": [
+                {"suite": "const_source", "test": "scalar_const_wrapping_shift_signed_minimum_pinned_stock_workers1_8"},
+                {"suite": "const_source", "test": "scalar_const_short_circuit_dead_faults_pinned_stock_workers1_8"},
+                {"suite": "const_source", "test": "scalar_const_signed_division_remainder_pinned_stock_workers1_8"}
+              ]
             }
           ],
           "id": "const-scalar-evaluator",
