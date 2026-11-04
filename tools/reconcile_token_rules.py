@@ -455,6 +455,175 @@ def scalar_source_binding(raw, selector, expectation):
             'selector_body_sha256': digest(body.encode('utf-8'))}
 
 
+def summarize_witness_sources(index_path, candidate_path, repo_root):
+    """Read authored partial attribution, not Reference prose or execution evidence."""
+    try:
+        return _summarize_witness_sources(index_path, candidate_path, repo_root)
+    except (KeyError, TypeError, AttributeError, OSError, ImportError, SyntaxError) as exc:
+        raise ValueError('witness sources: ' + str(exc)) from exc
+
+
+def _summarize_witness_sources(index_path, candidate_path, repo_root):
+    index_path, candidate_path, repo_root = map(safe_path, (index_path, candidate_path, repo_root))
+    for path in (index_path, candidate_path):
+        require(not path.exists() or path.is_file(), 'present witness input is not a file')
+    proposal = summarize_proposals(index_path, candidate_path)
+    index = json.loads(index_path.read_bytes()) if index_path.is_file() else None
+    candidate = json.loads(candidate_path.read_bytes()) if candidate_path.is_file() else None
+    pages = index['pages'] + index['unlinked_markdown_files'] if index is not None else []
+    obligations = {row['id'] for section in candidate['sections']
+                   for row in section['obligations']} if candidate is not None else None
+    selected_paths = {path for profile in ('tokens', 'const-eval')
+                      for path in profile_inputs(profile)[0]}
+    witness_context = any(page['path'] in selected_paths for page in pages) or (
+        obligations is not None and len(obligations) == 205)
+    if proposal.get('missing_selected_pages') or not witness_context:
+        return {
+            'readiness': 'missing', 'review_status': 'unreviewed',
+            'missing_files': proposal.get('missing_files', []),
+            'missing_selected_pages': proposal.get('missing_selected_pages', []),
+            'global_rule_identities': None, 'profiles': {}, 'links': [], 'source_files': [],
+            'direct_witness_selectors': 0, 'direct_rule_links': 0,
+            'distinct_direct_rule_identities': 0, 'candidate_obligation_ids': [],
+            'candidate_obligations_with_partial_links': 0,
+            'reviewed_rule_rows': 0, 'completed_rule_rows': 0,
+            'rows_with_exact_executable_evidence': 0, 'full_rust_completion_percent': None,
+            'execution_evidence_imported': False,
+            'source_file_byte_verification': 'not_reverified_in_this_run',
+            'source_block_byte_verification': 'not_reverified_in_this_run',
+            'source_archive_byte_verification': 'not_reverified_in_this_run',
+            'limitations': ['Required attribution metadata or selected proposal pages are missing. No pinned witness-source claim or attribution is established.'],
+        }
+    missing = list(proposal.get('missing_files', []))
+    profiles, files, all_links = {}, {}, []
+    credit = {'reviewed_rule_rows': 0, 'completed_rule_rows': 0,
+              'rows_with_exact_executable_evidence': 0, 'full_rust_completion_percent': None}
+    # Lexical discovery is bounded to the two authorized source streams. Neither
+    # unrelated suites nor their discovery, receipts, or runner are dependencies.
+    scope_path = safe_path(repo_root / 'data/compiler-compatibility-scope.json')
+    scope, scoped = None, None
+
+    def counts(links):
+        ids = sorted({identity for link in links for identity in link['candidate_obligation_ids']})
+        return {'direct_witness_selectors': len({(row['suite'], row['test']) for row in links}),
+                'direct_rule_links': len({(row['suite'], row['test'], rule['page'], rule['rule'])
+                                          for row in links for rule in row['rule_links']}),
+                'distinct_direct_rule_identities': len({(rule['page'], rule['rule'])
+                                                        for row in links for rule in row['rule_links']}),
+                'candidate_obligation_ids': ids, 'candidate_obligations_with_partial_links': len(ids)}
+
+    for profile in ('tokens', 'const-eval'):
+        pin, witnesses, aliases, suite, source_file = witness_profile(profile)
+        selected = profile_inputs(profile)[0]
+        authored_labels = {line.split('|')[0] for line in profile_inputs(profile)[3].strip().splitlines()}
+        for field, actual in (
+                ('reference_commit', index['provenance']['reference_commit'] if index is not None else None),
+                ('rule_index_sha256', digest(index_path.read_bytes()) if index is not None else None),
+                ('candidate_inventory_sha256', digest(candidate_path.read_bytes()) if candidate is not None else None)):
+            if actual is not None:
+                require(actual == pin[field], 'witness source-contract ' + field)
+        profile_files = []
+        for name, expected in pin['files'].items():
+            require(isinstance(name, str) and Path(name).as_posix() == name
+                    and not Path(name).is_absolute(), 'noncanonical source-contract path')
+            path = safe_path(repo_root / name)
+            require(path.is_relative_to(repo_root), 'source-contract path escapes repository')
+            if not path.exists():
+                missing.append(str(path))
+                continue
+            require(path.is_file(), 'source-contract path is not a file')
+            actual = digest(path.read_bytes())
+            require(actual == expected, 'witness source-contract file mismatch: ' + name)
+            record = {'path': name, 'sha256': actual}
+            profile_files.append(record)
+            require(name not in files or files[name] == record, 'conflicting source-contract hash')
+            files[name] = record
+        if scope is None and scope_path.is_file():
+            scope = json.loads(scope_path.read_bytes())
+            scoped = {(case['suite'], case['test']) for area in scope['areas']
+                      for requirement in area['requirements'] for gate in requirement['gates']
+                      for case in gate['tests']}
+        path = safe_path(repo_root / source_file)
+        discovered = []
+        if path.is_file():
+            pending_test = False
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if re.match(r'\s*#\[test\]', line):
+                    pending_test = True
+                function = re.match(r'\s*(?:pub\s+)?fn\s+(\w+)\s*\(', line)
+                if pending_test and function:
+                    discovered.append({'file': source_file, 'line': number, 'test': function.group(1)})
+                    pending_test = False
+        require(isinstance(aliases, dict) and aliases, 'invalid witness aliases')
+        require(all(isinstance(key, str) and isinstance(value, str) for key, value in aliases.items()),
+                'invalid witness alias identity')
+        require(len(set(aliases.values())) == len(aliases), 'duplicate witness candidate alias')
+        if obligations is not None:
+            require(set(aliases.values()) <= obligations and len(obligations) == 205,
+                    'foreign witness candidate alias')
+        require(isinstance(witnesses, tuple) and len(witnesses) == 6, 'authored witness cardinality mismatch')
+        rows = {rule['label']: {'page': page['path'], 'rule': rule['label'], 'line': rule['line']}
+                for page in pages if page['path'] in selected for rule in page['rules']}
+        links, seen = [], set()
+        for authored in witnesses:
+            require(isinstance(authored, tuple) and len(authored) == 6, 'invalid authored witness tuple')
+            selector, expectation, labels, names, rationale, limitations = authored
+            require(isinstance(selector, str) and re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', selector),
+                    'invalid exact witness selector')
+            require(selector not in seen, 'duplicate direct selector')
+            seen.add(selector)
+            require(expectation in ('positive', 'semantic-invalid'), 'foreign expectation class')
+            require(all(isinstance(text, str) and text.strip() for text in (rationale, limitations)),
+                    'missing authored witness rationale or limitations')
+            for values in (labels, names):
+                require(isinstance(values, tuple) and values and all(isinstance(value, str) and value.strip()
+                        for value in values) and len(set(values)) == len(values),
+                        'empty or duplicate witness labels/aliases')
+            require(set(names) <= set(aliases), 'foreign direct candidate alias')
+            require(set(labels) <= authored_labels, 'foreign direct rule identity')
+            ids = [aliases[name] for name in names]
+            require(len(set(ids)) == len(ids), 'duplicate direct candidate identity')
+            if index is not None:
+                require(set(labels) <= set(rows), 'foreign direct rule identity')
+            path = safe_path(repo_root / source_file)
+            matches = [row for row in discovered if row['file'] == source_file and row['test'] == selector]
+            if path.is_file():
+                require(len(matches) == 1, 'missing or duplicate exact top-level selector: ' + selector)
+                text = path.read_text()
+                require(len(re.findall(r'^fn ' + re.escape(selector) + r'\(\) \{\s*$', text, re.M)) == 1,
+                        'selector is not a unique literal top-level function')
+            if scoped is not None:
+                require((suite, selector) in scoped, 'exact selector absent from compatibility scope: ' + selector)
+            if index is None or not path.is_file() or scope is None:
+                continue
+            link = {'suite': suite, 'test': selector, 'source_file': source_file,
+                    'selector_line': matches[0]['line'], 'expectation_class': expectation,
+                    'relationship': 'unreviewed-direct-partial-link',
+                    'rule_links': [dict(rows[label]) for label in labels],
+                    'candidate_obligation_ids': ids, 'rationale': rationale, 'limitations': limitations}
+            if profile == 'const-eval':
+                link.update(scalar_source_binding(path.read_bytes(), selector, expectation))
+            links.append(link)
+        links.sort(key=lambda row: (row['suite'], row['test']))
+        profiles[profile] = {'selected_pages': list(selected), 'source_files': profile_files,
+                             'links': links, **counts(links), **credit, 'review_status': 'unreviewed'}
+        all_links.extend(links)
+    return {'readiness': 'missing' if missing or proposal['readiness'] == 'missing' else 'review-required',
+            'review_status': 'unreviewed', 'missing_files': sorted(set(missing)),
+            'global_rule_identities': None if missing or proposal['readiness'] == 'missing' else 2965,
+            'profiles': profiles, 'links': all_links, 'source_files': [files[name] for name in sorted(files)],
+            **counts(all_links), **credit, 'execution_evidence_imported': False,
+            'source_file_byte_verification': 'partial' if missing else 'reverified_in_this_run',
+            'source_block_byte_verification': 'not_reverified_in_this_run',
+            'source_archive_byte_verification': 'not_reverified_in_this_run',
+            'limitations': [
+                'Partial authored attribution only, not full obligation coverage, normative review, execution or completion credit.',
+                'Inventory obligations contain no embedded exact links. Their missing-link counts remain unchanged.',
+                'Selector discovery is lexical, not libtest discovery or execution. Only authorized fixture streams and linked scope memberships are read.',
+                'Local source files are reverified where present. Reference blocks and archive bytes are NOT reverified in this run.',
+                'Source-backed build_witness_links remains an independent stronger verification path.']}
+
+
 def build_witness_links(index_path, candidate_path, source_root, repo_root, profile='tokens'):
     """Direct partial attribution, never imported execution or reviewed coverage."""
     contract, witnesses, aliases_by_name, suite, source_file = witness_profile(profile)

@@ -466,6 +466,13 @@ def render(summary):
                      f"{observations['missing_detail_page_records']} missing literal page records. "
                      f"Backlog: {library['documentation_backlog']['readiness']}. "
                      "Not API counts or compatibility coverage. External source bytes not reverified.")
+    witnesses = summary["semantic_inventory"]["partial_witness_sources"]
+    if witnesses["readiness"] == "review-required":
+        lines.insert(-1, "Unreviewed partial source attribution: "
+                     f"{witnesses['direct_witness_selectors']} exact selectors; "
+                     f"{witnesses['distinct_direct_rule_identities']} rule labels; "
+                     f"{witnesses['candidate_obligations_with_partial_links']} candidate obligations. "
+                     "Not reviewed coverage or test outcomes. Reference block bytes not reverified.")
     return "\n".join(lines)
 
 

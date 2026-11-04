@@ -227,6 +227,10 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     for marker in [
         "\"rule_proposals\"",
         "\"documentation_backlog\"",
+        "\"partial_witness_sources\"",
+        "\"direct_witness_selectors\": 12",
+        "\"execution_evidence_imported\": false",
+        "\"source_file_byte_verification\": \"reverified_in_this_run\"",
         "\"tokens\"",
         "\"const-eval\"",
         "\"unsafe\"",

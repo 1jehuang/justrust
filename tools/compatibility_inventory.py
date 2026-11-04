@@ -666,6 +666,7 @@ def load_and_summarize(root: Path):
     """Return honest missing readiness for partial fixtures, reject malformed present inputs."""
     root = Path(root)
     proposals = rule_proposal_readiness(root)
+    witness_sources = partial_witness_source_readiness(root)
     library_data = load(root / LIBRARY_PROVENANCE) if (root / LIBRARY_PROVENANCE).is_file() else _ABSENT
     if library_data is not _ABSENT:
         fields(library_data, LIBRARY_FIELDS, "library_provenance")
@@ -698,6 +699,7 @@ def load_and_summarize(root: Path):
                 "review_status": "unreviewed", "missing_files": missing,
                 "full_rust_completion_percent": None,
                 "rule_proposals": proposals,
+                "partial_witness_sources": witness_sources,
                 "inventory_readiness_blockers": missing + ([REFERENCE_RULES] if reference_data is _ABSENT else [])
                                                 + ([LIBRARY_PROVENANCE] if library_data is _ABSENT else [])
                                                 + ([LIBRARY_BACKLOG] if backlog["readiness"] == "missing" else []),
@@ -712,6 +714,7 @@ def load_and_summarize(root: Path):
     result["reference_rules"] = reference_readiness(root, data=reference_data, contract=contract)
     result["library_surface_inputs"] = library_surface_readiness(root, data=library_data, contract=contract)
     result["rule_proposals"] = proposals
+    result["partial_witness_sources"] = witness_sources
     result["inventory_readiness_blockers"] = inventory_readiness_blockers(result)
     return result
 
@@ -724,6 +727,16 @@ def rule_proposal_readiness(root, *, index_path=None, candidate_path=None):
                                    candidate_path or root / "data/compiler-language-inventory.json")
     except ValueError as exc:
         # The CLI's __main__ class and an imported module's class are distinct.
+        raise InvalidInventory(str(exc)) from exc
+
+
+def partial_witness_source_readiness(root, *, index_path=None, candidate_path=None):
+    from reconcile_token_rules import summarize_witness_sources
+    root = Path(root)
+    try:
+        return summarize_witness_sources(index_path or root / REFERENCE_RULES,
+                                         candidate_path or root / "data/compiler-language-inventory.json", root)
+    except ValueError as exc:
         raise InvalidInventory(str(exc)) from exc
 
 
@@ -767,6 +780,10 @@ def main(argv=None):
             args.root, data=load(args.library_surface_provenance) if args.library_surface_provenance else _ABSENT,
             contract=contract)
         report["rule_proposals"] = rule_proposal_readiness(
+            args.root, index_path=args.reference_rules,
+            candidate_path=next((path for path in args.inventory
+                                 if path.name == "compiler-language-inventory.json"), None))
+        report["partial_witness_sources"] = partial_witness_source_readiness(
             args.root, index_path=args.reference_rules,
             candidate_path=next((path for path in args.inventory
                                  if path.name == "compiler-language-inventory.json"), None))

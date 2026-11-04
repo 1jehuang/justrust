@@ -272,6 +272,18 @@ existing requirement has passing scenarios. Ordinary tests and CI reject
 malformed references, unknown mappings, duplicate identities and an oracle
 contract that disagrees with the actual stock verifier.
 
+The separate `partial_witness_sources` summary exposes explicitly authored
+token and scalar-const witness associations. It rechecks pinned local fixture,
+oracle-helper and scope bytes, literal exact-selector membership, rule-index
+identities and candidate associations without requiring external Reference
+prose. It does not reverify Reference blocks or archive bytes, import execution
+receipts or run a compiler. A partial association is not a reviewed obligation
+mapping, full-rule coverage or a passing outcome. The inventory entry counts
+still describe the inventory records themselves, which have no embedded exact
+test links. Separately reported partial associations do not reduce their missing
+test needs or grant executable or completion credit. The stronger source-backed
+witness generation and authenticated observation commands remain independent.
+
 `data/compiler-language-reference-rules.json` separately indexes the Reference
 revision linked by the pinned compiler's source submodule. It retains page
 hashes, source positions and rule labels, including unlinked Markdown pages.

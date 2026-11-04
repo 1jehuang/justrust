@@ -9,6 +9,7 @@ import sys
 import tempfile
 import tarfile
 import unittest
+from unittest import mock
 
 import compatibility_inventory as inventory
 
@@ -841,6 +842,92 @@ class LibraryBacklogIntegrationTests(unittest.TestCase):
         self.assertIn("40 downloaded page records; 35114 missing literal page records", process.stdout)
         self.assertIn("Backlog: review-required", process.stdout)
         self.assertIn("Not API counts or compatibility coverage. External source bytes not reverified.", process.stdout)
+
+
+class PartialWitnessIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.actual_root = Path(__file__).resolve().parents[1]
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / "data").mkdir()
+
+    def test_actual_partial_attribution_never_completes_inventory_obligations(self):
+        result = inventory.load_and_summarize(self.actual_root)
+        witnesses = result["partial_witness_sources"]
+        self.assertEqual(witnesses["readiness"], "review-required")
+        self.assertEqual(witnesses["review_status"], "unreviewed")
+        self.assertEqual(witnesses["direct_witness_selectors"], 12)
+        self.assertEqual(witnesses["direct_rule_links"], 35)
+        self.assertEqual(witnesses["distinct_direct_rule_identities"], 19)
+        self.assertEqual(witnesses["candidate_obligations_with_partial_links"], 11)
+        self.assertEqual(witnesses["source_file_byte_verification"], "reverified_in_this_run")
+        for key in ("source_block_byte_verification", "source_archive_byte_verification"):
+            self.assertEqual(witnesses[key], "not_reverified_in_this_run")
+        for key in ("reviewed_rule_rows", "completed_rule_rows", "rows_with_exact_executable_evidence"):
+            self.assertEqual(witnesses[key], 0)
+        self.assertFalse(witnesses["execution_evidence_imported"])
+        self.assertIsNone(witnesses["full_rust_completion_percent"])
+        self.assertEqual(result["counts"]["obligations"], 257)
+        self.assertEqual(result["counts"]["obligations_lacking_direct_exact_test_links"], 257)
+        self.assertEqual(result["counts"]["obligations_with_executable_evidence"], 0)
+
+    def test_both_inventory_cli_paths_and_coverage_expose_same_partial_sources(self):
+        expected = inventory.partial_witness_source_readiness(self.actual_root)
+        for options in ([], ["--reference-rules", str(self.actual_root / inventory.REFERENCE_RULES)]):
+            result = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.actual_root), *options],
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["partial_witness_sources"], expected)
+        result = subprocess.run([sys.executable, str(self.actual_root / "tools/conformance.py"), "coverage", "--json"],
+                                cwd=self.actual_root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["semantic_inventory"]["partial_witness_sources"], expected)
+        result = subprocess.run([sys.executable, str(self.actual_root / "tools/conformance.py"), "coverage"],
+                                cwd=self.actual_root, capture_output=True, text=True, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Unreviewed partial source attribution: 12 exact selectors; 19 rule labels; 11 candidate obligations", result.stdout)
+        self.assertIn("Not reviewed coverage or test outcomes. Reference block bytes not reverified.", result.stdout)
+
+    def test_missing_partial_source_inputs_have_no_claimed_credit(self):
+        result = inventory.load_and_summarize(self.root)["partial_witness_sources"]
+        self.assertEqual(result["readiness"], "missing")
+        self.assertTrue(result["missing_files"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertFalse(result["execution_evidence_imported"])
+
+    def test_present_malformed_index_is_not_hidden_by_missing_companions(self):
+        for raw in ("null", "[]", "{}", "{", '{"schema_version":1,"schema_version":1}'):
+            (self.root / inventory.REFERENCE_RULES).write_text(raw, encoding="utf-8")
+            with self.subTest(raw=raw):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.partial_witness_source_readiness(self.root)
+                result = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.root)],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("error", json.loads(result.stderr))
+
+    def test_present_source_drift_is_not_hidden_by_other_missing_sources(self):
+        for name in (inventory.REFERENCE_RULES, "data/compiler-language-inventory.json"):
+            (self.root / name).write_bytes((self.actual_root / name).read_bytes())
+        helper = self.root / "tests/support/closure_oracle.rs"
+        helper.parent.mkdir(parents=True)
+        helper.write_bytes(b"// changed source, not a missing-input excuse\n")
+        with self.assertRaises(inventory.InvalidInventory):
+            inventory.partial_witness_source_readiness(self.root)
+
+    def test_source_only_summary_does_not_probe_a_compiler_or_execution_identity(self):
+        import conformance
+        import compatibility_scope
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("no process probes")), \
+                mock.patch.object(conformance, "source_identity", side_effect=AssertionError("no execution identity")), \
+                mock.patch.object(conformance, "discover", side_effect=AssertionError("no unrelated whole-suite discovery")), \
+                mock.patch.object(compatibility_scope, "validate", side_effect=AssertionError("no unrelated whole-scope validation")), \
+                mock.patch.object(compatibility_scope, "runner_identity", side_effect=AssertionError("no runner")):
+            result = inventory.partial_witness_source_readiness(self.actual_root)
+        self.assertEqual(result["direct_witness_selectors"], 12)
+        self.assertFalse(result["execution_evidence_imported"])
 
 
 if __name__ == "__main__":

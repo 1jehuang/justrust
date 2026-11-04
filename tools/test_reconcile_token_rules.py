@@ -6,6 +6,7 @@ import io
 import json
 import os
 import subprocess
+import shutil
 import tempfile
 import sys
 from types import SimpleNamespace
@@ -20,6 +21,164 @@ import reconcile_token_rules as reconciliation
 from token_reconciliation_proposals import DIRECT_WITNESSES, WITNESS_SOURCE_CONTRACT
 
 BASE = Path(__file__).resolve().parent
+
+
+class WitnessSourceSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.repo = self.root / 'repo'
+        shutil.copytree(BASE.parent / 'tests', self.repo / 'tests')
+        (self.repo / 'data').mkdir()
+        for name in ('compiler-compatibility-scope.json', 'compiler-language-inventory.json',
+                     'compiler-language-reference-rules.json'):
+            shutil.copyfile(BASE.parent / 'data' / name, self.repo / 'data' / name)
+        self.index = self.repo / 'data/compiler-language-reference-rules.json'
+        self.candidate = self.repo / 'data/compiler-language-inventory.json'
+
+    def summary(self):
+        return reconciliation.summarize_witness_sources(self.index, self.candidate, self.repo)
+
+    def test_actual_pins_no_prose_no_execution_or_evidence(self):
+        with mock.patch.object(reconciliation, 'build', side_effect=AssertionError('Reference read')), \
+                mock.patch.object(subprocess, 'run', side_effect=AssertionError('execution')):
+            result = self.summary()
+        self.assertEqual(result['readiness'], 'review-required')
+        self.assertEqual([result[key] for key in ('direct_witness_selectors', 'direct_rule_links',
+                          'distinct_direct_rule_identities', 'candidate_obligations_with_partial_links')],
+                         [12, 35, 19, 11])
+        self.assertEqual(len(result['candidate_obligation_ids']), 11)
+        self.assertEqual(len(result['source_files']), 5)
+        self.assertFalse(result['execution_evidence_imported'])
+        for row in (result, *result['profiles'].values()):
+            self.assertEqual(row['review_status'], 'unreviewed')
+            for key in ('reviewed_rule_rows', 'completed_rule_rows', 'rows_with_exact_executable_evidence'):
+                self.assertEqual(row[key], 0)
+            self.assertIsNone(row['full_rust_completion_percent'])
+        self.assertEqual(result['source_file_byte_verification'], 'reverified_in_this_run')
+        for key in ('source_block_byte_verification', 'source_archive_byte_verification'):
+            self.assertEqual(result[key], 'not_reverified_in_this_run')
+        pages = json.loads(self.index.read_bytes())['pages']
+        rules = {(page['path'], rule['label']): rule['line'] for page in pages for rule in page['rules']}
+        for link in result['links']:
+            self.assertTrue(link['rationale'] and link['limitations'])
+            for rule in link['rule_links']:
+                self.assertEqual(rule['line'], rules[rule['page'], rule['rule']])
+
+    def test_missing_inputs_and_bad_present_hashes(self):
+        self.candidate.unlink()
+        missing = self.repo / 'tests/support/stock_rustc.rs'
+        missing.unlink()
+        result = self.summary()
+        self.assertEqual(result['readiness'], 'missing')
+        self.assertEqual(set(result['missing_files']), {str(self.candidate), str(missing)})
+        self.assertIsNone(result['global_rule_identities'])
+        (self.repo / 'tests/support/closure_oracle.rs').write_text('bad present file')
+        with self.assertRaisesRegex(ValueError, 'source-contract file mismatch'):
+            self.summary()
+
+    def test_present_index_pin_checked_without_candidate(self):
+        self.candidate.unlink()
+        self.index.write_bytes(self.index.read_bytes() + b'\n')
+        with self.assertRaisesRegex(ValueError, 'source-contract rule_index_sha256'):
+            self.summary()
+
+    def test_unrelated_synthetic_fixture_is_explicitly_missing(self):
+        from test_compatibility_inventory import ReferenceRulesTests
+        fixture = ReferenceRulesTests('test_missing_reference_is_explicit_blocker')
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        index = fixture.root / 'data/compiler-language-reference-rules.json'
+        index.write_text(json.dumps(fixture.data))
+        with mock.patch.object(reconciliation, 'witness_profile', side_effect=AssertionError('pin claim')):
+            result = reconciliation.summarize_witness_sources(
+                index, fixture.root / 'data/compiler-language-inventory.json', fixture.root)
+        self.assertEqual(result['readiness'], 'missing')
+        self.assertTrue(result['missing_selected_pages'])
+        self.assertEqual(result['links'], [])
+        self.assertEqual(result['source_files'], [])
+        self.assertIsNone(result['global_rule_identities'])
+        self.assertEqual(result['source_file_byte_verification'], 'not_reverified_in_this_run')
+
+    def test_scope_hash_failure_is_value_error_with_missing_companion(self):
+        self.candidate.unlink()
+        (self.repo / 'data/compiler-compatibility-scope.json').write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'source-contract file mismatch'):
+            self.summary()
+
+    def test_present_candidate_pin_checked_without_index(self):
+        self.index.unlink()
+        self.candidate.write_bytes(self.candidate.read_bytes() + b'\n')
+        with self.assertRaisesRegex(ValueError, 'source-contract candidate_inventory_sha256'):
+            self.summary()
+
+    def test_symlink_files_and_ancestors_rejected(self):
+        source = self.repo / 'tests/support/closure_oracle.rs'
+        target = self.root / 'oracle.rs'
+        source.rename(target)
+        source.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            self.summary()
+        source.unlink()
+        target.rename(source)
+        support = self.repo / 'tests/support'
+        support.rename(self.root / 'support')
+        support.symlink_to(self.root / 'support', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'symlink'):
+            self.summary()
+
+    def test_authored_shape_duplicates_foreign_and_manual_state(self):
+        original = reconciliation.witness_profile
+        pin, witnesses, aliases, suite, source = original('tokens')
+        first = witnesses[0]
+        changes = [first + ('passed',),
+                   (first[0], 'passed', *first[2:]),
+                   (*first[:2], (first[2][0], first[2][0]), *first[3:]),
+                   (*first[:2], ('const-eval.const-expr.evaluation',), *first[3:]),
+                   (*first[:3], ('foreign-alias',), *first[4:]),
+                   (*first[:3], (first[3][0], first[3][0]), *first[4:]),
+                   (*first[:4], '', first[5]), (*first[:5], '')]
+        for altered in changes:
+            with self.subTest(altered=altered):
+                def profile(name):
+                    return (pin, (altered, *witnesses[1:]), aliases, suite, source) if name == 'tokens' else original(name)
+                with mock.patch.object(reconciliation, 'witness_profile', side_effect=profile):
+                    with self.assertRaises(ValueError):
+                        self.summary()
+        with mock.patch.object(reconciliation, 'witness_profile', side_effect=lambda name:
+                (pin, (first, first, *witnesses[2:]), aliases, suite, source) if name == 'tokens' else original(name)):
+            with self.assertRaisesRegex(ValueError, 'duplicate direct selector'):
+                self.summary()
+
+    def test_discovery_and_scope_controls_even_when_companion_missing(self):
+        self.candidate.unlink()
+        original = reconciliation.witness_profile
+        pin, witnesses, aliases, suite, source = original('tokens')
+        path = self.repo / source
+        raw = path.read_bytes()
+        path.write_bytes(raw + ('\n#[test]\nfn ' + DIRECT_WITNESSES[0][0] + '() {\n}\n').encode())
+        changed_pin = copy.deepcopy(pin)
+        changed_pin['files'][source] = digest(path.read_bytes())
+        with mock.patch.object(reconciliation, 'witness_profile', side_effect=lambda name:
+                (changed_pin, witnesses, aliases, suite, source) if name == 'tokens' else original(name)):
+            with self.assertRaisesRegex(ValueError, 'duplicate exact top-level selector'):
+                self.summary()
+        path.write_bytes(raw)
+        with mock.patch.object(reconciliation, 'witness_profile', side_effect=lambda name:
+                (pin, witnesses, aliases, 'foreign_suite', source) if name == 'tokens' else original(name)):
+            with self.assertRaisesRegex(ValueError, 'absent from compatibility scope'):
+                self.summary()
+
+    def test_unrelated_files_symlinks_and_discovery_are_not_dependencies(self):
+        import conformance
+        import compatibility_scope
+        expected = self.summary()
+        (self.repo / 'tests/unrelated.rs').write_bytes(b'\xff unrelated invalid UTF-8')
+        (self.repo / 'tests/unrelated-link.rs').symlink_to(self.root / 'absent.rs')
+        with mock.patch.object(conformance, 'discover', side_effect=AssertionError('whole suite')), \
+                mock.patch.object(compatibility_scope, 'validate', side_effect=AssertionError('whole scope')):
+            self.assertEqual(self.summary(), expected)
 
 
 class ProposalSummaryTests(unittest.TestCase):
