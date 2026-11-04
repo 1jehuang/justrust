@@ -3,7 +3,7 @@
 
 Token proposals are the unchanged default. The explicit const-eval profile uses
 const_reconciliation_proposals.py, including explicit partial witness links.
-Unsafe, ABI, visibility and branching profiles cover pinned pages and are generate/validate only.
+Unsafe, ABI, visibility, branching and destructor profiles cover pinned pages and are generate/validate only.
 Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
@@ -24,8 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
-PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58))
-SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5)}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,)}
 
 
 def digest(data):
@@ -45,8 +45,10 @@ def source_only_proposals(profile):
         import abi_reconciliation_proposals as proposals
     elif profile == 'visibility':
         import visibility_reconciliation_proposals as proposals
-    else:
+    elif profile == 'branching':
         import branching_reconciliation_proposals as proposals
+    else:
+        import destructors_reconciliation_proposals as proposals
     return proposals
 
 
@@ -371,6 +373,7 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
     for line in proposals.strip().splitlines():
         fields = line.split('|')
         require(len(fields) == 7, 'proposal requires seven explicit fields')
+        require(all(field.strip() for field in fields), 'proposal fields must be nonempty')
         label, classes, rationale, aliases, positive, invalid, interaction = fields
         identity = (selected_pages[0], label)
         if profile in SOURCE_ONLY_PAGE_COUNTS:
@@ -493,6 +496,7 @@ def validate(data, index_path, candidate_path, source_root, profile='tokens'):
         for line in proposals.ROWS.strip().splitlines():
             fields = line.split('|')
             require(len(fields) == 7, 'proposal requires seven explicit fields')
+            require(all(field.strip() for field in fields), 'proposal fields must be nonempty')
             label, classes, rationale, aliases, positive, invalid, interaction = fields
             require(label not in authored, 'duplicate ' + profile + ' proposal rule')
             authored[label] = (

@@ -498,6 +498,15 @@ separate pinned-stock feature and stability classification. Reference grammar
 alone does not establish stable-oracle admissibility. All rows remain unreviewed,
 with missing test needs and no witness-link or execution-evidence actions.
 
+Use `--profile destructors` with `generate` or `validate` for all 50 labels
+on the pinned destruction page. These proposals distinguish initialized-field
+cleanup, nested drop scopes, edition-2024 temporary narrowing, syntactic lifetime
+extension, promotion, intentional destructor suppression and non-unwinding
+termination. Unspecified capture order and permitted ABI-boundary outcomes must
+not acquire one invented exact order. Reference descriptions of super macros
+and pattern-matching guards require separate pinned-stock admissibility review.
+All rows remain unreviewed, with missing tests and no witness or execution credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching

@@ -246,9 +246,10 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"abi\"",
         "\"visibility\"",
         "\"branching\"",
+        "\"destructors\"",
         "\"global_rule_identities\": 2965",
-        "\"proposed_rule_identities\": 286",
-        "\"rule_identities_without_proposals\": 2679",
+        "\"proposed_rule_identities\": 336",
+        "\"rule_identities_without_proposals\": 2629",
         "\"backlog\"",
         "\"total_pages\": 122",
         "\"missing_rule_sample_limit\": 100",
@@ -346,6 +347,23 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"source_block_byte_verification\": \"not_reverified_in_this_run\"",
     ] {
         assert!(proposal.contains(marker), "missing {marker}: {proposal}");
+    }
+    let destructor = python(
+        "tools/compatibility_inventory.py",
+        &["--rule", "destructors.operation", "--with-rule-proposals"],
+    );
+    for marker in [
+        "\"selected_authored_proposal_count\": 1",
+        "\"profile\": \"destructors\"",
+        "\"missing_test_needs\"",
+        "\"relationship\": \"proposed-partial-decomposition\"",
+        "\"rows_with_exact_executable_evidence\": 0",
+        "\"full_rust_completion_percent\": null",
+    ] {
+        assert!(
+            destructor.contains(marker),
+            "missing {marker}: {destructor}"
+        );
     }
 }
 
