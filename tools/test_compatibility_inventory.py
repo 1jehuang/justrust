@@ -436,12 +436,13 @@ class ReferenceRulesTests(unittest.TestCase):
         extra["sections"][0]["obligations"][0]["id"] = "library-extra"
         (self.root / "data/compiler-library-project-inventory.json").write_text(json.dumps(extra), encoding="utf-8")
         missing = inventory.load_and_summarize(self.root)
-        self.assertEqual(missing["inventory_readiness_blockers"], [inventory.REFERENCE_RULES, inventory.LIBRARY_PROVENANCE])
+        self.assertEqual(missing["inventory_readiness_blockers"],
+                         [inventory.REFERENCE_RULES, inventory.LIBRARY_PROVENANCE, inventory.LIBRARY_BACKLOG])
         reference_path = self.root / inventory.REFERENCE_RULES
         reference_path.write_text(json.dumps(self.data), encoding="utf-8")
         result = inventory.load_and_summarize(self.root)
         self.assertEqual(result["reference_rules"]["counts"]["unique_rule_labels_total"], 2)
-        self.assertEqual(result["inventory_readiness_blockers"], [inventory.LIBRARY_PROVENANCE])
+        self.assertEqual(result["inventory_readiness_blockers"], [inventory.LIBRARY_PROVENANCE, inventory.LIBRARY_BACKLOG])
         command = [sys.executable, inventory.__file__, "--root", str(self.root)]
         result = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -711,7 +712,7 @@ class LibraryProvenanceTests(unittest.TestCase):
             (self.root / "data" / name).write_text(json.dumps(value), encoding="utf-8")
         result = inventory.load_and_summarize(self.root)
         self.assertEqual(result["library_surface_inputs"]["observations"]["downloaded_page_records"], 8)
-        self.assertEqual(result["inventory_readiness_blockers"], [inventory.REFERENCE_RULES])
+        self.assertEqual(result["inventory_readiness_blockers"], [inventory.REFERENCE_RULES, inventory.LIBRARY_BACKLOG])
         command = [sys.executable, inventory.__file__, "--root", str(self.root)]
         process = subprocess.run(command, capture_output=True, text=True, check=False)
         self.assertEqual(process.returncode, 0, process.stderr)
@@ -721,6 +722,125 @@ class LibraryProvenanceTests(unittest.TestCase):
         self.assertEqual(process.returncode, 2)
         self.assertEqual(process.stdout, "")
         self.assertIn("error", json.loads(process.stderr))
+
+
+class LibraryBacklogIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.actual_root = Path(__file__).resolve().parents[1]
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / "data").mkdir()
+        self.provenance = json.loads((self.actual_root / inventory.LIBRARY_PROVENANCE).read_bytes())
+        self.backlog = json.loads((self.actual_root / inventory.LIBRARY_BACKLOG).read_bytes())
+
+    def write_backlog(self, value):
+        (self.root / inventory.LIBRARY_BACKLOG).write_text(json.dumps(value), encoding="utf-8")
+
+    def test_missing_backlog_never_means_complete_api_inventory(self):
+        result = inventory.library_documentation_backlog_readiness(self.root, provenance=self.provenance)
+        self.assertEqual(result["readiness"], "missing")
+        self.assertEqual(result["missing_files"], [inventory.LIBRARY_BACKLOG])
+        self.assertIsNone(result["api_denominator"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+
+    def test_present_backlog_without_provenance_is_blocked(self):
+        self.write_backlog(self.backlog)
+        result = inventory.library_surface_readiness(self.root)
+        self.assertEqual(result["readiness"], "missing")
+        backlog = result["documentation_backlog"]
+        self.assertEqual(backlog["readiness"], "blocked-by-missing-inputs")
+        self.assertEqual(backlog["missing_files"], [inventory.LIBRARY_PROVENANCE])
+        partial = inventory.load_and_summarize(self.root)
+        self.assertEqual(partial["library_surface_inputs"]["documentation_backlog"], backlog)
+        self.assertIn(inventory.LIBRARY_PROVENANCE, partial["inventory_readiness_blockers"])
+
+    def test_present_malformed_backlog_rejected_even_in_incomplete_root(self):
+        for raw in ("{", "null", "[]", "{}", '{"schema_version":1,"schema_version":1}'):
+            (self.root / inventory.LIBRARY_BACKLOG).write_text(raw, encoding="utf-8")
+            with self.subTest(raw=raw):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.load_and_summarize(self.root)
+                process = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.root)],
+                                         capture_output=True, text=True, check=False)
+                self.assertEqual(process.returncode, 2)
+                self.assertEqual(process.stdout, "")
+                self.assertIn("error", json.loads(process.stderr))
+
+    def test_recorded_metadata_summary_has_no_review_or_execution_credit(self):
+        self.write_backlog(self.backlog)
+        result = inventory.library_documentation_backlog_readiness(self.root, provenance=self.provenance)
+        self.assertEqual(result["readiness"], "review-required")
+        self.assertEqual(result["review_status"], "unreviewed")
+        self.assertIsNone(result["api_denominator"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertNotIn("supported", result)
+        self.assertNotIn("passed", result)
+        self.assertEqual(result["external_verification"], "recorded-not-recomputed")
+        self.assertIsNone(result["full_rust_denominator"])
+        for key in ("review_credit", "execution_credit", "completion_credit"):
+            self.assertEqual(result[key], 0)
+        counts = result["observations"]["global"]
+        self.assertEqual(counts, {"literal_candidate_records": 35236, "unique_candidate_page_paths": 35154,
+                                "downloaded_page_records": 40, "downloaded_index_all_pages": 8,
+                                "downloaded_other_detail_pages": 32, "missing_unique_paths": 35114,
+                                "candidate_records_collapsed_by_page_path": 82})
+        self.assertEqual({crate: row["missing_unique_paths"]
+                          for crate, row in result["observations"]["per_crate"].items()},
+                         {"alloc": 257, "core": 32790, "proc_macro": 0, "std": 2067})
+        self.assertEqual(len(result["missing_path_sample"]), 100)
+        self.assertTrue(result["missing_path_sample_truncated"])
+
+    def test_partial_root_malformed_companion_provenance_is_structured_error(self):
+        self.write_backlog(self.backlog)
+        for key, bad in (("source_identity", {}), ("observations", {}), ("observations", None),
+                         ("pages", [None]), ("artifacts", None)):
+            changed = copy.deepcopy(self.provenance)
+            changed[key] = bad
+            (self.root / inventory.LIBRARY_PROVENANCE).write_text(json.dumps(changed), encoding="utf-8")
+            with self.subTest(key=key, bad=bad):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.load_and_summarize(self.root)
+                process = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.root)],
+                                         capture_output=True, text=True, check=False)
+                self.assertEqual(process.returncode, 2)
+                self.assertEqual(process.stdout, "")
+                self.assertIn("error", json.loads(process.stderr))
+
+    def test_stale_provenance_and_manual_review_state_rejected(self):
+        self.write_backlog(self.backlog)
+        changed = copy.deepcopy(self.provenance)
+        changed["artifacts"][0]["content_sha256"] = "f" * 64
+        with self.assertRaises(inventory.InvalidInventory):
+            inventory.library_documentation_backlog_readiness(self.root, provenance=changed)
+        changed = copy.deepcopy(self.backlog)
+        changed["review_status"] = "reviewed"
+        self.write_backlog(changed)
+        with self.assertRaises(inventory.InvalidInventory):
+            inventory.library_documentation_backlog_readiness(self.root, provenance=self.provenance)
+
+    def test_actual_root_loader_inventory_clis_and_coverage_agree(self):
+        expected = inventory.load_and_summarize(self.actual_root)["library_surface_inputs"]["documentation_backlog"]
+        self.assertEqual(expected["readiness"], "review-required")
+        self.assertIsNone(expected["api_denominator"])
+        for options in ([], ["--reference-rules", str(self.actual_root / inventory.REFERENCE_RULES)]):
+            process = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.actual_root), *options],
+                                     capture_output=True, text=True, check=False)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            result = json.loads(process.stdout)
+            self.assertEqual(result["library_surface_inputs"]["documentation_backlog"], expected)
+            self.assertNotIn(inventory.LIBRARY_BACKLOG, result["inventory_readiness_blockers"])
+        process = subprocess.run([sys.executable, str(self.actual_root / "tools/conformance.py"), "coverage", "--json"],
+                                 cwd=self.actual_root, capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["semantic_inventory"]["library_surface_inputs"]["documentation_backlog"], expected)
+        process = subprocess.run([sys.executable, str(self.actual_root / "tools/conformance.py"), "coverage"],
+                                 cwd=self.actual_root, capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn("40 downloaded page records; 35114 missing literal page records", process.stdout)
+        self.assertIn("Backlog: review-required", process.stdout)
+        self.assertIn("Not API counts or compatibility coverage. External source bytes not reverified.", process.stdout)
 
 
 if __name__ == "__main__":

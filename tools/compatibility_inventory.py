@@ -615,12 +615,51 @@ def validate_library_surface_provenance(root: Path, data=_ABSENT, *, contract=No
                             "External artifact hashes and recorded page metadata are not source-byte authentication."]}
 
 
+LIBRARY_BACKLOG = "data/compiler-library-documentation-backlog.json"
+
+
+def library_documentation_backlog_readiness(root, *, provenance=_ABSENT):
+    """Report recorded documentation gaps, never an authenticated API denominator."""
+    root = Path(root)
+    if not (root / LIBRARY_BACKLOG).is_file():
+        return {"readiness": "missing", "review_status": "unreviewed",
+                "missing_files": [LIBRARY_BACKLOG], "api_denominator": None,
+                "full_rust_completion_percent": None,
+                "limitations": ["Missing literal documentation backlog is not evidence of an enumerated public API surface."]}
+    from library_surface_backlog import validate_metadata, validate_structure
+    data = load(root / LIBRARY_BACKLOG)
+    try:
+        validate_structure(data)
+        if provenance is _ABSENT:
+            return {"readiness": "blocked-by-missing-inputs", "review_status": "unreviewed",
+                    "missing_files": [LIBRARY_PROVENANCE], "api_denominator": None,
+                    "full_rust_completion_percent": None,
+                    "limitations": ["Recorded documentation backlog requires its acquisition provenance."]}
+        return validate_metadata(data, provenance)
+    except ValueError as exc:
+        raise InvalidInventory(str(exc)) from exc
+
+
 def library_surface_readiness(root, *, data=_ABSENT, contract=None):
     if data is _ABSENT and not (Path(root) / LIBRARY_PROVENANCE).is_file():
         return {"readiness": "missing", "review_status": "unreviewed", "missing_files": [LIBRARY_PROVENANCE],
                 "full_rust_completion_percent": None, "api_denominator": None,
+                "documentation_backlog": library_documentation_backlog_readiness(root),
                 "limitations": ["Library acquisition input provenance is missing and does not establish API readiness."]}
-    return validate_library_surface_provenance(root, data, contract=contract)
+    provenance = load(Path(root) / LIBRARY_PROVENANCE) if data is _ABSENT else data
+    result = validate_library_surface_provenance(root, provenance, contract=contract)
+    result["documentation_backlog"] = library_documentation_backlog_readiness(root, provenance=provenance)
+    return result
+
+
+def inventory_readiness_blockers(report):
+    result = [path for name, path in (("reference_rules", REFERENCE_RULES),
+                                      ("library_surface_inputs", LIBRARY_PROVENANCE))
+              if report[name]["readiness"] == "missing"]
+    backlog = report["library_surface_inputs"]["documentation_backlog"]
+    if backlog["readiness"] == "missing":
+        result.append(LIBRARY_BACKLOG)
+    return result
 
 
 def load_and_summarize(root: Path):
@@ -654,25 +693,26 @@ def load_and_summarize(root: Path):
             require(names[1] in present, "inventory validation requires current scope")
             validate(present[name], existing, seen)
     if missing:
+        backlog = library_documentation_backlog_readiness(root, provenance=library_data)
         return {"schema_version": 1, "scope": CONTRACT, "readiness": "missing",
                 "review_status": "unreviewed", "missing_files": missing,
                 "full_rust_completion_percent": None,
                 "rule_proposals": proposals,
                 "inventory_readiness_blockers": missing + ([REFERENCE_RULES] if reference_data is _ABSENT else [])
-                                                + ([LIBRARY_PROVENANCE] if library_data is _ABSENT else []),
+                                                + ([LIBRARY_PROVENANCE] if library_data is _ABSENT else [])
+                                                + ([LIBRARY_BACKLOG] if backlog["readiness"] == "missing" else []),
                 "reference_rules": {"readiness": "missing" if reference_data is _ABSENT else "blocked-by-missing-inputs",
                                     "full_rust_completion_percent": None},
                 "library_surface_inputs": {"readiness": "missing" if library_data is _ABSENT else "blocked-by-missing-inputs",
-                                               "full_rust_completion_percent": None, "api_denominator": None},
+                                               "full_rust_completion_percent": None, "api_denominator": None,
+                                               "documentation_backlog": backlog},
                 "limitations": ["Missing inventory inputs cannot establish executable evidence or full compatibility."]}
     result = summarize([present[name] for name in names[2:4]], present[names[1]])
     result.update(contract_id=contract["contract_id"], readiness="unreviewed", missing_files=[])
     result["reference_rules"] = reference_readiness(root, data=reference_data, contract=contract)
     result["library_surface_inputs"] = library_surface_readiness(root, data=library_data, contract=contract)
     result["rule_proposals"] = proposals
-    result["inventory_readiness_blockers"] = [path for name, path in (("reference_rules", REFERENCE_RULES),
-                                            ("library_surface_inputs", LIBRARY_PROVENANCE))
-                                            if result[name]["readiness"] == "missing"]
+    result["inventory_readiness_blockers"] = inventory_readiness_blockers(result)
     return result
 
 
@@ -730,9 +770,7 @@ def main(argv=None):
             args.root, index_path=args.reference_rules,
             candidate_path=next((path for path in args.inventory
                                  if path.name == "compiler-language-inventory.json"), None))
-        report["inventory_readiness_blockers"] = [path for name, path in (("reference_rules", REFERENCE_RULES),
-                                                ("library_surface_inputs", LIBRARY_PROVENANCE))
-                                                if report[name]["readiness"] == "missing"]
+        report["inventory_readiness_blockers"] = inventory_readiness_blockers(report)
     except InvalidInventory as exc:
         print(json.dumps({"error": str(exc)}), file=sys.stderr)
         return 2

@@ -219,12 +219,14 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_extract_reference_rules.py", &["-v"]);
     python("tools/test_pinned_acquisition.py", &["-v"]);
     python("tools/test_compact_library_surface_provenance.py", &["-v"]);
+    python("tools/test_library_surface_backlog.py", &["-v"]);
     python("tools/test_classify_proc_macro_details.py", &["-v"]);
     python("tools/test_reconcile_token_rules.py", &["-v"]);
     python("tools/test_bounded_failure_reduce.py", &["-v"]);
     let inventory = python("tools/compatibility_inventory.py", &[]);
     for marker in [
         "\"rule_proposals\"",
+        "\"documentation_backlog\"",
         "\"tokens\"",
         "\"const-eval\"",
         "\"unsafe\"",

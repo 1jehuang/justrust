@@ -458,6 +458,14 @@ def render(summary):
                   f"Lexical selector reconciliation backlog: {summary['selector_reconciliation_backlog']['untriaged_selector_count']} untriaged of {summary['selector_reconciliation_backlog']['discovered_selector_count']} candidates, including unmapped tests inside partly mapped suites. Not execution or semantic coverage.",
                   "Source-referenced inventory readiness: " + summary["semantic_inventory"]["readiness"] + ". Inventory links are not executable evidence.",
                   "Scope is incomplete. Use --json for exact missing requirements, case commands and evidence paths."])
+    library = summary["semantic_inventory"]["library_surface_inputs"]
+    if "observations" in library:
+        observations = library["observations"]
+        lines.insert(-1, "Recorded library documentation inputs: "
+                     f"{observations['downloaded_page_records']} downloaded page records; "
+                     f"{observations['missing_detail_page_records']} missing literal page records. "
+                     f"Backlog: {library['documentation_backlog']['readiness']}. "
+                     "Not API counts or compatibility coverage. External source bytes not reverified.")
     return "\n".join(lines)
 
 

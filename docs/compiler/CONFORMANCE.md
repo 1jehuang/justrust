@@ -301,6 +301,19 @@ the acquisition directory containing `pinned-source-final` and
 `tools/test_compact_library_surface_provenance.py`. A skipped fixture check is
 not proof of source-byte verification or API completeness.
 
+`data/compiler-library-documentation-backlog.json` records the derived literal
+documentation backlog, including per-crate page counts and a bounded missing
+page sample. Ordinary inventory and coverage reports expose it under
+`library_surface_inputs.documentation_backlog`. Offline metadata validation
+checks bindings and accounting, but does not recompute observations from the
+external full sidecar. `tools/library_surface_backlog.py` can regenerate or
+verify the compact backlog against those exact retained sidecar bytes. That
+verification still does not verify all original HTML files, resolve stable
+target-public API identities, execute compiler tests or establish compatibility.
+Navigation pages and multiple anchors are not separate API items, and the
+public API denominator remains unavailable even when all observed pages have
+been acquired.
+
 `tools/classify_proc_macro_details.py` provides a bounded literal review of
 retained `proc_macro` detail pages. It scopes stability annotations to their
 item header or method summary, keeps const instability separate, and leaves
