@@ -243,6 +243,69 @@ def obligation_backlog(inventories, scope, *, obligation_id=None):
                             'Existing requirement links and partial witness proposals do not satisfy these needs.']}
 
 
+def obligation_witness_backlog(root, *, obligation_id=None):
+    """Navigate existing partial source proposals, never satisfy a test need.
+
+    This action deliberately accepts only a repository root, not independently
+    replaceable inventories or evidence. Both attribution families must validate
+    completely before selection so an exact query cannot hide unrelated drift.
+    """
+    root = Path(root)
+    contract = validate_contract(load(root / 'data/compiler-compatibility-contract.json'),
+                                 read_verifier(root / 'tests/support/stock_rustc.rs'))
+    inventories = [load(root / 'data/compiler-language-inventory.json'),
+                   load(root / 'data/compiler-library-project-inventory.json')]
+    scope = load(root / 'data/compiler-compatibility-scope.json')
+    report = obligation_backlog(inventories, scope)
+    families = [('reference-rule', partial_witness_source_readiness(root)),
+                ('library-documentation', library_witness_readiness(root))]
+    rows = {row['obligation_id']: row for row in report['rows']}
+    for row in rows.values():
+        row['partial_witness_links'] = []
+    selectors = set()
+    for kind, family in families:
+        require(family['readiness'] == 'review-required',
+                'partial witness inputs missing: ' + kind)
+        require(family['source_file_byte_verification'] == 'reverified_in_this_run'
+                and family['execution_evidence_imported'] is False,
+                'partial witness source verification required: ' + kind)
+        for link in family['links']:
+            relationship = 'unreviewed-direct-partial-link' if kind == 'reference-rule' else 'partial'
+            require(link['relationship'] == relationship
+                    and link.get('review_status', family['review_status']) == 'unreviewed',
+                    'partial witness relationship required')
+            require(bool(link['candidate_obligation_ids']), 'partial witness obligation required')
+            for ident in link['candidate_obligation_ids']:
+                require(ident in rows, 'foreign partial witness obligation: ' + str(ident))
+                rows[ident]['partial_witness_links'].append(dict(link, kind=kind))
+            selectors.add((link['suite'], link['test']))
+    for row in rows.values():
+        row['partial_witness_links'].sort(key=lambda link: (link['kind'], link['suite'], link['test']))
+    known_linked = sum(bool(row['partial_witness_links']) for row in rows.values())
+    if obligation_id is not None:
+        require(type(obligation_id) is str and bool(obligation_id), 'obligation: nonempty ID required')
+        require(obligation_id in rows, 'unknown obligation ID: ' + obligation_id)
+        report['rows'] = [rows[obligation_id]]
+    report.update(obligation_id=obligation_id, contract_id=contract['contract_id'],
+                  selected_obligation_count=len(report['rows']),
+                  selected_test_need_count=sum(len(row['test_needs']) for row in report['rows']))
+    report['partial_witness_sources'] = {
+        'readiness': 'review-required', 'known_witness_selectors': len(selectors),
+        'selected_witness_selectors': len({(link['suite'], link['test']) for row in report['rows']
+                                           for link in row['partial_witness_links']}),
+        'known_obligations_with_partial_witnesses': known_linked,
+        'selected_obligations_with_partial_witnesses': sum(bool(row['partial_witness_links'])
+                                                         for row in report['rows']),
+        'source_file_byte_verification': 'reverified_in_this_run',
+        'source_block_byte_verification': 'not_reverified_in_this_run',
+        'documentation_page_byte_verification': 'not_reverified_in_this_run',
+        'execution_evidence_imported': False}
+    report['limitations'].append('Partial witness links bind existing local source proposals only. '
+                                'No need-to-test completeness mapping, fresh external source bytes, '
+                                'review, execution outcome or completion credit is imported.')
+    return report
+
+
 def validate_contract(contract, verifier_text):
     fields(contract, ("schema_version", "contract_id", "edition", "target", "oracle", "dimensions",
                       "evidence_policy", "exclusions", "readiness", "source_provenance_policy"), "contract")
@@ -823,7 +886,7 @@ def library_witness_readiness(root):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--root", type=Path, default=Path(__file__).absolute().parents[1])
     parser.add_argument("--inventory", action="append", type=Path)
     parser.add_argument("--scope", type=Path)
     parser.add_argument("--contract", type=Path)
@@ -834,6 +897,7 @@ def main(argv=None):
     parser.add_argument("--library-surface-provenance", type=Path)
     parser.add_argument("--obligation-backlog", action="store_true", help="List all validated authored obligations and needs, not outcomes")
     parser.add_argument("--obligation", help="Query one exact authored obligation ID")
+    parser.add_argument("--with-partial-witnesses", action="store_true", help="Attach validated partial source proposals to an obligation query, not evidence")
     parser.add_argument("--rule-backlog", action="store_true", help="List every pinned indexed Reference label, not normative coverage")
     parser.add_argument("--rule-page", help="Query one exact indexed Reference page path")
     parser.add_argument("--rule", help="Query one exact indexed Reference rule label")
@@ -841,6 +905,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     query = args.obligation_backlog or args.obligation is not None
     rule_query = args.rule_backlog or args.rule_page is not None or args.rule is not None
+    if args.with_partial_witnesses:
+        if not query or rule_query or args.unproposed or any((args.inventory, args.scope, args.contract,
+                args.oracle_verifier, args.reference_rules, args.source_archive,
+                args.submodule_proof, args.library_surface_provenance)):
+            parser.error("--with-partial-witnesses requires an obligation query and only --root may override inputs")
+        try:
+            report = obligation_witness_backlog(args.root, obligation_id=args.obligation)
+        except ValueError as exc:
+            print(json.dumps({'error': str(exc)}), file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if args.unproposed and not rule_query:
         parser.error("--unproposed requires a rule query")
     if rule_query:

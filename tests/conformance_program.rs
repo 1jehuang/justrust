@@ -274,6 +274,28 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
             "missing {marker}: {obligation}"
         );
     }
+    let linked_obligation = python(
+        "tools/compatibility_inventory.py",
+        &[
+            "--obligation",
+            "obligation-core-option",
+            "--with-partial-witnesses",
+        ],
+    );
+    for marker in [
+        "\"known_witness_selectors\": 18",
+        "\"selected_witness_selectors\": 2",
+        "\"known_obligations_with_partial_witnesses\": 14",
+        "\"partial_witness_links\"",
+        "\"kind\": \"library-documentation\"",
+        "\"direct_exact_test_links\": []",
+        "\"executed_test_need_count\": 0",
+    ] {
+        assert!(
+            linked_obligation.contains(marker),
+            "missing {marker}: {linked_obligation}"
+        );
+    }
     let rule = python(
         "tools/compatibility_inventory.py",
         &["--rule", "type.text.char-value"],

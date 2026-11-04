@@ -1295,5 +1295,221 @@ class ObligationBacklogIdentityTests(unittest.TestCase):
                     self.assertIn("cannot override", stderr.getvalue())
 
 
+class ObligationWitnessBacklogTests(unittest.TestCase):
+    """Partial source attribution must never turn authored needs into credit."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.root = Path(inventory.__file__).resolve().parents[1]
+        cls.candidates = [inventory.load(cls.root / 'data' / name) for name in
+                          ('compiler-language-inventory.json', 'compiler-library-project-inventory.json')]
+        cls.scope = inventory.load(cls.root / 'data/compiler-compatibility-scope.json')
+        cls.families = [
+            ('reference-rule', inventory.partial_witness_source_readiness(cls.root)),
+            ('library-documentation', inventory.library_witness_readiness(cls.root)),
+        ]
+        cls.base = inventory.obligation_backlog(cls.candidates, cls.scope)
+        cls.links = {row['obligation_id']: [] for row in cls.base['rows']}
+        for kind, family in cls.families:
+            for link in family['links']:
+                for ident in link['candidate_obligation_ids']:
+                    cls.links[ident].append(dict(link, kind=kind))
+        for links in cls.links.values():
+            links.sort(key=lambda link: (link['kind'], link['suite'], link['test']))
+        cls.language_id = next(ident for ident, links in cls.links.items()
+                               if any(link['kind'] == 'reference-rule' for link in links))
+        cls.unlinked_id = next(ident for ident, links in cls.links.items() if not links)
+
+    def assert_no_credit(self, report):
+        ObligationBacklogIdentityTests.assert_no_credit(self, report)
+        for row in report['rows']:
+            self.assertEqual(row['direct_exact_test_links'], [])
+            self.assertEqual(row['review_status'], 'unreviewed')
+            self.assertTrue(all(need['status'] == 'unmeasured' for need in row['test_needs']))
+
+    def assert_attribution(self, report):
+        self.assert_no_credit(report)
+        selected = report['rows']
+        self.assertEqual(report['partial_witness_sources'], {
+            'readiness': 'review-required', 'known_witness_selectors': 18,
+            'selected_witness_selectors': len({(link['suite'], link['test'])
+                for row in selected for link in self.links[row['obligation_id']]}),
+            'known_obligations_with_partial_witnesses': 14,
+            'selected_obligations_with_partial_witnesses': sum(
+                bool(self.links[row['obligation_id']]) for row in selected),
+            'source_file_byte_verification': 'reverified_in_this_run',
+            'source_block_byte_verification': 'not_reverified_in_this_run',
+            'documentation_page_byte_verification': 'not_reverified_in_this_run',
+            'execution_evidence_imported': False})
+        authored = {row['obligation_id']: row for row in self.base['rows']}
+        for row in selected:
+            self.assertEqual(row, dict(authored[row['obligation_id']],
+                                       partial_witness_links=self.links[row['obligation_id']]))
+        self.assertEqual(report['known_obligation_count'], 257)
+        self.assertEqual(report['known_test_need_count'], 938)
+        self.assertEqual(report['selected_obligation_count'], len(selected))
+        self.assertEqual(report['selected_test_need_count'], sum(len(row['test_needs']) for row in selected))
+
+    def cli(self, *flags):
+        return subprocess.run([sys.executable, inventory.__file__, '--root', str(self.root), *flags],
+                              capture_output=True, text=True, check=False)
+
+    def copied_root(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        paths = {'data/compiler-compatibility-contract.json', 'data/compiler-compatibility-scope.json',
+                 'data/compiler-language-inventory.json', 'data/compiler-library-project-inventory.json',
+                 inventory.REFERENCE_RULES, inventory.LIBRARY_PROVENANCE}
+        paths.update(row['path'] for _, family in self.families for row in family['source_files'])
+        for name in sorted(paths):
+            target = root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes((self.root / name).read_bytes())
+        return root
+
+    def test_actual_full_and_exact_queries_conserve_attribution_without_credit(self):
+        report = inventory.obligation_witness_backlog(self.root)
+        self.assert_attribution(report)
+        self.assertEqual(len(report['rows']), 257)
+        self.assertEqual(sum(bool(links) for links in self.links.values()), 14)
+        self.assertEqual(report['partial_witness_sources']['selected_witness_selectors'], 18)
+        for ident in ('obligation-core-option', self.language_id, self.unlinked_id):
+            with self.subTest(ident=ident):
+                selected = inventory.obligation_witness_backlog(self.root, obligation_id=ident)
+                self.assert_attribution(selected)
+                self.assertEqual(selected['obligation_id'], ident)
+                self.assertEqual(selected['rows'], [row for row in report['rows'] if row['obligation_id'] == ident])
+        option = inventory.obligation_witness_backlog(self.root, obligation_id='obligation-core-option')
+        self.assertEqual(len(option['rows'][0]['partial_witness_links']), 2)
+        self.assertTrue(all(link['kind'] == 'library-documentation'
+                            for link in option['rows'][0]['partial_witness_links']))
+        unlinked = inventory.obligation_witness_backlog(self.root, obligation_id=self.unlinked_id)
+        self.assertEqual(unlinked['rows'][0]['partial_witness_links'], [])
+        self.assertEqual(unlinked['partial_witness_sources']['selected_witness_selectors'], 0)
+
+    def test_cli_extended_and_default_query_bytes_remain_separate(self):
+        for ident in (None, 'obligation-core-option', self.language_id, self.unlinked_id):
+            flags = ['--obligation-backlog'] if ident is None else ['--obligation', ident]
+            extended = self.cli(*flags, '--with-partial-witnesses')
+            self.assertEqual(extended.returncode, 0, extended.stderr)
+            self.assert_attribution(json.loads(extended.stdout))
+            expected = inventory.obligation_backlog(self.candidates, self.scope, obligation_id=ident)
+            expected['contract_id'] = inventory.load(self.root / 'data/compiler-compatibility-contract.json')['contract_id']
+            before = self.cli(*flags)
+            self.assertEqual(before.returncode, 0, before.stderr)
+            self.assertEqual(before.stdout, json.dumps(expected, indent=2, sort_keys=True) + '\n')
+            self.assertNotIn('partial_witness_sources', expected)
+            self.assertTrue(all('partial_witness_links' not in row for row in expected['rows']))
+
+    def test_unknown_empty_and_nonexact_queries_have_json_errors_without_stdout(self):
+        for query in ('', 'not-an-obligation', ' obligation-core-option', 'obligation-core', False, 7, []):
+            with self.subTest(query=query), self.assertRaises(inventory.InvalidInventory):
+                inventory.obligation_witness_backlog(self.root, obligation_id=query)
+        for query in ('', 'not-an-obligation', ' obligation-core-option', 'obligation-core'):
+            result = self.cli('--obligation', query, '--with-partial-witnesses')
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertEqual(result.stdout, '')
+            self.assertTrue(json.loads(result.stderr)['error'])
+
+    def test_actual_root_does_not_read_external_bytes_receipts_or_runner(self):
+        import conformance
+        import compatibility_scope
+        import library_witness_sources
+        forbidden = AssertionError('no archives, HTML, execution evidence or runner')
+        with mock.patch.object(inventory.tarfile, 'open', side_effect=forbidden), \
+                mock.patch.object(inventory, 'reference_readiness', side_effect=forbidden), \
+                mock.patch.object(inventory, 'library_surface_readiness', side_effect=forbidden), \
+                mock.patch.object(library_witness_sources, 'verify_html', side_effect=forbidden), \
+                mock.patch.object(conformance, 'source_identity', side_effect=forbidden), \
+                mock.patch.object(conformance, 'discover', side_effect=forbidden), \
+                mock.patch.object(compatibility_scope, 'runner_identity', side_effect=forbidden), \
+                mock.patch.object(subprocess, 'run', side_effect=forbidden):
+            self.assert_attribution(inventory.obligation_witness_backlog(self.root))
+
+    def test_real_missing_and_malformed_inputs_cannot_hide_behind_option_filter(self):
+        root = self.copied_root()
+        self.assert_attribution(inventory.obligation_witness_backlog(root))
+        paths = sorted(str(path.relative_to(root)) for path in root.rglob('*') if path.is_file())
+        for name in paths:
+            path = root / name
+            original = path.read_bytes()
+            for mutation in ('missing', 'malformed'):
+                try:
+                    if mutation == 'missing':
+                        path.unlink()
+                    else:
+                        path.write_bytes(b'{ malformed input\n')
+                    with self.subTest(name=name, mutation=mutation), self.assertRaises(inventory.InvalidInventory):
+                        inventory.obligation_witness_backlog(root, obligation_id='obligation-core-option')
+                finally:
+                    path.write_bytes(original)
+
+    def test_real_source_and_metadata_byte_drift_is_rejected_before_filtering(self):
+        root = self.copied_root()
+        paths = {row['path'] for _, family in self.families for row in family['source_files']}
+        paths.update((inventory.REFERENCE_RULES, 'data/compiler-language-inventory.json'))
+        for name in sorted(paths):
+            path = root / name
+            original = path.read_bytes()
+            try:
+                path.write_bytes(original + b'\n')
+                with self.subTest(name=name), self.assertRaises(inventory.InvalidInventory):
+                    inventory.obligation_witness_backlog(root, obligation_id='obligation-core-option')
+            finally:
+                path.write_bytes(original)
+
+    def test_both_readiness_families_are_required_and_foreign_links_checked_globally(self):
+        for kind, function in (('reference-rule', 'partial_witness_source_readiness'),
+                               ('library-documentation', 'library_witness_readiness')):
+            original = next(family for family_kind, family in self.families if family_kind == kind)
+            for mutation in ('readiness', 'foreign-link', 'relationship', 'review_status',
+                             'source-verification', 'execution-credit', 'empty-obligations'):
+                altered = copy.deepcopy(original)
+                if mutation == 'readiness':
+                    altered['readiness'] = 'missing'
+                elif mutation == 'foreign-link':
+                    altered['links'][0]['candidate_obligation_ids'].append('foreign-obligation')
+                elif mutation == 'source-verification':
+                    altered['source_file_byte_verification'] = 'not_reverified_in_this_run'
+                elif mutation == 'execution-credit':
+                    altered['execution_evidence_imported'] = True
+                elif mutation == 'empty-obligations':
+                    altered['links'][0]['candidate_obligation_ids'] = []
+                elif mutation == 'relationship':
+                    altered['links'][0]['relationship'] = 'complete'
+                else:
+                    altered['links'][0]['review_status'] = 'reviewed'
+                with self.subTest(kind=kind, mutation=mutation), \
+                        mock.patch.object(inventory, function, return_value=altered), \
+                        self.assertRaises(inventory.InvalidInventory):
+                    inventory.obligation_witness_backlog(self.root, obligation_id=self.unlinked_id)
+
+    def test_cli_incompatible_combinations_reject_before_any_filesystem_io(self):
+        overrides = ('--inventory', '--scope', '--contract', '--oracle-verifier', '--reference-rules',
+                     '--source-archive', '--submodule-proof', '--library-surface-provenance')
+        combinations = [['--with-partial-witnesses']]
+        for action in (['--obligation-backlog'], ['--obligation', 'obligation-core-option']):
+            combinations.extend([*action, '--with-partial-witnesses', flag, '/missing'] for flag in overrides)
+            combinations.extend([*action, '--with-partial-witnesses', *rule] for rule in
+                                (['--rule-backlog'], ['--rule-page', 'src/types.md'],
+                                 ['--rule', 'types'], ['--unproposed']))
+        forbidden = AssertionError('incompatible flags must reject before filesystem access')
+        for flags in combinations:
+            with self.subTest(flags=flags), \
+                    mock.patch.object(Path, 'open', side_effect=forbidden), \
+                    mock.patch.object(Path, 'stat', side_effect=forbidden), \
+                    mock.patch.object(inventory, 'load', side_effect=forbidden), \
+                    mock.patch.object(inventory, 'read_verifier', side_effect=forbidden), \
+                    mock.patch.object(inventory, 'obligation_witness_backlog', side_effect=forbidden), \
+                    mock.patch.object(sys, 'stdout', io.StringIO()) as stdout, \
+                    mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+                with self.assertRaises(SystemExit) as raised:
+                    inventory.main(['--root', '/missing/root', *flags])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertEqual(stdout.getvalue(), '')
+                self.assertIn('--with-partial-witnesses', stderr.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

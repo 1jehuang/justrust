@@ -345,6 +345,17 @@ receipts or a complete normative denominator. Partial witness proposals do not
 discharge needs. The ordinary summary reports queue counts without expanding all
 rows, and unknown obligation queries fail instead of returning empty success.
 
+Add `--with-partial-witnesses` to either obligation query to navigate the existing
+source-bound language and library witness proposals. All default inventory and
+source-pin validators run before selecting an obligation. The combined queue has
+18 distinct selectors partially associated with 14 obligations. Each row keeps
+its existing need IDs and unmeasured needs, and adds separate
+`partial_witness_links` with the original authored source relationships. These
+are not need-to-test completeness mappings or execution receipts. Direct test
+links, reviewed counts and executed-need counts remain empty or zero. This action
+allows only `--root` as an input override, rejects missing attribution inputs,
+and does not freshly verify Reference prose or external library HTML.
+
 The complete pinned label queue is available with
 `python3 tools/compatibility_inventory.py --rule-backlog`; add `--unproposed` to
 select every indexed label lacking an authored proposal, not merely the ordinary
