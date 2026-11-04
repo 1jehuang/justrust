@@ -554,6 +554,14 @@ prove a `'static` lifetime or an `FnOnce`-only call capability. Detailed capture
 precision and async call-trait rules on other pages remain separate missing
 work. All rows are unreviewed and cannot import witnesses or execution credit.
 
+Use `--profile calls` with `generate` or `validate` for all 23 labels on the
+pinned call-expression and method-call-expression pages. These source-only
+proposals preserve ordered receiver candidates and per-candidate lookup rather
+than a global inherent-method preference. Receiver mutability, lifetime and
+unsafe-call requirements are checked after lookup, not used to select a later
+fallback. Method-name token editions and the trait-object same-name restriction
+remain explicit missing obligations. No witness or execution credit is imported.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
