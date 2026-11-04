@@ -483,6 +483,14 @@ items and public items behind private ancestors require separate controls rather
 than a blanket re-export permission. All rows remain unreviewed, with missing
 source-bound tests and no witness-link or execution-evidence actions.
 
+Use `--profile branching` with `generate` or `validate` for all 58 labels on
+the pinned if, match and return expression pages. These proposals distinguish
+short-circuit selection, binding scope, scrutinee ownership, guard retries,
+result coercion and return transfer. Match let guards and guard chains require
+separate pinned-stock feature and stability classification. Reference grammar
+alone does not establish stable-oracle admissibility. All rows remain unreviewed,
+with missing test needs and no witness-link or execution-evidence actions.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 The ordinary inventory CLI and `coverage --json` expose `rule_proposals` with
