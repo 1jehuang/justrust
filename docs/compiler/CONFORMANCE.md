@@ -313,6 +313,18 @@ tests and supplies the archive to inventory validation, so the pinned-source
 checks run rather than relying only on synthetic fixtures. Acquisition and
 source reproduction grant no normative review or compiler compatibility credit.
 
+Ordinary reports also expose `library_witness_sources`: six existing exact
+Option, Vec and Iterator source cases associated with three candidate library
+obligations and seven documentation anchors. The local fixture, oracle helpers,
+scope, candidate inventory and compact documentation provenance are byte-pinned.
+These are partial authored associations, not all behavior of the named APIs,
+reviewed obligations or imported execution results. Inventory missing-test needs
+and zero completion credit remain unchanged. Ordinary reporting does not read
+external HTML. For the stronger page-byte and anchor check, run
+`python3 tools/library_witness_sources.py --html-root <acquisition>/pinned-html-final/html`.
+That check still does not establish stable target-public API identities or a
+compatibility denominator.
+
 `data/compiler-library-surface-provenance.json` records bounded pinned library
 source and rustdoc input provenance, not public API coverage. Its link/anchor
 observations include unstable and other-target entries and must not become a

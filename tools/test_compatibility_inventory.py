@@ -930,5 +930,93 @@ class PartialWitnessIntegrationTests(unittest.TestCase):
         self.assertFalse(result["execution_evidence_imported"])
 
 
+class LibraryWitnessIntegrationTests(unittest.TestCase):
+    def setUp(self):
+        self.actual_root = Path(__file__).resolve().parents[1]
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        (self.root / "data").mkdir()
+
+    def test_partial_library_associations_do_not_complete_inventory_obligations(self):
+        report = inventory.load_and_summarize(self.actual_root)
+        result = report["library_witness_sources"]
+        self.assertEqual(result["readiness"], "review-required")
+        self.assertEqual(result["review_status"], "unreviewed")
+        for key, count in (("direct_witness_selectors", 6), ("positive_selectors", 3),
+                           ("semantic_invalid_selectors", 3), ("direct_documentation_links", 10),
+                           ("distinct_documentation_references", 7), ("documentation_page_count", 3),
+                           ("candidate_obligations_with_partial_links", 3)):
+            self.assertEqual(result[key], count, key)
+        self.assertEqual(result["source_file_byte_verification"], "reverified_in_this_run")
+        for key in ("documentation_page_byte_verification", "documentation_anchor_verification"):
+            self.assertEqual(result[key], "not_reverified_in_this_run")
+        for key in ("reviewed_obligations", "completed_obligations", "obligations_with_executable_evidence"):
+            self.assertEqual(result[key], 0)
+        self.assertFalse(result["execution_evidence_imported"])
+        self.assertIsNone(result["full_rust_completion_percent"])
+        self.assertIsNone(result["api_denominator"])
+        self.assertEqual(report["counts"]["obligations"], 257)
+        self.assertEqual(report["counts"]["obligations_lacking_direct_exact_test_links"], 257)
+        self.assertEqual(report["counts"]["obligations_with_executable_evidence"], 0)
+
+    def test_both_inventory_cli_paths_and_coverage_report_same_library_sources(self):
+        expected = inventory.library_witness_readiness(self.actual_root)
+        for options in ([], ["--library-surface-provenance", str(self.actual_root / inventory.LIBRARY_PROVENANCE)]):
+            result = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.actual_root), *options],
+                                    capture_output=True, text=True, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["library_witness_sources"], expected)
+        command = [sys.executable, str(self.actual_root / "tools/conformance.py"), "coverage"]
+        result = subprocess.run([*command, "--json"], cwd=self.actual_root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["semantic_inventory"]["library_witness_sources"], expected)
+        result = subprocess.run(command, cwd=self.actual_root, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Unreviewed library source attribution: 6 exact selectors; 7 documentation references; 3 candidate obligations", result.stdout)
+        self.assertIn("Not an API denominator, reviewed coverage or test outcomes. Documentation bytes not reverified.", result.stdout)
+
+    def test_empty_root_has_no_library_attribution_credit(self):
+        result = inventory.load_and_summarize(self.root)["library_witness_sources"]
+        self.assertEqual(result["readiness"], "missing")
+        self.assertEqual(result["direct_witness_selectors"], 0)
+        self.assertFalse(result["execution_evidence_imported"])
+        self.assertIsNone(result["api_denominator"])
+
+    def test_malformed_present_library_inventory_not_hidden_by_missing_companions(self):
+        path = self.root / "data/compiler-library-project-inventory.json"
+        for raw in ("null", "[]", "{}", "{", '{"schema_version":1,"schema_version":1}'):
+            path.write_text(raw)
+            with self.subTest(raw=raw):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.library_witness_readiness(self.root)
+                result = subprocess.run([sys.executable, inventory.__file__, "--root", str(self.root)],
+                                        capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(result.stdout, "")
+                self.assertIn("error", json.loads(result.stderr))
+
+    def test_changed_fixture_is_not_hidden_by_other_missing_sources(self):
+        for name in ("data/compiler-library-project-inventory.json", inventory.LIBRARY_PROVENANCE):
+            (self.root / name).write_bytes((self.actual_root / name).read_bytes())
+        fixture = self.root / "tests/conformance_generated.rs"
+        fixture.parent.mkdir()
+        fixture.write_bytes(b"// changed fixture, not a missing-input excuse\n")
+        with self.assertRaises(inventory.InvalidInventory):
+            inventory.library_witness_readiness(self.root)
+
+    def test_ordinary_library_summary_has_no_execution_or_unrelated_discovery(self):
+        import conformance
+        import compatibility_scope
+        with mock.patch.object(subprocess, "run", side_effect=AssertionError("no execution")), \
+                mock.patch.object(conformance, "source_identity", side_effect=AssertionError("no receipt identity")), \
+                mock.patch.object(conformance, "discover", side_effect=AssertionError("no whole-suite scan")), \
+                mock.patch.object(compatibility_scope, "validate", side_effect=AssertionError("no whole-scope scan")), \
+                mock.patch.object(compatibility_scope, "runner_identity", side_effect=AssertionError("no runner")):
+            result = inventory.library_witness_readiness(self.actual_root)
+        self.assertEqual(result["direct_witness_selectors"], 6)
+        self.assertFalse(result["execution_evidence_imported"])
+
+
 if __name__ == "__main__":
     unittest.main()

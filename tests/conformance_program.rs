@@ -221,6 +221,7 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_pinned_acquisition.py", &["-v"]);
     python("tools/test_compact_library_surface_provenance.py", &["-v"]);
     python("tools/test_library_surface_backlog.py", &["-v"]);
+    python("tools/test_library_witness_sources.py", &["-v"]);
     python("tools/test_classify_proc_macro_details.py", &["-v"]);
     python("tools/test_reconcile_token_rules.py", &["-v"]);
     python("tools/test_bounded_failure_reduce.py", &["-v"]);
@@ -229,6 +230,9 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"rule_proposals\"",
         "\"documentation_backlog\"",
         "\"partial_witness_sources\"",
+        "\"library_witness_sources\"",
+        "\"direct_documentation_links\": 10",
+        "\"distinct_documentation_references\": 7",
         "\"direct_witness_selectors\": 12",
         "\"execution_evidence_imported\": false",
         "\"source_file_byte_verification\": \"reverified_in_this_run\"",

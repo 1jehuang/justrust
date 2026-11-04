@@ -473,6 +473,13 @@ def render(summary):
                      f"{witnesses['distinct_direct_rule_identities']} rule labels; "
                      f"{witnesses['candidate_obligations_with_partial_links']} candidate obligations. "
                      "Not reviewed coverage or test outcomes. Reference block bytes not reverified.")
+    library_witnesses = summary["semantic_inventory"]["library_witness_sources"]
+    if library_witnesses["readiness"] == "review-required":
+        lines.insert(-1, "Unreviewed library source attribution: "
+                     f"{library_witnesses['direct_witness_selectors']} exact selectors; "
+                     f"{library_witnesses['distinct_documentation_references']} documentation references; "
+                     f"{library_witnesses['candidate_obligations_with_partial_links']} candidate obligations. "
+                     "Not an API denominator, reviewed coverage or test outcomes. Documentation bytes not reverified.")
     return "\n".join(lines)
 
 
