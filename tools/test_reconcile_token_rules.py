@@ -59,6 +59,106 @@ class ProposalSummaryTests(unittest.TestCase):
             self.assertEqual(result[key], 'not_reverified_in_this_run')
         self.assertIn('not normative semantic coverage', ' '.join(result['limitations']))
 
+    def assert_backlog_matches_metadata(self, result):
+        pages = self.index['pages'] + self.index['unlinked_markdown_files']
+        selected = {path for name in ('tokens', 'const-eval', 'unsafe')
+                    for path in reconciliation.profile_inputs(name)[0]}
+        proposed = {(page['path'], rule['label']) for page in pages
+                    if page['path'] in selected for rule in page['rules']}
+        expected_pages, missing = [], {}
+        for page in pages:
+            identities = {(page['path'], rule['label']) for rule in page['rules']}
+            expected_pages.append({
+                'page': page['path'], 'global_rule_identities': len(identities),
+                'proposed_rule_identities': len(identities & proposed),
+                'rule_identities_without_proposals': len(identities - proposed),
+            })
+            for rule in page['rules']:
+                identity = (page['path'], rule['label'])
+                if identity not in proposed:
+                    missing[identity] = {'page': page['path'], 'rule': rule['label'],
+                                         'line': rule['line'], 'page_sha256': page['sha256']}
+        backlog = result['backlog']
+        expected_pages.sort(key=lambda row: row['page'])
+        self.assertEqual(backlog['pages'], expected_pages)
+        self.assertEqual(backlog['total_pages'], len(pages))
+        self.assertEqual(backlog['pages_without_proposals'], sum(
+            row['global_rule_identities'] > 0 and row['proposed_rule_identities'] == 0
+            for row in expected_pages))
+        self.assertEqual(backlog['pages_with_partial_proposals'], sum(
+            0 < row['proposed_rule_identities'] < row['global_rule_identities']
+            for row in expected_pages))
+        for key in ('global_rule_identities', 'proposed_rule_identities',
+                    'rule_identities_without_proposals'):
+            self.assertEqual(sum(row[key] for row in backlog['pages']), result[key])
+        self.assertEqual(backlog['missing_rule_sample_limit'], 100)
+        self.assertIs(backlog['missing_rule_sample_truncated'], len(missing) > 100)
+        self.assertEqual(backlog['missing_rule_sample'],
+                         [missing[identity] for identity in sorted(missing)[:100]])
+        self.assertTrue(all((row['page'], row['rule']) not in proposed
+                            for row in backlog['missing_rule_sample']))
+
+    def test_backlog_covers_every_pinned_page_and_exact_missing_metadata(self):
+        result = self.summary()
+        self.assertEqual((result['global_rule_identities'], result['proposed_rule_identities'],
+                          result['rule_identities_without_proposals']), (2965, 186, 2779))
+        self.assert_backlog_matches_metadata(result)
+        self.assertEqual(result, self.summary())
+        self.assertTrue(any(not page['rules'] for page in self.index['pages']))
+        self.assertTrue(any(not page['rules'] for page in self.index['unlinked_markdown_files']))
+        self.assertEqual(result['backlog']['pages_with_partial_proposals'], 0)
+        self.assertEqual(len(result['backlog']['missing_rule_sample']), 100)
+
+    def test_backlog_helper_boundaries_partial_pages_and_deterministic_order(self):
+        for count in (0, 100, 101):
+            with self.subTest(missing=count):
+                pages = [
+                    {'path': 'src/zero.md', 'sha256': '0' * 64, 'rules': []},
+                    {'path': 'src/full.md', 'sha256': '1' * 64,
+                     'rules': [{'label': 'full', 'line': 9}]},
+                    {'path': 'src/partial.md', 'sha256': '2' * 64,
+                     'rules': [{'label': 'proposed', 'line': 3}] + [
+                         {'label': 'missing.' + str(i).zfill(3), 'line': i + 10}
+                         for i in range(count)]},
+                ]
+                proposed = {('src/full.md', 'full'), ('src/partial.md', 'proposed')}
+                backlog = reconciliation.proposal_backlog(pages, proposed)
+                reordered = copy.deepcopy(pages[::-1])
+                for page in reordered:
+                    page['rules'].reverse()
+                self.assertEqual(backlog, reconciliation.proposal_backlog(reordered, proposed))
+                self.assertEqual(backlog['pages'], [
+                    {'page': 'src/full.md', 'global_rule_identities': 1,
+                     'proposed_rule_identities': 1, 'rule_identities_without_proposals': 0},
+                    {'page': 'src/partial.md', 'global_rule_identities': count + 1,
+                     'proposed_rule_identities': 1, 'rule_identities_without_proposals': count},
+                    {'page': 'src/zero.md', 'global_rule_identities': 0,
+                     'proposed_rule_identities': 0, 'rule_identities_without_proposals': 0},
+                ])
+                self.assertEqual(backlog['total_pages'], 3)
+                self.assertEqual(backlog['pages_without_proposals'], 0)
+                self.assertEqual(backlog['pages_with_partial_proposals'], int(count > 0))
+                self.assertEqual(backlog['missing_rule_sample_limit'], 100)
+                self.assertIs(backlog['missing_rule_sample_truncated'], count > 100)
+                self.assertEqual(backlog['missing_rule_sample'], [
+                    {'page': 'src/partial.md', 'rule': 'missing.' + str(i).zfill(3),
+                     'line': i + 10, 'page_sha256': '2' * 64}
+                    for i in range(min(count, 100))])
+
+    def test_backlog_absent_when_either_or_both_inputs_are_missing(self):
+        index_bytes = self.index_path.read_bytes()
+        candidate_bytes = self.candidate_path.read_bytes()
+        for missing in ((self.index_path,), (self.candidate_path,),
+                        (self.index_path, self.candidate_path)):
+            with self.subTest(missing=[path.name for path in missing]):
+                self.index_path.write_bytes(index_bytes)
+                self.candidate_path.write_bytes(candidate_bytes)
+                for path in missing:
+                    path.unlink()
+                result = self.summary()
+                self.assertEqual(result['readiness'], 'missing')
+                self.assertNotIn('backlog', result)
+
     def test_each_authored_module_rejects_duplicate_omitted_foreign_and_bad_fields(self):
         import compatibility_inventory as inventory
         original = reconciliation.profile_inputs
@@ -107,6 +207,8 @@ class ProposalSummaryTests(unittest.TestCase):
         with mock.patch.object(reconciliation, 'profile_inputs', side_effect=inputs), mock.patch.object(
                 reconciliation, 'WITNESS_SOURCE_CONTRACT', pin):
             result = self.summary()
+            self.assert_backlog_matches_metadata(result)
+            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 142)
         self.assertEqual(result['proposed_rule_identities'], 142)
         self.assertEqual(result['rule_identities_without_proposals'], 2823)
 

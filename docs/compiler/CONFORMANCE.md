@@ -366,6 +366,11 @@ All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 The ordinary inventory CLI and `coverage --json` expose `rule_proposals` with
 per-profile proposed counts and the unique union of rule identities. This
+includes a `backlog` with counts for every pinned page, including zero-rule and
+unlinked pages, and the first 100 missing rule identities in page/rule order.
+The sample retains recorded source lines and page hashes, with an explicit
+truncation flag. Page totals account for all missing proposals, not just the
+sample. This work queue does not change reviewed or completed rule counts. The
 offline summary checks authored module inputs against index and candidate
 metadata. It does not reverify Reference source blocks or archive bytes and
 does not consume execution receipts. Reviewed, executable and completed rule

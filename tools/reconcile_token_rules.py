@@ -52,6 +52,38 @@ def profile_purpose(profile):
     return 'bounded-' + ('token' if profile == 'tokens' else profile) + '-rule-reconciliation-candidate'
 
 
+def proposal_backlog(pages, proposed):
+    """Index-only work queue, not a semantic coverage or review assessment.
+
+    The caller has validated the complete pinned index and authored proposals.
+    Keep every page, including unlinked and zero-rule pages. Only the global
+    exact-rule sample is capped, so totals never silently discard missing work.
+    """
+    page_rows, missing = [], []
+    for page in sorted(pages, key=lambda row: row['path']):
+        total = len(page['rules'])
+        count = sum((page['path'], rule['label']) in proposed for rule in page['rules'])
+        page_rows.append({
+            'page': page['path'], 'global_rule_identities': total,
+            'proposed_rule_identities': count, 'rule_identities_without_proposals': total - count,
+        })
+        missing.extend({
+            'page': page['path'], 'rule': rule['label'], 'line': rule['line'],
+            'page_sha256': page['sha256'],
+        } for rule in page['rules'] if (page['path'], rule['label']) not in proposed)
+    missing.sort(key=lambda row: (row['page'], row['rule']))
+    limit = 100
+    return {
+        'pages': page_rows, 'total_pages': len(page_rows),
+        'pages_without_proposals': sum(row['global_rule_identities'] > 0
+                                       and row['proposed_rule_identities'] == 0 for row in page_rows),
+        'pages_with_partial_proposals': sum(0 < row['proposed_rule_identities']
+                                           < row['global_rule_identities'] for row in page_rows),
+        'missing_rule_sample': missing[:limit], 'missing_rule_sample_limit': limit,
+        'missing_rule_sample_truncated': len(missing) > limit,
+    }
+
+
 def summarize_proposals(index_path, candidate_path):
     """Summarize authored module inputs, without Reference prose or sidecars.
 
@@ -142,6 +174,7 @@ def summarize_proposals(index_path, candidate_path):
             'readiness': 'review-required', 'review_status': 'unreviewed', 'profiles': profiles,
             'global_rule_identities': len(identities), 'proposed_rule_identities': len(union),
             'rule_identities_without_proposals': len(identities - union),
+            'backlog': proposal_backlog(pages, union),
             'reviewed_rule_rows': 0, 'rows_with_exact_executable_evidence': 0,
             'completed_rule_rows': 0, 'full_rust_completion_percent': None,
             'source_block_byte_verification': 'not_reverified_in_this_run',
