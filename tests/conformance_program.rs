@@ -189,6 +189,7 @@ fn compatibility_progress_comes_from_layered_exact_tests_not_manual_status() {
         "\"missing_test_gates\"",
         "\"unmapped_integration_suites\"",
         "\"interaction_matrix\"",
+        "\"rule_proposals\"",
         "\"full_rust_support_established\": false",
     ] {
         assert!(coverage.contains(marker), "missing {marker}: {coverage}");
@@ -221,7 +222,21 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_classify_proc_macro_details.py", &["-v"]);
     python("tools/test_reconcile_token_rules.py", &["-v"]);
     python("tools/test_bounded_failure_reduce.py", &["-v"]);
-    python("tools/compatibility_inventory.py", &[]);
+    let inventory = python("tools/compatibility_inventory.py", &[]);
+    for marker in [
+        "\"rule_proposals\"",
+        "\"tokens\"",
+        "\"const-eval\"",
+        "\"unsafe\"",
+        "\"global_rule_identities\": 2965",
+        "\"proposed_rule_identities\": 186",
+        "\"rule_identities_without_proposals\": 2779",
+        "\"reviewed_rule_rows\": 0",
+        "\"completed_rule_rows\": 0",
+        "\"source_block_byte_verification\": \"not_reverified_in_this_run\"",
+    ] {
+        assert!(inventory.contains(marker), "missing {marker}: {inventory}");
+    }
 }
 
 #[test]

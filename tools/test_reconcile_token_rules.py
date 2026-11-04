@@ -5,6 +5,7 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import tempfile
 import sys
 from types import SimpleNamespace
@@ -19,6 +20,167 @@ import reconcile_token_rules as reconciliation
 from token_reconciliation_proposals import DIRECT_WITNESSES, WITNESS_SOURCE_CONTRACT
 
 BASE = Path(__file__).resolve().parent
+
+
+class ProposalSummaryTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.index_path = self.root / 'index.json'
+        self.candidate_path = self.root / 'candidate.json'
+        repo = BASE.parent
+        self.index = json.loads((repo / 'data/compiler-language-reference-rules.json').read_bytes())
+        self.candidate = json.loads((repo / 'data/compiler-language-inventory.json').read_bytes())
+        self.candidate_path.write_bytes((repo / 'data/compiler-language-inventory.json').read_bytes())
+        self.index_path.write_bytes((repo / 'data/compiler-language-reference-rules.json').read_bytes())
+
+    def save_index(self):
+        self.index_path.write_text(json.dumps(self.index))
+
+    def summary(self):
+        return reconciliation.summarize_proposals(self.index_path, self.candidate_path)
+
+    def test_standalone_without_prose_artifacts_or_root(self):
+        result = self.summary()
+        self.assertEqual(result['global_rule_identities'], 2965)
+        self.assertEqual(result['proposed_rule_identities'], 186)
+        self.assertEqual(result['rule_identities_without_proposals'], 2779)
+        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27)):
+            profile = result['profiles'][name]
+            self.assertEqual(profile['proposed_rule_identities'], count)
+            self.assertEqual(profile['review_status'], 'unreviewed')
+            for key in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+                self.assertEqual(profile[key], 0)
+                self.assertEqual(result[key], 0)
+            self.assertIsNone(profile['full_rust_completion_percent'])
+        self.assertIsNone(result['full_rust_completion_percent'])
+        for key in ('source_block_byte_verification', 'source_archive_byte_verification'):
+            self.assertEqual(result[key], 'not_reverified_in_this_run')
+        self.assertIn('not normative semantic coverage', ' '.join(result['limitations']))
+
+    def test_each_authored_module_rejects_duplicate_omitted_foreign_and_bad_fields(self):
+        import compatibility_inventory as inventory
+        original = reconciliation.profile_inputs
+        for profile in ('tokens', 'const-eval', 'unsafe'):
+            selected, aliases, classes, authored = original(profile)
+            lines = authored.strip().splitlines()
+            fields = lines[0].split('|')
+            mutations = [lines + [lines[0]], lines[1:]]
+            for position, value in ((0, 'foreign.rule'), (1, 'Z'), (1, 'N N'),
+                                    (3, 'foreign-alias'), (3, fields[3].split()[0] + ' ' + fields[3].split()[0])):
+                changed = list(fields)
+                changed[position] = value
+                mutations.append(['|'.join(changed)] + lines[1:])
+            for position in range(7):
+                changed = list(fields)
+                changed[position] = ' '
+                mutations.append(['|'.join(changed)] + lines[1:])
+            for mutation in mutations:
+                def inputs(name):
+                    return (selected, aliases, classes, '\n'.join(mutation)) if name == profile else original(name)
+                with self.subTest(profile=profile, row=mutation[0]), mock.patch.object(
+                        reconciliation, 'profile_inputs', side_effect=inputs), self.assertRaises(inventory.InvalidInventory):
+                    self.summary()
+            for changed_aliases, changed_classes in ((dict(aliases, unused='foreign-id'), classes),
+                                                       (aliases, dict(classes, Z='executable'))):
+                def inputs(name):
+                    return (selected, changed_aliases, changed_classes, authored) if name == profile else original(name)
+                with mock.patch.object(reconciliation, 'profile_inputs', side_effect=inputs), self.assertRaises(inventory.InvalidInventory):
+                    self.summary()
+
+    def test_unique_union_not_sum_of_overlapping_profiles(self):
+        original = reconciliation.profile_inputs
+        token = next(page for page in self.index['pages'] if page['path'] == 'src/tokens.md')
+        other = next(page for page in self.index['pages'] if page['path'] == 'src/types.md')
+        moved, token['rules'] = token['rules'][:44], token['rules'][44:]
+        start = max([rule['line'] for rule in other['rules']] + [0])
+        other['rules'].extend({'label': row['label'], 'line': start + i + 1} for i, row in enumerate(moved))
+        self.save_index()
+        selected = ('src/tokens.md', 'src/const_eval.md')
+        labels = [rule['label'] for page in self.index['pages'] if page['path'] in selected for rule in page['rules']]
+        aliases = original('tokens')[1]
+        authored = '\n'.join(label + '|N|Synthetic rationale|lit|Positive need|Invalid need|Interaction need' for label in labels)
+        def inputs(profile):
+            return (selected, aliases, original(profile)[2], authored) if profile == 'tokens' else original(profile)
+        pin = dict(WITNESS_SOURCE_CONTRACT, rule_index_sha256=digest(self.index_path.read_bytes()))
+        with mock.patch.object(reconciliation, 'profile_inputs', side_effect=inputs), mock.patch.object(
+                reconciliation, 'WITNESS_SOURCE_CONTRACT', pin):
+            result = self.summary()
+        self.assertEqual(result['proposed_rule_identities'], 142)
+        self.assertEqual(result['rule_identities_without_proposals'], 2823)
+
+    def test_malformed_metadata_binding_counts_and_false_credit(self):
+        import compatibility_inventory as inventory
+        baseline = copy.deepcopy(self.index)
+        mutations = []
+        for key, value in (('unique_rule_labels_total', 2964), ('rules_with_reviewed_obligation_mapping', 1),
+                           ('duplicate_rule_labels', True)):
+            changed = copy.deepcopy(baseline)
+            changed['counts'][key] = value
+            mutations.append(changed)
+        changed = copy.deepcopy(baseline)
+        changed['pages'].append(copy.deepcopy(changed['pages'][0]))
+        mutations.append(changed)
+        changed = copy.deepcopy(baseline)
+        changed['pages'][0]['rules'].append(copy.deepcopy(changed['pages'][0]['rules'][0]))
+        mutations.append(changed)
+        changed = copy.deepcopy(baseline)
+        changed['review_status'] = 'reviewed'
+        mutations.append(changed)
+        for changed in mutations:
+            self.index = changed
+            self.save_index()
+            with self.assertRaises(inventory.InvalidInventory):
+                self.summary()
+        self.index = baseline
+        self.save_index()
+        for raw in ('null', '[]', '{', '{"sections":[],"sections":[]}'):
+            self.candidate_path.write_text(raw)
+            with self.assertRaises(inventory.InvalidInventory):
+                self.summary()
+
+    def test_missing_inputs_do_not_invent_denominators_and_present_errors_survive(self):
+        import compatibility_inventory as inventory
+        self.index_path.unlink()
+        result = self.summary()
+        self.assertEqual(result['readiness'], 'missing')
+        self.assertIsNone(result['global_rule_identities'])
+        self.candidate_path.write_text('null')
+        with self.assertRaises(inventory.InvalidInventory):
+            self.summary()
+        self.candidate_path.unlink()
+        result = self.summary()
+        self.assertEqual(len(result['missing_files']), 2)
+        self.index_path.write_text('null')
+        with self.assertRaises(inventory.InvalidInventory):
+            self.summary()
+
+    def test_ordinary_cli_normalizes_invalid_proposal_inputs(self):
+        data = self.root / 'data'
+        data.mkdir()
+        (data / 'compiler-language-inventory.json').write_bytes(self.candidate_path.read_bytes())
+        (data / 'compiler-language-reference-rules.json').write_text('null')
+        process = subprocess.run([sys.executable, str(BASE / 'compatibility_inventory.py'),
+                                  '--root', str(self.root)], capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(process.stdout, '')
+        self.assertIn('rule_proposals', json.loads(process.stderr)['error'])
+
+    def test_self_consistent_foreign_pin_and_index_bytes_rejected(self):
+        import compatibility_inventory as inventory
+        old = self.index['provenance']['reference_commit']
+        foreign = 'a' * 40
+        for name in ('reference_commit', 'reference_repository_url', 'source_archive_url'):
+            self.index['provenance'][name] = self.index['provenance'][name].replace(old, foreign)
+        for page in self.index['pages'] + self.index['unlinked_markdown_files']:
+            page['url'] = page['url'].replace(old, foreign)
+        self.save_index()
+        with self.assertRaisesRegex(inventory.InvalidInventory, 'source-contract reference_commit'):
+            self.summary()
+        self.index_path.write_bytes((BASE.parent / 'data/compiler-language-reference-rules.json').read_bytes() + b' ')
+        with self.assertRaisesRegex(inventory.InvalidInventory, 'source-contract rule_index_sha256'):
+            self.summary()
 
 
 class ReconciliationTests(unittest.TestCase):

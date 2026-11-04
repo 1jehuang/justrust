@@ -349,8 +349,28 @@ prove evaluation timing, and three unused overflow controls do not establish
 all const-error behavior. All missing needs remain open, even with passing
 current receipts. Default token artifacts remain unchanged, and an artifact
 from one profile cannot validate as the other.
-Both profiles refer to the same 2,965-rule universe, not additive language
+
+For the two pinned unsafe-language pages, use `--profile unsafe` with `generate`
+or `validate`. `tools/unsafe_reconciliation_proposals.py` accounts for all 16
+labels in `src/unsafe-keyword.md` and all 11 in `src/unsafety.md`, retaining the
+other 2,938 identities. The retained candidate is
+`data/compiler-language-unsafe-reconciliation.json`. Unsafe permission and
+programmer proof obligations are distinct from defined execution: undefined
+behavior must not be executed as an equivalence oracle, and general runtime
+undefined behavior need not be statically rejected. This profile does not
+support witness-link or execution-evidence actions. Its proposed classifications
+and missing test needs remain unreviewed, with no executable or completion
+credit.
+
+All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
+The ordinary inventory CLI and `coverage --json` expose `rule_proposals` with
+per-profile proposed counts and the unique union of rule identities. This
+offline summary checks authored module inputs against index and candidate
+metadata. It does not reverify Reference source blocks or archive bytes and
+does not consume execution receipts. Reviewed, executable and completed rule
+counts remain zero. Use the exact-source `generate` and `validate` commands
+above for the separate, stronger source-byte checks.
 
 For the six explicitly authored token witnesses, use `build-witness-links`
 with the same arguments and a new external scratch artifact path. Check that

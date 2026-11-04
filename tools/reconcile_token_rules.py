@@ -52,6 +52,110 @@ def profile_purpose(profile):
     return 'bounded-' + ('token' if profile == 'tokens' else profile) + '-rule-reconciliation-candidate'
 
 
+def summarize_proposals(index_path, candidate_path):
+    """Summarize authored module inputs, without Reference prose or sidecars.
+
+    This deliberately does not call build/validate: those independently verify
+    actual selected source bytes and remain the stronger reproduction path.
+    """
+    import compatibility_inventory as inventory
+
+    index_path, candidate_path = Path(index_path), Path(candidate_path)
+    missing = [str(path) for path in (index_path, candidate_path) if not path.is_file()]
+    # A present malformed file must not be hidden by another missing input.
+    index = inventory.load(index_path) if index_path.is_file() else None
+    candidate = inventory.load(candidate_path) if candidate_path.is_file() else None
+    try:
+        if candidate_path.is_file():
+            require(isinstance(candidate, dict), 'proposal candidate must be an object')
+            existing = {r for section in candidate['sections'] for row in section['obligations']
+                        for r in row['existing_requirements']}
+            inventory.validate(candidate, existing)
+        if index_path.is_file():
+            require(isinstance(index, dict), 'proposal index must be an object')
+            provenance = index['provenance']
+            inventory.validate_reference_metadata(
+                index, candidate, candidate_path if candidate is not None else None,
+                provenance['compiler_commit'])
+            pages = index['pages'] + index['unlinked_markdown_files']
+            paths = {page['path'] for page in pages}
+            identities = {(page['path'], rule['label']) for page in pages for rule in page['rules']}
+        if missing:
+            return {'readiness': 'missing', 'review_status': 'unreviewed', 'missing_files': missing,
+                    'global_rule_identities': None, 'full_rust_completion_percent': None,
+                    'limitations': ['Missing proposal inputs cannot establish a universal source denominator.']}
+        selected_paths = {path for profile in ('tokens', 'const-eval', 'unsafe')
+                          for path in profile_inputs(profile)[0]}
+        if not selected_paths & paths:
+            return {'readiness': 'missing', 'review_status': 'unreviewed',
+                    'missing_files': [], 'missing_selected_pages': sorted(selected_paths),
+                    'global_rule_identities': None, 'full_rust_completion_percent': None,
+                    'limitations': ['This fixture has no selected proposal pages and cannot establish the pinned source denominator.']}
+        require(len(identities) == 2965, 'proposal pinned global denominator mismatch')
+        for name, actual in (
+                ('reference_commit', provenance['reference_commit']),
+                ('rule_index_sha256', digest(index_path.read_bytes())),
+                ('candidate_inventory_sha256', digest(candidate_path.read_bytes()))):
+            require(actual == WITNESS_SOURCE_CONTRACT[name], 'proposal source-contract ' + name)
+        obligations = {row['id'] for section in candidate['sections'] for row in section['obligations']}
+        profiles, union = {}, set()
+        valid_classes = {'normative-semantic', 'grammar', 'index', 'cross-reference', 'edition-context'}
+        for profile, expected in (('tokens', 115), ('const-eval', 44), ('unsafe', 27)):
+            selected, aliases, classes, authored = profile_inputs(profile)
+            require(len(selected) == len(set(selected)) and set(selected) <= paths,
+                    'missing or duplicate selected proposal page')
+            require(isinstance(aliases, dict) and aliases and set(aliases.values()) <= obligations,
+                    'foreign candidate alias')
+            require(isinstance(classes, dict) and classes and set(classes.values()) <= valid_classes,
+                    'invalid proposal classes')
+            selected_identities = {identity for identity in identities if identity[0] in selected}
+            by_label = {label: (page, label) for page, label in selected_identities}
+            seen, counts = set(), Counter()
+            for line in authored.strip().splitlines():
+                fields = line.split('|')
+                require(len(fields) == 7 and all(field.strip() for field in fields),
+                        'proposal requires seven nonempty explicit fields')
+                label, classification, _, links, _, _, _ = fields
+                require(label in by_label, 'foreign proposal rule: ' + label)
+                identity = by_label[label]
+                require(identity not in seen, 'duplicate proposal rule: ' + label)
+                seen.add(identity)
+                codes, names = classification.split(), links.split()
+                require(len(codes) == len(set(codes)) and set(codes) <= set(classes),
+                        'invalid proposal classification')
+                require(len(names) == len(set(names)) and set(names) <= set(aliases),
+                        'foreign or duplicate proposal alias')
+                require(len({aliases[name] for name in names}) == len(names),
+                        'duplicate proposal candidate identity')
+                counts.update(classes[code] for code in codes)
+            require(seen == selected_identities, 'omitted selected proposal rules')
+            require(len(seen) == expected, 'proposal pinned profile denominator mismatch')
+            union.update(seen)
+            profiles[profile] = {
+                'selected_pages': list(selected), 'proposed_rule_identities': len(seen),
+                'proposed_classification_counts': {name: counts[name] for name in sorted(set(classes.values()))},
+                'review_status': 'unreviewed', 'reviewed_rule_rows': 0,
+                'rows_with_exact_executable_evidence': 0, 'completed_rule_rows': 0,
+                'full_rust_completion_percent': None,
+            }
+        return {
+            'readiness': 'review-required', 'review_status': 'unreviewed', 'profiles': profiles,
+            'global_rule_identities': len(identities), 'proposed_rule_identities': len(union),
+            'rule_identities_without_proposals': len(identities - union),
+            'reviewed_rule_rows': 0, 'rows_with_exact_executable_evidence': 0,
+            'completed_rule_rows': 0, 'full_rust_completion_percent': None,
+            'source_block_byte_verification': 'not_reverified_in_this_run',
+            'source_archive_byte_verification': 'not_reverified_in_this_run',
+            'limitations': [
+                'Authored proposed interpretation is not normative semantic coverage, review, execution or completion credit.',
+                'Source blocks and archive bytes are NOT reverified in this offline module-input summary. Recorded hashes are not fresh proof.',
+                'Exact source-backed generate/validate remains an independent stronger check. No reconciliation artifact is consumed.',
+            ],
+        }
+    except (ValueError, KeyError, TypeError, AttributeError, OSError, ImportError, SyntaxError) as exc:
+        raise inventory.InvalidInventory('rule_proposals: ' + str(exc)) from exc
+
+
 def load_inputs(index_path, candidate_path, source_root, profile='tokens'):
     selected, _, _, _ = profile_inputs(profile)
     index_bytes, candidate_bytes = index_path.read_bytes(), candidate_path.read_bytes()

@@ -284,6 +284,13 @@ def validate_reference_rules(root: Path, data=_ABSENT, *, candidate_path=None, c
     contract = contract if contract is not None else load(root / "data/compiler-compatibility-contract.json")
     validate_contract(contract, read_verifier(root / "tests/support/stock_rustc.rs"))
     validate(candidate, scope_ids(load(root / "data/compiler-compatibility-scope.json")))
+    return validate_reference_metadata(data, candidate, candidate_path, contract["oracle"]["commit"],
+                                       source_archive=source_archive, submodule_proof=submodule_proof)
+
+
+def validate_reference_metadata(data, candidate, candidate_path, compiler_commit, *,
+                                source_archive=None, submodule_proof=None):
+    """Validate pinned metadata only. The caller owns candidate/scope validation."""
     fields(data, ("schema_version", "review_status", "scope", "provenance", "counts",
                   "pinned_pages_without_candidate_section", "candidate_pages_absent_from_pinned_summary",
                   "unlinked_markdown_files", "limitations", "pages"), "reference_rules")
@@ -299,12 +306,12 @@ def validate_reference_rules(root: Path, data=_ABSENT, *, candidate_path=None, c
                         "summary_sha256", "candidate_inventory_sha256"), "reference_rules.provenance")
     compiler = exact_hex(provenance["compiler_commit"], 40, "compiler_commit")
     reference = exact_hex(provenance["reference_commit"], 40, "reference_commit")
-    require(isinstance(contract, dict) and isinstance(contract.get("oracle"), dict)
-            and compiler == contract["oracle"].get("commit"), "reference_rules: compiler pin mismatch")
+    require(compiler == compiler_commit, "reference_rules: compiler pin mismatch")
     for name in ("compiler_submodule_response_sha256", "source_archive_sha256", "summary_sha256", "candidate_inventory_sha256"):
         exact_hex(provenance[name], 64, name)
-    require(provenance["candidate_inventory_sha256"] == sha256(file_bytes(candidate_path)),
-            "reference_rules: candidate inventory bytes changed")
+    if candidate_path is not None:
+        require(provenance["candidate_inventory_sha256"] == sha256(file_bytes(candidate_path)),
+                "reference_rules: candidate inventory bytes changed")
     api = "https://api.github.com/repos/rust-lang/rust/contents/src/doc/reference?ref=" + compiler
     repository = "https://github.com/rust-lang/reference/tree/" + reference
     require(provenance["compiler_submodule_api_url"] == api
@@ -317,7 +324,7 @@ def validate_reference_rules(root: Path, data=_ABSENT, *, candidate_path=None, c
     # The caller validates the complete candidate schema against the current scope.
     # Independently require unambiguous page identities for the adjacency relation.
     candidate_pages = {}
-    for section in rows(candidate.get("sections"), "candidate.sections"):
+    for section in rows(candidate.get("sections"), "candidate.sections") if candidate is not None else ():
         require(isinstance(section, dict), "candidate.section: object required")
         refs = rows(section.get("source_refs"), "candidate.source_refs")
         first = refs[0]
@@ -347,9 +354,14 @@ def validate_reference_rules(root: Path, data=_ABSENT, *, candidate_path=None, c
             exact_hex(page["sha256"], 64, "reference.page.sha256")
             require(page["rule_obligation_mapping_status"] == "unreviewed", "reference.page: mappings must remain unreviewed")
             expected = candidate_pages.get(path) if group == "pages" else None
-            require(page["candidate_section"] == (expected["id"] if expected else None)
-                    and page["candidate_obligations"] == ([item["id"] for item in expected["obligations"]] if expected else []),
-                    "reference.page: candidate adjacency mismatch, not semantic mapping")
+            if candidate is not None:
+                require(page["candidate_section"] == (expected["id"] if expected else None)
+                        and page["candidate_obligations"] == ([item["id"] for item in expected["obligations"]] if expected else []),
+                        "reference.page: candidate adjacency mismatch, not semantic mapping")
+            else:
+                require(page["candidate_section"] is None or isinstance(page["candidate_section"], str),
+                        "reference.page: invalid candidate adjacency")
+                strings(page["candidate_obligations"], "reference.page.candidate_obligations")
             for name, keys in (("headings", ("level", "title", "line")),
                                ("edition_note_markers", ("edition", "line")), ("rules", ("label", "line"))):
                 prior = 0
@@ -379,15 +391,24 @@ def validate_reference_rules(root: Path, data=_ABSENT, *, candidate_path=None, c
             and summary["sha256"] == provenance["summary_sha256"], "reference_rules: summary hash missing or inconsistent")
     absent = sorted(set(candidate_pages) - linked)
     unmatched = sorted(linked - set(candidate_pages))
-    require(data["pinned_pages_without_candidate_section"] == [path.removeprefix("src/") for path in unmatched]
-            and data["candidate_pages_absent_from_pinned_summary"] == [path.removeprefix("src/") for path in absent],
-            "reference_rules: missing-page accounting mismatch")
+    if candidate is not None:
+        require(data["pinned_pages_without_candidate_section"] == [path.removeprefix("src/") for path in unmatched]
+                and data["candidate_pages_absent_from_pinned_summary"] == [path.removeprefix("src/") for path in absent],
+                "reference_rules: missing-page accounting mismatch")
+    else:
+        strings(data["pinned_pages_without_candidate_section"], "reference_rules.unmatched")
+        strings(data["candidate_pages_absent_from_pinned_summary"], "reference_rules.absent")
     computed = {"chapter_pages": len(linked), "linked_page_rule_labels": linked_count,
                 "unlinked_page_rule_labels": unlinked_count, "unique_rule_labels_total": len(labels),
                 "duplicate_rule_labels": 0, "candidate_pages": len(candidate_pages),
                 "chapter_pages_without_candidate_section": len(unmatched),
                 "candidate_pages_absent_from_pinned_summary": len(absent),
                 "rules_with_reviewed_obligation_mapping": 0, "rules_requiring_mapping_review": len(labels)}
+    if candidate is None:
+        for name in ("candidate_pages", "chapter_pages_without_candidate_section", "candidate_pages_absent_from_pinned_summary"):
+            value = data["counts"].get(name)
+            require(type(value) is int and value >= 0, "reference_rules: invalid candidate count")
+            computed[name] = value
     require(isinstance(data["counts"], dict) and set(data["counts"]) == set(computed)
             and all(type(data["counts"][key]) is int and data["counts"][key] == value for key, value in computed.items()),
             "reference_rules: declared counts disagree with exact page/rule inventory")
@@ -605,6 +626,7 @@ def library_surface_readiness(root, *, data=_ABSENT, contract=None):
 def load_and_summarize(root: Path):
     """Return honest missing readiness for partial fixtures, reject malformed present inputs."""
     root = Path(root)
+    proposals = rule_proposal_readiness(root)
     library_data = load(root / LIBRARY_PROVENANCE) if (root / LIBRARY_PROVENANCE).is_file() else _ABSENT
     if library_data is not _ABSENT:
         fields(library_data, LIBRARY_FIELDS, "library_provenance")
@@ -635,6 +657,7 @@ def load_and_summarize(root: Path):
         return {"schema_version": 1, "scope": CONTRACT, "readiness": "missing",
                 "review_status": "unreviewed", "missing_files": missing,
                 "full_rust_completion_percent": None,
+                "rule_proposals": proposals,
                 "inventory_readiness_blockers": missing + ([REFERENCE_RULES] if reference_data is _ABSENT else [])
                                                 + ([LIBRARY_PROVENANCE] if library_data is _ABSENT else []),
                 "reference_rules": {"readiness": "missing" if reference_data is _ABSENT else "blocked-by-missing-inputs",
@@ -646,10 +669,22 @@ def load_and_summarize(root: Path):
     result.update(contract_id=contract["contract_id"], readiness="unreviewed", missing_files=[])
     result["reference_rules"] = reference_readiness(root, data=reference_data, contract=contract)
     result["library_surface_inputs"] = library_surface_readiness(root, data=library_data, contract=contract)
+    result["rule_proposals"] = proposals
     result["inventory_readiness_blockers"] = [path for name, path in (("reference_rules", REFERENCE_RULES),
                                             ("library_surface_inputs", LIBRARY_PROVENANCE))
                                             if result[name]["readiness"] == "missing"]
     return result
+
+
+def rule_proposal_readiness(root, *, index_path=None, candidate_path=None):
+    from reconcile_token_rules import summarize_proposals
+    root = Path(root)
+    try:
+        return summarize_proposals(index_path or root / REFERENCE_RULES,
+                                   candidate_path or root / "data/compiler-language-inventory.json")
+    except ValueError as exc:
+        # The CLI's __main__ class and an imported module's class are distinct.
+        raise InvalidInventory(str(exc)) from exc
 
 
 def main(argv=None):
@@ -664,6 +699,16 @@ def main(argv=None):
     parser.add_argument("--submodule-proof", type=Path)
     parser.add_argument("--library-surface-provenance", type=Path)
     args = parser.parse_args(argv)
+    if not any((args.inventory, args.scope, args.contract, args.oracle_verifier,
+                args.reference_rules, args.source_archive, args.submodule_proof,
+                args.library_surface_provenance)):
+        try:
+            report = load_and_summarize(args.root)
+        except InvalidInventory as exc:
+            print(json.dumps({"error": str(exc)}), file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     args.scope = args.scope or args.root / "data/compiler-compatibility-scope.json"
     args.inventory = args.inventory or [args.root / "data/compiler-language-inventory.json",
                                        args.root / "data/compiler-library-project-inventory.json"]
@@ -681,6 +726,10 @@ def main(argv=None):
         report["library_surface_inputs"] = library_surface_readiness(
             args.root, data=load(args.library_surface_provenance) if args.library_surface_provenance else _ABSENT,
             contract=contract)
+        report["rule_proposals"] = rule_proposal_readiness(
+            args.root, index_path=args.reference_rules,
+            candidate_path=next((path for path in args.inventory
+                                 if path.name == "compiler-language-inventory.json"), None))
         report["inventory_readiness_blockers"] = [path for name, path in (("reference_rules", REFERENCE_RULES),
                                                 ("library_surface_inputs", LIBRARY_PROVENANCE))
                                                 if report[name]["readiness"] == "missing"]

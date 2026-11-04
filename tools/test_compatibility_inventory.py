@@ -49,6 +49,25 @@ VERIFIER = '\n'.join(f'const {name}: &str = "{value}";' for name, value in {
 
 
 class InventoryTests(unittest.TestCase):
+    def test_actual_root_proposals_loader_and_both_cli_paths(self):
+        root = Path(__file__).resolve().parents[1]
+        report = inventory.load_and_summarize(root)
+        self.assertEqual(report['counts']['obligations'], 257)
+        self.assertEqual(report['counts']['obligations_with_executable_evidence'], 0)
+        self.assertIsNone(report['full_rust_completion_percent'])
+        expected = report['rule_proposals']
+        self.assertEqual(expected['global_rule_identities'], 2965)
+        self.assertEqual(expected['proposed_rule_identities'], 186)
+        self.assertEqual(expected['rule_identities_without_proposals'], 2779)
+        for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
+            process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
+                                     capture_output=True, text=True, check=False)
+            self.assertEqual(process.returncode, 0, process.stderr)
+            result = json.loads(process.stdout)
+            self.assertEqual(result['rule_proposals'], expected)
+            self.assertEqual(result['counts']['obligations'], 257)
+            self.assertEqual(result['counts']['obligations_with_executable_evidence'], 0)
+
     def reject(self, value):
         with self.assertRaises(inventory.InvalidInventory):
             inventory.summarize([value], scope_fixture())
@@ -236,6 +255,12 @@ class InventoryTests(unittest.TestCase):
             self.assertEqual(result["readiness"], "missing")
             self.assertEqual(len(result["missing_files"]), 5)
             self.assertIsNone(result["full_rust_completion_percent"])
+            self.assertEqual(result['rule_proposals']['readiness'], 'missing')
+            self.assertIsNone(result['rule_proposals']['global_rule_identities'])
+            cli = subprocess.run([sys.executable, inventory.__file__, '--root', str(root)],
+                                 capture_output=True, text=True, check=False)
+            self.assertEqual(cli.returncode, 0, cli.stderr)
+            self.assertEqual(json.loads(cli.stdout)['rule_proposals']['readiness'], 'missing')
             (root / "data").mkdir()
             (root / "tests/support").mkdir(parents=True)
             for name, value in (("compiler-compatibility-contract.json", contract_fixture()),
