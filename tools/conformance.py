@@ -364,6 +364,8 @@ def main(argv=None) -> int:
     parser.add_argument("--evidence", type=Path, action="append", default=[], help="coverage: retained track directory; catalog-coverage: retained catalog directory")
     parser.add_argument("--require-complete", action="store_true",
                         help="coverage only: exit zero only when every mapped exact case has current passing evidence")
+    parser.add_argument("--require-measured", action="store_true",
+                        help="coverage only: require current authenticated pass-or-fail results for every mapped case, not conformance")
     parser.add_argument("--json", action="store_true", help="machine-readable layered coverage")
     parser.add_argument("--dry-run", action="store_true", help="show exact track invocations without executing")
     parser.add_argument("--jobs", type=int, default=1, help="track: independent exact-case processes, 1..8")
@@ -390,6 +392,10 @@ def main(argv=None) -> int:
                 raise InvalidEvidence("catalog requires unique --suite selections and positive timeout")
         if args.shard and args.action != "track":
             raise InvalidEvidence("--shard is only valid with track")
+        if args.require_complete and args.require_measured:
+            raise InvalidEvidence("--require-complete and --require-measured are mutually exclusive")
+        if args.require_measured and (args.action != "coverage" or not args.evidence):
+            raise InvalidEvidence("--require-measured requires coverage with --evidence")
         if args.require_complete and (args.action != "coverage" or not args.evidence):
             raise InvalidEvidence("--require-complete requires coverage with --evidence")
         data = validate(load_json(args.manifest))

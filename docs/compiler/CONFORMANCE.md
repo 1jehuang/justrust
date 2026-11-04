@@ -151,6 +151,9 @@ python3 tools/conformance.py coverage \
 # Repeat --evidence for every independently run shard directory.
 python3 tools/conformance.py coverage --require-complete --json \
   --evidence "$JCODE_SCRATCH_DIR/compatibility-current"
+# Measurement-only gate. A fully measured campaign may still contain failures.
+python3 tools/conformance.py coverage --require-measured --json \
+  --evidence "$JCODE_SCRATCH_DIR/compatibility-current"
 ```
 
 The optional `coverage --require-complete` gate exits zero only when every
@@ -161,6 +164,10 @@ are rejected with exit 2 rather than patched or silently imported.
 `campaign.complete_current_measurement` distinguishes a complete pass/fail
 measurement from an incomplete campaign; a complete measurement containing
 failed cases still has `campaign.all_cases_passed=false` and fails the gate.
+The separate `coverage --require-measured` gate exits zero for a complete
+authenticated pass/fail measurement even when cases fail. It requires evidence,
+is valid only for coverage, and cannot be combined with `--require-complete`.
+It does not turn failed cases into passing conformance or change the summary.
 Unmeasured, stale, conflicting, timed-out, infrastructure and unverified cases
 remain unresolved. Completion here covers only the mapped exact tests. It does
 not fill missing layer obligations or certify the full Rust inventory.

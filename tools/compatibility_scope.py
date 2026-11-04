@@ -540,6 +540,8 @@ def main(args, base, c):
         print(c.encoded(summary).decode() if args.json else render(summary))
         if getattr(args, "require_complete", False):
             return 0 if summary["campaign"]["all_cases_passed"] else 1
+        if getattr(args, "require_measured", False):
+            return 0 if summary["campaign"]["complete_current_measurement"] else 1
         return 0
     jobs = getattr(args, "jobs", 1)
     if not isinstance(jobs, int) or isinstance(jobs, bool) or not 1 <= jobs <= 8:

@@ -15,6 +15,107 @@ import conformance as c
 
 
 class ScopeTests(unittest.TestCase):
+    def measured_coverage(self, reports=(), strict=False, json_output=True):
+        path = self.root / "scope.json"
+        path.write_bytes(c.encoded(self.scope))
+        args = SimpleNamespace(scope=path, action="coverage", evidence=list(reports),
+                               json=json_output, require_complete=strict,
+                               require_measured=not strict)
+        output = io.StringIO()
+        with patch.object(c, "ROOT", self.root), \
+                patch.object(c, "source_identity", return_value=self.identity), \
+                patch.object(s, "runner_identity", return_value=self.runner), \
+                patch.object(c, "execute", side_effect=AssertionError("coverage must not execute")), \
+                contextlib.redirect_stdout(output):
+            code = s.main(args, self.base, c)
+        return code, json.loads(output.getvalue()) if json_output else output.getvalue()
+
+    def test_require_measured_complete_failed_and_passed_are_distinct_from_all_pass(self):
+        for name, states, all_pass in (
+                ("failed", {"accepts": (101, "failure"), "rejects": (101, "failure")}, False),
+                ("mixed", {"accepts": (0, "justrust: ok: 1 test passed\n"),
+                           "rejects": (101, "failure")}, False),
+                ("passed", {test: (0, "justrust: ok: 1 test passed\n")
+                            for test in ("accepts", "rejects")}, True)):
+            directory, _ = self.report(name, states)
+            for reports in ([directory], [directory, directory]):
+                with self.subTest(name=name, reports=reports):
+                    expected = self.summary(reports)
+                    self.assertTrue(expected["campaign"]["complete_current_measurement"])
+                    self.assertIs(expected["campaign"]["all_cases_passed"], all_pass)
+                    self.assertEqual(self.measured_coverage(reports), (0, expected))
+                    self.assertEqual(self.measured_coverage(reports, strict=True),
+                                     (0 if all_pass else 1, expected))
+                    self.assertEqual(self.measured_coverage(reports, json_output=False),
+                                     (0, s.render(expected) + "\n"))
+                    self.assertFalse(expected["full_rust_support_established"])
+
+    def test_require_measured_missing_partial_empty_and_repeated_canonical_cases_fail(self):
+        partial, _ = self.report("partial")
+        repeated, _ = self.report("same-canonical-case")
+        for reports in ([], [partial], [partial, partial, repeated]):
+            with self.subTest(reports=reports):
+                code, result = self.measured_coverage(reports)
+                self.assertEqual(code, 1)
+                self.assertFalse(result["campaign"]["complete_current_measurement"])
+                self.assertEqual(result["campaign"]["measured_case_count"], bool(reports))
+                self.assertEqual(result["campaign"]["expected_case_count"], 2)
+        for gate in self.scope["areas"][0]["requirements"][0]["gates"]:
+            gate["tests"] = []
+        code, result = self.measured_coverage()
+        self.assertEqual(code, 1)
+        self.assertEqual(result["campaign"]["expected_case_count"], 0)
+        self.assertFalse(result["campaign"]["complete_current_measurement"])
+
+    def test_require_measured_noncurrent_conflicting_and_unverified_receipts_fail(self):
+        for status in ("stale", "conflicting", "timeout", "infrastructure", "unverified"):
+            with self.subTest(status=status):
+                directory, report = self.report("measured-" + status, {
+                    test: (0, "justrust: ok: 1 test passed\n") for test in ("accepts", "rejects")})
+                reports = [directory]
+                if status == "stale":
+                    report["source_before"] = {"revision": "old"}
+                elif status == "conflicting":
+                    failed, _ = self.report("measured-conflict-failure", {"accepts": (101, "failure")})
+                    reports.append(failed)
+                else:
+                    row = next(row for row in report["results"] if row["id"] == s.case_id(self.accept))
+                    payload = b"unverified log\n"
+                    (directory / row["log"]).write_bytes(payload)
+                    row.update(returncode=101 if status == "timeout" else None if status == "infrastructure" else 0,
+                               timed_out=status == "timeout", outcome=status, tests_passed=0,
+                               log_sha256=c.digest(payload))
+                self.save(directory, report)
+                for ordered in (reports, list(reversed(reports)) + reports):
+                    code, result = self.measured_coverage(ordered)
+                    self.assertEqual(code, 1)
+                    self.assertFalse(result["campaign"]["complete_current_measurement"])
+                    self.assertIn({"id": s.case_id(self.accept), "status": status},
+                                  result["campaign"]["unresolved_cases"])
+
+    def test_require_measured_rejects_malformed_or_tampered_receipts_even_with_good_evidence(self):
+        good, _ = self.report("measured-good", {
+            test: (0, "justrust: ok: 1 test passed\n") for test in ("accepts", "rejects")})
+        for kind in ("interrupted", "duplicate", "forged", "missing-identity", "nonobject", "json", "log"):
+            with self.subTest(kind=kind):
+                directory, report = self.report("measured-bad-" + kind, {
+                    test: (0, "justrust: ok: 1 test passed\n") for test in ("accepts", "rejects")})
+                if kind == "interrupted":
+                    report["results"].pop()
+                elif kind == "duplicate":
+                    report["results"].append(report["results"][0])
+                elif kind == "forged":
+                    report["results"][0]["tests_passed"] = 999
+                elif kind == "missing-identity":
+                    report.pop("runner_after")
+                self.save(directory, [] if kind == "nonobject" else report)
+                if kind == "json":
+                    (directory / "report.json").write_text('{"results": [')
+                elif kind == "log":
+                    (directory / report["results"][0]["log"]).write_text("changed log\n")
+                with self.assertRaises(c.InvalidEvidence):
+                    self.measured_coverage([good, directory, good])
+
     def backlog(self):
         return s.selector_backlog(self.scope, c, self.root)
 

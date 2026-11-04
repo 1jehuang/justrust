@@ -23,6 +23,47 @@ CLIENT_RETRY_LINES = (
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_require_measured_invalid_combinations_are_rejected_before_manifest_io(self):
+        actions = ("validate", "plan", "discover", "run", "assess", "track",
+                   "catalog", "assess-catalog", "catalog-coverage")
+        invalid = [[action, "--require-measured"] for action in actions]
+        invalid += [[action, "--require-measured", "--evidence", "missing-report"]
+                    for action in actions]
+        invalid.append(["coverage", "--require-measured"])
+        invalid += [["coverage", *flags, "--evidence", "missing-report"] for flags in (
+            ["--require-measured", "--require-complete"],
+            ["--require-complete", "--require-measured"])]
+        for argv in invalid:
+            with self.subTest(argv=argv), patch.object(c, "load_json") as load, \
+                    patch.object(c, "validate") as validate, \
+                    patch.object(c, "execute") as execute, \
+                    contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(c.main(argv), 2)
+                load.assert_not_called()
+                validate.assert_not_called()
+                execute.assert_not_called()
+
+    def test_require_measured_with_evidence_reaches_coverage_dispatch(self):
+        import compatibility_scope
+        for evidence in (["first"], ["first", "second"]):
+            argv = ["coverage", "--require-measured", "--json"]
+            for directory in evidence:
+                argv.extend(["--evidence", directory])
+            for code in (0, 1):
+                with self.subTest(evidence=evidence, code=code), \
+                        patch.object(c, "load_json", return_value=self.data) as load, \
+                        patch.object(c, "validate", return_value=self.data), \
+                        patch.object(compatibility_scope, "main", return_value=code) as scope_main:
+                    self.assertEqual(c.main(argv), code)
+                    load.assert_called_once()
+                    args, data, runner = scope_main.call_args.args
+                    self.assertTrue(args.require_measured)
+                    self.assertFalse(args.require_complete)
+                    self.assertTrue(args.json)
+                    self.assertEqual(args.evidence, list(map(Path, evidence)))
+                    self.assertIs(data, self.data)
+                    self.assertIs(runner, c)
+
     def test_require_complete_invalid_combinations_are_rejected_before_io(self):
         invalid = [[action, "--require-complete"]
                    for action in ("validate", "plan", "discover", "run", "assess", "track")]
