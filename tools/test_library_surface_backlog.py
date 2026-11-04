@@ -323,6 +323,193 @@ class BacklogTests(unittest.TestCase):
             self.assertEqual(backlog.main(['verify', '--surface-index', str(self.surface_path),
                 '--provenance', str(self.provenance_path), '--backlog', str(output)]), 1)
 
+    def query(self, **options):
+        return backlog.query(self.surface_path, self.provenance_path, **options)
+
+    def test_query_all_literal_records_and_original_build_bytes(self):
+        before = backlog.encode(self.build())
+        surface_before = self.surface_path.read_bytes()
+        provenance_before = self.provenance_path.read_bytes()
+        expected = sorted(self.surface['index_link_candidates'], key=lambda r: (r['path'], r['anchor']))
+        records = []
+        for offset in (0, 100):
+            result = self.query(offset=offset)
+            self.assertEqual(set(result), {'schema_version', 'inventory_kind', 'source_identity',
+                'scope', 'surface_artifact', 'selection', 'total_candidate_records',
+                'matched_candidate_records', 'returned_candidate_records', 'has_more', 'records',
+                'external_verification', 'original_html_verification', 'review_credit',
+                'execution_credit', 'completion_credit', 'api_denominator',
+                'full_rust_completion_percent', 'interpretation'})
+            self.assertEqual(result['schema_version'], 1)
+            self.assertEqual(result['inventory_kind'], 'literal-documentation-candidate-query')
+            self.assertEqual(result['source_identity'], self.identity)
+            self.assertEqual(result['scope'], self.surface['scope'])
+            self.assertEqual(result['surface_artifact'], self.provenance['artifacts'][0])
+            self.assertEqual(result['selection'], {'crate': None, 'page': None, 'anchor': None,
+                'missing_only': False, 'limit': 100, 'offset': offset})
+            self.assertEqual(result['total_candidate_records'], len(expected))
+            self.assertEqual(result['matched_candidate_records'], len(expected))
+            self.assertEqual(result['returned_candidate_records'], len(result['records']))
+            self.assertIs(result['has_more'], offset + len(result['records']) < len(expected))
+            self.assertEqual(result['external_verification'], 'retained-sidecar-bytes-reverified')
+            self.assertEqual(result['original_html_verification'], 'not_reverified_in_this_run')
+            for key in ('review_credit', 'execution_credit', 'completion_credit'):
+                self.assertIs(type(result[key]), int)
+                self.assertEqual(result[key], 0)
+            for key in ('api_denominator', 'full_rust_completion_percent'):
+                self.assertIsNone(result[key])
+            self.assertIn('not', result['interpretation'].lower())
+            self.assertIn('api', result['interpretation'].lower())
+            records.extend(result['records'])
+        downloaded = {p['path'] for p in self.pages}
+        self.assertEqual(records, [{**r, 'page_downloaded': r['path'] in downloaded} for r in expected])
+        for record in records:
+            self.assertEqual(record['stable_api_review'], 'required')
+            self.assertEqual(record['target_availability_review'], 'required')
+            self.assertIs(type(record['page_downloaded']), bool)
+        self.assertEqual(backlog.encode(self.build()), before)
+        self.assertEqual(self.surface_path.read_bytes(), surface_before)
+        self.assertEqual(self.provenance_path.read_bytes(), provenance_before)
+        self.assertFalse((self.root / 'html').exists())
+
+    def test_query_exact_filters_root_anchor_and_missing_not_unsupported(self):
+        cases = [({}, lambda r: True),
+            ({'crate': 'core'}, lambda r: r['path'].startswith('core/')),
+            ({'page': 'alloc/index.html'}, lambda r: r['path'] == 'alloc/index.html'),
+            ({'anchor': ''}, lambda r: r['anchor'] == ''),
+            ({'anchor': 'main-content'}, lambda r: r['anchor'] == 'main-content'),
+            ({'crate': 'alloc', 'page': 'alloc/index.html', 'anchor': ''},
+             lambda r: r['path'] == 'alloc/index.html' and r['anchor'] == ''),
+            ({'missing_only': True}, lambda r: r['path'] in self.missing),
+            ({'page': 'std/struct.Example.html', 'missing_only': True}, lambda r: False),
+            ({'page': 'std/fn.not_observed.html'}, lambda r: False),
+            ({'anchor': 'main'}, lambda r: False)]
+        for options, predicate in cases:
+            with self.subTest(options=options):
+                expected = sorted([r for r in self.surface['index_link_candidates'] if predicate(r)],
+                                  key=lambda r: (r['path'], r['anchor']))
+                result = self.query(**options)
+                self.assertEqual(result['matched_candidate_records'], len(expected))
+                self.assertEqual([(r['path'], r['anchor']) for r in result['records']],
+                                 [(r['path'], r['anchor']) for r in expected[:100]])
+                if options.get('missing_only'):
+                    self.assertTrue(all(r['page_downloaded'] is False for r in result['records']))
+                    self.assertTrue(all(r['stable_api_review'] == 'required' for r in result['records']))
+
+    def test_query_pagination_boundaries_and_sorting(self):
+        self.surface['index_link_candidates'].reverse()
+        self.save()
+        expected = sorted(self.surface['index_link_candidates'], key=lambda r: (r['path'], r['anchor']))
+        for limit, offset in ((1, 0), (1, 1), (100, 17), (100, 117), (1, 999999)):
+            with self.subTest(limit=limit, offset=offset):
+                result = self.query(limit=limit, offset=offset)
+                selected = expected[offset:offset + limit]
+                self.assertEqual([(r['path'], r['anchor']) for r in result['records']],
+                                 [(r['path'], r['anchor']) for r in selected])
+                self.assertEqual(result['returned_candidate_records'], len(selected))
+                self.assertIs(result['has_more'], offset + len(selected) < len(expected))
+
+    def test_query_invalid_options_rejected_before_any_io(self):
+        cases = [{'limit': v} for v in (True, False, None, 0, -1, 101, 1.0, '1')]
+        cases += [{'offset': v} for v in (True, False, None, -1, 1.0, '0')]
+        cases += [{'missing_only': v} for v in (None, 0, 1, '', 'true', [])]
+        cases += [{'crate': v} for v in ('', 'Core', 'core/', 'foreign', True, 1, [])]
+        cases += [{'page': v} for v in ('', 'core', '../core/index.html', '/core/index.html',
+            'core/../index.html', 'core//index.html', 'core/%69ndex.html', 'core/index.html#x',
+            'core/index.html?x', 'foreign/index.html', 'core\\index.html', True, 1, [])]
+        cases += [{'crate': 'core', 'page': 'std/index.html'}]
+        cases += [{'anchor': v} for v in ('#x', 'a/b', 'a b', '%20', 'x' * 2049, True, 1, [])]
+        for options in cases:
+            with self.subTest(options=options):
+                with mock.patch.object(Path, 'open', side_effect=AssertionError('unexpected IO')):
+                    with self.assertRaises(ValueError):
+                        self.query(**options)
+
+    def test_query_authenticated_bytes_receipts_and_metadata_required(self):
+        raw = self.surface_path.read_bytes()
+        for corrupted in (raw + b' ', raw.replace(b'literal', b'LITERAL', 1)):
+            with self.subTest(tamper='surface'):
+                self.surface_path.write_bytes(corrupted)
+                with self.assertRaises(ValueError):
+                    self.query()
+        self.save()
+        for field, value in (('content_sha256', '0' * 64), ('byte_length', len(raw) + 1)):
+            with self.subTest(field=field):
+                self.save()
+                self.provenance['artifacts'][0][field] = value
+                self.provenance_path.write_bytes(backlog.encode(self.provenance))
+                with self.assertRaises(ValueError):
+                    self.query()
+        self.save()
+        self.surface['index_link_candidates'][0]['stable_api_review'] = 'complete'
+        self.save()
+        with self.assertRaises(ValueError):
+            self.query()
+
+    def test_query_uses_one_authenticated_surface_snapshot(self):
+        original_read = backlog.read_json
+        reads = []
+        def replace_after_read(path, limit):
+            result = original_read(path, limit)
+            if Path(path) == self.surface_path:
+                reads.append(path)
+                self.surface_path.write_bytes(b'{"unauthenticated":"replacement"}')
+            return result
+        with mock.patch.object(backlog, 'read_json', side_effect=replace_after_read):
+            result = self.query(page='alloc/index.html')
+        self.assertEqual(len(reads), 1)
+        self.assertEqual([(r['path'], r['anchor']) for r in result['records']],
+                         [('alloc/index.html', ''), ('alloc/index.html', 'main-content')])
+
+    def test_query_cli_json_stdout_and_no_output_file(self):
+        args = ['query', '--surface-index', str(self.surface_path), '--provenance',
+            str(self.provenance_path), '--crate', 'core', '--missing-pages-only',
+            '--limit', '2', '--offset', '3']
+        files_before = set(self.root.iterdir())
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(backlog.main(args), 0)
+        self.assertEqual(json.loads(output.getvalue()), self.query(crate='core', missing_only=True, limit=2, offset=3))
+        self.assertEqual(set(self.root.iterdir()), files_before)
+        for extra in (['--output', str(self.root / 'unexpected.json')], ['--limit', '0'],
+                      ['--offset', '-1'], ['--anchor', '#bad']):
+            with self.subTest(extra=extra):
+                with mock.patch.object(Path, 'open', side_effect=AssertionError('unexpected IO')):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        try:
+                            status = backlog.main(args + extra)
+                        except SystemExit as error:
+                            status = error.code
+                    self.assertNotEqual(status, 0)
+
+
+    def test_query_validates_unselected_records_and_output_byte_bound(self):
+        self.surface['index_link_candidates'][-1]['anchor'] = '#invalid'
+        self.save()
+        with self.assertRaises(ValueError):
+            self.query(crate='core', limit=1)
+        self.surface['index_link_candidates'][-1]['anchor'] = 'main-content'
+        self.save()
+        with mock.patch.object(backlog, 'MAX_QUERY_BYTES', 10):
+            with self.assertRaises(ValueError):
+                self.query()
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()):
+                status = backlog.main(['query', '--surface-index', str(self.surface_path),
+                    '--provenance', str(self.provenance_path)])
+            self.assertEqual(status, 1)
+            self.assertEqual(stdout.getvalue(), '')
+
+    def test_query_preserves_labels_and_sorts_index_pages(self):
+        record = self.surface['index_link_candidates'][-1]
+        record['index_pages'] = ['std/index.html', 'alloc/index.html', 'core/all.html']
+        record['labels'] = ['not a classification', 'literal', 'literal']
+        self.save()
+        result = self.query(page=record['path'], anchor=record['anchor'])
+        self.assertEqual(result['records'][0]['index_pages'], sorted(record['index_pages']))
+        self.assertEqual(result['records'][0]['labels'], record['labels'])
+
+
     @unittest.skipUnless(os.environ.get('JR_COMPAT_LIBRARY_FIXTURES'), 'retained sidecar fixture is optional')
     def test_actual_retained_fixture(self):
         # Accept the shared acquisition root or the retained HTML directory itself.
@@ -339,6 +526,22 @@ class BacklogTests(unittest.TestCase):
             'candidate_records_collapsed_by_page_path': 82})
         self.assertLess(len(backlog.encode(data)), 100_000)
         backlog.verify(data, surface_path, provenance_path)
+        result = backlog.query(surface_path, provenance_path, crate='std', limit=100)
+        self.assertEqual(result['total_candidate_records'], 35236)
+        self.assertEqual(result['returned_candidate_records'], 100)
+        self.assertTrue(result['has_more'])
+        self.assertTrue(all(r['path'].startswith('std/') for r in result['records']))
+        self.assertEqual(result['external_verification'], 'retained-sidecar-bytes-reverified')
+        end = backlog.query(surface_path, provenance_path, missing_only=True, offset=35114)
+        self.assertEqual(end['matched_candidate_records'], 35114)
+        self.assertEqual(end['returned_candidate_records'], 0)
+        self.assertEqual(end['records'], [])
+        self.assertIs(end['has_more'], False)
+        missing = backlog.query(surface_path, provenance_path, missing_only=True, limit=1, offset=35113)
+        self.assertEqual(missing['matched_candidate_records'], 35114)
+        self.assertEqual(missing['returned_candidate_records'], 1)
+        self.assertIs(missing['records'][0]['page_downloaded'], False)
+        self.assertIs(missing['has_more'], False)
 
 
 if __name__ == '__main__':

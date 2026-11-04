@@ -412,6 +412,26 @@ Navigation pages and multiple anchors are not separate API items, and the
 public API denominator remains unavailable even when all observed pages have
 been acquired.
 
+Query the full retained literal-candidate sidecar, rather than only its bounded
+missing-page sample, with:
+
+```sh
+python3 tools/library_surface_backlog.py query \
+  --surface-index "$LIBRARY_FIXTURES/pinned-html-final/pinned-html-api-index.json" \
+  --provenance data/compiler-library-surface-provenance.json \
+  --crate std --limit 100 --offset 0
+```
+
+Queries authenticate and validate the complete retained sidecar before filtering,
+then return records sorted by exact `(path, anchor)` with matched counts and a
+`has_more` flag. Use `--page` and `--anchor` for exact selectors. An explicitly
+empty anchor selects page-root records. `--missing-pages-only` selects records
+whose page was not acquired in that snapshot, not APIs missing from Rust or this
+compiler. Page acquisition does not prove that an anchor exists. Results are
+bounded to 100 records and 1 MB, never import execution evidence, and do not
+reverify original HTML bytes or classify stable/public/target API eligibility.
+Existing compact backlog generation and verification remain unchanged.
+
 `tools/classify_proc_macro_details.py` provides a bounded literal review of
 retained `proc_macro` detail pages. It scopes stability annotations to their
 item header or method summary, keeps const instability separate, and leaves

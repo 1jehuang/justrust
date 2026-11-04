@@ -17,6 +17,7 @@ import sys
 
 MAX_BYTES = 100_000
 MAX_SURFACE_BYTES = 64_000_000
+MAX_QUERY_BYTES = 1_000_000
 CRATES = ('alloc', 'core', 'proc_macro', 'std')
 COUNTS = frozenset(('literal_candidate_records', 'unique_candidate_page_paths',
     'downloaded_page_records', 'downloaded_index_all_pages',
@@ -31,6 +32,15 @@ INTERPRETATION = ('Literal documentation observations only, not a stable public 
     'credit. Metadata-only validation does not recompute per-crate candidate observations '
     'or missing samples and is not fresh external-byte verification. Sidecar verification '
     'authenticates retained JSON bytes only, not original HTML source bytes.')
+QUERY_INTERPRETATION = ('Authenticated retained-sidecar literal candidates only, not stable public '
+    'target API identities, reachability or implementation support. Byte authentication is '
+    'relative to the supplied recorded provenance, not fresh source-index or official HTML '
+    'verification. A downloaded page flag '
+    'means recorded page acquisition, not anchor existence, fresh HTML verification or API '
+    'coverage. Missing-page filtering means page bytes were not acquired in the recorded '
+    'snapshot, never that Rust lacks the API. Navigation pages, aliases, unstable and '
+    'other-target items remain unclassified. Review, execution and completion credit stay '
+    'zero; API and full Rust denominators remain unavailable.')
 PAGE_FIELDS = frozenset(('path', 'url', 'byte_length', 'content_sha256', 'rustdoc_version'))
 ARTIFACT_FIELDS = frozenset(('id', 'filename', 'content_sha256', 'byte_length', 'role'))
 IDENTITY_FIELDS = frozenset(('commit', 'library_tree_sha1', 'official_documentation_root',
@@ -246,7 +256,8 @@ def validate_metadata(data, provenance):
 
 
 @value_errors
-def build(surface_path: Path, provenance_path: Path) -> dict:
+def _build_snapshot(surface_path: Path, provenance_path: Path):
+    """Authenticate and validate once, retaining the exact candidate snapshot."""
     _, provenance = read_json(provenance_path, 1_000_000)
     descriptor = provenance_parts(provenance)
     raw, surface = read_json(surface_path, MAX_SURFACE_BYTES)
@@ -320,7 +331,70 @@ def build(surface_path: Path, provenance_path: Path) -> dict:
         'review_credit': 0, 'execution_credit': 0, 'completion_credit': 0,
         'api_denominator': None, 'full_rust_denominator': None, 'interpretation': INTERPRETATION}
     validate_metadata(data, provenance)
-    return data
+    return data, candidates
+
+
+def build(surface_path: Path, provenance_path: Path) -> dict:
+    """Build the unchanged compact backlog from authenticated retained bytes."""
+    return _build_snapshot(surface_path, provenance_path)[0]
+
+
+def query_options(crate, page, anchor, missing_only, limit, offset):
+    """Reject malformed selectors and bounds before opening any inputs."""
+    need(crate is None or type(crate) is str and crate in CRATES, 'unknown query crate')
+    if page is not None:
+        path_ok(page)
+        need(crate is None or page.startswith(crate + '/'), 'query crate/page mismatch')
+    need(anchor is None or type(anchor) is str and len(anchor) <= 2048 and
+         re.fullmatch(r'[A-Za-z0-9_.:-]*', anchor) is not None,
+         'noncanonical query anchor')
+    need(type(missing_only) is bool, 'missing_only must be a boolean')
+    need(type(limit) is int and 1 <= limit <= 100, 'query limit must be 1..100')
+    need(type(offset) is int and offset >= 0, 'query offset must be nonnegative')
+
+
+@value_errors
+def query(surface_path: Path, provenance_path: Path, *, crate=None, page=None,
+          anchor=None, missing_only=False, limit=100, offset=0):
+    """Page through exact literal candidates, not a semantic/public API census.
+
+    All sidecar records are validated before filtering. Querying uses the same
+    in-memory bytes that passed authentication, never a second unverified read.
+    """
+    query_options(crate, page, anchor, missing_only, limit, offset)
+    data, candidates = _build_snapshot(surface_path, provenance_path)
+    downloaded = {item['path'] for item in data['downloaded_pages']}
+    matched = sorted((candidate for candidate in candidates
+                      if (crate is None or candidate['path'].startswith(crate + '/'))
+                      and (page is None or candidate['path'] == page)
+                      and (anchor is None or candidate['anchor'] == anchor)
+                      and (not missing_only or candidate['path'] not in downloaded)),
+                     key=lambda item: (item['path'], item['anchor']))
+    records = [{key: copy.deepcopy(candidate[key])
+                for key in ('path', 'anchor', 'url', 'index_pages', 'labels',
+                            'stable_api_review', 'target_availability_review')}
+               for candidate in matched[offset:offset + limit]]
+    for record in records:
+        record['index_pages'].sort()
+        record['page_downloaded'] = record['path'] in downloaded
+    result = {
+        'schema_version': 1, 'inventory_kind': 'literal-documentation-candidate-query',
+        'source_identity': copy.deepcopy(data['source_identity']),
+        'scope': copy.deepcopy(data['scope']),
+        'surface_artifact': copy.deepcopy(data['surface_artifact']),
+        'selection': {'crate': crate, 'page': page, 'anchor': anchor,
+                      'missing_only': missing_only, 'limit': limit, 'offset': offset},
+        'total_candidate_records': len(candidates),
+        'matched_candidate_records': len(matched), 'returned_candidate_records': len(records),
+        'has_more': offset + len(records) < len(matched), 'records': records,
+        'external_verification': 'retained-sidecar-bytes-reverified',
+        'original_html_verification': 'not_reverified_in_this_run',
+        'review_credit': 0, 'execution_credit': 0, 'completion_credit': 0,
+        'api_denominator': None, 'full_rust_completion_percent': None,
+        'interpretation': QUERY_INTERPRETATION,
+    }
+    need(len(encode(result)) <= MAX_QUERY_BYTES, 'query output exceeds byte limit')
+    return result
 
 
 @value_errors
@@ -339,14 +413,27 @@ def encode(data):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
-    for command in ('generate', 'verify'):
+    for command in ('generate', 'verify', 'query'):
         p = sub.add_parser(command)
         p.add_argument('--surface-index', type=Path, required=True)
         p.add_argument('--provenance', type=Path, required=True)
-        p.add_argument('--output' if command == 'generate' else '--backlog', type=Path, required=True)
+        if command == 'query':
+            p.add_argument('--crate', choices=CRATES)
+            p.add_argument('--page')
+            p.add_argument('--anchor')
+            p.add_argument('--missing-pages-only', action='store_true')
+            p.add_argument('--limit', type=int, default=100)
+            p.add_argument('--offset', type=int, default=0)
+        else:
+            p.add_argument('--output' if command == 'generate' else '--backlog', type=Path, required=True)
     args = parser.parse_args(argv)  # All option validation precedes any input/output IO.
     try:
-        if args.command == 'generate':
+        if args.command == 'query':
+            result = query(args.surface_index, args.provenance, crate=args.crate, page=args.page,
+                           anchor=args.anchor, missing_only=args.missing_pages_only,
+                           limit=args.limit, offset=args.offset)
+            sys.stdout.write(encode(result).decode('ascii'))
+        elif args.command == 'generate':
             data = build(args.surface_index, args.provenance)
             with args.output.open('xb') as stream:
                 stream.write(encode(data))
