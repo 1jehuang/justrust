@@ -974,9 +974,15 @@ def main(argv=None):
     parser.add_argument("--rule-page", help="Query one exact indexed Reference page path")
     parser.add_argument("--rule", help="Query one exact indexed Reference rule label")
     parser.add_argument("--unproposed", action="store_true", help="Filter a rule query to labels lacking authored proposals")
+    parser.add_argument("--with-rule-proposals", action="store_true", help="Attach validated unreviewed rationale and missing needs to a rule query")
     args = parser.parse_args(argv)
     query = args.obligation_backlog or args.obligation is not None
     rule_query = args.rule_backlog or args.rule_page is not None or args.rule is not None
+    if args.with_rule_proposals and (not rule_query or query or any((
+            args.with_partial_witnesses, args.observe_partial_witnesses, args.evidence,
+            args.inventory, args.scope, args.contract, args.oracle_verifier, args.reference_rules,
+            args.source_archive, args.submodule_proof, args.library_surface_provenance))):
+        parser.error("--with-rule-proposals requires a rule query and only --root may override inputs")
     if args.observe_partial_witnesses and not args.with_partial_witnesses:
         parser.error("--observe-partial-witnesses requires --with-partial-witnesses and an obligation query")
     if args.evidence and not args.observe_partial_witnesses:
@@ -1008,7 +1014,8 @@ def main(argv=None):
             report = query_rule_backlog(
                 args.reference_rules or args.root / REFERENCE_RULES,
                 args.inventory[0] if args.inventory else args.root / 'data/compiler-language-inventory.json',
-                page=args.rule_page, rule=args.rule, missing_only=args.unproposed)
+                page=args.rule_page, rule=args.rule, missing_only=args.unproposed,
+                include_proposals=args.with_rule_proposals)
         except ValueError as exc:
             print(json.dumps({'error': str(exc)}), file=sys.stderr)
             return 2

@@ -332,6 +332,21 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     ] {
         assert!(rule.contains(marker), "missing {marker}: {rule}");
     }
+    let proposal = python(
+        "tools/compatibility_inventory.py",
+        &["--rule", "expr.match.guard.next", "--with-rule-proposals"],
+    );
+    for marker in [
+        "\"selected_authored_proposal_count\": 1",
+        "\"authored_proposals\"",
+        "\"profile\": \"branching\"",
+        "\"missing_test_needs\"",
+        "\"relationship\": \"proposed-partial-decomposition\"",
+        "\"rows_with_exact_executable_evidence\": 0",
+        "\"source_block_byte_verification\": \"not_reverified_in_this_run\"",
+    ] {
+        assert!(proposal.contains(marker), "missing {marker}: {proposal}");
+    }
 }
 
 #[test]

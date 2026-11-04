@@ -99,7 +99,7 @@ def proposal_backlog(pages, proposed):
     }
 
 
-def summarize_proposals(index_path, candidate_path):
+def summarize_proposals(index_path, candidate_path, *, include_proposals=False):
     """Summarize authored module inputs, without Reference prose or sidecars.
 
     This deliberately does not call build/validate: those independently verify
@@ -108,6 +108,7 @@ def summarize_proposals(index_path, candidate_path):
     import compatibility_inventory as inventory
 
     index_path, candidate_path = Path(index_path), Path(candidate_path)
+    require(type(include_proposals) is bool, 'include_proposals must be a boolean')
     missing = [str(path) for path in (index_path, candidate_path) if not path.is_file()]
     # A present malformed file must not be hidden by another missing input.
     index = inventory.load(index_path) if index_path.is_file() else None
@@ -157,12 +158,12 @@ def summarize_proposals(index_path, candidate_path):
                     'invalid proposal classes')
             selected_identities = {identity for identity in identities if identity[0] in selected}
             by_label = {label: (page, label) for page, label in selected_identities}
-            seen, counts = set(), Counter()
+            seen, counts, details = set(), Counter(), []
             for line in authored.strip().splitlines():
                 fields = line.split('|')
                 require(len(fields) == 7 and all(field.strip() for field in fields),
                         'proposal requires seven nonempty explicit fields')
-                label, classification, _, links, _, _, _ = fields
+                label, classification, rationale, links, positive, invalid, interaction = fields
                 require(label in by_label, 'foreign proposal rule: ' + label)
                 identity = by_label[label]
                 require(identity not in seen, 'duplicate proposal rule: ' + label)
@@ -175,6 +176,18 @@ def summarize_proposals(index_path, candidate_path):
                 require(len({aliases[name] for name in names}) == len(names),
                         'duplicate proposal candidate identity')
                 counts.update(classes[code] for code in codes)
+                if include_proposals:
+                    classifications = sorted(classes[code] for code in codes)
+                    executable = bool({'normative-semantic', 'grammar'} & set(classifications))
+                    details.append({
+                        'page': identity[0], 'rule': label, 'profile': profile,
+                        'classifications': classifications, 'rationale': rationale,
+                        'candidate_obligation_ids': sorted(aliases[name] for name in names),
+                        'relationship': 'proposed-partial-decomposition' if executable else 'context-only',
+                        'review_status': 'unreviewed',
+                        'missing_test_needs': {'positive': positive, 'invalid': invalid,
+                                               'interaction': interaction},
+                    })
             require(seen == selected_identities, 'omitted selected proposal rules')
             require(len(seen) == expected, 'proposal pinned profile denominator mismatch')
             union.update(seen)
@@ -185,6 +198,9 @@ def summarize_proposals(index_path, candidate_path):
                 'rows_with_exact_executable_evidence': 0, 'completed_rule_rows': 0,
                 'full_rust_completion_percent': None,
             }
+            if include_proposals:
+                profiles[profile]['authored_proposals'] = sorted(
+                    details, key=lambda row: (row['page'], row['rule']))
         return {
             'readiness': 'review-required', 'review_status': 'unreviewed', 'profiles': profiles,
             'global_rule_identities': len(identities), 'proposed_rule_identities': len(union),
@@ -204,7 +220,8 @@ def summarize_proposals(index_path, candidate_path):
         raise inventory.InvalidInventory('rule_proposals: ' + str(exc)) from exc
 
 
-def query_rule_backlog(index_path, candidate_path, *, page=None, rule=None, missing_only=False):
+def query_rule_backlog(index_path, candidate_path, *, page=None, rule=None, missing_only=False,
+                       include_proposals=False):
     """Query every indexed label without treating labels as normative coverage.
 
     The existing pinned metadata and complete authored proposal validators run
@@ -217,7 +234,9 @@ def query_rule_backlog(index_path, candidate_path, *, page=None, rule=None, miss
             require(value is None or (type(value) is str and bool(value)),
                     name + ': nonempty exact string required')
         require(type(missing_only) is bool, 'missing_only must be a boolean')
-        summary = summarize_proposals(index_path, candidate_path)
+        require(type(include_proposals) is bool, 'include_proposals must be a boolean')
+        summary = (summarize_proposals(index_path, candidate_path, include_proposals=True)
+                   if include_proposals else summarize_proposals(index_path, candidate_path))
         require(summary['readiness'] == 'review-required', 'rule query requires complete pinned metadata inputs')
         # Authenticate the exact bytes used for rows, not an unchecked second load.
         raw = Path(index_path).read_bytes()
@@ -246,7 +265,7 @@ def query_rule_backlog(index_path, candidate_path, *, page=None, rule=None, miss
                          'proposal_status': 'authored-unreviewed' if names else 'missing',
                          'review_status': 'unreviewed'} for row in rules)
         proposed = sum(bool(row['proposal_profiles']) for row in rows)
-        return {'readiness': 'review-required', 'review_status': 'unreviewed', 'scope': dict(SCOPE),
+        report = {'readiness': 'review-required', 'review_status': 'unreviewed', 'scope': dict(SCOPE),
                 'bindings': {key: WITNESS_SOURCE_CONTRACT[key] for key in
                              ('reference_commit', 'rule_index_sha256', 'candidate_inventory_sha256')},
                 'global_rule_identities': summary['global_rule_identities'],
@@ -266,6 +285,21 @@ def query_rule_backlog(index_path, candidate_path, *, page=None, rule=None, miss
                                 'Authored proposals remain unreviewed. Missing proposals are not compiler failures.',
                                 'Pinned metadata bytes are checked, but source blocks, archives and execution evidence are not read.',
                                 'No normative completeness, reviewed coverage or full Rust percentage is established.']}
+        if include_proposals:
+            by_identity = {}
+            for profile in sorted(summary['profiles']):
+                for detail in summary['profiles'][profile]['authored_proposals']:
+                    payload = {key: value for key, value in detail.items() if key not in ('page', 'rule')}
+                    by_identity.setdefault((detail['page'], detail['rule']), []).append(payload)
+            for row in report['rows']:
+                row['authored_proposals'] = by_identity.get((row['page'], row['rule']), [])
+            report['include_proposals'] = True
+            report['selected_authored_proposal_count'] = sum(
+                len(row['authored_proposals']) for row in report['rows'])
+            report['limitations'].append(
+                'These three authored missing needs do not replace full profile generate/validate '
+                'end-to-end requirements. Context-only rows earn no standalone executable credit.')
+        return report
     except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
         raise inventory.InvalidInventory('rule_query: ' + str(error)) from error
 

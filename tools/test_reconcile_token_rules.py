@@ -724,6 +724,204 @@ class RuleBacklogQueryTests(unittest.TestCase):
         self.assertIsInstance(json.loads(process.stderr)['error'], str)
 
 
+    def expected_authored_proposals(self):
+        expected = {}
+        for profile, _ in reconciliation.PROPOSAL_COUNTS:
+            selected, aliases, classes, authored = reconciliation.profile_inputs(profile)
+            pages = {item['label']: entry['path'] for entry in self.index['pages'] +
+                     self.index['unlinked_markdown_files'] if entry['path'] in selected
+                     for item in entry['rules']}
+            for line in authored.strip().splitlines():
+                label, codes, rationale, links, positive, invalid, interaction = line.split('|')
+                classifications = sorted(classes[code] for code in codes.split())
+                expected.setdefault((pages[label], label), []).append({
+                    'profile': profile, 'classifications': classifications,
+                    'rationale': rationale,
+                    'candidate_obligation_ids': sorted(aliases[name] for name in links.split()),
+                    'relationship': ('proposed-partial-decomposition' if
+                                     {'normative-semantic', 'grammar'} & set(classifications)
+                                     else 'context-only'),
+                    'review_status': 'unreviewed',
+                    'missing_test_needs': {'positive': positive, 'invalid': invalid,
+                                           'interaction': interaction}})
+        return {identity: sorted(rows, key=lambda row: row['profile'])
+                for identity, rows in expected.items()}
+
+    def assert_proposal_query(self, result, **selection):
+        expected = self.expected_authored_proposals()
+        self.assertIs(result['include_proposals'], True)
+        self.assertEqual(result['selected_authored_proposal_count'], sum(
+            len(row['authored_proposals']) for row in result['rows']))
+        ordinary = copy.deepcopy(result)
+        ordinary.pop('include_proposals')
+        ordinary.pop('selected_authored_proposal_count')
+        for row in ordinary['rows']:
+            details = row.pop('authored_proposals')
+            self.assertEqual(details, expected.get((row['page'], row['rule']), []))
+            self.assertEqual([detail['profile'] for detail in details], row['proposal_profiles'])
+        # An additional opt-in warning must not mask any original limitations.
+        baseline = self.query(**selection)
+        self.assertTrue(set(baseline['limitations']) <= set(ordinary['limitations']))
+        additions = set(ordinary['limitations']) - set(baseline['limitations'])
+        self.assertTrue(additions, 'authored needs must not replace full profile requirements')
+        warning = ' '.join(additions).lower()
+        for word in ('profile', 'generate', 'validate', 'end-to-end'):
+            self.assertIn(word, warning)
+        ordinary['limitations'] = baseline['limitations']
+        self.assertEqual(ordinary, baseline)
+        self.assert_query(ordinary, **selection)
+
+    def test_proposal_details_all_profiles_exact_authored_text_and_no_credit(self):
+        result = self.query(include_proposals=True)
+        self.assert_proposal_query(result)
+        expected_count = sum(count for _, count in reconciliation.PROPOSAL_COUNTS)
+        self.assertEqual(result['selected_authored_proposal_count'], expected_count)
+        self.assertEqual({detail['profile'] for row in result['rows']
+                          for detail in row['authored_proposals']},
+                         {profile for profile, _ in reconciliation.PROPOSAL_COUNTS})
+        self.assertEqual(result, self.query(include_proposals=True))
+
+    def test_proposal_details_count_overlapping_profile_rows_not_unique_rules(self):
+        original = reconciliation.profile_inputs
+        counts = (*reconciliation.PROPOSAL_COUNTS, ('zz_tokens_overlap', 115))
+        def inputs(profile):
+            return original('tokens' if profile == 'zz_tokens_overlap' else profile)
+        with mock.patch.object(reconciliation, 'PROPOSAL_COUNTS', counts), mock.patch.object(
+                reconciliation, 'profile_inputs', side_effect=inputs):
+            result = self.query(include_proposals=True)
+            self.assert_proposal_query(result)
+            self.assertEqual(result['selected_proposed_rule_identities'], 286)
+            self.assertEqual(result['selected_authored_proposal_count'], 401)
+            result = self.query(page='src/tokens.md', include_proposals=True)
+            self.assertEqual(result['selected_proposed_rule_identities'], 115)
+            self.assertEqual(result['selected_authored_proposal_count'], 230)
+            self.assertTrue(all([detail['profile'] for detail in row['authored_proposals']] ==
+                                ['tokens', 'zz_tokens_overlap'] for row in result['rows']))
+
+    def test_proposal_details_explicit_false_preserves_default_bytes_and_schema(self):
+        baseline = self.query()
+        explicit = self.query(include_proposals=False)
+        self.assertEqual(json.dumps(baseline, indent=2), json.dumps(explicit, indent=2))
+        self.assertNotIn('include_proposals', baseline)
+        self.assertNotIn('selected_authored_proposal_count', baseline)
+        self.assertTrue(all('authored_proposals' not in row for row in baseline['rows']))
+
+    def test_proposal_details_exact_page_rule_and_missing_filters(self):
+        details = self.expected_authored_proposals()
+        # Every authored profile is exercised through exact page and rule selection.
+        representatives = {}
+        for identity, proposals in details.items():
+            for proposal in proposals:
+                representatives.setdefault(proposal['profile'], identity)
+        selections = []
+        for page, rule in representatives.values():
+            selections.extend(({'page': page}, {'rule': rule}, {'page': page, 'rule': rule}))
+        selections.extend(({'missing_only': True}, {'page': 'src/SUMMARY.md'},
+                           {'page': 'src/tokens.md', 'missing_only': True}))
+        for selection in selections:
+            with self.subTest(selection=selection):
+                result = self.query(include_proposals=True, **selection)
+                self.assert_proposal_query(result, **selection)
+                if selection.get('missing_only'):
+                    self.assertEqual(result['selected_authored_proposal_count'], 0)
+                    self.assertTrue(all(row['authored_proposals'] == [] for row in result['rows']))
+
+    def test_proposal_details_strict_boolean_rejected_before_io(self):
+        import compatibility_inventory as inventory
+        for value in (None, 0, 1, '', 'true', [], {}, (True,)):
+            with self.subTest(value=value), contextlib.ExitStack() as stack:
+                stack.enter_context(mock.patch.object(reconciliation, 'summarize_proposals',
+                                   side_effect=AssertionError('summary before flag validation')))
+                stack.enter_context(mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('byte IO')))
+                stack.enter_context(mock.patch.object(Path, 'read_text', side_effect=AssertionError('text IO')))
+                with self.assertRaises(inventory.InvalidInventory):
+                    self.query(include_proposals=value)
+
+    def test_proposal_details_validate_all_authored_modules_before_filtering(self):
+        import compatibility_inventory as inventory
+        original = reconciliation.profile_inputs
+        for profile, _ in reconciliation.PROPOSAL_COUNTS:
+            selected, aliases, classes, authored = original(profile)
+            lines = authored.strip().splitlines()
+            fields = lines[0].split('|')
+            mutations = ['\n'.join(lines[1:]), authored + '\n' + lines[0],
+                         authored.replace(fields[0], 'foreign.rule', 1)]
+            for column, replacement in ((1, 'UNKNOWN'), (3, 'foreign-alias'), (4, ''), (6, '')):
+                malformed = list(fields)
+                malformed[column] = replacement
+                mutations.append('\n'.join(['|'.join(malformed), *lines[1:]]))
+            for mutation in mutations:
+                def inputs(name):
+                    return (selected, aliases, classes, mutation) if name == profile else original(name)
+                with self.subTest(profile=profile, mutation=mutation[:60]), mock.patch.object(
+                        reconciliation, 'profile_inputs', side_effect=inputs):
+                    for selection in ({'page': 'src/SUMMARY.md'}, {'missing_only': True}):
+                        with self.assertRaises(inventory.InvalidInventory):
+                            self.query(include_proposals=True, **selection)
+
+    def test_proposal_details_metadata_only_no_source_receipts_or_execution(self):
+        import compatibility_inventory as inventory
+        expected = self.query(include_proposals=True)
+        allowed = {self.index_path.resolve(), self.candidate_path.resolve()}
+        original_bytes, original_text = Path.read_bytes, Path.read_text
+        def read_bytes(path):
+            self.assertIn(path.resolve(), allowed, 'unexpected nonmetadata read')
+            return original_bytes(path)
+        def read_text(path, *args, **kwargs):
+            self.assertIn(path.resolve(), allowed, 'unexpected nonmetadata read')
+            return original_text(path, *args, **kwargs)
+        with contextlib.ExitStack() as stack:
+            for module, name in ((reconciliation, 'build'), (reconciliation, 'validate'),
+                                 (reconciliation, 'summarize_witness_sources'),
+                                 (inventory, 'verify_reference_archive'), (inventory, 'read_verifier'),
+                                 (subprocess, 'run')):
+                stack.enter_context(mock.patch.object(module, name, side_effect=AssertionError(name)))
+            stack.enter_context(mock.patch.object(Path, 'read_bytes', read_bytes))
+            stack.enter_context(mock.patch.object(Path, 'read_text', read_text))
+            self.assertEqual(self.query(include_proposals=True), expected)
+
+    def test_cli_with_rule_proposals_exact_api_and_actual_script(self):
+        self.cli_inputs()
+        label = self.query(page='src/tokens.md')['rows'][0]['rule']
+        for args, selection in ((['--rule-backlog'], {}),
+                (['--rule-page', 'src/tokens.md'], {'page': 'src/tokens.md'}),
+                (['--rule', label], {'rule': label}),
+                (['--rule-page', 'src/tokens.md', '--rule', label],
+                 {'page': 'src/tokens.md', 'rule': label}),
+                (['--rule-backlog', '--unproposed'], {'missing_only': True})):
+            with self.subTest(args=args):
+                expected = self.query(include_proposals=True, **selection)
+                status, out, err = self.cli([*args, '--with-rule-proposals'])
+                self.assertEqual((status, err), (0, ''))
+                self.assertEqual(json.loads(out), expected)
+                process = subprocess.run([sys.executable, str(BASE / 'compatibility_inventory.py'),
+                                          '--root', str(self.root), *args, '--with-rule-proposals'],
+                                         capture_output=True, text=True, check=False)
+                self.assertEqual((process.returncode, process.stderr), (0, ''))
+                self.assertEqual(process.stdout, out)
+
+    def test_cli_with_rule_proposals_conflicts_before_any_io(self):
+        import compatibility_inventory as inventory
+        conflicts = [[], ['--unproposed'], ['--obligation-backlog'], ['--obligation', 'absent'],
+                     ['--with-partial-witnesses'], ['--observe-partial-witnesses']]
+        for query in (['--rule-backlog'], ['--rule-page', 'src/tokens.md'], ['--rule', 'token']):
+            for flag in ('--scope', '--contract', '--oracle-verifier', '--source-archive',
+                         '--submodule-proof', '--library-surface-provenance', '--obligation',
+                         '--inventory', '--reference-rules', '--evidence'):
+                conflicts.append([*query, flag, 'absent'])
+            for flag in ('--obligation-backlog', '--with-partial-witnesses', '--observe-partial-witnesses'):
+                conflicts.append([*query, flag])
+        for args in conflicts:
+            with self.subTest(args=args), contextlib.ExitStack() as stack:
+                for module, name in ((inventory, 'load'), (reconciliation, 'query_rule_backlog'),
+                                     (Path, 'read_bytes'), (Path, 'read_text'), (Path, 'is_file')):
+                    stack.enter_context(mock.patch.object(module, name, side_effect=AssertionError('IO: ' + name)))
+                status, out, err = self.cli([*args, '--with-rule-proposals'])
+                self.assertEqual(status, 2)
+                self.assertEqual(out, '')
+                self.assertTrue(err)
+
+
 class ReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

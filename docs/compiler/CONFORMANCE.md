@@ -493,6 +493,13 @@ with missing test needs and no witness-link or execution-evidence actions.
 
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
+For a rule-backlog query, add `--with-rule-proposals` to expose each matching
+profile's validated rationale, classifications, partial candidate routing and
+three authored missing test needs. Only `--root` may override inputs for this
+option. Missing rules have an empty proposal list. Context-only rows remain
+distinct from proposed semantic decomposition. This offline view does not
+reverify source blocks, import outcomes or replace the stronger profile
+generation/validation and end-to-end acceptance requirements.
 The ordinary inventory CLI and `coverage --json` expose `rule_proposals` with
 per-profile proposed counts and the unique union of rule identities. This
 includes a `backlog` with counts for every pinned page, including zero-rule and
