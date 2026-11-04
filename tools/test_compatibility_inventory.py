@@ -1511,5 +1511,263 @@ class ObligationWitnessBacklogTests(unittest.TestCase):
                 self.assertIn('--with-partial-witnesses', stderr.getvalue())
 
 
+class ObligationWitnessObservationAuthenticationTests(unittest.TestCase):
+    """Real receipt parser controls, with no compiler or receipt command execution."""
+
+    @classmethod
+    def setUpClass(cls):
+        import conformance as c
+        import compatibility_scope as s
+        cls.c, cls.s = c, s
+        cls.root = Path(inventory.__file__).resolve().parents[1]
+        cls.source = inventory.obligation_witness_backlog(cls.root)
+        cls.scope = inventory.load(cls.root / 'data/compiler-compatibility-scope.json')
+        cls.manifest = s.case_manifest(cls.scope, inventory.load(cls.root / c.MANIFEST), c)
+        cls.selectors = sorted({(link['suite'], link['test']) for row in cls.source['rows']
+                                for link in row['partial_witness_links']})
+        cls.case = dict(zip(('suite', 'test'), cls.selectors[0]))
+        cls.ident = next(row['obligation_id'] for row in cls.source['rows']
+                         if any((link['suite'], link['test']) == cls.selectors[0]
+                                for link in row['partial_witness_links']))
+        cls.unlinked = next(row['obligation_id'] for row in cls.source['rows']
+                            if not row['partial_witness_links'])
+        cls.identity = {'revision': 'synthetic-current', 'inputs_sha256': 'abc', 'input_files': 1}
+        cls.runner = {'executable': '/stable/justrust', 'sha256': 'client', 'environment': {}}
+        cls.statuses = ('passed', 'failed', 'timeout', 'infrastructure', 'unverified',
+                        'untested', 'missing', 'stale', 'conflicting')
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='witness-observation-')
+        self.addCleanup(self.temp.cleanup)
+        self.receipts = Path(self.temp.name)
+
+    def report(self, name='run', code=0, text='justrust: ok: 1 test passed\n', timed_out=False,
+               cases=None):
+        c, s = self.c, self.s
+        directory = self.receipts / name
+        directory.mkdir()
+        selected = sorted(s.case_id(case) for case in (cases or [self.case]))
+        results = []
+        for index, entry in enumerate(c.plan(self.manifest, 'full', selected, 'target/test')):
+            log = f'{index}.log'
+            payload = text.encode()
+            (directory / log).write_bytes(payload)
+            results.append(dict(entry, returncode=code, timed_out=timed_out,
+                                outcome=c.outcome(code, text, 'case', timed_out),
+                                tests_passed=c.test_count(text), log=log, log_sha256=c.digest(payload)))
+        report = dict(schema_version=1, profile='full', selected=selected, target_dir='target/test',
+                      manifest_sha256=c.digest(c.encoded(self.manifest)),
+                      scope_sha256=c.digest(c.encoded(self.scope)), source_before=self.identity,
+                      source_after=self.identity, runner_before=self.runner, runner_after=self.runner,
+                      integration_suites=c.integration_suites(self.root), results=results)
+        self.save(directory, report)
+        return directory, report
+
+    def save(self, directory, report):
+        (directory / 'report.json').write_bytes(self.c.encoded(report))
+
+    def observe(self, reports=(), ident=None):
+        forbidden = AssertionError('assessor must not execute receipt commands')
+        with mock.patch.object(self.c, 'source_identity', return_value=self.identity), \
+                mock.patch.object(self.s, 'runner_identity', return_value=self.runner), \
+                mock.patch.object(self.c, 'execute', side_effect=forbidden), \
+                mock.patch.object(subprocess, 'run', side_effect=forbidden):
+            return inventory.observe_obligation_witnesses(self.root, reports, obligation_id=ident)
+
+    def observations(self, report):
+        return [obs for row in report['rows'] for obs in row['partial_witness_observations']]
+
+    def assert_conservation(self, report, imported):
+        self.assertIs(report['execution_evidence_imported'], imported)
+        self.assertFalse(report['partial_witness_sources']['execution_evidence_imported'])
+        self.assertEqual(report['executed_test_need_count'], 0)
+        self.assertEqual(report['reviewed_obligation_count'], 0)
+        self.assertIsNone(report['full_rust_completion_percent'])
+        for row in report['rows']:
+            self.assertEqual(row['direct_exact_test_links'], [])
+            self.assertEqual(row['review_status'], 'unreviewed')
+            self.assertTrue(all(need['status'] == 'unmeasured' for need in row['test_needs']))
+            self.assertEqual([(obs['kind'], obs['suite'], obs['test'])
+                              for obs in row['partial_witness_observations']],
+                             [(link['kind'], link['suite'], link['test'])
+                              for link in row['partial_witness_links']])
+        summary = report['witness_observations']
+        self.assertEqual(set(summary['status_counts']), set(self.statuses))
+        self.assertEqual(summary['known_witness_selectors'], 18)
+        unique = {(obs['suite'], obs['test']): obs['status'] for obs in self.observations(report)}
+        self.assertEqual(summary['selected_witness_selectors'], len(unique))
+        self.assertEqual(summary['distinct_linked_selectors_observed'],
+                         sum(status != 'untested' for status in unique.values()))
+        self.assertEqual(summary['status_counts'],
+                         {status: list(unique.values()).count(status) for status in self.statuses})
+
+    def test_no_receipts_never_reads_current_identities_or_executes(self):
+        forbidden = AssertionError('source-only observation must not inspect execution identity')
+        with mock.patch.object(self.c, 'source_identity', side_effect=forbidden), \
+                mock.patch.object(self.s, 'runner_identity', side_effect=forbidden), \
+                mock.patch.object(self.c, 'execute', side_effect=forbidden), \
+                mock.patch.object(subprocess, 'run', side_effect=forbidden):
+            report = inventory.observe_obligation_witnesses(self.root)
+        self.assert_conservation(report, False)
+        summary = report['witness_observations']
+        self.assertIsNone(summary['source_identity'])
+        self.assertIsNone(summary['runner_identity'])
+        self.assertEqual(summary['evidence_directories'], 0)
+        self.assertEqual(summary['status_counts']['untested'], 18)
+        self.assertTrue(all(obs['evidence'] == [] for obs in self.observations(report)))
+
+    def test_authentic_status_controls_and_failure_annotation(self):
+        controls = [('passed', 0, 'justrust: ok: 1 test passed\n', False),
+                    ('failed', 101, 'unsupported valid source\n', False),
+                    ('timeout', None, '', True), ('infrastructure', None, '', False),
+                    ('unverified', 0, 'justrust: ok: 0 tests passed\n', False)]
+        for status, code, text, timed_out in controls:
+            directory, _ = self.report(status, code, text, timed_out)
+            result = self.observe([directory])
+            with self.subTest(status=status):
+                self.assert_conservation(result, True)
+                self.assertEqual(result['witness_observations']['status_counts'][status], 1)
+                observed = [obs for obs in self.observations(result)
+                            if (obs['suite'], obs['test']) == self.selectors[0]]
+                self.assertTrue(observed)
+                for obs in observed:
+                    self.assertEqual(obs['status'], status)
+                    self.assertEqual(len(obs['evidence']), 1)
+                    if status == 'failed':
+                        self.assertEqual(obs['failure_annotation'], self.c.failure_annotation(text))
+                    else:
+                        self.assertNotIn('failure_annotation', obs)
+
+    def test_failure_annotations_are_rederived_and_aggregate_ordinary_failures(self):
+        first, receipt = self.report('marked', 101,
+                                     '[justrust-conformance-failure:v1] valid-source-rejected\n')
+        receipt['results'][0]['failure_annotation'] = 'invalid-source-accepted'
+        receipt['failed_case_annotations'] = {'invalid-source-accepted': 999}
+        self.save(first, receipt)
+        second, _ = self.report('other-marked', 101,
+                                '[justrust-conformance-failure:v1] invalid-source-accepted\n')
+        for reports, expected in (([first], 'valid-source-rejected'),
+                                  ([first, second], 'unannotated')):
+            result = self.observe(reports, self.ident)
+            self.assert_conservation(result, True)
+            for obs in self.observations(result):
+                if (obs['suite'], obs['test']) == self.selectors[0]:
+                    self.assertEqual(obs['status'], 'failed')
+                    self.assertEqual(obs['failure_annotation'], expected)
+                    self.assertEqual(obs['evidence'][0]['failure_annotation'], 'valid-source-rejected')
+
+    def test_cli_repeated_evidence_uses_the_authenticated_observer(self):
+        first, _ = self.report('cli-passed')
+        second, _ = self.report('cli-failed', 101, 'failure')
+        args = ['--root', str(self.root), '--obligation', self.ident, '--with-partial-witnesses',
+                '--observe-partial-witnesses', '--evidence', str(first), '--evidence', str(second)]
+        with mock.patch.object(self.c, 'source_identity', return_value=self.identity), \
+                mock.patch.object(self.s, 'runner_identity', return_value=self.runner), \
+                mock.patch.object(self.c, 'execute', side_effect=AssertionError('no execution')), \
+                mock.patch.object(subprocess, 'run', side_effect=AssertionError('no commands')), \
+                mock.patch.object(sys, 'stdout', io.StringIO()) as stdout, \
+                mock.patch.object(sys, 'stderr', io.StringIO()) as stderr:
+            result = inventory.main(args)
+        self.assertIn(result, (0, None))
+        self.assertEqual(stderr.getvalue(), '')
+        report = json.loads(stdout.getvalue())
+        self.assert_conservation(report, True)
+        self.assertEqual(report['witness_observations']['evidence_directories'], 2)
+        self.assertEqual(report['witness_observations']['status_counts']['conflicting'], 1)
+
+    def test_stale_conflict_and_canonical_directory_deduplication(self):
+        stale, receipt = self.report('stale')
+        receipt['source_after'] = {'revision': 'old'}
+        self.save(stale, receipt)
+        passed, _ = self.report('passed')
+        failed, _ = self.report('failed', 101, 'failure')
+        alias = self.receipts / 'alias'
+        alias.symlink_to(passed, target_is_directory=True)
+        for reports, expected in (([stale], 'stale'), ([stale, passed], 'passed'),
+                                  ([passed, failed], 'conflicting'), ([failed, passed], 'conflicting')):
+            with self.subTest(expected=expected, reports=reports):
+                result = self.observe(reports, self.ident)
+                self.assert_conservation(result, True)
+                self.assertEqual(result['witness_observations']['status_counts'][expected], 1)
+        result = self.observe([passed, passed / '.'], self.ident)
+        with self.assertRaises(ValueError):
+            self.observe([alias], self.ident)
+        self.assert_conservation(result, True)
+        self.assertEqual(result['witness_observations']['evidence_directories'], 1)
+        for obs in self.observations(result):
+            if obs['status'] == 'passed':
+                self.assertEqual(len(obs['evidence']), 1)
+
+    def test_all_receipt_rows_authenticated_even_for_unlinked_filter(self):
+        extra = next(dict(suite=gate['suite'], test=gate['test']) for gate in self.manifest['gates']
+                     if (gate['suite'], gate['test']) not in self.selectors)
+        mutations = {
+            'invocation': lambda receipt: receipt['results'][-1]['command'].remove('--exact'),
+            'outcome': lambda receipt: receipt['results'][-1].update(outcome='failed'),
+            'count': lambda receipt: receipt['results'][-1].update(tests_passed=99),
+            'missing': lambda receipt: receipt['results'].pop(),
+            'duplicate': lambda receipt: receipt['results'].append(receipt['results'][-1]),
+            'manifest': lambda receipt: receipt.update(manifest_sha256='changed'),
+            'scope': lambda receipt: receipt.update(scope_sha256='changed'),
+            'profile': lambda receipt: receipt.update(profile='smoke'),
+            'selection': lambda receipt: receipt.update(selected=[]),
+            'unfinalized': lambda receipt: receipt.update(runner_after=None),
+        }
+        for name, mutate in mutations.items():
+            directory, receipt = self.report(name, cases=[self.case, extra])
+            mutate(receipt)
+            self.save(directory, receipt)
+            with self.subTest(name=name), self.assertRaises(self.c.InvalidEvidence):
+                self.observe([directory], self.unlinked)
+        directory, receipt = self.report('tampered-log', cases=[extra])
+        (directory / receipt['results'][0]['log']).write_text('tampered')
+        with self.assertRaises(self.c.InvalidEvidence):
+            self.observe([directory], self.unlinked)
+        directory, receipt = self.report('external-log', cases=[extra])
+        log = directory / receipt['results'][0]['log']
+        external = self.receipts / 'outside.log'
+        external.write_bytes(log.read_bytes())
+        log.unlink()
+        log.symlink_to(external)
+        with self.assertRaises(self.c.InvalidEvidence):
+            self.observe([directory], self.unlinked)
+
+    def test_source_validation_precedes_filtering_and_receipts(self):
+        original = inventory.obligation_witness_backlog
+        with mock.patch.object(inventory, 'obligation_witness_backlog', wraps=original) as source:
+            self.observe(ident=self.unlinked)
+        self.assertEqual(source.call_args, mock.call(self.root))
+        for ident in ('', 'unknown', ' obligation-core-option', False, 7, []):
+            with self.subTest(ident=ident), self.assertRaises(inventory.InvalidInventory):
+                self.observe(ident=ident)
+
+    def test_cli_incompatible_flags_rejected_before_io(self):
+        observe = ['--observe-partial-witnesses']
+        action = ['--obligation-backlog', '--with-partial-witnesses', *observe]
+        combinations = [observe, [*observe, '--with-partial-witnesses'],
+                        ['--obligation-backlog', *observe], ['--evidence', '/missing'],
+                        ['--obligation-backlog', '--with-partial-witnesses', '--evidence', '/missing']]
+        for flag in ('--inventory', '--scope', '--contract', '--oracle-verifier', '--reference-rules',
+                     '--source-archive', '--submodule-proof', '--library-surface-provenance'):
+            combinations.append([*action, flag, '/missing'])
+        for flags in (['--rule-backlog'], ['--rule-page', 'src/types.md'], ['--rule', 'types'],
+                      ['--unproposed']):
+            combinations.append([*action, *flags])
+        forbidden = AssertionError('argument rejection must precede filesystem and runner access')
+        for flags in combinations:
+            with self.subTest(flags=flags), \
+                    mock.patch.object(Path, 'open', side_effect=forbidden), \
+                    mock.patch.object(Path, 'stat', side_effect=forbidden), \
+                    mock.patch.object(inventory, 'load', side_effect=forbidden), \
+                    mock.patch.object(self.c, 'source_identity', side_effect=forbidden), \
+                    mock.patch.object(self.s, 'runner_identity', side_effect=forbidden), \
+                    mock.patch.object(sys, 'stdout', io.StringIO()) as stdout, \
+                    mock.patch.object(sys, 'stderr', io.StringIO()):
+                with self.assertRaises(SystemExit) as raised:
+                    inventory.main(['--root', '/missing/root', *flags])
+                self.assertEqual(raised.exception.code, 2)
+                self.assertEqual(stdout.getvalue(), '')
+
+
 if __name__ == "__main__":
     unittest.main()

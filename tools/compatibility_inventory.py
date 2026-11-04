@@ -306,6 +306,76 @@ def obligation_witness_backlog(root, *, obligation_id=None):
     return report
 
 
+def observe_obligation_witnesses(root, reports=(), *, obligation_id=None):
+    """Observe exact selectors through the ordinary authenticated receipt parser.
+
+    Observations do not map an authored need to sufficient evidence, or turn a
+    partial source relationship into reviewed obligation coverage.
+    """
+    import conformance as c
+    import compatibility_scope as coverage
+    from reconcile_token_rules import safe_path
+
+    report = obligation_witness_backlog(root)
+    if obligation_id is not None:
+        require(type(obligation_id) is str and bool(obligation_id), 'obligation: nonempty ID required')
+        selected = [row for row in report['rows'] if row['obligation_id'] == obligation_id]
+        require(bool(selected), 'unknown obligation ID: ' + obligation_id)
+        report['rows'] = selected
+    report.update(obligation_id=obligation_id, selected_obligation_count=len(report['rows']),
+                  selected_test_need_count=sum(len(row['test_needs']) for row in report['rows']))
+    root = safe_path(root)
+    directories = sorted({safe_path(directory) for directory in reports})
+    observations = {(link['suite'], link['test']): [] for row in report['rows']
+                    for link in row['partial_witness_links']}
+    identity = c.source_identity(root) if directories else None
+    runner = coverage.runner_identity(c) if directories else None
+    if directories:
+        scope = coverage.validate(c.load_json(root / 'data/compiler-compatibility-scope.json'), c, root)
+        base = c.validate(c.load_json(root / c.MANIFEST), root)
+        manifest = coverage.case_manifest(scope, base, c)
+        cases = {coverage.case_id({'suite': suite, 'test': test}): (suite, test)
+                 for suite, test in observations}
+        for directory in directories:
+            # Authenticate every receipt row, including unrelated selectors.
+            # Filtering must never conceal tampering elsewhere in a receipt.
+            for key, attempt in coverage.evidence(scope, manifest, directory, identity, runner, c, root).items():
+                if key in cases:
+                    observations[cases[key]].append(attempt)
+    counts = dict.fromkeys(('passed', 'failed', 'timeout', 'infrastructure', 'unverified',
+                            'untested', 'missing', 'stale', 'conflicting'), 0)
+    observed = {}
+    for key, attempts in observations.items():
+        require(all(attempt['status'] in counts for attempt in attempts), 'unknown witness observation status')
+        states = {attempt['status'] for attempt in attempts if attempt['status'] != 'stale'}
+        status = ('conflicting' if len(states) > 1 else next(iter(states)) if states
+                  else 'stale' if attempts else 'untested')
+        value = {'status': status, 'evidence': attempts}
+        if status == 'failed':
+            annotations = {attempt['failure_annotation'] for attempt in attempts if attempt['status'] == 'failed'}
+            value['failure_annotation'] = next(iter(annotations)) if len(annotations) == 1 else 'unannotated'
+        observed[key] = value
+        counts[status] += 1
+    for row in report['rows']:
+        row['partial_witness_observations'] = [
+            dict(observed[(link['suite'], link['test'])], kind=link['kind'],
+                 suite=link['suite'], test=link['test']) for link in row['partial_witness_links']]
+    selected = report['partial_witness_sources']
+    selected['selected_witness_selectors'] = len(observations)
+    selected['selected_obligations_with_partial_witnesses'] = sum(bool(row['partial_witness_links'])
+                                                                for row in report['rows'])
+    report['execution_evidence_imported'] = bool(directories)
+    report['witness_observations'] = {
+        'source_identity': identity, 'runner_identity': runner, 'evidence_directories': len(directories),
+        'known_witness_selectors': selected['known_witness_selectors'],
+        'selected_witness_selectors': len(observations),
+        'distinct_linked_selectors_observed': sum(bool(value['evidence']) for value in observed.values()),
+        'status_counts': counts}
+    report['limitations'].append('Imported execution observations apply only to exact partial witness selectors. '
+                                'They do not satisfy test needs, complete an obligation or establish normative coverage.')
+    return report
+
+
 def validate_contract(contract, verifier_text):
     fields(contract, ("schema_version", "contract_id", "edition", "target", "oracle", "dimensions",
                       "evidence_policy", "exclusions", "readiness", "source_provenance_policy"), "contract")
@@ -898,6 +968,8 @@ def main(argv=None):
     parser.add_argument("--obligation-backlog", action="store_true", help="List all validated authored obligations and needs, not outcomes")
     parser.add_argument("--obligation", help="Query one exact authored obligation ID")
     parser.add_argument("--with-partial-witnesses", action="store_true", help="Attach validated partial source proposals to an obligation query, not evidence")
+    parser.add_argument("--observe-partial-witnesses", action="store_true", help="Observe authenticated exact witness receipts without completing needs")
+    parser.add_argument("--evidence", type=Path, action="append", default=[], help="Existing authenticated tracked receipt directory, requires --observe-partial-witnesses")
     parser.add_argument("--rule-backlog", action="store_true", help="List every pinned indexed Reference label, not normative coverage")
     parser.add_argument("--rule-page", help="Query one exact indexed Reference page path")
     parser.add_argument("--rule", help="Query one exact indexed Reference rule label")
@@ -905,13 +977,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     query = args.obligation_backlog or args.obligation is not None
     rule_query = args.rule_backlog or args.rule_page is not None or args.rule is not None
+    if args.observe_partial_witnesses and not args.with_partial_witnesses:
+        parser.error("--observe-partial-witnesses requires --with-partial-witnesses and an obligation query")
+    if args.evidence and not args.observe_partial_witnesses:
+        parser.error("--evidence requires --observe-partial-witnesses")
     if args.with_partial_witnesses:
         if not query or rule_query or args.unproposed or any((args.inventory, args.scope, args.contract,
                 args.oracle_verifier, args.reference_rules, args.source_archive,
                 args.submodule_proof, args.library_surface_provenance)):
             parser.error("--with-partial-witnesses requires an obligation query and only --root may override inputs")
         try:
-            report = obligation_witness_backlog(args.root, obligation_id=args.obligation)
+            report = (observe_obligation_witnesses(args.root, args.evidence, obligation_id=args.obligation)
+                      if args.observe_partial_witnesses
+                      else obligation_witness_backlog(args.root, obligation_id=args.obligation))
         except ValueError as exc:
             print(json.dumps({'error': str(exc)}), file=sys.stderr)
             return 2

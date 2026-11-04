@@ -356,6 +356,17 @@ links, reviewed counts and executed-need counts remain empty or zero. This actio
 allows only `--root` as an input override, rejects missing attribution inputs,
 and does not freshly verify Reference prose or external library HTML.
 
+Add `--observe-partial-witnesses` with repeatable `--evidence <track-directory>`
+to observe exact linked selectors through the ordinary authenticated receipt
+parser. The assessor checks every row in each supplied receipt, even rows outside
+the selected obligation. Canonical duplicate directories are read once. Current,
+stale, conflicting, failed and untested states remain distinct. With no receipts,
+all linked selectors are untested and no runner or Git identity is required.
+Per-obligation `partial_witness_observations` report selector outcomes separately
+from authored test needs. `execution_evidence_imported` describes receipt import,
+not need completion: executed-need and reviewed-obligation counts stay zero,
+all needs stay unmeasured, and passing partial tests do not establish coverage.
+
 The complete pinned label queue is available with
 `python3 tools/compatibility_inventory.py --rule-backlog`; add `--unproposed` to
 select every indexed label lacking an authored proposal, not merely the ordinary

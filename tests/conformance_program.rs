@@ -296,6 +296,28 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
             "missing {marker}: {linked_obligation}"
         );
     }
+    let observations = python(
+        "tools/compatibility_inventory.py",
+        &[
+            "--obligation",
+            "obligation-core-option",
+            "--with-partial-witnesses",
+            "--observe-partial-witnesses",
+        ],
+    );
+    for marker in [
+        "\"partial_witness_observations\"",
+        "\"untested\": 2",
+        "\"distinct_linked_selectors_observed\": 0",
+        "\"source_identity\": null",
+        "\"runner_identity\": null",
+        "\"executed_test_need_count\": 0",
+    ] {
+        assert!(
+            observations.contains(marker),
+            "missing {marker}: {observations}"
+        );
+    }
     let rule = python(
         "tools/compatibility_inventory.py",
         &["--rule", "type.text.char-value"],
