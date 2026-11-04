@@ -217,6 +217,7 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_compatibility_scope.py", &["-v"]);
     python("tools/test_compatibility_inventory.py", &["-v"]);
     python("tools/test_extract_reference_rules.py", &["-v"]);
+    python("tools/test_acquire_pinned_reference.py", &["-v"]);
     python("tools/test_pinned_acquisition.py", &["-v"]);
     python("tools/test_compact_library_surface_provenance.py", &["-v"]);
     python("tools/test_library_surface_backlog.py", &["-v"]);

@@ -2,6 +2,7 @@
 """Archive-backed static extraction tests with isolated temporary fixtures."""
 import io
 import json
+import os
 import tarfile
 import tempfile
 import unittest
@@ -9,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 from contextlib import redirect_stdout
 
-from extract_reference_rules import SCOPE, extract, main, parse_markdown, sha256
+from extract_reference_rules import SCOPE, extract, main, parse_markdown, sha256, verify_archive
 
 BASE = Path(__file__).resolve().parent
 COMPILER = '48a229ceaefd4985c50990b14116b6d856af0985'
@@ -207,6 +208,40 @@ class ExtractTests(unittest.TestCase):
         self.repack()
         with self.assertRaisesRegex(ValueError, 'escapes'):
             self.run_extract()
+
+
+class PinnedSourceTests(unittest.TestCase):
+    def inputs(self):
+        archive = os.environ.get('JR_REFERENCE_ARCHIVE')
+        source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
+        if not archive:
+            self.skipTest('set JR_REFERENCE_ARCHIVE for actual archive and source verification')
+        self.assertTrue(archive and source, 'both pinned archive and source root are required')
+        return Path(source), Path(archive)
+
+    def test_actual_archive_reproduces_source_and_all_recorded_rule_metadata(self):
+        import compatibility_inventory as inventory
+        source, archive = self.inputs()
+        expected = '580d2250b29ac221aefc647c5e2c3e9d648ba833b6634e41105de2de1316cd91'
+        self.assertEqual(verify_archive(source, archive, expected, REFERENCE), 190)
+        result = inventory.validate_reference_rules(BASE.parent, source_archive=archive)
+        self.assertEqual(result['source_archive_byte_verification'], 'reproduced-from-provided-archive')
+        self.assertEqual(result['compiler_submodule_byte_verification'], 'not_reverified_in_this_run')
+        self.assertEqual(result['counts']['unique_rule_labels_total'], 2965)
+        self.assertEqual(result['counts']['rules_with_reviewed_obligation_mapping'], 0)
+        self.assertIsNone(result['full_rust_completion_percent'])
+
+    def test_ci_acquires_before_tests_and_supplies_archive_to_inventory(self):
+        workflow = (BASE.parent / '.github/workflows/compiler-conformance.yml').read_text()
+        acquisition = workflow.index('python3 tools/acquire_pinned_reference.py --output-dir')
+        regressions = workflow.index("python3 -m unittest discover -s tools -p 'test_*.py'")
+        self.assertLess(acquisition, regressions)
+        self.assertIn("data['readiness'] != 'input-verified'", workflow)
+        self.assertIn("data['verified_files'] != 190", workflow)
+        for variable in ('JUSTRUST_WITNESS_REFERENCE_ROOT=', 'JR_REFERENCE_ARCHIVE='):
+            self.assertLess(workflow.index(variable), regressions)
+        self.assertIn('tools/compatibility_inventory.py --source-archive "$JR_REFERENCE_ARCHIVE"', workflow)
+        self.assertIn('not semantic review or compiler proof', workflow)
 
 
 if __name__ == '__main__':

@@ -301,6 +301,18 @@ hash establishes byte consistency, not independent authentication. Ordinary
 metadata validation must not claim that external source bytes were reverified
 when the archive was not supplied.
 
+`python3 tools/acquire_pinned_reference.py --output-dir <new-scratch-directory>`
+downloads the fixed official Reference archive and checks its committed digest
+before creating an output directory. Use `--archive <retained-archive>` for an
+offline acquisition of the same pinned bytes. It rejects archive links, unsafe
+paths and resource-limit violations, then verifies all extracted source files.
+The command reports `source_root` and `archive_path`; set
+`JUSTRUST_WITNESS_REFERENCE_ROOT` and `JR_REFERENCE_ARCHIVE` to those paths when
+running the Python suites. Evidence-system CI acquires these inputs before its
+tests and supplies the archive to inventory validation, so the pinned-source
+checks run rather than relying only on synthetic fixtures. Acquisition and
+source reproduction grant no normative review or compiler compatibility credit.
+
 `data/compiler-library-surface-provenance.json` records bounded pinned library
 source and rustdoc input provenance, not public API coverage. Its link/anchor
 observations include unstable and other-target entries and must not become a
