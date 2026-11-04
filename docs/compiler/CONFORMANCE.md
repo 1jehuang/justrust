@@ -362,6 +362,15 @@ support witness-link or execution-evidence actions. Its proposed classifications
 and missing test needs remain unreviewed, with no executable or completion
 credit.
 
+Use `--profile abi` with `generate` or `validate` for all 24 labels on the pinned
+`src/abi.md` page. Its explicit proposals distinguish `used` retention in
+intermediate objects from final linker retention, actual symbol/section output
+from accepted attribute syntax, duplicate-attribute lints from hard errors, and
+edition-2024 unsafe wrappers from programmer proof obligations. It does not
+establish calling conventions, object emission support or external linking
+compatibility. Witness-link and execution-evidence actions are unavailable for
+this source-only profile. All rows remain unreviewed with missing test needs.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 The ordinary inventory CLI and `coverage --json` expose `rule_proposals` with

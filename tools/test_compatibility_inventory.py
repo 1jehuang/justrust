@@ -57,8 +57,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 186)
-        self.assertEqual(expected['rule_identities_without_proposals'], 2779)
+        self.assertEqual(expected['proposed_rule_identities'], 210)
+        self.assertEqual(expected['rule_identities_without_proposals'], 2755)
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)

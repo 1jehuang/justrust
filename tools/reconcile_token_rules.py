@@ -3,7 +3,7 @@
 
 Token proposals are the unchanged default. The explicit const-eval profile uses
 const_reconciliation_proposals.py, including explicit partial witness links.
-The unsafe profile covers both pinned unsafe pages and is generate/validate only.
+Unsafe and ABI profiles cover their pinned pages and are generate/validate only.
 Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
@@ -24,6 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,)}
 
 
 def digest(data):
@@ -35,13 +37,22 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def profile_inputs(profile):
-    """Only explicitly selected pages and authored proposals are admitted."""
-    require(profile in ('tokens', 'const-eval', 'unsafe'), 'unknown reconciliation profile')
-    if profile == 'tokens':
-        return SELECTED, ALIASES, CLASS_NAMES, ROWS
+def source_only_proposals(profile):
+    require(profile in SOURCE_ONLY_PAGE_COUNTS, 'unknown source-only profile')
     if profile == 'unsafe':
         import unsafe_reconciliation_proposals as proposals
+    else:
+        import abi_reconciliation_proposals as proposals
+    return proposals
+
+
+def profile_inputs(profile):
+    """Only explicitly selected pages and authored proposals are admitted."""
+    require(profile in dict(PROPOSAL_COUNTS), 'unknown reconciliation profile')
+    if profile == 'tokens':
+        return SELECTED, ALIASES, CLASS_NAMES, ROWS
+    if profile in SOURCE_ONLY_PAGE_COUNTS:
+        proposals = source_only_proposals(profile)
         return proposals.SELECTED, proposals.ALIASES, proposals.CLASS_NAMES, proposals.ROWS
     # Token callers and witness APIs do not depend on the optional module.
     import const_reconciliation_proposals as proposals
@@ -116,7 +127,7 @@ def summarize_proposals(index_path, candidate_path):
             return {'readiness': 'missing', 'review_status': 'unreviewed', 'missing_files': missing,
                     'global_rule_identities': None, 'full_rust_completion_percent': None,
                     'limitations': ['Missing proposal inputs cannot establish a universal source denominator.']}
-        selected_paths = {path for profile in ('tokens', 'const-eval', 'unsafe')
+        selected_paths = {path for profile, _ in PROPOSAL_COUNTS
                           for path in profile_inputs(profile)[0]}
         if not selected_paths & paths:
             return {'readiness': 'missing', 'review_status': 'unreviewed',
@@ -132,7 +143,7 @@ def summarize_proposals(index_path, candidate_path):
         obligations = {row['id'] for section in candidate['sections'] for row in section['obligations']}
         profiles, union = {}, set()
         valid_classes = {'normative-semantic', 'grammar', 'index', 'cross-reference', 'edition-context'}
-        for profile, expected in (('tokens', 115), ('const-eval', 44), ('unsafe', 27)):
+        for profile, expected in PROPOSAL_COUNTS:
             selected, aliases, classes, authored = profile_inputs(profile)
             require(len(selected) == len(set(selected)) and set(selected) <= paths,
                     'missing or duplicate selected proposal page')
@@ -258,7 +269,7 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
         require(len(fields) == 7, 'proposal requires seven explicit fields')
         label, classes, rationale, aliases, positive, invalid, interaction = fields
         identity = (selected_pages[0], label)
-        if profile == 'unsafe':
+        if profile in SOURCE_ONLY_PAGE_COUNTS:
             matches = [key for key in records if key[1] == label]
             require(len(matches) == 1, 'foreign proposal rule: ' + label)
             identity = matches[0]
@@ -283,9 +294,8 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
         if profile == 'const-eval' and executable:
             row['missing_test_needs'][-1] = (
                 'end-to-end: Missing authored original-source CHECK/BUILD/run or stage-specific rejection witnesses, named test identities, pinned-stock outcomes and immutable receipts at workers1/8. Invalid CTFE, unsupported input, resource limits and infrastructure faults require distinct outcomes; no execution is inferred from legacy IDs.')
-        if profile == 'unsafe':
-            import unsafe_reconciliation_proposals as unsafe_proposals
-            row['missing_test_needs'][-1] = unsafe_proposals.END_TO_END
+        if profile in SOURCE_ONLY_PAGE_COUNTS:
+            row['missing_test_needs'][-1] = source_only_proposals(profile).END_TO_END
         rows.append(row)
     rows.sort(key=lambda r: (r['page'], r['line']))
     selected = {(r['page'], r['rule']) for r in rows}
@@ -316,9 +326,8 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
             'All classifications and mappings are proposed interpretations of the exact pinned src/const_eval.md page. They remain unreviewed and grant no reviewed-readiness credit.',
             f'The bounded selection is all {len(records)} labeled blocks on src/const_eval.md only. All other {len(identities) - len(records)} source identities remain explicitly unselected; none are removed from the {len(identities)}-label denominator.',
         ]
-    if profile == 'unsafe':
-        import unsafe_reconciliation_proposals as unsafe_proposals
-        result['limitations'] = list(unsafe_proposals.LIMITATIONS)
+    if profile in SOURCE_ONLY_PAGE_COUNTS:
+        result['limitations'] = list(source_only_proposals(profile).LIMITATIONS)
     validate(result, index_path, candidate_path, source_root, profile)
     return result
 
@@ -369,18 +378,19 @@ def validate(data, index_path, candidate_path, source_root, profile='tokens'):
             'All classifications and mappings are proposed interpretations of the exact pinned src/const_eval.md page. They remain unreviewed and grant no reviewed-readiness credit.',
             f'The bounded selection is all {len(records)} labeled blocks on src/const_eval.md only. All other {len(identities) - len(records)} source identities remain explicitly unselected; none are removed from the {len(identities)}-label denominator.',
         ], 'const-eval scope limitations mismatch')
-    if profile == 'unsafe':
-        import unsafe_reconciliation_proposals as proposals
-        require(len(identities) == 2965 and len(records) == 27,
-                'unsafe pinned denominator mismatch')
-        require(Counter(page for page, _ in records) == Counter(dict(zip(proposals.SELECTED, (16, 11)))),
-                'unsafe selected page cardinality mismatch')
+    if profile in SOURCE_ONLY_PAGE_COUNTS:
+        proposals = source_only_proposals(profile)
+        require(len(identities) == 2965 and len(records) == dict(PROPOSAL_COUNTS)[profile],
+                profile + ' pinned denominator mismatch')
+        require(Counter(page for page, _ in records)
+                == Counter(dict(zip(proposals.SELECTED, SOURCE_ONLY_PAGE_COUNTS[profile]))),
+                profile + ' selected page cardinality mismatch')
         authored = {}
         for line in proposals.ROWS.strip().splitlines():
             fields = line.split('|')
             require(len(fields) == 7, 'proposal requires seven explicit fields')
             label, classes, rationale, aliases, positive, invalid, interaction = fields
-            require(label not in authored, 'duplicate unsafe proposal rule')
+            require(label not in authored, 'duplicate ' + profile + ' proposal rule')
             authored[label] = (
                 [proposals.CLASS_NAMES[c] for c in classes.split()], rationale,
                 [proposals.ALIASES[a] for a in aliases.split()],
@@ -388,14 +398,14 @@ def validate(data, index_path, candidate_path, source_root, profile='tokens'):
                  'invalid: Missing direct exact test link. ' + invalid,
                  'interaction: Missing direct exact test link. ' + interaction,
                  proposals.END_TO_END])
-        require(set(authored) == {label for _, label in records}, 'unsafe authored selection mismatch')
+        require(set(authored) == {label for _, label in records}, profile + ' authored selection mismatch')
         for row in data['rows']:
             require((row['classifications'], row['rationale'], row['candidate_obligation_ids'],
                      row['missing_test_needs']) == authored[row['rule']],
-                    'unsafe authored classification or proposal mismatch')
+                    profile + ' authored classification or proposal mismatch')
             require(row['id'] == 'reconcile-' + re.sub('[^a-z0-9]+', '-', row['rule']),
-                    'unsafe authored row ID mismatch')
-        require(data['limitations'] == list(proposals.LIMITATIONS), 'unsafe scope limitations mismatch')
+                    profile + ' authored row ID mismatch')
+        require(data['limitations'] == list(proposals.LIMITATIONS), profile + ' scope limitations mismatch')
     return data['counts']
 
 
@@ -414,7 +424,7 @@ def witness_bytes(data):
 
 
 def witness_profile(profile):
-    require(profile != 'unsafe', 'unsafe profile supports generate/validate only')
+    require(profile not in SOURCE_ONLY_PAGE_COUNTS, profile + ' profile supports generate/validate only')
     profile_inputs(profile)
     if profile == 'tokens':
         return WITNESS_SOURCE_CONTRACT, DIRECT_WITNESSES, ALIASES, 'conformance_generated', 'tests/conformance_generated.rs'
@@ -445,11 +455,11 @@ def scalar_source_binding(raw, selector, expectation):
 
 def build_witness_links(index_path, candidate_path, source_root, repo_root, profile='tokens'):
     """Direct partial attribution, never imported execution or reviewed coverage."""
+    contract, witnesses, aliases_by_name, suite, source_file = witness_profile(profile)
     index_path, candidate_path, source_root, repo_root = map(
         safe_path, (index_path, candidate_path, source_root, repo_root))
     # Reuse every v1 source/page/line/block and candidate identity check. Keep the
     # entire reconciliation, including all missing needs and unselected rules.
-    contract, witnesses, aliases_by_name, suite, source_file = witness_profile(profile)
     reconciliation = build(index_path, candidate_path, source_root, profile)
     pin = copy.deepcopy(contract)
     for field in ('reference_commit', 'rule_index_sha256', 'candidate_inventory_sha256'):
@@ -614,7 +624,7 @@ def assess_witness_links(data, index_path, candidate_path, source_root, repo_roo
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=['generate','validate','generate-witness-links','build-witness-links','validate-witness-links','assess-witness-links'])
-    parser.add_argument('--profile', choices=['tokens', 'const-eval', 'unsafe'], default='tokens')
+    parser.add_argument('--profile', choices=[profile for profile, _ in PROPOSAL_COUNTS], default='tokens')
     parser.add_argument('--rule-index', type=Path, required=True)
     parser.add_argument('--inventory', type=Path, required=True)
     parser.add_argument('--source-root', type=Path, required=True)
@@ -622,11 +632,11 @@ def main(argv=None):
     parser.add_argument('--repo-root', type=Path)
     parser.add_argument('--evidence', type=Path, action='append', default=[])
     args = parser.parse_args(argv)
-    if args.profile == 'unsafe':
+    if args.profile in SOURCE_ONLY_PAGE_COUNTS:
         require(args.action in ('generate', 'validate'),
-                'unsafe profile supports generate/validate only')
+                args.profile + ' profile supports generate/validate only')
         require(args.repo_root is None and not args.evidence,
-                'unsafe profile does not support --repo-root or --evidence')
+                args.profile + ' profile does not support --repo-root or --evidence')
     if args.profile == 'const-eval' and args.action in ('generate', 'validate'):
         require(args.repo_root is None and not args.evidence,
                 'const-eval profile does not support --repo-root or --evidence')
