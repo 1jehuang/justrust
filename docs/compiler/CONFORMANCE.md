@@ -562,6 +562,15 @@ unsafe-call requirements are checked after lookup, not used to select a later
 fallback. Method-name token editions and the trait-object same-name restriction
 remain explicit missing obligations. No witness or execution credit is imported.
 
+Use `--profile aggregates` with `generate` or `validate` for the 38 labels on
+the pinned array-expression and tuple-expression pages. Missing obligations
+distinguish constant and ordinary repeat operands, including zero-length
+evaluation, and the exceptions to the repeated-value `Copy` requirement.
+Indexing keeps temporary-lifetime extension, trait dispatch, compile-time
+invalidity, runtime panic and lint policy separate. Tuple numeric fields have
+their own syntax and place semantics. All proposals remain unreviewed with no
+witness attribution or execution credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
