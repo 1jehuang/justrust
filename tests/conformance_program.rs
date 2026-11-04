@@ -232,6 +232,9 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"documentation_backlog\"",
         "\"partial_witness_sources\"",
         "\"library_witness_sources\"",
+        "\"obligation_queue\"",
+        "\"known_obligations\": 257",
+        "\"authored_test_needs\": 938",
         "\"direct_documentation_links\": 10",
         "\"distinct_documentation_references\": 7",
         "\"direct_witness_selectors\": 12",
@@ -254,6 +257,22 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"source_block_byte_verification\": \"not_reverified_in_this_run\"",
     ] {
         assert!(inventory.contains(marker), "missing {marker}: {inventory}");
+    }
+    let obligation = python(
+        "tools/compatibility_inventory.py",
+        &["--obligation", "obligation-core-option"],
+    );
+    for marker in [
+        "\"selected_obligation_count\": 1",
+        "\"known_obligation_count\": 257",
+        "\"reviewed_obligation_count\": 0",
+        "\"executed_test_need_count\": 0",
+        "\"status\": \"unmeasured\"",
+    ] {
+        assert!(
+            obligation.contains(marker),
+            "missing {marker}: {obligation}"
+        );
     }
 }
 

@@ -159,12 +159,15 @@ def summarize(inventories, scope):
     existing = scope_ids(scope)
     totals = {"inventories": 0, "sources": 0, "sections": 0, "obligations": 0, "test_needs": 0}
     seen, mapped = set(), set()
+    without_needs = 0
     for inventory in inventories:
         counts, mappings = validate(inventory, existing, seen)
         totals["inventories"] += 1
         for key, value in counts.items():
             totals[key] += value
         mapped.update(mappings)
+        without_needs += sum(not obligation['test_needs'] for section in inventory['sections']
+                             for obligation in section['obligations'])
     require(totals["inventories"] > 0, "at least one inventory required")
     return {"schema_version": 1, "scope": CONTRACT, "review_status": "unreviewed",
             "full_rust_completion_percent": None,
@@ -172,9 +175,72 @@ def summarize(inventories, scope):
                            obligations_lacking_direct_exact_test_links=totals["obligations"],
                            obligations_with_executable_evidence=0),
             "unmapped_existing_requirements": sorted(existing - mapped),
+            "obligation_queue": {"readiness": "unreviewed", "known_obligations": totals['obligations'],
+                                 "authored_test_needs": totals['test_needs'],
+                                 "obligations_without_authored_test_needs": without_needs,
+                                 "reviewed_obligations": 0, "executed_test_needs": 0,
+                                 "normative_inventory_complete": False,
+                                 "execution_evidence_imported": False},
             "limitations": ["Unreviewed inventories are planning obligations, not execution evidence.",
                             "Existing requirement links do not cover new obligations or supply direct exact test links.",
                             "Counts and mappings are not a full Rust compatibility percentage."]}
+
+
+def _canonical_content(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+
+
+def obligation_backlog(inventories, scope, *, obligation_id=None):
+    """Query authored needs only. IDs identify content, never test execution.
+
+    Inventory fingerprints use canonical JSON, not original file bytes. A need ID
+    depends on scope, obligation ID and exact description, not list position.
+    Validate every input before selecting a row so filtering cannot conceal debt.
+    """
+    inventories = list(inventories)
+    summary = summarize(inventories, scope)
+    if obligation_id is not None:
+        require(type(obligation_id) is str and bool(obligation_id), 'obligation: nonempty ID required')
+    selected = []
+    for inventory in inventories:
+        fingerprint = hashlib.sha256(_canonical_content(inventory)).hexdigest()
+        sources = {source['id']: source for source in inventory['sources']}
+        for section in inventory['sections']:
+            references = sorted(({'source_id': ref['source'], 'section': ref['section'],
+                                  'url': sources[ref['source']]['url'],
+                                  'version_note': sources[ref['source']]['version_note']}
+                                 for ref in section['source_refs']),
+                                key=lambda row: (row['source_id'], row['section']))
+            for obligation in section['obligations']:
+                ident = obligation['id']
+                if obligation_id is not None and ident != obligation_id:
+                    continue
+                needs = []
+                for description in obligation['test_needs']:
+                    identity = {'scope': dict(CONTRACT), 'obligation_id': ident, 'description': description}
+                    needs.append({'id': 'need-' + hashlib.sha256(_canonical_content(identity)).hexdigest(),
+                                  'description': description, 'status': 'unmeasured'})
+                selected.append({'obligation_id': ident, 'title': obligation['title'],
+                                 'section_id': section['id'], 'section_title': section['title'],
+                                 'inventory_content_sha256': fingerprint,
+                                 'source_references': [dict(ref) for ref in references],
+                                 'existing_requirements': sorted(obligation['existing_requirements']),
+                                 'review_status': 'unreviewed', 'direct_exact_test_links': [],
+                                 'test_needs': sorted(needs, key=lambda need: need['id'])})
+    require(obligation_id is None or bool(selected), 'unknown obligation ID: ' + str(obligation_id))
+    return {'schema_version': 1, 'scope': dict(CONTRACT), 'readiness': 'unreviewed',
+            'obligation_id': obligation_id, 'known_obligation_count': summary['counts']['obligations'],
+            'selected_obligation_count': len(selected),
+            'known_test_need_count': summary['counts']['test_needs'],
+            'selected_test_need_count': sum(len(row['test_needs']) for row in selected),
+            'reviewed_obligation_count': 0, 'executed_test_need_count': 0,
+            'execution_evidence_imported': False, 'normative_inventory_complete': False,
+            'full_rust_completion_percent': None,
+            'rows': sorted(selected, key=lambda row: row['obligation_id']),
+            'limitations': ['Authored inventory queue only, not a complete normative Rust denominator.',
+                            'Need IDs bind scope, obligation and text, not tests, outcomes or evidence.',
+                            'Canonical JSON fingerprints are not original-file byte verification.',
+                            'Existing requirement links and partial witness proposals do not satisfy these needs.']}
 
 
 def validate_contract(contract, verifier_text):
@@ -699,6 +765,10 @@ def load_and_summarize(root: Path):
         return {"schema_version": 1, "scope": CONTRACT, "readiness": "missing",
                 "review_status": "unreviewed", "missing_files": missing,
                 "full_rust_completion_percent": None,
+                "obligation_queue": {"readiness": "missing", "known_obligations": None,
+                                     "authored_test_needs": None, "reviewed_obligations": 0,
+                                     "executed_test_needs": 0, "normative_inventory_complete": False,
+                                     "execution_evidence_imported": False},
                 "rule_proposals": proposals,
                 "partial_witness_sources": witness_sources,
                 "library_witness_sources": library_witnesses,
@@ -762,10 +832,16 @@ def main(argv=None):
     parser.add_argument("--source-archive", type=Path)
     parser.add_argument("--submodule-proof", type=Path)
     parser.add_argument("--library-surface-provenance", type=Path)
+    parser.add_argument("--obligation-backlog", action="store_true", help="List all validated authored obligations and needs, not outcomes")
+    parser.add_argument("--obligation", help="Query one exact authored obligation ID")
     args = parser.parse_args(argv)
+    query = args.obligation_backlog or args.obligation is not None
+    if query and any((args.reference_rules, args.source_archive, args.submodule_proof,
+                      args.library_surface_provenance)):
+        parser.error("obligation queries cannot override Reference or library provenance inputs")
     if not any((args.inventory, args.scope, args.contract, args.oracle_verifier,
                 args.reference_rules, args.source_archive, args.submodule_proof,
-                args.library_surface_provenance)):
+                args.library_surface_provenance, query)):
         try:
             report = load_and_summarize(args.root)
         except InvalidInventory as exc:
@@ -780,7 +856,13 @@ def main(argv=None):
         contract_path = args.contract or args.scope.with_name("compiler-compatibility-contract.json")
         verifier_path = args.oracle_verifier or contract_path.parent.parent / "tests/support/stock_rustc.rs"
         contract = validate_contract(load(contract_path), read_verifier(verifier_path))
-        report = summarize([load(path) for path in args.inventory], load(args.scope))
+        inventories, scope = [load(path) for path in args.inventory], load(args.scope)
+        if query:
+            report = obligation_backlog(inventories, scope, obligation_id=args.obligation)
+            report['contract_id'] = contract['contract_id']
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+        report = summarize(inventories, scope)
         report["contract_id"] = contract["contract_id"]
         report["readiness"] = "unreviewed"
         report["reference_rules"] = reference_readiness(

@@ -1018,5 +1018,282 @@ class LibraryWitnessIntegrationTests(unittest.TestCase):
         self.assertFalse(result["execution_evidence_imported"])
 
 
+
+
+class ObligationBacklogIdentityTests(unittest.TestCase):
+    """Authored queue identity is deliberately not execution or review evidence."""
+
+    @staticmethod
+    def canonical_digest(value):
+        import hashlib
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                         ensure_ascii=False).encode("utf-8")).hexdigest()
+
+    def need_id(self, obligation_id, description):
+        return "need-" + self.canonical_digest({"scope": inventory.CONTRACT,
+            "obligation_id": obligation_id, "description": description})
+
+    def synthetic(self):
+        value = fixture()
+        first = value["sections"][0]["obligations"][0]
+        first["existing_requirements"] = ["req-two", "req-one"]
+        first["test_needs"] = ["Unicode café λ", "Differential type check"]
+        second = copy.deepcopy(first)
+        second["id"] = "types-zero"
+        second["title"] = "Another authored obligation"
+        value["sections"][0]["obligations"].append(second)
+        return value
+
+    def assert_no_credit(self, report):
+        self.assertEqual(report["schema_version"], 1)
+        self.assertEqual(report["scope"], inventory.CONTRACT)
+        self.assertEqual(report["readiness"], "unreviewed")
+        self.assertIsNone(report["full_rust_completion_percent"])
+        self.assertEqual(report["reviewed_obligation_count"], 0)
+        self.assertEqual(report["executed_test_need_count"], 0)
+        self.assertIs(report["execution_evidence_imported"], False)
+        self.assertIs(report["normative_inventory_complete"], False)
+        self.assertTrue(report["limitations"])
+        for row in report["rows"]:
+            self.assertEqual(row["review_status"], "unreviewed")
+            self.assertEqual(row["direct_exact_test_links"], [])
+            self.assertTrue(all(need["status"] == "unmeasured" for need in row["test_needs"]))
+
+    def test_synthetic_exact_schema_identity_and_conservation(self):
+        value = self.synthetic()
+        report = inventory.obligation_backlog([value], scope_fixture())
+        self.assert_no_credit(report)
+        self.assertIsNone(report["obligation_id"])
+        self.assertEqual((report["known_obligation_count"], report["selected_obligation_count"],
+                          report["known_test_need_count"], report["selected_test_need_count"]),
+                         (2, 2, 4, 4))
+        self.assertEqual([row["obligation_id"] for row in report["rows"]],
+                         ["types-one", "types-zero"])
+        for row in report["rows"]:
+            authored = next(item for item in value["sections"][0]["obligations"]
+                            if item["id"] == row["obligation_id"])
+            expected_needs = sorted([{"id": self.need_id(authored["id"], text),
+                "description": text, "status": "unmeasured"} for text in authored["test_needs"]],
+                key=lambda need: need["id"])
+            self.assertEqual(row, {"obligation_id": authored["id"], "title": authored["title"],
+                "section_id": "types", "section_title": "Types",
+                "source_references": [{"source_id": "reference",
+                    "url": "https://doc.rust-lang.org/reference/types.html",
+                    "version_note": "Synthetic pinned fixture", "section": "types"}],
+                "existing_requirements": ["req-one", "req-two"],
+                "review_status": "unreviewed", "direct_exact_test_links": [],
+                "test_needs": expected_needs,
+                "inventory_content_sha256": self.canonical_digest(value)})
+        ids = [need["id"] for row in report["rows"] for need in row["test_needs"]]
+        self.assertEqual(len(ids), len(set(ids)), "same prose in distinct obligations is not one need")
+
+    def test_reordering_preserves_authored_rows_but_not_inventory_digest(self):
+        value = self.synthetic()
+        extra = copy.deepcopy(value["sections"][0])
+        extra["id"] = "another-section"
+        for item in extra["obligations"]:
+            item["id"] += "-other"
+        value["sections"].append(extra)
+        original = inventory.obligation_backlog([value], scope_fixture())
+        reordered = copy.deepcopy(value)
+        reordered["sections"].reverse()
+        for section in reordered["sections"]:
+            section["obligations"].reverse()
+            for item in section["obligations"]:
+                item["test_needs"].reverse()
+                item["existing_requirements"].reverse()
+        changed = inventory.obligation_backlog([reordered], scope_fixture())
+        self.assertNotEqual(self.canonical_digest(value), self.canonical_digest(reordered))
+        for report in (original, changed):
+            for row in report["rows"]:
+                expected = value if report is original else reordered
+                self.assertEqual(row.pop("inventory_content_sha256"), self.canonical_digest(expected))
+        self.assertEqual(original, changed)
+        left, right = fixture(), fixture()
+        right["sections"][0]["obligations"][0]["id"] = "different-inventory"
+        self.assertEqual(inventory.obligation_backlog([left, right], scope_fixture()),
+                         inventory.obligation_backlog([right, left], scope_fixture()))
+
+    def test_identity_changes_only_with_authored_need_inputs(self):
+        base = fixture()
+        def only_need(value):
+            return inventory.obligation_backlog([value], scope_fixture())["rows"][0]["test_needs"][0]["id"]
+        identity = only_need(base)
+        self.assertEqual(identity, self.need_id("types-one", "Differential type check"))
+        for field, replacement in (("id", "types-renamed"), ("test_needs", ["Changed description"])):
+            changed = copy.deepcopy(base)
+            changed["sections"][0]["obligations"][0][field] = replacement
+            self.assertNotEqual(only_need(changed), identity)
+        changed = copy.deepcopy(base)
+        changed["sections"][0]["obligations"][0]["title"] = "Retitled"
+        self.assertEqual(only_need(changed), identity)
+        changed["scope"]["edition"] = "2018"
+        with self.assertRaises(inventory.InvalidInventory):
+            only_need(changed)
+        invalid_scope = scope_fixture()
+        invalid_scope["scope"]["target"] = "aarch64-unknown-linux-gnu"
+        with self.assertRaises(inventory.InvalidInventory):
+            inventory.obligation_backlog([base], invalid_scope)
+
+    def test_caller_and_output_mutation_cannot_alias_inputs(self):
+        values, scope = [self.synthetic()], scope_fixture()
+        before = copy.deepcopy((values, scope))
+        report = inventory.obligation_backlog(values, scope)
+        pristine = copy.deepcopy(report)
+        self.assertEqual((values, scope), before)
+        report["scope"]["target"] = "modified-output"
+        row = report["rows"][0]
+        row["existing_requirements"].append("modified-output")
+        row["source_references"][0]["url"] = "modified-output"
+        row["test_needs"][0]["description"] = "modified-output"
+        self.assertEqual((values, scope), before)
+        self.assertEqual(inventory.obligation_backlog(values, scope), pristine)
+
+    def test_validation_of_all_inputs_precedes_exact_filter(self):
+        valid = fixture()
+        bad_cases = []
+        for path in ((), ("sources", 0), ("sections", 0),
+                     ("sections", 0, "source_refs", 0), ("sections", 0, "obligations", 0)):
+            malformed = copy.deepcopy(valid)
+            current = malformed
+            for component in path:
+                current = current[component]
+            current["unexpected"] = "must not be ignored"
+            bad_cases.append(malformed)
+        duplicate_need = copy.deepcopy(valid)
+        duplicate_need["sections"][0]["obligations"][0]["test_needs"] *= 2
+        bad_cases.append(duplicate_need)
+        unknown_requirement = copy.deepcopy(valid)
+        unknown_requirement["sections"][0]["obligations"][0]["existing_requirements"] = ["absent"]
+        bad_cases.append(unknown_requirement)
+        for malformed in bad_cases:
+            malformed["sections"][0]["obligations"][0]["id"] = "not-selected"
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.obligation_backlog([valid, malformed], scope_fixture(), obligation_id="types-one")
+        for values in ([], [valid, copy.deepcopy(valid)], [valid, None]):
+            with self.subTest(values=values):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.obligation_backlog(values, scope_fixture(), obligation_id="types-one")
+        for query in ("", "unknown", "types", " types-one", 1, False, []):
+            with self.subTest(query=query):
+                with self.assertRaises(inventory.InvalidInventory):
+                    inventory.obligation_backlog([valid], scope_fixture(), obligation_id=query)
+
+    def test_actual_queue_conserves_257_obligations_938_needs_and_queries(self):
+        root = Path(__file__).resolve().parents[1]
+        values = [inventory.load(root / "data" / name) for name in
+                  ("compiler-language-inventory.json", "compiler-library-project-inventory.json")]
+        scope = inventory.load(root / "data/compiler-compatibility-scope.json")
+        report = inventory.obligation_backlog(values, scope)
+        self.assert_no_credit(report)
+        self.assertEqual((report["known_obligation_count"], report["selected_obligation_count"],
+                          report["known_test_need_count"], report["selected_test_need_count"]),
+                         (257, 257, 938, 938))
+        self.assertEqual(len(report["rows"]), 257)
+        self.assertEqual(sum(len(row["test_needs"]) for row in report["rows"]), 938)
+        for obligation_id in ("obligation-core-option", "obligation-alloc-vec-string", "obligation-core-iterators"):
+            selected = inventory.obligation_backlog(values, scope, obligation_id=obligation_id)
+            self.assert_no_credit(selected)
+            self.assertEqual(selected["obligation_id"], obligation_id)
+            self.assertEqual(selected["known_obligation_count"], 257)
+            self.assertEqual(selected["known_test_need_count"], 938)
+            self.assertEqual(selected["selected_obligation_count"], 1)
+            self.assertEqual(selected["rows"], [row for row in report["rows"]
+                                               if row["obligation_id"] == obligation_id])
+            self.assertEqual(selected["selected_test_need_count"], len(selected["rows"][0]["test_needs"]))
+
+    def test_cli_backlog_query_and_custom_inventory_validation(self):
+        root = Path(__file__).resolve().parents[1]
+        def cli(*options):
+            return subprocess.run([sys.executable, inventory.__file__, "--root", str(root),
+                                   "--contract", str(root / "data/compiler-compatibility-contract.json"), *options],
+                                  capture_output=True, text=True, check=False)
+        full = cli("--obligation-backlog")
+        self.assertEqual(full.returncode, 0, full.stderr)
+        report = json.loads(full.stdout)
+        self.assert_no_credit(report)
+        self.assertEqual(report["selected_obligation_count"], 257)
+        for flags in (("--obligation", "obligation-core-option"),
+                      ("--obligation-backlog", "--obligation", "obligation-core-option")):
+            result = cli(*flags)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            query = json.loads(result.stdout)
+            self.assert_no_credit(query)
+            self.assertEqual(query["selected_obligation_count"], 1)
+            self.assertEqual(query["rows"][0]["obligation_id"], "obligation-core-option")
+        default = cli()
+        self.assertEqual(default.returncode, 0, default.stderr)
+        summary = json.loads(default.stdout)
+        self.assertEqual(summary["counts"]["obligations"], 257)
+        self.assertEqual(summary["counts"]["test_needs"], 938)
+        self.assertEqual(summary["counts"]["obligations_with_executable_evidence"], 0)
+        self.assertIn("obligation_queue", summary)
+        with tempfile.TemporaryDirectory() as directory:
+            custom = Path(directory) / "inventory.json"
+            custom.write_text(json.dumps(fixture()), encoding="utf-8")
+            custom_scope = Path(directory) / "scope.json"
+            custom_scope.write_text(json.dumps(scope_fixture()), encoding="utf-8")
+            result = cli("--obligation-backlog", "--inventory", str(custom),
+                         "--scope", str(custom_scope), "--obligation", "types-one")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout)["selected_obligation_count"], 1)
+            malformed = Path(directory) / "malformed.json"
+            malformed.write_text('{"unexpected":true}', encoding="utf-8")
+            for options in (("--inventory", str(custom), "--inventory", str(malformed), "--obligation", "types-one"),
+                            ("--inventory", str(custom), "--obligation", "not-an-obligation"),
+                            ("--inventory", str(custom), "--obligation", "")):
+                failed = cli("--scope", str(custom_scope), *options)
+                self.assertEqual(failed.returncode, 2, failed.stderr)
+                self.assertEqual(failed.stdout, "")
+                self.assertIn("error", json.loads(failed.stderr))
+
+
+    def test_no_authored_needs_is_not_completion_and_missing_root_is_unknown(self):
+        value = fixture()
+        value['sections'][0]['obligations'][0]['test_needs'] = []
+        queue = inventory.summarize([value], scope_fixture())['obligation_queue']
+        self.assertEqual(queue['obligations_without_authored_test_needs'], 1)
+        self.assertEqual(queue['authored_test_needs'], 0)
+        self.assertEqual(queue['reviewed_obligations'], 0)
+        report = inventory.obligation_backlog([value], scope_fixture())
+        self.assert_no_credit(report)
+        self.assertEqual(report['rows'][0]['test_needs'], [])
+        self.assertEqual(report['known_obligation_count'], 1)
+        with tempfile.TemporaryDirectory() as directory:
+            missing = inventory.load_and_summarize(Path(directory))['obligation_queue']
+        self.assertEqual(missing['readiness'], 'missing')
+        self.assertIsNone(missing['known_obligations'])
+        self.assertIsNone(missing['authored_test_needs'])
+        self.assertIs(missing['normative_inventory_complete'], False)
+
+    def test_query_does_not_import_witness_or_execution_evidence(self):
+        forbidden = AssertionError('source/evidence readers forbidden for authored queue')
+        with mock.patch.object(inventory, 'library_witness_readiness', side_effect=forbidden), \
+                mock.patch.object(inventory, 'partial_witness_source_readiness', side_effect=forbidden), \
+                mock.patch.object(inventory, 'reference_readiness', side_effect=forbidden), \
+                mock.patch('subprocess.run', side_effect=forbidden), \
+                mock.patch.object(sys, 'stdout', io.StringIO()) as output:
+            self.assertEqual(inventory.main(['--obligation', 'obligation-core-option']), 0)
+            report = json.loads(output.getvalue())
+        self.assert_no_credit(report)
+        self.assertEqual(report['selected_obligation_count'], 1)
+
+    def test_cli_incompatible_provenance_flags_reject_before_any_io(self):
+        for flag in ("--reference-rules", "--source-archive", "--submodule-proof",
+                     "--library-surface-provenance"):
+            for action in (("--obligation-backlog",), ("--obligation", "types-one")):
+                with self.subTest(flag=flag, action=action), \
+                        mock.patch.object(inventory, "load", side_effect=AssertionError("no JSON IO")), \
+                        mock.patch.object(inventory, "read_verifier", side_effect=AssertionError("no verifier IO")), \
+                        mock.patch.object(sys, "stderr", io.StringIO()) as stderr:
+                    with self.assertRaises(SystemExit) as raised:
+                        inventory.main([*action, flag, "/missing/provenance", "--inventory", "/missing/inventory",
+                                        "--scope", "/missing/scope", "--contract", "/missing/contract",
+                                        "--oracle-verifier", "/missing/verifier"])
+                    self.assertEqual(raised.exception.code, 2)
+                    self.assertIn("cannot override", stderr.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -333,6 +333,18 @@ uses the same bounded verification offline. Set `JR_LIBRARY_WITNESS_HTML_ROOT`
 to the reported `html_root` to run the real-page regression without the larger
 library acquisition tree. These input checks grant no review or execution credit.
 
+For the authored semantic obligation queue, run
+`python3 tools/compatibility_inventory.py --obligation-backlog`, or select one
+exact ID with `--obligation obligation-core-option`. Every inventory is validated
+before filtering. Rows retain source references, existing requirement mappings
+and the authored test-need descriptions, all unreviewed and unmeasured. Each need
+ID hashes its exact text, obligation ID and scope, so reordering does not rename
+it and editing the need does. Inventory fingerprints hash canonical JSON, not
+original file bytes. These planning identities are not executable test selectors,
+receipts or a complete normative denominator. Partial witness proposals do not
+discharge needs. The ordinary summary reports queue counts without expanding all
+rows, and unknown obligation queries fail instead of returning empty success.
+
 `data/compiler-library-surface-provenance.json` records bounded pinned library
 source and rustdoc input provenance, not public API coverage. Its link/anchor
 observations include unstable and other-target entries and must not become a

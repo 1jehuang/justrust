@@ -459,6 +459,12 @@ def render(summary):
                   "Source-referenced inventory readiness: " + summary["semantic_inventory"]["readiness"] + ". Inventory links are not executable evidence.",
                   "Scope is incomplete. Use --json for exact missing requirements, case commands and evidence paths."])
     library = summary["semantic_inventory"]["library_surface_inputs"]
+    queue = summary["semantic_inventory"]["obligation_queue"]
+    if queue["readiness"] == "unreviewed":
+        lines.insert(-1, "Authored semantic obligation queue: "
+                     f"{queue['known_obligations']} obligations; {queue['authored_test_needs']} test needs; "
+                     f"{queue['obligations_without_authored_test_needs']} obligations without authored test needs. "
+                     "Not reviewed requirements or executed tests. Query compatibility_inventory.py --obligation-backlog.")
     if "observations" in library:
         observations = library["observations"]
         lines.insert(-1, "Recorded library documentation inputs: "
