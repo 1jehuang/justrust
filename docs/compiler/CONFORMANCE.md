@@ -546,6 +546,14 @@ monomorphization, not just the instantiated primitive type. Pointer-cast syntax
 does not prove a resulting pointer is safe to dereference. All rows remain
 unreviewed with missing tests and no witness-link or execution-evidence actions.
 
+Use `--profile closures` with `generate` or `validate` for the 17 labels on
+the pinned closure-expression page. These source-only proposals distinguish
+parameter grammar, inferred captures, unique anonymous types, call traits,
+async closure construction and future execution. `move` does not by itself
+prove a `'static` lifetime or an `FnOnce`-only call capability. Detailed capture
+precision and async call-trait rules on other pages remain separate missing
+work. All rows are unreviewed and cannot import witnesses or execution credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching

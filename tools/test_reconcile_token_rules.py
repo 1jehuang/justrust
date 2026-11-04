@@ -203,9 +203,9 @@ class ProposalSummaryTests(unittest.TestCase):
     def test_standalone_without_prose_artifacts_or_root(self):
         result = self.summary()
         self.assertEqual(result['global_rule_identities'], 2965)
-        self.assertEqual(result['proposed_rule_identities'], 508)
-        self.assertEqual(result['rule_identities_without_proposals'], 2457)
-        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112)):
+        self.assertEqual(result['proposed_rule_identities'], 525)
+        self.assertEqual(result['rule_identities_without_proposals'], 2440)
+        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17)):
             profile = result['profiles'][name]
             self.assertEqual(profile['proposed_rule_identities'], count)
             self.assertEqual(profile['review_status'], 'unreviewed')
@@ -220,7 +220,7 @@ class ProposalSummaryTests(unittest.TestCase):
 
     def assert_backlog_matches_metadata(self, result):
         pages = self.index['pages'] + self.index['unlinked_markdown_files']
-        selected = {path for name in ('tokens', 'const-eval', 'unsafe', 'abi', 'visibility', 'branching', 'destructors', 'loops', 'operators')
+        selected = {path for name in ('tokens', 'const-eval', 'unsafe', 'abi', 'visibility', 'branching', 'destructors', 'loops', 'operators', 'closures')
                     for path in reconciliation.profile_inputs(name)[0]}
         proposed = {(page['path'], rule['label']) for page in pages
                     if page['path'] in selected for rule in page['rules']}
@@ -260,7 +260,7 @@ class ProposalSummaryTests(unittest.TestCase):
     def test_backlog_covers_every_pinned_page_and_exact_missing_metadata(self):
         result = self.summary()
         self.assertEqual((result['global_rule_identities'], result['proposed_rule_identities'],
-                          result['rule_identities_without_proposals']), (2965, 508, 2457))
+                          result['rule_identities_without_proposals']), (2965, 525, 2440))
         self.assert_backlog_matches_metadata(result)
         self.assertEqual(result, self.summary())
         self.assertTrue(any(not page['rules'] for page in self.index['pages']))
@@ -367,9 +367,9 @@ class ProposalSummaryTests(unittest.TestCase):
                 reconciliation, 'WITNESS_SOURCE_CONTRACT', pin):
             result = self.summary()
             self.assert_backlog_matches_metadata(result)
-            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 464)
-        self.assertEqual(result['proposed_rule_identities'], 464)
-        self.assertEqual(result['rule_identities_without_proposals'], 2501)
+            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 481)
+        self.assertEqual(result['proposed_rule_identities'], 481)
+        self.assertEqual(result['rule_identities_without_proposals'], 2484)
 
     def test_malformed_metadata_binding_counts_and_false_credit(self):
         import compatibility_inventory as inventory
@@ -498,8 +498,8 @@ class RuleBacklogQueryTests(unittest.TestCase):
         self.assertEqual(result['selected_proposed_rule_identities'], proposed)
         self.assertEqual(result['selected_rule_identities_without_proposals'], len(rows) - proposed)
         self.assertEqual(sum(row['selected_rule_identities'] for row in pages), len(rows))
-        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 508),
-                           ('rule_identities_without_proposals', 2457), ('total_pages', 122),
+        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 525),
+                           ('rule_identities_without_proposals', 2440), ('total_pages', 122),
                            ('readiness', 'review-required'), ('review_status', 'unreviewed')):
             self.assertEqual(result[key], value)
         for key in ('reviewed_rule_rows', 'completed_rule_rows', 'rows_with_exact_executable_evidence'):
@@ -541,7 +541,7 @@ class RuleBacklogQueryTests(unittest.TestCase):
     def test_missing_only_preserves_known_fully_proposed_and_zero_rule_pages(self):
         result = self.query(missing_only=True)
         self.assert_query(result, missing_only=True)
-        self.assertEqual(len(result['rows']), 2457)
+        self.assertEqual(len(result['rows']), 2440)
         self.assertEqual(len(result['pages']), 122)
         for selection in ({'page': 'src/tokens.md', 'missing_only': True},
                           {'page': 'src/SUMMARY.md'},
@@ -790,8 +790,8 @@ class RuleBacklogQueryTests(unittest.TestCase):
                 reconciliation, 'profile_inputs', side_effect=inputs):
             result = self.query(include_proposals=True)
             self.assert_proposal_query(result)
-            self.assertEqual(result['selected_proposed_rule_identities'], 508)
-            self.assertEqual(result['selected_authored_proposal_count'], 623)
+            self.assertEqual(result['selected_proposed_rule_identities'], 525)
+            self.assertEqual(result['selected_authored_proposal_count'], 640)
             result = self.query(page='src/tokens.md', include_proposals=True)
             self.assertEqual(result['selected_proposed_rule_identities'], 115)
             self.assertEqual(result['selected_authored_proposal_count'], 230)
@@ -3403,6 +3403,203 @@ class PinnedOperatorsProfileTests(unittest.TestCase):
                     data = build(self.index, self.inventory, self.source, profile)
                     self.assertEqual(digest((json.dumps(data, indent=2) + '\n').encode()), sha)
 
+
+
+
+class PinnedClosuresProfileTests(unittest.TestCase):
+    """Independent pinned-source checks, not Rust execution or review credit."""
+
+    PAGE = 'src/expressions/closure-expr.md'
+    PAGE_SHA256 = 'c6b2cfe69852a0dde9e91a37c69b1885ff680af6e10120f7077d855a1f355813'
+    LABELS = (
+        'expr.closure', 'expr.closure.syntax', 'expr.closure.intro',
+        'expr.closure.param-type', 'expr.closure.explicit-type-body',
+        'expr.closure.parameter-restriction', 'expr.closure.unique-type',
+        'expr.closure.captures', 'expr.closure.capture-inference',
+        'expr.closure.capture-mut-ref', 'expr.closure.capture-move',
+        'expr.closure.trait-impl', 'expr.closure.async',
+        'expr.closure.async.intro', 'expr.closure.async.future',
+        'expr.closure.async.edition2018', 'expr.closure.param-attributes',
+    )
+
+    def setUp(self):
+        source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
+        if not source:
+            self.skipTest('set JUSTRUST_WITNESS_REFERENCE_ROOT for pinned-source structural checks')
+        self.source = Path(source)
+        repo = Path(os.environ.get('JUSTRUST_WITNESS_REPO_ROOT', BASE.parent))
+        self.index = repo / 'data/compiler-language-reference-rules.json'
+        self.inventory = repo / 'data/compiler-language-inventory.json'
+
+    def artifact(self):
+        return build(self.index, self.inventory, self.source, 'closures')
+
+    def verify(self, data, source=None):
+        return validate(data, self.index, self.inventory,
+                        self.source if source is None else source, 'closures')
+
+    def test_actual_source_hash_labels_blocks_ids_partition_and_zero_credit(self):
+        import hashlib
+        import re
+        data = self.artifact()
+        counts = self.verify(data)
+        self.assertEqual([counts[key] for key in ('selected_rule_rows',
+                         'unselected_rule_identities', 'global_rule_identities')], [17, 2948, 2965])
+        for key in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence'):
+            self.assertEqual(counts[key], 0)
+        raw = (self.source / self.PAGE).read_bytes()
+        sha = lambda value: hashlib.sha256(value).hexdigest()
+        self.assertEqual(sha(raw), self.PAGE_SHA256)
+        self.assertEqual([(p['path'], p['sha256']) for p in data['selected_pages']],
+                         [(self.PAGE, self.PAGE_SHA256)])
+        lines = raw.splitlines(keepends=True)
+        # The oracle deliberately does not call the production Markdown parser.
+        markers = [(number, match.group(1).decode()) for number, line in enumerate(lines, 1)
+                   if (match := re.fullmatch(rb'r\[([^\]\r\n]+)\]\r?\n?', line))]
+        self.assertEqual(tuple(label for _, label in markers), self.LABELS)
+        self.assertEqual(tuple(row['rule'] for row in data['rows']), self.LABELS)
+        self.assertEqual(len({row['id'] for row in data['rows']}), 17)
+        prefix = 'reconcile-closures-'
+        for position, (row, (start, label)) in enumerate(zip(data['rows'], markers)):
+            with self.subTest(label=label):
+                end = markers[position + 1][0] - 1 if position + 1 < len(markers) else len(lines)
+                self.assertEqual((row['page'], row['line'], row['end_line']), (self.PAGE, start, end))
+                self.assertEqual(row['source_block_sha256'], sha(b''.join(lines[start - 1:end])))
+                self.assertEqual(row['id'], prefix + label.encode().hex())
+                self.assertEqual(bytes.fromhex(row['id'][len(prefix):]).decode(), label)
+                self.assertEqual(row['review_status'], 'unreviewed')
+                self.assertTrue(row['missing_test_needs'])
+                self.assertTrue(all(need.startswith(('positive: Missing ', 'invalid: Missing ',
+                                                    'interaction: Missing ', 'end-to-end: Missing '))
+                                    for need in row['missing_test_needs']))
+        index = json.loads(self.index.read_bytes())
+        universe = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
+                    for r in p['rules']}
+        selected = {(row['page'], row['rule']) for row in data['rows']}
+        other = {(row['page'], row['rule']) for row in data['unselected_rules']}
+        self.assertEqual((len(selected), len(other), len(universe)), (17, 2948, 2965))
+        self.assertEqual(len(data['unselected_rules']), 2948)
+        self.assertFalse(selected & other)
+        self.assertEqual(selected | other, universe)
+        self.assertEqual(data, self.artifact())
+
+    def test_missing_duplicate_foreign_authored_labels_rejected(self):
+        import closures_reconciliation_proposals as proposals
+        valid = self.artifact()
+        rows = proposals.ROWS.strip().splitlines()
+        foreign = rows[0].split('|')
+        foreign[0] = 'expr.loop'
+        for changed in (rows[:-1], rows + rows[:1], ['|'.join(foreign)] + rows[1:]):
+            with self.subTest(length=len(changed)), \
+                    mock.patch.object(proposals, 'ROWS', '\n'.join(changed)):
+                with self.assertRaises(ValueError):
+                    self.artifact()
+                with self.assertRaises(ValueError):
+                    self.verify(valid)
+
+    def test_forged_rows_partition_bindings_and_credits_rejected(self):
+        original = self.artifact()
+        mutations = [
+            lambda d: d['rows'].pop(),
+            lambda d: d['rows'].append(copy.deepcopy(d['rows'][0])),
+            lambda d: d['rows'][0].update(page='src/tokens.md'),
+            lambda d: d['rows'][0].update(rule='expr.loop'),
+            lambda d: d['rows'][0].update(line=True),
+            lambda d: d['rows'][0].update(end_line=99999),
+            lambda d: d['rows'][0].update(source_block_sha256='0' * 64),
+            lambda d: d['rows'][0].update(classifications=['normative-semantic']),
+            lambda d: d['rows'][0].update(rationale='invented interpretation'),
+            lambda d: d['rows'][0].update(candidate_obligation_ids=['foreign']),
+            lambda d: d['rows'][0].update(missing_test_needs=[]),
+            lambda d: d['rows'][0]['missing_test_needs'].__setitem__(0, 'positive: implemented'),
+            lambda d: d['rows'][0].update(id=d['rows'][1]['id']),
+            lambda d: d['rows'][0].update(id='reconcile-closures-expr-closure'),
+            lambda d: d['rows'][0].update(review_status='reviewed'),
+            lambda d: d['counts'].update(reviewed_rule_rows=1),
+            lambda d: d['counts'].update(rows_with_exact_executable_evidence=1),
+            lambda d: d['selected_pages'][0].update(sha256='0' * 64),
+            lambda d: d['bindings'].update(reference_commit='0' * 40),
+            lambda d: d['unselected_rules'].pop(),
+            lambda d: d['unselected_rules'].append(copy.deepcopy(d['unselected_rules'][0])),
+            lambda d: d['unselected_rules'][0].update(page=d['rows'][0]['page'],
+                                                     rule=d['rows'][0]['rule']),
+        ]
+        for number, mutate in enumerate(mutations):
+            changed = copy.deepcopy(original)
+            mutate(changed)
+            with self.subTest(mutation=number), self.assertRaises(ValueError):
+                self.verify(changed)
+
+    def test_stale_source_and_symlink_rejected(self):
+        data = self.artifact()
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            target = root / self.PAGE
+            target.parent.mkdir(parents=True)
+            target.write_bytes((self.source / self.PAGE).read_bytes() + b'\n')
+            with self.assertRaises(ValueError):
+                self.verify(data, root)
+            target.unlink()
+            target.symlink_to(self.source / self.PAGE)
+            with self.assertRaises(ValueError):
+                self.verify(data, root)
+
+    def test_source_only_unsupported_cli_and_api_fail_before_io(self):
+        args = ['--profile', 'closures', '--rule-index', '/absent/index',
+                '--inventory', '/absent/inventory', '--source-root', '/absent/source',
+                '--artifact', '/absent/artifact']
+        extras = ([], ['--repo-root', '/absent/repo'], ['--evidence', '/absent/evidence'],
+                  ['--repo-root', '/absent/repo', '--evidence', '/absent/evidence'])
+        actions = ('generate-witness-links', 'build-witness-links',
+                   'validate-witness-links', 'assess-witness-links')
+        cases = [(action, extra) for action in actions for extra in extras]
+        cases += [(action, extra) for action in ('generate', 'validate') for extra in extras[1:]]
+        with contextlib.ExitStack() as stack:
+            for name in ('read_bytes', 'read_text', 'open', 'is_symlink', 'is_file',
+                         'write_bytes', 'write_text', 'mkdir'):
+                stack.enter_context(mock.patch.object(Path, name, side_effect=AssertionError('IO')))
+            stack.enter_context(mock.patch.object(subprocess, 'run', side_effect=AssertionError('execution')))
+            for action, extra in cases:
+                with self.subTest(action=action, extra=extra), self.assertRaises(ValueError):
+                    main([action, *args, *extra])
+            calls = (
+                lambda: reconciliation.build_witness_links(
+                    self.index, self.inventory, self.source, self.source, 'closures'),
+                lambda: reconciliation.validate_witness_links(
+                    {}, self.index, self.inventory, self.source, self.source, 'closures'),
+                lambda: reconciliation.assess_witness_links(
+                    {}, self.index, self.inventory, self.source, self.source, (), 'closures'),
+            )
+            for call in calls:
+                with self.subTest(api=call), self.assertRaises(ValueError):
+                    call()
+
+    def test_cli_generate_validate_exclusive_output(self):
+        data = self.artifact()
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'closures.json'
+            args = ['--profile', 'closures', '--rule-index', str(self.index),
+                    '--inventory', str(self.inventory), '--source-root', str(self.source),
+                    '--artifact', str(artifact)]
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(['generate', *args])
+                main(['validate', *args])
+            raw = artifact.read_bytes()
+            self.assertEqual(raw, (json.dumps(data, indent=2) + '\n').encode())
+            with self.assertRaises(FileExistsError):
+                main(['generate', *args])
+            self.assertEqual(artifact.read_bytes(), raw)
+            data['rows'][0]['review_status'] = 'reviewed'
+            artifact.write_text(json.dumps(data))
+            with self.assertRaises(ValueError):
+                main(['validate', *args])
+
+    def test_prior_operators_bytes_unchanged_without_closures_module(self):
+        with mock.patch.dict(sys.modules, {'closures_reconciliation_proposals': None}):
+            data = build(self.index, self.inventory, self.source, 'operators')
+        self.assertEqual(
+            digest((json.dumps(data, indent=2) + '\n').encode()),
+            '2d724517022229ad541ef7c2a66aafc414b13f56c68d3cb8ea633755d3996ba3')
 
 if __name__ == '__main__':
     unittest.main()
