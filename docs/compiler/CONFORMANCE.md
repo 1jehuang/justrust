@@ -507,6 +507,15 @@ not acquire one invented exact order. Reference descriptions of super macros
 and pattern-matching guards require separate pinned-stock admissibility review.
 All rows remain unreviewed, with missing tests and no witness or execution credit.
 
+Use `--profile loops` with `generate` or `validate` for all 60 labels on
+the pinned loop-expression page. These proposals distinguish condition
+re-evaluation, short-circuit binding scopes, standard iterator language items,
+label hygiene, control-flow destinations and result coercion. A labeled block
+is not a target for `continue`, and `for` desugaring names do not resolve to
+user-shadowed declarations. Feature admission and grammar caveats require
+separate pinned-stock checks. All rows remain unreviewed with missing tests,
+and this source-only profile cannot import witnesses or execution evidence.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching

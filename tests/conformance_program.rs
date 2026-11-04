@@ -247,9 +247,10 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"visibility\"",
         "\"branching\"",
         "\"destructors\"",
+        "\"loops\"",
         "\"global_rule_identities\": 2965",
-        "\"proposed_rule_identities\": 336",
-        "\"rule_identities_without_proposals\": 2629",
+        "\"proposed_rule_identities\": 396",
+        "\"rule_identities_without_proposals\": 2569",
         "\"backlog\"",
         "\"total_pages\": 122",
         "\"missing_rule_sample_limit\": 100",
@@ -364,6 +365,24 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
             destructor.contains(marker),
             "missing {marker}: {destructor}"
         );
+    }
+    let loops = python(
+        "tools/compatibility_inventory.py",
+        &[
+            "--rule",
+            "expr.loop.for.lang-items",
+            "--with-rule-proposals",
+        ],
+    );
+    for marker in [
+        "\"selected_authored_proposal_count\": 1",
+        "\"profile\": \"loops\"",
+        "\"missing_test_needs\"",
+        "\"relationship\": \"proposed-partial-decomposition\"",
+        "\"rows_with_exact_executable_evidence\": 0",
+        "\"full_rust_completion_percent\": null",
+    ] {
+        assert!(loops.contains(marker), "missing {marker}: {loops}");
     }
 }
 

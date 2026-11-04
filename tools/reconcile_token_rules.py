@@ -3,7 +3,7 @@
 
 Token proposals are the unchanged default. The explicit const-eval profile uses
 const_reconciliation_proposals.py, including explicit partial witness links.
-Unsafe, ABI, visibility, branching and destructor profiles cover pinned pages and are generate/validate only.
+Unsafe, ABI, visibility, branching, destructor and loop profiles cover pinned pages and are generate/validate only.
 Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
@@ -24,8 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
-PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50))
-SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,)}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,)}
 
 
 def digest(data):
@@ -47,8 +47,10 @@ def source_only_proposals(profile):
         import visibility_reconciliation_proposals as proposals
     elif profile == 'branching':
         import branching_reconciliation_proposals as proposals
-    else:
+    elif profile == 'destructors':
         import destructors_reconciliation_proposals as proposals
+    else:
+        import loops_reconciliation_proposals as proposals
     return proposals
 
 
@@ -67,6 +69,16 @@ def profile_inputs(profile):
 
 def profile_purpose(profile):
     return 'bounded-' + ('token' if profile == 'tokens' else profile) + '-rule-reconciliation-candidate'
+
+
+def proposal_row_id(label, profile):
+    # Dots and hyphens both occur in distinct loop labels, for example
+    # expr.loop.break-label and expr.loop.break.label. A lossy slug merges them.
+    # Use reversible UTF-8 bytes for this new profile, without changing any
+    # previously published profile's artifact identities or canonical bytes.
+    if profile == 'loops':
+        return 'reconcile-loops-' + label.encode('utf-8').hex()
+    return 'reconcile-' + re.sub('[^a-z0-9]+', '-', label)
 
 
 def proposal_backlog(pages, proposed):
@@ -384,7 +396,7 @@ def build(index_path, candidate_path, source_root, profile='tokens'):
         classifications = [class_names[c] for c in classes.split()]
         executable = 'normative-semantic' in classifications or 'grammar' in classifications
         row = {
-            'id': 'reconcile-' + re.sub('[^a-z0-9]+', '-', label),
+            'id': proposal_row_id(label, profile),
             'page': identity[0], 'rule': label, **records[identity],
             'classifications': classifications,
             'rationale': rationale,
@@ -511,7 +523,7 @@ def validate(data, index_path, candidate_path, source_root, profile='tokens'):
             require((row['classifications'], row['rationale'], row['candidate_obligation_ids'],
                      row['missing_test_needs']) == authored[row['rule']],
                     profile + ' authored classification or proposal mismatch')
-            require(row['id'] == 'reconcile-' + re.sub('[^a-z0-9]+', '-', row['rule']),
+            require(row['id'] == proposal_row_id(row['rule'], profile),
                     profile + ' authored row ID mismatch')
         require(data['limitations'] == list(proposals.LIMITATIONS), profile + ' scope limitations mismatch')
     return data['counts']
