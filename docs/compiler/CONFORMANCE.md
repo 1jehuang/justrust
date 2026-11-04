@@ -536,6 +536,16 @@ user-shadowed declarations. Feature admission and grammar caveats require
 separate pinned-stock checks. All rows remain unreviewed with missing tests,
 and this source-only profile cannot import witnesses or execution evidence.
 
+Use `--profile operators` with `generate` or `validate` for all 112 labels
+on the pinned operator-expression page. These proposals distinguish borrowing,
+raw-pointer construction, dereferencing, propagation, arithmetic, comparisons,
+numeric and pointer casts, assignment and compound assignment. Runtime panic,
+compile-time invalidity, lint policy and undefined behavior are separate
+outcomes. Compound-assignment evaluation order depends on types known before
+monomorphization, not just the instantiated primitive type. Pointer-cast syntax
+does not prove a resulting pointer is safe to dereference. All rows remain
+unreviewed with missing tests and no witness-link or execution-evidence actions.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching

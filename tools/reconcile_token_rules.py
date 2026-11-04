@@ -3,7 +3,7 @@
 
 Token proposals are the unchanged default. The explicit const-eval profile uses
 const_reconciliation_proposals.py, including explicit partial witness links.
-Unsafe, ABI, visibility, branching, destructor and loop profiles cover pinned pages and are generate/validate only.
+Unsafe, ABI, visibility, branching, destructor, loop and operator profiles cover pinned pages and are generate/validate only.
 Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
@@ -24,8 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
-PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60))
-SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,)}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,), 'operators': (112,)}
 
 
 def digest(data):
@@ -49,8 +49,10 @@ def source_only_proposals(profile):
         import branching_reconciliation_proposals as proposals
     elif profile == 'destructors':
         import destructors_reconciliation_proposals as proposals
-    else:
+    elif profile == 'loops':
         import loops_reconciliation_proposals as proposals
+    else:
+        import operators_reconciliation_proposals as proposals
     return proposals
 
 
@@ -74,10 +76,10 @@ def profile_purpose(profile):
 def proposal_row_id(label, profile):
     # Dots and hyphens both occur in distinct loop labels, for example
     # expr.loop.break-label and expr.loop.break.label. A lossy slug merges them.
-    # Use reversible UTF-8 bytes for this new profile, without changing any
-    # previously published profile's artifact identities or canonical bytes.
-    if profile == 'loops':
-        return 'reconcile-loops-' + label.encode('utf-8').hex()
+    # Use reversible UTF-8 bytes for loop and operator profiles, without changing
+    # previously published profile artifact identities or canonical bytes.
+    if profile in ('loops', 'operators'):
+        return 'reconcile-' + profile + '-' + label.encode('utf-8').hex()
     return 'reconcile-' + re.sub('[^a-z0-9]+', '-', label)
 
 
