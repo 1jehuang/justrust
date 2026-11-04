@@ -371,6 +371,14 @@ establish calling conventions, object emission support or external linking
 compatibility. Witness-link and execution-evidence actions are unavailable for
 this source-only profile. All rows remain unreviewed with missing test needs.
 
+Use `--profile visibility` with `generate` or `validate` for all 18 labels on
+`src/visibility-and-privacy.md`. These source-only proposals distinguish default
+privacy, ancestor accessibility, restricted visibility and re-export paths.
+Earlier-edition path syntax is context, not an additional target. Directly private
+items and public items behind private ancestors require separate controls rather
+than a blanket re-export permission. All rows remain unreviewed, with missing
+source-bound tests and no witness-link or execution-evidence actions.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 The ordinary inventory CLI and `coverage --json` expose `rule_proposals` with

@@ -3,7 +3,7 @@
 
 Token proposals are the unchanged default. The explicit const-eval profile uses
 const_reconciliation_proposals.py, including explicit partial witness links.
-Unsafe and ABI profiles cover their pinned pages and are generate/validate only.
+Unsafe, ABI and visibility profiles cover pinned pages and are generate/validate only.
 Classifications are explicitly authored in the selected proposal module.
 The validator checks identities, hashes, row completeness and structural claims,
 not whether the proposed interpretation of normative Rust is correct.
@@ -24,8 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
-PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24))
-SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,)}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,)}
 
 
 def digest(data):
@@ -41,8 +41,10 @@ def source_only_proposals(profile):
     require(profile in SOURCE_ONLY_PAGE_COUNTS, 'unknown source-only profile')
     if profile == 'unsafe':
         import unsafe_reconciliation_proposals as proposals
-    else:
+    elif profile == 'abi':
         import abi_reconciliation_proposals as proposals
+    else:
+        import visibility_reconciliation_proposals as proposals
     return proposals
 
 
