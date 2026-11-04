@@ -834,8 +834,32 @@ def main(argv=None):
     parser.add_argument("--library-surface-provenance", type=Path)
     parser.add_argument("--obligation-backlog", action="store_true", help="List all validated authored obligations and needs, not outcomes")
     parser.add_argument("--obligation", help="Query one exact authored obligation ID")
+    parser.add_argument("--rule-backlog", action="store_true", help="List every pinned indexed Reference label, not normative coverage")
+    parser.add_argument("--rule-page", help="Query one exact indexed Reference page path")
+    parser.add_argument("--rule", help="Query one exact indexed Reference rule label")
+    parser.add_argument("--unproposed", action="store_true", help="Filter a rule query to labels lacking authored proposals")
     args = parser.parse_args(argv)
     query = args.obligation_backlog or args.obligation is not None
+    rule_query = args.rule_backlog or args.rule_page is not None or args.rule is not None
+    if args.unproposed and not rule_query:
+        parser.error("--unproposed requires a rule query")
+    if rule_query:
+        if query or any((args.scope, args.contract, args.oracle_verifier, args.source_archive,
+                         args.submodule_proof, args.library_surface_provenance)):
+            parser.error("rule queries cannot mix obligation actions or scope, contract, source and library overrides")
+        if args.inventory and len(args.inventory) != 1:
+            parser.error("rule queries require exactly one language candidate inventory")
+        try:
+            from reconcile_token_rules import query_rule_backlog
+            report = query_rule_backlog(
+                args.reference_rules or args.root / REFERENCE_RULES,
+                args.inventory[0] if args.inventory else args.root / 'data/compiler-language-inventory.json',
+                page=args.rule_page, rule=args.rule, missing_only=args.unproposed)
+        except ValueError as exc:
+            print(json.dumps({'error': str(exc)}), file=sys.stderr)
+            return 2
+        print(json.dumps(report, indent=2, sort_keys=True))
+        return 0
     if query and any((args.reference_rules, args.source_archive, args.submodule_proof,
                       args.library_surface_provenance)):
         parser.error("obligation queries cannot override Reference or library provenance inputs")

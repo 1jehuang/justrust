@@ -458,6 +458,10 @@ def render(summary):
                   f"Lexical selector reconciliation backlog: {summary['selector_reconciliation_backlog']['untriaged_selector_count']} untriaged of {summary['selector_reconciliation_backlog']['discovered_selector_count']} candidates, including unmapped tests inside partly mapped suites. Not execution or semantic coverage.",
                   "Source-referenced inventory readiness: " + summary["semantic_inventory"]["readiness"] + ". Inventory links are not executable evidence.",
                   "Scope is incomplete. Use --json for exact missing requirements, case commands and evidence paths."])
+    if summary["semantic_inventory"]["rule_proposals"]["readiness"] == "review-required":
+        lines.insert(-1, "The rule sample is bounded, not the queryable queue. "
+                     "Use compatibility_inventory.py --rule-backlog --unproposed or --rule-page <exact path>. "
+                     "Indexed labels and authored proposals are not reviewed normative coverage.")
     library = summary["semantic_inventory"]["library_surface_inputs"]
     queue = summary["semantic_inventory"]["obligation_queue"]
     if queue["readiness"] == "unreviewed":

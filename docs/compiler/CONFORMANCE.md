@@ -345,6 +345,19 @@ receipts or a complete normative denominator. Partial witness proposals do not
 discharge needs. The ordinary summary reports queue counts without expanding all
 rows, and unknown obligation queries fail instead of returning empty success.
 
+The complete pinned label queue is available with
+`python3 tools/compatibility_inventory.py --rule-backlog`; add `--unproposed` to
+select every indexed label lacking an authored proposal, not merely the ordinary
+report's capped sample. `--rule-page src/types/textual.md` includes the nine
+unlinked labels, and `--rule type.text.char-value` selects one exact label.
+Page and label filters must match exactly. A known zero-rule page or a fully
+proposed page filtered with `--unproposed` can intentionally return zero rows.
+Unknown pages, labels and mismatched page/label pairs fail. Every query validates
+the complete pinned index, candidate and authored proposal modules first, retaining
+all global counts. The query verifies metadata pins, not original prose, archive
+bytes or executable evidence. Rule labels are not a complete normative Rust
+inventory: unlabeled prose, grammar and tables remain review obligations.
+
 `data/compiler-library-surface-provenance.json` records bounded pinned library
 source and rustdoc input provenance, not public API coverage. Its link/anchor
 observations include unstable and other-target entries and must not become a

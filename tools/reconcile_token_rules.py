@@ -202,6 +202,72 @@ def summarize_proposals(index_path, candidate_path):
         raise inventory.InvalidInventory('rule_proposals: ' + str(exc)) from exc
 
 
+def query_rule_backlog(index_path, candidate_path, *, page=None, rule=None, missing_only=False):
+    """Query every indexed label without treating labels as normative coverage.
+
+    The existing pinned metadata and complete authored proposal validators run
+    before filtering. Original Reference prose, archives and receipts are not read.
+    """
+    import compatibility_inventory as inventory
+
+    try:
+        for name, value in (('page', page), ('rule', rule)):
+            require(value is None or (type(value) is str and bool(value)),
+                    name + ': nonempty exact string required')
+        require(type(missing_only) is bool, 'missing_only must be a boolean')
+        summary = summarize_proposals(index_path, candidate_path)
+        require(summary['readiness'] == 'review-required', 'rule query requires complete pinned metadata inputs')
+        # Authenticate the exact bytes used for rows, not an unchecked second load.
+        raw = Path(index_path).read_bytes()
+        require(digest(raw) == WITNESS_SOURCE_CONTRACT['rule_index_sha256'], 'rule query index pin drift')
+        index = json.loads(raw)
+        linked = {entry['path'] for entry in index['pages']}
+        pages = index['pages'] + index['unlinked_markdown_files']
+        paths = {entry['path'] for entry in pages}
+        require(page is None or page in paths, 'unknown exact rule page: ' + str(page))
+        selected = [entry for entry in pages if page is None or entry['path'] == page]
+        if rule is not None:
+            selected = [entry for entry in selected if any(row['label'] == rule for row in entry['rules'])]
+            require(bool(selected), 'unknown exact rule in selected pages: ' + rule)
+        profiles = {name: set(data['selected_pages']) for name, data in summary['profiles'].items()}
+        page_rows, rows = [], []
+        for entry in sorted(selected, key=lambda value: value['path']):
+            names = sorted(name for name, paths in profiles.items() if entry['path'] in paths)
+            rules = [row for row in entry['rules'] if (rule is None or row['label'] == rule)
+                     and (not missing_only or not names)]
+            page_rows.append({'page': entry['path'], 'page_sha256': entry['sha256'],
+                              'linked': entry['path'] in linked, 'rule_identities': len(entry['rules']),
+                              'selected_rule_identities': len(rules)})
+            rows.extend({'page': entry['path'], 'rule': row['label'], 'line': row['line'],
+                         'page_sha256': entry['sha256'], 'linked': entry['path'] in linked,
+                         'proposal_profiles': list(names),
+                         'proposal_status': 'authored-unreviewed' if names else 'missing',
+                         'review_status': 'unreviewed'} for row in rules)
+        proposed = sum(bool(row['proposal_profiles']) for row in rows)
+        return {'readiness': 'review-required', 'review_status': 'unreviewed', 'scope': dict(SCOPE),
+                'bindings': {key: WITNESS_SOURCE_CONTRACT[key] for key in
+                             ('reference_commit', 'rule_index_sha256', 'candidate_inventory_sha256')},
+                'global_rule_identities': summary['global_rule_identities'],
+                'proposed_rule_identities': summary['proposed_rule_identities'],
+                'rule_identities_without_proposals': summary['rule_identities_without_proposals'],
+                'total_pages': len(pages), 'selected_page_count': len(page_rows),
+                'selected_rule_identities': len(rows), 'selected_proposed_rule_identities': proposed,
+                'selected_rule_identities_without_proposals': len(rows) - proposed,
+                'selection': {'page': page, 'rule': rule, 'missing_only': missing_only},
+                'pages': page_rows, 'rows': sorted(rows, key=lambda row: (row['page'], row['rule'])),
+                'reviewed_rule_rows': 0, 'completed_rule_rows': 0,
+                'rows_with_exact_executable_evidence': 0, 'full_rust_completion_percent': None,
+                'normative_inventory_complete': False,
+                'source_block_byte_verification': 'not_reverified_in_this_run',
+                'source_archive_byte_verification': 'not_reverified_in_this_run',
+                'limitations': ['Indexed labels only. Unlabeled prose, grammar and tables may impose additional requirements.',
+                                'Authored proposals remain unreviewed. Missing proposals are not compiler failures.',
+                                'Pinned metadata bytes are checked, but source blocks, archives and execution evidence are not read.',
+                                'No normative completeness, reviewed coverage or full Rust percentage is established.']}
+    except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
+        raise inventory.InvalidInventory('rule_query: ' + str(error)) from error
+
+
 def load_inputs(index_path, candidate_path, source_root, profile='tokens'):
     selected, _, _, _ = profile_inputs(profile)
     index_bytes, candidate_bytes = index_path.read_bytes(), candidate_path.read_bytes()

@@ -274,6 +274,19 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
             "missing {marker}: {obligation}"
         );
     }
+    let rule = python(
+        "tools/compatibility_inventory.py",
+        &["--rule", "type.text.char-value"],
+    );
+    for marker in [
+        "\"selected_rule_identities\": 1",
+        "\"global_rule_identities\": 2965",
+        "\"linked\": false",
+        "\"proposal_status\": \"missing\"",
+        "\"reviewed_rule_rows\": 0",
+    ] {
+        assert!(rule.contains(marker), "missing {marker}: {rule}");
+    }
 }
 
 #[test]

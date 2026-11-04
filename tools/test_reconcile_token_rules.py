@@ -444,6 +444,286 @@ class ProposalSummaryTests(unittest.TestCase):
             self.summary()
 
 
+class RuleBacklogQueryTests(unittest.TestCase):
+    """Pinned metadata navigation is not source verification or review credit."""
+    setUp = ProposalSummaryTests.setUp
+
+    def query(self, **selection):
+        return reconciliation.query_rule_backlog(self.index_path, self.candidate_path, **selection)
+
+    def expected(self, *, page=None, rule=None, missing_only=False):
+        memberships = {}
+        for profile, _ in reconciliation.PROPOSAL_COUNTS:
+            for path in reconciliation.profile_inputs(profile)[0]:
+                memberships.setdefault(path, []).append(profile)
+        pages, rows = [], []
+        for linked, entries in ((True, self.index['pages']),
+                                (False, self.index['unlinked_markdown_files'])):
+            for entry in entries:
+                if page is not None and entry['path'] != page:
+                    continue
+                chosen = [item for item in entry['rules']
+                          if (rule is None or item['label'] == rule)
+                          and (not missing_only or entry['path'] not in memberships)]
+                if rule is not None and not any(item['label'] == rule for item in entry['rules']):
+                    continue
+                pages.append({'page': entry['path'], 'page_sha256': entry['sha256'],
+                              'linked': linked, 'rule_identities': len(entry['rules']),
+                              'selected_rule_identities': len(chosen)})
+                for item in chosen:
+                    profiles = sorted(memberships.get(entry['path'], []))
+                    rows.append({'page': entry['path'], 'rule': item['label'],
+                                 'line': item['line'], 'page_sha256': entry['sha256'],
+                                 'linked': linked, 'proposal_profiles': profiles,
+                                 'proposal_status': 'authored-unreviewed' if profiles else 'missing',
+                                 'review_status': 'unreviewed'})
+        return sorted(pages, key=lambda row: row['page']), sorted(rows, key=lambda row: (row['page'], row['rule']))
+
+    def assert_query(self, result, **selection):
+        selection = {
+            'page': selection.get('page'), 'rule': selection.get('rule'),
+            'missing_only': selection.get('missing_only', False)}
+        pages, rows = self.expected(**selection)
+        self.assertEqual(result['scope'], dict(SCOPE))
+        self.assertEqual(result['bindings'], {name: WITNESS_SOURCE_CONTRACT[name] for name in (
+            'reference_commit', 'rule_index_sha256', 'candidate_inventory_sha256')})
+        self.assertEqual(result['selection'], selection)
+        self.assertEqual(result['pages'], pages)
+        self.assertEqual(result['rows'], rows)
+        for row in (*result['pages'], *result['rows']):
+            self.assertIs(type(row['linked']), bool)
+        self.assertEqual(result['selected_page_count'], len(pages))
+        self.assertEqual(result['selected_rule_identities'], len(rows))
+        proposed = sum(bool(row['proposal_profiles']) for row in rows)
+        self.assertEqual(result['selected_proposed_rule_identities'], proposed)
+        self.assertEqual(result['selected_rule_identities_without_proposals'], len(rows) - proposed)
+        self.assertEqual(sum(row['selected_rule_identities'] for row in pages), len(rows))
+        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 228),
+                           ('rule_identities_without_proposals', 2737), ('total_pages', 122),
+                           ('readiness', 'review-required'), ('review_status', 'unreviewed')):
+            self.assertEqual(result[key], value)
+        for key in ('reviewed_rule_rows', 'completed_rule_rows', 'rows_with_exact_executable_evidence'):
+            self.assertEqual(result[key], 0)
+        self.assertIsNone(result['full_rust_completion_percent'])
+        self.assertIs(result['normative_inventory_complete'], False)
+        for key in ('source_block_byte_verification', 'source_archive_byte_verification'):
+            self.assertEqual(result[key], 'not_reverified_in_this_run')
+        self.assertTrue(result['limitations'])
+
+    def test_complete_conservation_exact_rows_and_determinism(self):
+        result = self.query()
+        self.assert_query(result)
+        self.assertEqual(len(result['rows']), 2965)
+        self.assertEqual(len(result['pages']), 122)
+        self.assertEqual(result, self.query())
+        self.assertEqual(sum(not row['linked'] for row in result['rows']), 9)
+        self.assertEqual(json.dumps(result, sort_keys=True), json.dumps(self.query(), sort_keys=True))
+        original = self.index_path.read_bytes()
+        self.assertEqual(digest(original), WITNESS_SOURCE_CONTRACT['rule_index_sha256'])
+
+    def test_exact_page_label_combination_and_textual_unlinked_labels(self):
+        for page in ('src/tokens.md', 'src/const_eval.md'):
+            with self.subTest(page=page):
+                self.assert_query(self.query(page=page), page=page)
+        unlinked = [page for page in self.index['unlinked_markdown_files'] if page['rules']]
+        for page in unlinked:
+            for item in page['rules']:
+                for selection in ({'rule': item['label']}, {'page': page['path']},
+                                  {'page': page['path'], 'rule': item['label']}):
+                    with self.subTest(selection=selection):
+                        result = self.query(**selection)
+                        self.assert_query(result, **selection)
+                        self.assertTrue(all(not row['linked'] for row in result['rows']))
+        label = self.query(page='src/tokens.md')['rows'][0]['rule']
+        self.assert_query(self.query(rule=label), rule=label)
+        self.assert_query(self.query(page='src/tokens.md', rule=label), page='src/tokens.md', rule=label)
+
+    def test_missing_only_preserves_known_fully_proposed_and_zero_rule_pages(self):
+        result = self.query(missing_only=True)
+        self.assert_query(result, missing_only=True)
+        self.assertEqual(len(result['rows']), 2737)
+        self.assertEqual(len(result['pages']), 122)
+        for selection in ({'page': 'src/tokens.md', 'missing_only': True},
+                          {'page': 'src/SUMMARY.md'},
+                          {'page': 'src/SUMMARY.md', 'missing_only': True}):
+            with self.subTest(selection=selection):
+                result = self.query(**selection)
+                self.assert_query(result, **selection)
+                self.assertEqual(result['rows'], [])
+                self.assertEqual(result['selected_page_count'], 1)
+        label = self.query(page='src/tokens.md')['rows'][0]['rule']
+        self.assert_query(self.query(rule=label, missing_only=True), rule=label, missing_only=True)
+
+    def test_unknown_empty_nonstring_and_nonboolean_filters_are_invalid(self):
+        import compatibility_inventory as inventory
+        label = self.query(page='src/tokens.md')['rows'][0]['rule']
+        selections = [{'page': value} for value in ('', ' ', 'src/token', 'tokens.md',
+                       'src/TOKENS.md', '../src/tokens.md', 0, False, [], {})]
+        selections += [{'rule': value} for value in ('', ' ', 'foreign.rule', label[:-1], 0, False, [], {})]
+        selections += [{'missing_only': value} for value in (None, 0, 1, 'true', [], {})]
+        selections += [{'page': 'src/const_eval.md', 'rule': label}]
+        for selection in selections:
+            with self.subTest(selection=selection), self.assertRaises(inventory.InvalidInventory):
+                self.query(**selection)
+
+    def test_missing_inputs_and_no_pinned_context_fail_closed(self):
+        import compatibility_inventory as inventory
+        for missing in (self.index_path, self.candidate_path):
+            raw = missing.read_bytes()
+            missing.unlink()
+            with self.subTest(path=missing), self.assertRaises(inventory.InvalidInventory):
+                self.query()
+            missing.write_bytes(raw)
+        with mock.patch.object(reconciliation, 'summarize_proposals', return_value={
+                'readiness': 'missing', 'missing_files': [], 'missing_selected_pages': ['src/tokens.md']}):
+            with self.assertRaises(inventory.InvalidInventory):
+                self.query()
+
+    def test_index_candidate_pin_drift_and_malformed_json_rejected(self):
+        import compatibility_inventory as inventory
+        for path in (self.index_path, self.candidate_path):
+            original = path.read_bytes()
+            for raw in (original + b'\n', b'null', b'[]', b'{', b'{"x":0,"x":1}'):
+                with self.subTest(path=path, raw=raw[:15]):
+                    path.write_bytes(raw)
+                    with self.assertRaises(inventory.InvalidInventory):
+                        self.query()
+            path.write_bytes(original)
+        changed = copy.deepcopy(self.index)
+        changed['counts']['unique_rule_labels_total'] = 2964
+        self.index_path.write_text(json.dumps(changed))
+        with self.assertRaises(inventory.InvalidInventory):
+            self.query()
+
+    def test_all_authored_modules_revalidated_even_for_unrelated_page(self):
+        import compatibility_inventory as inventory
+        original = reconciliation.profile_inputs
+        for profile, _ in reconciliation.PROPOSAL_COUNTS:
+            selected, aliases, classes, authored = original(profile)
+            lines = authored.strip().splitlines()
+            for mutation in ('\n'.join(lines[1:]), authored + '\n' + lines[0],
+                             authored.replace(lines[0].split('|')[0], 'foreign.rule', 1)):
+                def inputs(name):
+                    return (selected, aliases, classes, mutation) if name == profile else original(name)
+                with self.subTest(profile=profile), mock.patch.object(
+                        reconciliation, 'profile_inputs', side_effect=inputs), self.assertRaises(inventory.InvalidInventory):
+                    self.query(page='src/SUMMARY.md')
+        with mock.patch.object(reconciliation, 'profile_inputs', side_effect=ImportError('missing proposal module')):
+            with self.assertRaises(inventory.InvalidInventory):
+                self.query()
+
+    def test_second_index_read_cannot_substitute_unvalidated_metadata(self):
+        import compatibility_inventory as inventory
+        original = reconciliation.summarize_proposals
+        def summarize_then_change(*args, **kwargs):
+            result = original(*args, **kwargs)
+            altered = copy.deepcopy(self.index)
+            altered['pages'][0]['rules'][0]['line'] += 1
+            self.index_path.write_text(json.dumps(altered))
+            return result
+        with mock.patch.object(reconciliation, 'summarize_proposals', side_effect=summarize_then_change):
+            with self.assertRaises(inventory.InvalidInventory):
+                self.query()
+
+    def test_metadata_only_without_source_archive_receipts_or_execution(self):
+        import compatibility_inventory as inventory
+        expected = self.query()
+        allowed = {self.index_path.resolve(), self.candidate_path.resolve()}
+        original_bytes, original_text = Path.read_bytes, Path.read_text
+        def read_bytes(path):
+            self.assertIn(path.resolve(), allowed, 'unexpected nonmetadata read')
+            return original_bytes(path)
+        def read_text(path, *args, **kwargs):
+            self.assertIn(path.resolve(), allowed, 'unexpected nonmetadata read')
+            return original_text(path, *args, **kwargs)
+        with contextlib.ExitStack() as stack:
+            for module, name in ((reconciliation, 'build'), (reconciliation, 'validate'),
+                                 (reconciliation, 'summarize_witness_sources'),
+                                 (inventory, 'verify_reference_archive'), (inventory, 'read_verifier'),
+                                 (subprocess, 'run')):
+                stack.enter_context(mock.patch.object(module, name, side_effect=AssertionError(name)))
+            stack.enter_context(mock.patch.object(Path, 'read_bytes', read_bytes))
+            stack.enter_context(mock.patch.object(Path, 'read_text', read_text))
+            self.assertEqual(self.query(), expected)
+
+    def cli(self, args):
+        import compatibility_inventory as inventory
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                status = inventory.main(['--root', str(self.root), *args])
+            except SystemExit as exc:
+                status = exc.code
+        return status, out.getvalue(), err.getvalue()
+
+    def cli_inputs(self):
+        data = self.root / 'data'
+        data.mkdir(exist_ok=True)
+        shutil.copyfile(self.index_path, data / 'compiler-language-reference-rules.json')
+        shutil.copyfile(self.candidate_path, data / 'compiler-language-inventory.json')
+
+    def test_cli_default_language_candidate_and_explicit_single_override(self):
+        self.cli_inputs()
+        label = self.query(page='src/tokens.md')['rows'][0]['rule']
+        for args, selection in ((['--rule-backlog'], {}),
+                (['--rule-page', 'src/SUMMARY.md'], {'page': 'src/SUMMARY.md'}),
+                (['--rule', label], {'rule': label}),
+                (['--rule-page', 'src/tokens.md', '--rule', label], {'page': 'src/tokens.md', 'rule': label}),
+                (['--rule-backlog', '--unproposed'], {'missing_only': True}),
+                (['--rule-page', 'src/tokens.md', '--unproposed'], {'page': 'src/tokens.md', 'missing_only': True})):
+            for overrides in ([], ['--reference-rules', str(self.index_path), '--inventory', str(self.candidate_path)]):
+                with self.subTest(args=args, overrides=overrides):
+                    status, out, err = self.cli(args + overrides)
+                    self.assertEqual((status, err), (0, ''))
+                    self.assert_query(json.loads(out), **selection)
+
+    def test_cli_unknown_and_empty_filters_no_stdout(self):
+        self.cli_inputs()
+        for args in (['--rule', 'foreign.rule'], ['--rule', ''], ['--rule-page', 'src/unknown.md'],
+                     ['--rule-page', ''], ['--rule-page', 'src/SUMMARY.md', '--rule', 'foreign.rule']):
+            with self.subTest(args=args):
+                status, out, err = self.cli(args)
+                self.assertEqual(status, 2)
+                self.assertEqual(out, '')
+                self.assertTrue(err)
+
+    def test_cli_conflicts_rejected_before_any_metadata_io(self):
+        import compatibility_inventory as inventory
+        conflicts = [['--unproposed']]
+        for query in (['--rule-backlog'], ['--rule-page', 'src/tokens.md'], ['--rule', 'token']):
+            for incompatible in ('--scope', '--contract', '--oracle-verifier', '--source-archive',
+                                 '--submodule-proof', '--library-surface-provenance', '--obligation'):
+                conflicts.append(query + [incompatible, 'absent'])
+            conflicts.append(query + ['--obligation-backlog'])
+            conflicts.append(query + ['--inventory', 'one', '--inventory', 'two'])
+        for args in conflicts:
+            with self.subTest(args=args), mock.patch.object(inventory, 'load', side_effect=AssertionError('metadata IO')), \
+                    mock.patch.object(Path, 'read_bytes', side_effect=AssertionError('byte IO')), \
+                    mock.patch.object(Path, 'read_text', side_effect=AssertionError('text IO')):
+                status, out, err = self.cli(args)
+                self.assertEqual(status, 2)
+                self.assertEqual(out, '')
+                self.assertTrue(err)
+
+    def test_cli_script_import_boundary_reports_structured_errors(self):
+        self.cli_inputs()
+        for args in (['--rule', 'foreign.rule'], ['--rule-page', 'src/SUMMARY.md', '--rule', 'foreign.rule']):
+            process = subprocess.run([sys.executable, str(BASE / 'compatibility_inventory.py'),
+                                      '--root', str(self.root), *args],
+                                     capture_output=True, text=True, check=False)
+            self.assertEqual(process.returncode, 2)
+            self.assertEqual(process.stdout, '')
+            self.assertIsInstance(json.loads(process.stderr)['error'], str)
+            self.assertNotIn('Traceback', process.stderr)
+        (self.root / 'data/compiler-language-inventory.json').write_text('null')
+        process = subprocess.run([sys.executable, str(BASE / 'compatibility_inventory.py'),
+                                  '--root', str(self.root), '--rule-backlog'],
+                                 capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 2)
+        self.assertEqual(process.stdout, '')
+        self.assertIsInstance(json.loads(process.stderr)['error'], str)
+
+
 class ReconciliationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
