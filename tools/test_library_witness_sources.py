@@ -274,10 +274,11 @@ class LibraryWitnessSources(unittest.TestCase):
             witness.verify_html(raw + b' ', page, {'method.nth'})
 
     def test_optional_real_html_and_actual_anchor_drift(self):
+        html_root = os.environ.get('JR_LIBRARY_WITNESS_HTML_ROOT')
         fixtures = os.environ.get('JR_COMPAT_LIBRARY_FIXTURES')
-        if not fixtures:
-            self.skipTest('JR_COMPAT_LIBRARY_FIXTURES not provided')
-        html = Path(fixtures) / 'pinned-html-final/html'
+        if not html_root and not fixtures:
+            self.skipTest('JR_LIBRARY_WITNESS_HTML_ROOT or JR_COMPAT_LIBRARY_FIXTURES not provided')
+        html = Path(html_root) if html_root else Path(fixtures) / 'pinned-html-final/html'
         result = witness.summarize(self.root, html)
         self.assertEqual(result['documentation_anchor_verification'], 'reverified_in_this_run')
         self.assertEqual(result['documentation_page_byte_verification'], 'reverified_in_this_run')
@@ -290,6 +291,19 @@ class LibraryWitnessSources(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'anchor'):
             witness.verify_html(bad, dict(page, byte_length=len(bad),
                                 content_sha256=witness.sha(bad)), {'method.nth'})
+
+    def test_ci_acquires_and_uses_three_pinned_pages_before_tests(self):
+        workflow = (ROOT / '.github/workflows/compiler-conformance.yml').read_text()
+        acquire = workflow.index('python3 tools/acquire_pinned_library_pages.py --output-dir')
+        export = workflow.index("output.write('JR_LIBRARY_WITNESS_HTML_ROOT='")
+        regressions = workflow.index("python3 -m unittest discover -s tools -p 'test_*.py'")
+        anchors = workflow.index('python3 tools/library_witness_sources.py --html-root "$JR_LIBRARY_WITNESS_HTML_ROOT"')
+        self.assertLess(acquire, export)
+        self.assertLess(export, regressions)
+        self.assertLess(regressions, anchors)
+        self.assertIn("data['verified_pages'] != 3", workflow)
+        self.assertIn("data['verified_anchors'] != 7", workflow)
+        self.assertIn("data['compatibility_credit'] is not False", workflow)
 
     def test_optional_html_missing_and_symlink_rejected(self):
         html = self.root.parent / 'html'

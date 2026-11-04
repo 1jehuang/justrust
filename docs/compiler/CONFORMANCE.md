@@ -325,6 +325,14 @@ external HTML. For the stronger page-byte and anchor check, run
 That check still does not establish stable target-public API identities or a
 compatibility denominator.
 
+Evidence-system CI downloads just those three pages with
+`python3 tools/acquire_pinned_library_pages.py --output-dir <new-scratch-directory>`.
+The command verifies their fixed hashes, version markers and seven referenced
+anchors before publishing a new HTML input directory. `--html-root <retained-html>`
+uses the same bounded verification offline. Set `JR_LIBRARY_WITNESS_HTML_ROOT`
+to the reported `html_root` to run the real-page regression without the larger
+library acquisition tree. These input checks grant no review or execution credit.
+
 `data/compiler-library-surface-provenance.json` records bounded pinned library
 source and rustdoc input provenance, not public API coverage. Its link/anchor
 observations include unstable and other-target entries and must not become a

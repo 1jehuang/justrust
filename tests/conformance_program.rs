@@ -221,6 +221,7 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
     python("tools/test_pinned_acquisition.py", &["-v"]);
     python("tools/test_compact_library_surface_provenance.py", &["-v"]);
     python("tools/test_library_surface_backlog.py", &["-v"]);
+    python("tools/test_acquire_pinned_library_pages.py", &["-v"]);
     python("tools/test_library_witness_sources.py", &["-v"]);
     python("tools/test_classify_proc_macro_details.py", &["-v"]);
     python("tools/test_reconcile_token_rules.py", &["-v"]);
