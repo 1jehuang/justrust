@@ -36,6 +36,7 @@ pub(super) struct SyntaxExpr {
 }
 #[derive(Debug)]
 pub(super) struct DeclarationFact {
+    pub(super) storage: frontend::ConstantStorage,
     pub(super) declaration: ir::DeclId,
     pub(super) module: super::module_identity::ModuleId,
     pub(super) visibility: ir::Visibility,
@@ -48,6 +49,7 @@ pub(super) struct DeclarationFact {
 }
 #[derive(Debug)]
 struct DeclarationAuthority {
+    storage: frontend::ConstantStorage,
     declaration: ir::DeclId,
     module: super::module_identity::ModuleId,
     visibility: ir::Visibility,
@@ -59,7 +61,8 @@ struct DeclarationAuthority {
 impl DeclarationFact {
     pub(super) fn validate_authority(&self) -> Result<(), String> {
         let original = &self.authority;
-        if self.declaration != original.declaration
+        if self.storage != original.storage
+            || self.declaration != original.declaration
             || self.module != original.module
             || self.visibility != original.visibility
             || self.ty != original.ty
@@ -143,7 +146,7 @@ pub(super) fn project(
         plan,
         declaration,
         source.module,
-        &source.visibility,
+        (source.storage, &source.visibility),
         &source.initializer,
         ty,
         budget,
@@ -182,7 +185,7 @@ pub(super) fn project_associated_header(
         plan,
         declaration,
         info.path.module,
-        &source.visibility,
+        (frontend::ConstantStorage::Const, &source.visibility),
         initializer,
         ty,
         budget,
@@ -216,7 +219,7 @@ pub(super) fn project_associated_selected(
         plan,
         declaration,
         info.path.module,
-        &source.visibility,
+        (frontend::ConstantStorage::Const, &source.visibility),
         initializer,
         associated_scalar_type(selected.ty())?,
         budget,
@@ -228,11 +231,12 @@ fn project_initializer(
     plan: &frontend::PlanCtx,
     declaration: ir::DeclId,
     module: super::module_identity::ModuleId,
-    visibility: &ir::Visibility,
+    header: (frontend::ConstantStorage, &ir::Visibility),
     initializer: &frontend::Expr,
     ty: scalar::ScalarTy,
     budget: &ir::PlanBudget,
 ) -> Result<DeclarationFact, String> {
+    let (storage_kind, visibility) = header;
     let (node_count, edge_count) = shape(initializer, budget, 0)?;
     let bytes = node_count
         .checked_mul(std::mem::size_of::<SyntaxExpr>())
@@ -279,6 +283,7 @@ fn project_initializer(
     let expressions: Arc<[SyntaxExpr]> = expressions.into();
     let arguments: Arc<[usize]> = arguments.into();
     let authority = DeclarationAuthority {
+        storage: storage_kind,
         declaration,
         module,
         visibility: visibility.clone(),
@@ -288,6 +293,7 @@ fn project_initializer(
         root,
     };
     Ok(DeclarationFact {
+        storage: storage_kind,
         declaration,
         module,
         visibility: visibility.clone(),

@@ -7538,6 +7538,14 @@ pub(super) fn replay_source_body_with_scratch(
 ) -> Result<Vec<sr::NarrowValidatedCall>, FactsError> {
     validate_original_context(original, facts, budget)?;
     manually_drop::replay_operations(original, checked, budget)?;
+    for expression in &checked.exprs {
+        sr::work(budget, 1)?;
+        if let ir::ExprKind::PromotedArray(array) = &expression.kind {
+            array
+                .validate_owner(&original.identity)
+                .map_err(|e| source_error(budget, &e))?;
+        }
+    }
     if checked.body_substitution.is_some() {
         return Err(FactsError::invalid(
             budget,
@@ -9375,8 +9383,14 @@ pub enum Constness {
 }
 /// Original-source immutable constant declaration. This parsed AST remains in
 /// the source graph only, never in the published constant fact payloads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ConstantStorage {
+    Const,
+    Static,
+}
 #[derive(Clone, Debug)]
 pub struct ConstDecl {
+    pub storage: ConstantStorage,
     pub module: ModuleId,
     pub visibility: ir::Visibility,
     pub name: AstPath,
@@ -15786,11 +15800,14 @@ impl<'input, 'names> Parser<'input, 'names> {
             if self.item_expansion.is_some() {
                 return Err(self.unsupported("generated const item authority is unsupported"));
             }
-            // Immutable statics share constant semantics in this draft: every
-            // admitted initializer is pure, so each use observes the same value.
-            if !self.eat("static") {
+            // Scalar evaluation can share the immutable initializer protocol,
+            // but rvalue promotion must retain the authored storage category.
+            let storage = if self.eat("static") {
+                ConstantStorage::Static
+            } else {
                 self.expect("const")?;
-            }
+                ConstantStorage::Const
+            };
             let name = self.ident()?;
             self.expect(":")?;
             let ty = self.ty()?;
@@ -15799,6 +15816,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             self.expect(";")?;
             self.reserve_parser_items(&mut parsed.program.constants, 1)?;
             parsed.program.constants.push(ConstDecl {
+                storage,
                 module,
                 visibility: visibility.clone(),
                 name: module_path

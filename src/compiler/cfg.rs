@@ -1219,6 +1219,7 @@ pub enum Rvalue {
     },
     /// `&'static T` over a program-data copy of one constant scalar.
     PromotedScalar(ir::PromotedScalar),
+    PromotedArray(ir::PromotedArray),
     Println(String),
     Format {
         pieces: Vec<String>,
@@ -1368,6 +1369,7 @@ impl Rvalue {
             | Self::Output(_)
             | Self::Str(_)
             | Self::ByteStr(_)
+            | Self::PromotedArray(_)
             | Self::PromotedScalar(_)
             | Self::ByteRepeat { .. } => {}
         }
@@ -1915,6 +1917,9 @@ impl Function {
                             Rvalue::Str(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::ByteStr(text) => add(&mut bytes, text.len(), 1, budget)?,
                             Rvalue::ByteRepeat { .. } => add(&mut bytes, 1, 16, budget)?,
+                            Rvalue::PromotedArray(array) => {
+                                add(&mut bytes, array.values().len(), 32, budget)?
+                            }
                             Rvalue::PromotedScalar(_) => add(&mut bytes, 1, 24, budget)?,
                             Rvalue::IndexCopy { array, .. } | Rvalue::Discriminant(array) => {
                                 path(&mut bytes, array, budget)?
@@ -2696,6 +2701,7 @@ impl Function {
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
                             | Rvalue::ByteStr(_)
+                            | Rvalue::PromotedArray(_)
                             | Rvalue::PromotedScalar(_)
                             | Rvalue::ByteRepeat { .. } => {}
                         }
@@ -3576,6 +3582,7 @@ impl Function {
             Rvalue::Str(_) => Ok(Ty::shared_str_ty()),
             Rvalue::ByteStr(bytes) => Ok(Ty::byte_string_ty(bytes.len())),
             Rvalue::ByteRepeat { len, .. } => Ok(Ty::byte_string_ty(*len)),
+            Rvalue::PromotedArray(array) => Ok(array.reference_ty()),
             Rvalue::PromotedScalar(scalar) => Ok(scalar.reference_ty()),
             Rvalue::Unary { op, value } => {
                 let ty = self.operand_ty_with_facts(value, facts, scratch)?;
@@ -3779,6 +3786,18 @@ impl Function {
         }
         for block in &self.blocks {
             for statement in &block.statements {
+                if matches!(
+                    statement.value,
+                    Statement::Assign {
+                        value: Rvalue::PromotedArray(_),
+                        ..
+                    }
+                ) && self.lowering_proof.is_none()
+                {
+                    return Err(
+                        "promoted array requires its canonical source lowering snapshot".into(),
+                    );
+                }
                 if matches!(
                     statement.value,
                     Statement::Assign {
@@ -5899,6 +5918,22 @@ impl Lowerer<'_> {
                 Rvalue::ByteStr(std::sync::Arc::from(bytes.as_slice())),
                 origin,
             ),
+            ir::ExprKind::PromotedArray(array) => {
+                if let Some(publication) = self.publication {
+                    array.validate_owner(publication.authored_identity())?;
+                }
+                if self.publication.is_none() && self.result.body_substitution.is_none() {
+                    return Err(
+                        "unsupported: promoted array requires its original source publication"
+                            .into(),
+                    );
+                }
+                self.assign(
+                    destination.clone(),
+                    Rvalue::PromotedArray(array.clone()),
+                    origin,
+                )
+            }
             ir::ExprKind::PromotedScalar(scalar) => {
                 self.assign(destination.clone(), Rvalue::PromotedScalar(*scalar), origin)
             }
@@ -6973,6 +7008,237 @@ mod panic_terminal_tests {
             panic!("canonical source publication required")
         };
         publication
+    }
+
+    #[test]
+    fn promoted_arrays_reject_typed_source_cfg_and_cross_owner_changes() {
+        let budget = ir::PlanBudget::default();
+        let text =
+            "fn f(x:bool)->&'static [i32;2]{if x {&[7i32,9i32]} else {&[9i32,7i32]}}fn main(){}";
+        let publication = publish(text, &budget);
+        let source = publication.source();
+        let facts = publication.facts();
+        source
+            .validate_with_facts(ir::FactsCtx::from_validated(facts))
+            .unwrap();
+        publication.validate_source(source, facts, &budget).unwrap();
+        let promotions: Vec<_> = source
+            .exprs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, expr)| {
+                if let ir::ExprKind::PromotedArray(array) = &expr.kind {
+                    Some((index, array.clone()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(promotions.len(), 2);
+        assert_ne!(promotions[0].1, promotions[1].1);
+        let exhausted = ir::PlanBudget::new(ir::PlanLimits {
+            bytes: 0,
+            ..ir::PlanLimits::default()
+        });
+        assert!(
+            promotions[0]
+                .1
+                .validate(ExprId(promotions[0].0), &source.exprs, &exhausted)
+                .is_err()
+        );
+        assert!(exhausted.has_resource_failure());
+        for change in 0..3 {
+            let mut forged = source.as_ref().clone();
+            match change {
+                0 => {
+                    forged.exprs[promotions[0].0].kind =
+                        ir::ExprKind::PromotedArray(promotions[1].1.clone())
+                }
+                1 => {
+                    forged.exprs[promotions[0].0].ty = ir::Ty::Ref {
+                        kind: ir::BorrowKind::Mut,
+                        referent: Arc::new(ir::Ty::Array {
+                            element: Arc::new(ir::Ty::Int(IntTy::I32)),
+                            len: 2,
+                        }),
+                    }
+                }
+                _ => {
+                    let scalar = forged
+                        .exprs
+                        .iter_mut()
+                        .find_map(|expr| match &mut expr.kind {
+                            ir::ExprKind::Int(value) if value.bits == 7 => Some(value),
+                            _ => None,
+                        })
+                        .unwrap();
+                    scalar.bits = 8;
+                    assert!(
+                        forged
+                            .validate_with_facts(ir::FactsCtx::from_validated(facts))
+                            .is_err()
+                    );
+                }
+            }
+            assert!(
+                forged
+                    .validate_with_facts(ir::FactsCtx::from_validated(facts))
+                    .is_err()
+            );
+            assert!(
+                publication
+                    .validate_source(&Arc::new(forged), facts, &budget)
+                    .is_err()
+            );
+        }
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        function
+            .validate_source_publication(&publication, &budget)
+            .unwrap();
+        let locations: Vec<_> = function
+            .blocks
+            .iter()
+            .enumerate()
+            .flat_map(|(block, b)| {
+                b.statements
+                    .iter()
+                    .enumerate()
+                    .filter_map(move |(statement, s)| {
+                        matches!(
+                            s.value,
+                            Statement::Assign {
+                                value: Rvalue::PromotedArray(_),
+                                ..
+                            }
+                        )
+                        .then_some((block, statement))
+                    })
+            })
+            .collect();
+        assert_eq!(locations.len(), 2);
+        let (first_block, first_statement) = locations[0];
+        let (second_block, second_statement) = locations[1];
+        assert_ne!(
+            function.blocks[first_block].statements[first_statement].origin,
+            function.blocks[second_block].statements[second_statement].origin
+        );
+        for change in 0..3 {
+            let mut forged = function.clone();
+            match change {
+                0 => {
+                    let Statement::Assign {
+                        value: Rvalue::PromotedArray(other),
+                        ..
+                    } = &function.blocks[second_block].statements[second_statement].value
+                    else {
+                        unreachable!()
+                    };
+                    let Statement::Assign { value, .. } =
+                        &mut forged.blocks[first_block].statements[first_statement].value
+                    else {
+                        unreachable!()
+                    };
+                    *value = Rvalue::PromotedArray(other.clone());
+                }
+                1 => {
+                    forged.blocks[first_block].statements[first_statement].origin =
+                        function.blocks[second_block].statements[second_statement].origin
+                }
+                _ => forged.lowering_proof = None,
+            }
+            assert!(
+                forged
+                    .validate_source_publication(&publication, &budget)
+                    .is_err()
+            );
+            assert!(
+                forged
+                    .validate_with_facts(ir::FactsCtx::from_validated(facts))
+                    .is_err()
+            );
+        }
+        let foreign = publish(text, &budget);
+        assert!(!Arc::ptr_eq(publication.source(), foreign.source()));
+        let foreign_array = foreign
+            .source()
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.kind {
+                ir::ExprKind::PromotedArray(array) => Some(array.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(foreign_array.values(), promotions[0].1.values());
+        assert_eq!(foreign_array.value_ty(), promotions[0].1.value_ty());
+        assert_ne!(foreign_array, promotions[0].1);
+        let mut foreign_descriptor = function.clone();
+        let Statement::Assign { value, .. } =
+            &mut foreign_descriptor.blocks[first_block].statements[first_statement].value
+        else {
+            unreachable!()
+        };
+        *value = Rvalue::PromotedArray(foreign_array);
+        assert!(
+            foreign_descriptor
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        assert!(
+            function
+                .validate_source_publication(&foreign, &budget)
+                .is_err()
+        );
+        assert!(
+            publication
+                .validate_source(foreign.source(), facts, &budget)
+                .is_err()
+        );
+        assert!(lower_with_facts(source, facts, &budget).is_err());
+        // A genuine descriptor for a different element width cannot authorize
+        // this occurrence, even when its integer spellings are identical.
+        let other = publish("fn f()->&'static [u16;2]{&[7u16,9u16]}fn main(){}", &budget);
+        let replacement = other
+            .source()
+            .exprs
+            .iter()
+            .find_map(|expr| match &expr.kind {
+                ir::ExprKind::PromotedArray(array) => Some(array.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_ne!(replacement.value_ty(), promotions[0].1.value_ty());
+        assert_ne!(
+            crate::compiler::backend::array_element_stride(replacement.value_ty(), &budget)
+                .unwrap(),
+            crate::compiler::backend::array_element_stride(promotions[0].1.value_ty(), &budget)
+                .unwrap()
+        );
+        assert_ne!(
+            crate::compiler::memory_layout::alignment(
+                replacement.value_ty(),
+                ir::FactsCtx::from_validated(facts),
+                &budget
+            )
+            .unwrap(),
+            crate::compiler::memory_layout::alignment(
+                promotions[0].1.value_ty(),
+                ir::FactsCtx::from_validated(facts),
+                &budget
+            )
+            .unwrap()
+        );
+        let mut forged = function.clone();
+        let Statement::Assign { value, .. } =
+            &mut forged.blocks[first_block].statements[first_statement].value
+        else {
+            unreachable!()
+        };
+        *value = Rvalue::PromotedArray(replacement);
+        assert!(
+            forged
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
     }
 
     #[test]
@@ -14233,6 +14499,7 @@ mod tests {
                             | Rvalue::Output(_)
                             | Rvalue::Str(_)
                             | Rvalue::ByteStr(_)
+                            | Rvalue::PromotedArray(_)
                             | Rvalue::PromotedScalar(_)
                             | Rvalue::ByteRepeat { .. } => {}
                         }

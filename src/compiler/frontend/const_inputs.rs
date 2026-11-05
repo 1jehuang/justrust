@@ -254,6 +254,49 @@ impl CanonicalSourceCapability {
             ))
         })
     }
+    pub(super) fn promotion_reads_static(&self, expr: &Expr, depth: usize) -> Result<bool, String> {
+        self.plan.budget.check_depth(depth)?;
+        self.plan.budget.charge_work(1)?;
+        match expr {
+            Expr::ConstItem(_) => {
+                let Some(index) = self
+                    .inventory
+                    .constant_pointers
+                    .get(&(expr as *const Expr as usize))
+                else {
+                    return Err("promotion constant lacks original source occurrence".into());
+                };
+                let row = self
+                    .constants
+                    .get(*index)
+                    .ok_or("promotion constant lacks sealed graph value")?;
+                if row.node.owner != self.inventory.owner
+                    || row.declaration != row.value.scalar().declaration()
+                {
+                    return Err("promotion constant source owner changed".into());
+                }
+                let source = row.value.body().source();
+                source.validate_authority()?;
+                Ok(source.storage == ConstantStorage::Static)
+            }
+            Expr::Array(elements) => {
+                let mut reads_static = false;
+                for element in elements {
+                    reads_static |= self.promotion_reads_static(element, depth + 1)?;
+                }
+                Ok(reads_static)
+            }
+            Expr::Repeat { value, .. } | Expr::Unary { value, .. } => {
+                self.promotion_reads_static(value, depth + 1)
+            }
+            Expr::Binary { left, right, .. } => {
+                let left = self.promotion_reads_static(left, depth + 1)?;
+                let right = self.promotion_reads_static(right, depth + 1)?;
+                Ok(left || right)
+            }
+            _ => Ok(false),
+        }
+    }
     pub(super) fn constant_value(&self, expr: &Expr) -> Result<const_eval::ScalarValue, String> {
         let index = self.constant_index(expr)?;
         let row = self.constants.get(index).ok_or_else(|| {

@@ -22,6 +22,14 @@ mod tests {
             .publish_constant_declaration(&clone, a, &budget)
             .unwrap_err();
         assert!(error.contains("publication changed"), "{error}");
+        let mut changed_storage = plan
+            .publish_constant_declaration(&program, a, &budget)
+            .unwrap();
+        changed_storage.storage = ConstantStorage::Static;
+        assert!(
+            crate::compiler::const_check::check(Arc::new(changed_storage), &[], &plan, &budget)
+                .is_err()
+        );
         let b = plan.constant_decl(1).unwrap();
         let mut forged = plan
             .publish_constant_declaration(&program, a, &budget)

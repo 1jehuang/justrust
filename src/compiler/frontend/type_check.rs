@@ -5909,6 +5909,30 @@ impl<'a> Checker<'a> {
                 return Ok(id);
             }
         }
+        // Only closed scalar data, never runtime places or references, can
+        // acquire immutable static storage through array rvalue promotion.
+        if kind == ir::BorrowKind::Shared
+            && self.canonical.is_some()
+            && !matches!(expected, Some(ir::Ty::Ref { referent, .. }) if matches!(referent.as_ref(), ir::Ty::Slice { .. }))
+            && matches!(source, Expr::Array(_) | Expr::Repeat { .. })
+            && !self.canonical.unwrap().promotion_reads_static(source, 0)?
+            && let Some(array) = ir::PromotedArray::from_expression(
+                value,
+                ir::ExprId(self.exprs.len()),
+                &self.canonical.unwrap().inventory.owner,
+                &self.exprs,
+                &self.signatures.plan()?.budget,
+            )?
+        {
+            self.charge_node(std::mem::size_of::<ir::TypedExpr>())?;
+            let id = ir::ExprId(self.exprs.len());
+            self.exprs.push(ir::TypedExpr {
+                ty: array.reference_ty(),
+                completion: ir::Completion::Returns,
+                kind: ir::ExprKind::PromotedArray(array),
+            });
+            return Ok(id);
+        }
         let extended = self
             .extending_borrows
             .contains(&(source as *const Expr as usize));

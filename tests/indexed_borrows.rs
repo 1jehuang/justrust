@@ -11,6 +11,138 @@ mod closure_oracle;
 use closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
+fn returned_promotion_unproven_scope_is_explicit_unsupported() {
+    use std::{fs, process::Command};
+    let directory =
+        std::env::temp_dir().join(format!("jr-promotion-boundaries-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let stock = stock_rustc::stock_rustc();
+    for (index,source) in [
+        "fn promoted()->&'static [i32;2]{&[7i32,9i32]}fn first()->&'static i32{&promoted()[0]}fn main(){println!(\"{}\",*first());}",
+        "fn runtime()->i32{7i32}fn bad()->&'static [i32;0]{&[runtime();0]}fn main(){}",
+        "fn bad()->&'static [i32;1]{&[1i32+2i32]}fn main(){}",
+    ].into_iter().enumerate() {
+        let input=directory.join(format!("source-{index}.rs"));
+        fs::write(&input,source).unwrap();
+        let result=Command::new(&stock).env_remove("RUSTC_BOOTSTRAP").args(["--edition=2024","--crate-type=bin"]).arg(&input).arg("-o").arg(directory.join(format!("stock-{index}"))).output().unwrap();
+        assert!(result.status.success(),"stock-valid boundary: {}",String::from_utf8_lossy(&result.stderr));
+        for workers in [1,8] { for check in [true,false] {
+            let failure = justrust_engine::compiler::compile_observed(source.into(),workers,check).err().unwrap_or_else(||panic!("unproven scope accepted: {source}"));
+            assert!(failure.to_string().contains("unsupported:"),"{failure}");
+            assert!(failure.resource_usage.first_failure.is_none());
+            let report=failure.report.as_ref().expect("captured unsupported graph");
+            assert!(report.capture_complete);
+            if check { assert!(report.node_evaluations.iter().all(|(key,_)| !matches!(key.kind,103|105|130|131|133))); }
+        }}
+    }
+    fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn returned_promoted_arrays_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "returned-promoted-arrays",
+        &[
+            Case {
+                name: "original_returned_array_and_static",
+                source: r#"static OFFSET: i32 = 5i32;
+fn promoted() -> &'static [i32; 2] { &[7i32, 9i32] }
+fn main() {
+    let values = promoted();
+    println!("{} {} {}", values[0], values[1], values[0] + OFFSET);
+}
+"#,
+                expect: Expect::Run("7 9 12\n"),
+            },
+            Case {
+                name: "repeated_calls_keep_static_storage_after_other_frames",
+                source: r#"fn promoted()->&'static [i32;2]{&[7i32,9i32]}fn churn(x:i32)->i32{let a=[x,x+1,x+2];a[0]+a[1]+a[2]}fn main(){let a=promoted();println!("{}",churn(100));let b=promoted();println!("{} {} {} {}",a[0],a[1],b[0],b[1]);}"#,
+                expect: Expect::Run("303\n7 9 7 9\n"),
+            },
+            Case {
+                name: "nested_arrays_and_repeat_are_real_packed_memory",
+                source: r#"fn nested()->&'static [[u16;2];2]{&[[257u16,513u16],[1025u16,2049u16]]}fn repeated()->&'static [[u16;2];3]{&[[5u16,9u16];3]}fn main(){let a=nested();let b=repeated();println!("{} {} {} {} {}",a[0][0],a[0][1],a[1][0],a[1][1],b[2][1]);}"#,
+                expect: Expect::Run("257 513 1025 2049 9\n"),
+            },
+            Case {
+                name: "zero_one_and_nested_empty_qualify_types_and_values",
+                source: r#"fn empty()->&'static [i32;0]{&[]}fn one()->&'static [i32;1]{&[19i32]}fn nested()->&'static [[u8;0];2]{&[[],[]]}fn main(){let a=empty();let b=one();let c=nested();println!("{} {} {}",a.len(),b[0],c.len());}"#,
+                expect: Expect::Run("0 19 2\n"),
+            },
+            Case {
+                name: "dependent_scalar_constants_keep_graph_inputs",
+                source: r#"const FIRST:i32=7i32;const SECOND:i32=FIRST+2i32;fn promoted()->&'static [i32;2]{&[FIRST,SECOND]}fn main(){let a=promoted();println!("{} {}",a[0],a[1]);}"#,
+                expect: Expect::Run("7 9\n"),
+            },
+            Case {
+                name: "reading_and_reborrowing_returned_static_elements",
+                source: r#"fn promoted()->&'static [i32;2]{&[7i32,9i32]}fn first()->&'static i32{let values=promoted();&values[0]}fn read(a:&[i32;2])->i32{a[0]+a[1]}fn main(){println!("{} {}",*first(),read(promoted()));}"#,
+                expect: Expect::Run("7 16\n"),
+            },
+            Case {
+                name: "signed_narrow_wide_bool_and_character_arrays",
+                source: r#"fn a()->&'static [i8;2]{&[-7i8,-9i8]}fn b()->&'static [i16;2]{&[-257i16,-513i16]}fn c()->&'static [i32;2]{&[-65537i32,-131073i32]}fn d()->&'static [i64;2]{&[-4294967297i64,4294967299i64]}fn e()->&'static [u128;2]{&[18446744073709551617u128,36893488147419103235u128]}fn flags()->&'static [bool;2]{&[true,false]}fn chars()->&'static [char;2]{&['a','🦀']}fn main(){let a=a();let b=b();let c=c();let d=d();let e=e();let f=flags();let g=chars();println!("{} {} {} {} {} {} {} {} {} {} {} {} {} {}",a[0],a[1],b[0],b[1],c[0],c[1],d[0],d[1],e[0],e[1],f[0],f[1],g[0],g[1]);}"#,
+                expect: Expect::Run(
+                    "-7 -9 -257 -513 -65537 -131073 -4294967297 4294967299 18446744073709551617 36893488147419103235 true false a 🦀\n",
+                ),
+            },
+            Case {
+                name: "immutable_static_read_is_not_constant_promotion",
+                source: "static S:i32=7;fn bad()->&'static [i32;1]{&[S]}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "imported_static_read_is_not_constant_promotion",
+                source: "mod values{pub static S:i32=7;}use values::S as N;fn bad()->&'static [[i32;1];1]{&[[N]]}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_invalid_const_dependency_is_not_snapshotted",
+                source: "const BAD:i32=1i32/0i32;fn promoted()->&'static [i32;1]{&[7i32]}fn main(){}",
+                expect: Expect::Invalid("E0080"),
+            },
+            Case {
+                name: "cyclic_const_dependency_is_not_snapshotted",
+                source: "const A:i32=B;const B:i32=A;fn promoted()->&'static [i32;1]{&[A]}fn main(){}",
+                expect: Expect::Invalid("E0391"),
+            },
+            Case {
+                name: "unused_runtime_initializer_cannot_be_promoted",
+                source: "fn runtime()->i32{7i32}fn bad()->&'static [i32;1]{&[runtime()]}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_owned_drop_array_cannot_be_promoted",
+                source: "struct D{i:i32}impl Drop for D{fn drop(&mut self){}}fn bad()->&'static [D;1]{&[D{i:7i32}]}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "unused_interior_mutable_array_cannot_be_promoted",
+                source: "use core::cell::Cell;fn bad()->&'static [Cell<i32>;1]{&[Cell::new(7i32)]}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "local_copy_is_not_a_constant_promotion",
+                source: "fn bad()->&'static [i32;2]{let a=[7i32,9i32];&a}fn main(){}",
+                expect: Expect::Invalid("E0515"),
+            },
+            Case {
+                name: "zero_repeat_does_not_skip_operand_type_check",
+                source: "fn bad()->&'static [i32;0]{&[true;0]}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+            Case {
+                name: "unused_invalid_nested_element_is_checked",
+                source: "fn bad()->&'static [[i32;1];1]{&[[true]]}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn owned_aggregate_projected_borrows_match_stock() {
     closure_oracle::check_with_compiler(
         "owned-aggregate-projected-borrows",

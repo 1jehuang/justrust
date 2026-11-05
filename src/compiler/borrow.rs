@@ -3956,6 +3956,7 @@ impl<'a, 'b> CarrierBuilder<'a, 'b> {
                     Statement::Assign {
                         value: Rvalue::ByteStr(_)
                             | Rvalue::ByteRepeat { .. }
+                            | Rvalue::PromotedArray(_)
                             | Rvalue::PromotedScalar(_),
                         ..
                     }
@@ -4713,7 +4714,10 @@ impl CarrierBuilder<'_, '_> {
         statement: usize,
     ) -> Result<Vec<(CarrierLocation, CarrierOrigins)>, Exhausted> {
         match value {
-            Rvalue::ByteStr(_) | Rvalue::ByteRepeat { .. } | Rvalue::PromotedScalar(_) => {
+            Rvalue::ByteStr(_)
+            | Rvalue::ByteRepeat { .. }
+            | Rvalue::PromotedArray(_)
+            | Rvalue::PromotedScalar(_) => {
                 let origin = self.static_origin.ok_or(Exhausted)?;
                 let mut origins = self.empty_origins()?;
                 origins.references.0.insert(origin.0);
@@ -8309,6 +8313,7 @@ fn visit_rvalue(f: &cfg::Function, value: &Rvalue, mut visit: impl FnMut(&Place,
         | Rvalue::Output(_)
         | Rvalue::Str(_)
         | Rvalue::ByteStr(_)
+        | Rvalue::PromotedArray(_)
         | Rvalue::PromotedScalar(_)
         | Rvalue::ByteRepeat { .. } => {}
     }

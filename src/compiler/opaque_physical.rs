@@ -448,6 +448,7 @@ fn specialize_marker_constants(
             | Output(_)
             | Str(_)
             | ByteStr(_)
+            | PromotedArray(_)
             | PromotedScalar(_)
             | ByteRepeat { .. } => {}
         }

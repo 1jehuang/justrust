@@ -2648,12 +2648,12 @@ class FrozenRootWitnessTests(unittest.TestCase):
         inventory = repo / 'data/compiler-language-inventory.json'
         data = reconciliation.build_witness_links(index, inventory, Path(source), repo)
         self.assertEqual(digest(reconciliation.witness_bytes(data)),
-                         '75f80e72885b91694cc4b0d74918f0c499bab733d573e03d3123d6a4961a9eb9')
+                         'cbd26b9353c21759910f4944ff2db793a92f1e120947680b67bbb2abf8e1d86d')
         self.assertEqual(data, reconciliation.build_witness_links(index, inventory, Path(source),
                                                                   repo, profile='tokens'))
         observations = reconciliation.assess_witness_links(data, index, inventory, Path(source), repo)
         self.assertEqual(digest(reconciliation.witness_bytes(observations)),
-                         '3c6d4d575cfbb9b43971638beb0f7b84c1ce013650fc3e9eb2f1db1699f0896d')
+                         'c3fa23801dfbd4f7fe35f68f3fb86693b37666b38be363581bd5bdeed3089273')
         self.assertEqual(data['source_contract'], WITNESS_SOURCE_CONTRACT)
         self.assertEqual(reconciliation.validate_witness_links(data, index, inventory, Path(source), repo), data['summary'])
         self.assertEqual(data['reconciliation'], build(index, inventory, Path(source)))

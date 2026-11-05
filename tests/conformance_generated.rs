@@ -797,7 +797,6 @@ fn main() {
 }
 
 #[test]
-#[ignore = "bounded compatibility obligation"]
 fn const_promoted_static_borrow_runtime() {
     oracle::check(
         "const-promoted-static-borrow-runtime",

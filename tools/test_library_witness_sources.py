@@ -58,7 +58,7 @@ class LibraryWitnessSources(unittest.TestCase):
             self.assertTrue(link['rationale'])
             self.assertTrue(link['limitations'])
             self.assertEqual(link['source_file'], witness.FIXTURE)
-            expected_lines = (1148, 1176, 1194, 1220, 1240, 1270)
+            expected_lines = (1147, 1175, 1193, 1219, 1239, 1269)
             self.assertEqual(link['selector_line'], expected_lines[witness.ROWS.index(row)])
             self.assertEqual(len(link['selector_body_sha256']), 64)
 

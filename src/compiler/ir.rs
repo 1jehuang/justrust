@@ -7,7 +7,10 @@
 use super::frontend::{BinaryOp, UnaryOp};
 #[path = "ir/associated_const.rs"]
 mod associated_const;
+#[path = "ir/promotion.rs"]
+mod promotion;
 pub use associated_const::AssociatedConstOperand;
+pub use promotion::PromotedArray;
 #[path = "ir/schema_metadata.rs"]
 mod schema_metadata;
 pub(super) use schema_metadata::substitute_schema_metadata_ty;
@@ -3985,6 +3988,7 @@ pub(in crate::compiler) fn instantiate_checked_with_constants(
             | ExprKind::Str(_)
             | ExprKind::ByteStr(_)
             | ExprKind::ByteRepeat { .. }
+            | ExprKind::PromotedArray(_)
             | ExprKind::PromotedScalar(_)
             | ExprKind::Float(_)
             | ExprKind::Deref { .. }
@@ -10302,6 +10306,7 @@ pub enum ExprKind {
     /// Shared `&'static T` over an immutable program-data copy of a constant
     /// scalar (stock rvalue static promotion of `&3u32`, `&true`, `&'c'`).
     PromotedScalar(PromotedScalar),
+    PromotedArray(PromotedArray),
     /// Shared `&[u8; len]` over immutable static bytes all equal to `byte`
     /// (stock static promotion of `&[byte; len]`), without a per-element payload.
     ByteRepeat {
@@ -11233,6 +11238,7 @@ impl CheckedFunction {
                 ExprKind::Str(text) => storage(budget, text.len(), 1)?,
                 ExprKind::ByteStr(bytes) => storage(budget, bytes.len(), 1)?,
                 ExprKind::ByteRepeat { .. } => storage(budget, 1, 16)?,
+                ExprKind::PromotedArray(array) => storage(budget, array.values().len(), 32)?,
                 ExprKind::PromotedScalar(_) => storage(budget, 1, 24)?,
                 ExprKind::AssociatedConst(operand) => operand.validate_context(facts, budget)?,
                 ExprKind::Println(text) => storage(budget, text.len(), 1)?,
@@ -13117,6 +13123,12 @@ impl CheckedFunction {
                     value: Some(value), ..
                 } => expr(*value)?,
                 ExprKind::Break { value: None, .. } | ExprKind::Continue { .. } => {}
+                ExprKind::PromotedArray(array) => {
+                    array.validate(ExprId(borrow_index), &self.exprs, conditional_budget)?;
+                    if value.ty != array.reference_ty() || value.completion != Completion::Returns {
+                        return Err("promoted array expression type mismatch".into());
+                    }
+                }
                 ExprKind::PromotedScalar(scalar) => {
                     scalar.validate()?;
                     if value.ty != scalar.reference_ty() || value.completion != Completion::Returns

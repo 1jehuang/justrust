@@ -19,7 +19,7 @@ pub enum Outcome {
 impl crate::engine::Fact for Outcome {}
 
 // Increment this domain when the input encoding or operation contract changes.
-const DOMAIN: &[u8] = b"justrust/native-link/x86_64-linux/v1";
+const DOMAIN: &[u8] = b"justrust/native-link/x86_64-linux/v2-aligned-immutable-data";
 
 /// All semantic inputs used by backend::link_with_panic, except vtables (which
 /// cause a miss-by-ineligibility). Storage receipts are accounting evidence,
@@ -71,7 +71,11 @@ fn identity(
         }
         key.field(&(strings.len() as u64).to_le_bytes());
         for (offset, bytes) in strings {
-            data = data.checked_add(bytes.len())?;
+            data = data
+                .checked_add(15)?
+                .checked_div(16)?
+                .checked_mul(16)?
+                .checked_add(bytes.len())?;
             work = work.checked_add(8)?.checked_add(bytes.len())?;
             if data > MAX_ENTRY_BYTES || work > MAX_ENTRY_BYTES {
                 return None;
@@ -172,6 +176,36 @@ mod tests {
             strings: vec![],
             vtables: vec![],
             receipt: None,
+        }
+    }
+    #[test]
+    fn aligned_immutable_payload_lengths_and_order_match_linker() {
+        for unwind in [false, true] {
+            let mut first = object();
+            first.code.resize(48, 0);
+            first.strings = vec![
+                (0, vec![]),
+                (8, vec![7]),
+                (16, vec![1, 2, 3]),
+                (24, vec![9; 16]),
+                (32, vec![1, 2, 3]),
+                (40, vec![5; 33]),
+            ];
+            let objects = vec![("main".into(), first)];
+            let (key, length, _) = identity(&objects, unwind, &[1; 32]).unwrap();
+            assert_eq!(
+                length,
+                backend::link_with_panic(&objects, unwind).unwrap().len()
+            );
+            for change in 0..3 {
+                let mut changed = objects.clone();
+                match change {
+                    0 => changed[0].1.strings.swap(1, 2),
+                    1 => changed[0].1.strings[1].0 += 1,
+                    _ => changed[0].1.strings[1].1[0] = 8,
+                }
+                assert_ne!(key, identity(&changed, unwind, &[1; 32]).unwrap().0);
+            }
         }
     }
     #[test]

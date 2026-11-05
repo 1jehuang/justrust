@@ -331,6 +331,7 @@ impl Parser<'_, '_> {
         let name = AstPath::new(self.names, PathAnchor::Relative, &[hidden])
             .map_err(native_adapter::name_error)?;
         self.local_consts.pending.push(ConstDecl {
+            storage: ConstantStorage::Const,
             module: self.module,
             visibility: ir::Visibility::Restricted(self.module),
             name,

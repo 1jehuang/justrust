@@ -7,6 +7,36 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
+fn returned_promoted_arrays_check_without_codegen() {
+    let source = "const FIRST:i32=7;const SECOND:i32=FIRST+2;fn promoted()->&'static [i32;2]{&[FIRST,SECOND]}fn unrelated()->i32{42}fn main(){let a=promoted();println!(\"{} {}\",a[0],a[1]);}";
+    for workers in [1, 8] {
+        let checked = compiler::compile_observed(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers}: {error}"));
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        for kind in [104, 118, 119, 120] {
+            assert!(checked.report.published_kind(kind), "missing kind {kind}");
+        }
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+            "CHECK demanded code generation"
+        );
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .filter(|(key, _)| matches!(key.kind, 118..=120))
+                .all(|(_, count)| *count == 1)
+        );
+    }
+}
+
+#[test]
 fn const_aggregate_projected_receivers_check_without_codegen() {
     let source = r#"struct Table { values: [i32; 3], sum: i32 }
 const fn make_table() -> Table {

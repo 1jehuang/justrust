@@ -2685,6 +2685,54 @@ impl<'a> Emitter<'a> {
 
     /// `&'static T` to one constant scalar in the private frame layout: a
     /// normalized eight-byte word, or (low, high) limbs for 128-bit integers.
+    fn promoted_array(&mut self, array: &ir::PromotedArray) -> Result<(), String> {
+        let budget = self.concrete.facts().budget().clone();
+        let extent = usize::try_from(array_element_stride(array.value_ty(), &budget)?)
+            .map_err(|_| "promoted array extent is negative")?;
+        let alignment = super::memory_layout::alignment(
+            array.value_ty(),
+            ir::FactsCtx::from_validated(self.concrete.facts()),
+            &budget,
+        )?
+        .ok_or("unsupported: promoted array target alignment is unresolved")?;
+        if alignment > 16 {
+            return Err("unsupported: promoted array alignment exceeds 16".into());
+        }
+        let size = extent.max(16);
+        budget.charge_work(size)?;
+        budget.retain_bytes(size)?;
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| "promoted array allocation failed")?;
+        for scalar in array.values() {
+            scalar.validate()?;
+            match scalar {
+                ir::PromotedScalar::Int(value) if value.ty.bits() == 128 => {
+                    bytes.extend_from_slice(&value.bits.to_le_bytes())
+                }
+                ir::PromotedScalar::Int(value) => {
+                    let width = scalar_memory_bytes(&scalar.value_ty()) as usize;
+                    bytes.extend_from_slice(&value.bits.to_le_bytes()[..width]);
+                }
+                ir::PromotedScalar::Bool(value) => bytes.push(u8::from(*value)),
+                ir::PromotedScalar::Char(value) => {
+                    bytes.extend_from_slice(&value.value.to_le_bytes())
+                }
+            }
+        }
+        if bytes.len() != extent {
+            return Err("promoted array payload differs from target extent".into());
+        }
+        // Empty arrays still have a non-null, suitably aligned static address.
+        if bytes.is_empty() {
+            bytes.resize(16, 0);
+        }
+        self.data_relocation(bytes)?;
+        self.bytes(&[0x48, 0x89, 0xf0]);
+        Ok(())
+    }
+
     fn promoted_scalar(&mut self, scalar: ir::PromotedScalar) -> Result<(), String> {
         scalar.validate()?;
         let budget = self.concrete.facts().budget().clone();
@@ -3766,6 +3814,7 @@ impl Emitter<'_> {
             cfg::Rvalue::Str(text) => self.str_literal(text)?,
             cfg::Rvalue::ByteStr(bytes) => self.byte_string_literal(bytes)?,
             cfg::Rvalue::ByteRepeat { byte, len } => self.byte_repeat_literal(*byte, *len)?,
+            cfg::Rvalue::PromotedArray(array) => self.promoted_array(array)?,
             cfg::Rvalue::PromotedScalar(scalar) => self.promoted_scalar(*scalar)?,
             cfg::Rvalue::RefToDyn {
                 reference,
@@ -4875,6 +4924,18 @@ pub fn link_with_panic(functions: &[(String, Object)], unwind: bool) -> Result<V
             if at.checked_add(8).is_none_or(|end| end > object.code.len()) {
                 return Err("invalid string relocation".into());
             }
+            // Every immutable blob gets its own aligned address, not merely
+            // an aligned segment start. Closed scalar/array promotions admit
+            // only authoritative target alignments no greater than sixteen.
+            let aligned = data
+                .len()
+                .checked_add(15)
+                .map(|n| n & !15)
+                .ok_or("ELF immutable data alignment overflow")?;
+            aligned
+                .checked_add(literal.len())
+                .ok_or("ELF immutable data size overflow")?;
+            data.resize(aligned, 0);
             let address = BASE
                 .checked_add(data_offset as u64)
                 .and_then(|a| a.checked_add(data.len() as u64))
@@ -10264,6 +10325,52 @@ mod tests {
         let mut expected = literal.into_bytes();
         expected.push(b'\n');
         assert_eq!(output.stdout, expected);
+    }
+
+    #[test]
+    fn immutable_data_relocations_align_each_mixed_blob_and_preserve_bytes() {
+        let payloads = [
+            vec![],
+            vec![7],
+            vec![1, 2, 3],
+            vec![9; 16],
+            vec![1, 2, 3],
+            vec![5; 33],
+        ];
+        let object = Object {
+            code: vec![0; 48],
+            exports: vec![],
+            calls: vec![],
+            strings: payloads
+                .iter()
+                .enumerate()
+                .map(|(i, b)| (i * 8, b.clone()))
+                .collect(),
+            vtables: vec![],
+            receipt: None,
+        };
+        for unwind in [false, true] {
+            let image = link_with_panic(&[("main".into(), object.clone())], unwind).unwrap();
+            let code_start = PAGE + native_entry_code(unwind).len();
+            let mut previous_end = 0;
+            for (index, payload) in payloads.iter().enumerate() {
+                let address = u64::from_le_bytes(
+                    image[code_start + index * 8..code_start + index * 8 + 8]
+                        .try_into()
+                        .unwrap(),
+                );
+                assert_eq!(address % 16, 0);
+                let offset = usize::try_from(address - BASE).unwrap();
+                assert!(offset >= previous_end);
+                assert_eq!(&image[offset..offset + payload.len()], payload);
+                previous_end = offset + payload.len();
+            }
+            assert_eq!(
+                u32::from_le_bytes(image[68 + 2 * 56..72 + 2 * 56].try_into().unwrap()),
+                4,
+                "immutable data segment must be read only"
+            );
+        }
     }
 
     #[test]

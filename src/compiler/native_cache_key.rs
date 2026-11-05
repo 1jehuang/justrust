@@ -351,6 +351,19 @@ impl Encoder<'_, '_> {
                 self.bytes(&[*byte])?;
                 self.n(*len)
             }
+            PromotedArray(array) => {
+                self.n(91)?;
+                self.ty(array.value_ty(), 0)?;
+                self.n(array.values().len())?;
+                for scalar in array.values() {
+                    match scalar {
+                        ir::PromotedScalar::Int(v) => self.constant(&cfg::Constant::Int(*v))?,
+                        ir::PromotedScalar::Bool(v) => self.constant(&cfg::Constant::Bool(*v))?,
+                        ir::PromotedScalar::Char(v) => self.constant(&cfg::Constant::Char(*v))?,
+                    }
+                }
+                Ok(())
+            }
             PromotedScalar(s) => {
                 self.n(20)?;
                 match s {
