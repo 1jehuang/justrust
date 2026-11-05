@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 809)
-        self.assertEqual(expected['rule_identities_without_proposals'], 2156)
+        self.assertEqual(expected['proposed_rule_identities'], 815)
+        self.assertEqual(expected['rule_identities_without_proposals'], 2150)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -71,7 +71,8 @@ class InventoryTests(unittest.TestCase):
                 ('transfers', ['return-expr', 'await-expr'], 14),
                 ('ranges', ['range-expr', 'underscore-expr'], 10),
                 ('structs', ['struct-expr'], 14),
-                ('blocks', ['block-expr'], 43)):
+                ('blocks', ['block-expr'], 43),
+                ('path-expressions', ['path-expr'], 6)):
             profile = expected['profiles'][name]
             self.assertEqual(profile['selected_pages'],
                              ['src/expressions/' + page + '.md' for page in pages])

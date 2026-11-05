@@ -650,6 +650,15 @@ have only listed contexts and never precede ranges or listed binary forms,
 including casts and assignments. These source-only proposals remain unreviewed
 with no semantic, execution or completion credit.
 
+Use `--profile path-expressions` with `generate` or `validate` for all six
+labels on pinned `src/expressions/path-expr.md`. Local and static paths are
+places; other resolved paths are values. Mutable-static use requires an unsafe
+block, not blanket safety authorization. Associated-constant evaluation follows
+the linked const-block contract, not mandatory evaluation of every unused
+constant. Grammar, name resolution, privacy, qualified paths and stable
+eligibility remain separate linked contracts. These source-only proposals are
+unreviewed with no semantic, executable or completion credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
