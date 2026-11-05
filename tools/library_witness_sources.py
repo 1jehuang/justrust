@@ -24,7 +24,7 @@ FIXTURE = 'tests/conformance_generated.rs'
 CANDIDATE = 'data/compiler-library-project-inventory.json'
 PROVENANCE = 'data/compiler-library-surface-provenance.json'
 PINS = {
-    FIXTURE: '9e48f6798c36cdaded44cbd38babdea74a84c15b6da73e85cbc0f0eab9e0a0d8',
+    FIXTURE: '04bc9c21727ee8997cca959a8210b977937e8210cb2f414bf79a1c8d7ba4d00c',
     'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
     'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
     'data/compiler-compatibility-scope.json': '88afac0397deb6ae82dd586c166f81ec1316c14a22c716d98a774d87b07b3f59',

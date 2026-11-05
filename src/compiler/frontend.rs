@@ -8824,6 +8824,7 @@ pub use tr::CallableProvider;
 
 #[derive(Clone, Debug)]
 pub struct Program {
+    duplicate_modules: Arc<[item_module::DuplicateModuleSyntax]>,
     struct_sources: Arc<name_validation::StructSources>,
     embedded_issuers: Arc<[super::source::EmbeddedOriginalFile]>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
@@ -8950,6 +8951,7 @@ struct GlobImport {
 /// final program is published only after its one mutable owner is frozen.
 #[derive(Default)]
 struct ProgramDeclarations {
+    duplicate_modules: Vec<item_module::DuplicateModuleSyntax>,
     generated_metadata: Vec<generated_metadata::Attachment>,
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     core_prelude_scope: Option<ModuleId>,
@@ -8984,6 +8986,7 @@ impl ProgramDeclarations {
     ) -> Result<Program, ParseError> {
         let struct_sources = name_validation::capture_struct_sources(&names, &self.structs)?;
         Ok(Program {
+            duplicate_modules: self.duplicate_modules.into(),
             struct_sources,
             embedded_issuers: Arc::from([]),
             no_std_roots: self.no_std_roots,
@@ -9154,6 +9157,7 @@ impl ProgramBuilder {
             .freeze()
             .map_err(native_adapter::name_diagnostic)?;
         let program = ProgramDeclarations {
+            duplicate_modules: Vec::new(),
             c_abi: c_abi::Declarations::default(),
             functions: self.functions,
             constants: self.constants,
@@ -15095,9 +15099,23 @@ impl<'input, 'names> Parser<'input, 'names> {
                 continue;
             }
             if self.eat("mod") {
-                let (child, full) =
+                let (child, full, duplicate) =
                     self.inline_module_header(module, module_path, parsed, visibility)?;
-                self.items(child, &full, parsed)?;
+                if duplicate {
+                    // The header already proves an invalid declaration. Still
+                    // parse the body, but do not merge its colliding names into
+                    // the first module's declaration authority. CHECK consumes
+                    // the retained header evidence after signatures publish.
+                    let mut rejected = ParsedDeclarations {
+                        program: ProgramDeclarations::default(),
+                        items: HashMap::new(),
+                        empty_use_prefixes: Vec::new(),
+                        glob_imports: Vec::new(),
+                    };
+                    self.items(child, &full, &mut rejected)?;
+                } else {
+                    self.items(child, &full, parsed)?;
+                }
                 self.expect("}")?;
                 continue;
             }
@@ -20196,6 +20214,7 @@ pub(super) fn merge_crate_file_refs_at(
     let mut embedded_issuers = root.program.embedded_issuers.to_vec();
     let mut no_std_roots = root.program.no_std_roots.to_vec();
     let mut extern_crate_aliases = root.program.extern_crate_aliases.to_vec();
+    let mut duplicate_modules = root.program.duplicate_modules.to_vec();
     name_validation::validate_struct_sources(&root.program)?;
     generated_owners::validate(&root.program)?;
     generated_metadata::validate(&root.program)?;
@@ -20257,6 +20276,7 @@ pub(super) fn merge_crate_file_refs_at(
             }
         }
         extern_crate_aliases.extend(p.extern_crate_aliases.iter().cloned());
+        duplicate_modules.extend(p.duplicate_modules.iter().cloned());
         let function_offset = base.functions;
         for (index, function) in p.functions.iter().enumerate() {
             let mut relocated = function.clone();
@@ -20332,6 +20352,7 @@ pub(super) fn merge_crate_file_refs_at(
     program.embedded_issuers = embedded_issuers.into();
     program.no_std_roots = no_std_roots.into();
     program.extern_crate_aliases = extern_crate_aliases.into();
+    program.duplicate_modules = duplicate_modules.into();
     Ok(ParsedProgram {
         program,
         items,
@@ -22448,6 +22469,7 @@ pub struct PlanCtx {
 /// out over instead of scanning whole-program item counts.
 #[derive(Clone, Debug, Default)]
 pub struct ModuleItems {
+    duplicate_module: Option<item_module::DuplicateModuleSyntax>,
     pub callables: Vec<usize>,
     pub constants: Vec<ir::DeclId>,
     pub nominals: Vec<ir::DeclId>,
@@ -24418,6 +24440,19 @@ impl PlanCtx {
             }
             impls.push((slot(decl)?, decl));
         }
+        // Empty, unused module declarations must also have a CHECK inventory.
+        // This is syntax evidence owned by the immutable program, not a scan
+        // or read of unrelated per-item graph facts.
+        for duplicate in self.program.duplicate_modules.iter() {
+            self.budget.charge_work(1)?;
+            let at = *slots.entry(duplicate.parent).or_insert_with(|| {
+                modules.push(ModuleItems::default());
+                modules.len() - 1
+            });
+            modules[at]
+                .duplicate_module
+                .get_or_insert_with(|| duplicate.clone());
+        }
         for (at, index) in callables {
             modules[at].callables.push(index);
         }
@@ -24441,9 +24476,15 @@ impl PlanCtx {
     }
     /// Items owned by the module with inventory ordinal `ordinal`.
     pub fn module_inventory(&self, ordinal: usize) -> Result<&ModuleItems, String> {
-        self.module_items
+        let items = self
+            .module_items
             .get(ordinal)
-            .ok_or_else(|| "invalid module inventory ordinal".into())
+            .ok_or("invalid module inventory ordinal")?;
+        if let Some(duplicate) = &items.duplicate_module {
+            duplicate.validate(&self.program)?;
+            return Err("E0428: duplicate inline module declaration in the same namespace".into());
+        }
+        Ok(items)
     }
     /// Nongeneric Source callable indices in callable order. Test and
     /// diagnostic helper only; graph nodes use per-item `is_closed_root`.

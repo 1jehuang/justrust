@@ -1489,7 +1489,6 @@ fn main() {}
 }
 
 #[test]
-#[ignore = "pending native duplicate-inline-module rejection obligation"]
 fn module_unused_duplicate_inline_module_is_rejected_source() {
     oracle::check(
         "module-unused-duplicate-inline-module-is-rejected-source",
@@ -1503,6 +1502,69 @@ fn main() {}
 "#,
             expect: Expect::InvalidAfterParse("E0428"),
         }],
+    );
+}
+
+#[test]
+fn module_duplicate_inline_headers_reject_after_declarations_pinned_stock() {
+    oracle::check(
+        "module-duplicate-inline-headers-after-declarations",
+        &[
+            Case {
+                name: "unused_empty_duplicate_modules",
+                source: "mod owner { mod duplicate {} mod duplicate {} } fn main() {}",
+                expect: Expect::InvalidAfterParse("E0428"),
+            },
+            Case {
+                name: "root_duplicate_with_same_named_bodies",
+                source: "mod duplicate { pub fn value()->i32 {7} } mod duplicate { pub fn value()->i32 {11} } fn main() {}",
+                expect: Expect::InvalidAfterParse("E0428"),
+            },
+            Case {
+                name: "duplicate_with_disjoint_bodies",
+                source: "mod owner { mod duplicate { pub fn first() {} } mod duplicate { pub fn second() {} } } fn main() {}",
+                expect: Expect::InvalidAfterParse("E0428"),
+            },
+            Case {
+                name: "deep_unused_duplicate_modules",
+                source: "mod a { mod b { mod duplicate {} mod duplicate {} } } fn main() {}",
+                expect: Expect::InvalidAfterParse("E0428"),
+            },
+            Case {
+                name: "three_unused_duplicate_modules",
+                source: "mod owner { mod duplicate {} mod duplicate {} mod duplicate {} } fn main() {}",
+                expect: Expect::InvalidAfterParse("E0428"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn module_distinct_inline_headers_preserve_scopes_pinned_stock() {
+    oracle::check(
+        "module-distinct-inline-headers-preserve-scopes",
+        &[
+            Case {
+                name: "same_child_spelling_in_different_parents",
+                source: "mod a { pub mod same { pub fn value()->i32 {7} } } mod b { pub mod same { pub fn value()->i32 {11} } } fn main() { println!(\"{} {}\", a::same::value(), b::same::value()); }",
+                expect: Expect::Run("7 11\n"),
+            },
+            Case {
+                name: "distinct_children_in_one_unused_parent",
+                source: "mod owner { mod first {} mod second {} } fn main() {}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "module_and_function_are_distinct_namespaces",
+                source: "mod same { pub fn value()->i32 {7} } fn same()->i32 {11} fn main() { println!(\"{} {}\", same::value(), same()); }",
+                expect: Expect::Run("7 11\n"),
+            },
+            Case {
+                name: "same_child_spelling_at_different_depths",
+                source: "mod same { pub mod same { pub fn value()->i32 {7} } } fn main() { println!(\"{}\", same::same::value()); }",
+                expect: Expect::Run("7\n"),
+            },
+        ],
     );
 }
 

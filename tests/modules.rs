@@ -648,3 +648,86 @@ fn module_resolution_is_shared_and_check_never_demands_codegen() {
     child.env(CHILD, "1");
     capture(&mut child, &scratch, COMPILE_TIMEOUT).success("module graph child");
 }
+
+#[test]
+fn duplicate_inline_modules_fail_in_existing_module_inventory_after_signatures() {
+    use justrust_engine::compiler;
+
+    for source in [
+        "mod owner { mod duplicate {} mod duplicate {} } fn main() {}",
+        "mod owner { mod duplicate { pub fn value()->i32 {7} } mod duplicate { pub fn value()->i32 {11} } } fn main() {}",
+    ] {
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure = match compiler::compile_observed(source.into(), workers, check_only) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("an unused duplicate module must prevent success"),
+                };
+                assert!(failure.to_string().contains("E0428"), "{failure}");
+                let report = failure
+                    .report
+                    .expect("duplicate rejection must retain graph evidence");
+                assert!(report.capture_complete);
+                assert_eq!(report.events_dropped, 0);
+                let published =
+                    |kind| {
+                        report.node_ids.iter().zip(&report.node_evaluations).any(
+                            |(id, (key, _))| {
+                                key.kind == kind
+                                    && report.events.iter().any(|event| {
+                                        event.node == Some(*id) && event.kind == "publish"
+                                    })
+                            },
+                        )
+                    };
+                assert!(published(121), "original PARSE_FILE did not publish");
+                assert!(published(101), "declaration SIGNATURES did not publish");
+                assert!(!published(104), "CHECK must not publish success");
+                assert!(!published(105), "BUILD must not publish success");
+                let task_nodes: std::collections::HashMap<_, _> = report
+                    .events
+                    .iter()
+                    .filter_map(|event| Some((event.task?, event.node?)))
+                    .collect();
+                let inventories: Vec<_> = report
+                    .node_ids
+                    .iter()
+                    .zip(&report.node_evaluations)
+                    .filter(|(_, (key, _))| key.kind == 141)
+                    .collect();
+                assert!(!inventories.is_empty());
+                for (id, (key, evaluations)) in inventories {
+                    assert_eq!(key.params.len(), 1, "inventory must remain per module");
+                    assert_eq!(*evaluations, 1, "shared inventory must evaluate once");
+                    let dependencies: std::collections::BTreeSet<_> = report
+                        .dependency_edges
+                        .iter()
+                        .filter(|(task, _, _)| task_nodes.get(task) == Some(id))
+                        .map(|(_, producer, _)| {
+                            let at = report
+                                .node_ids
+                                .iter()
+                                .position(|id| id == producer)
+                                .unwrap();
+                            report.node_evaluations[at].0.kind
+                        })
+                        .collect();
+                    assert_eq!(
+                        dependencies,
+                        std::collections::BTreeSet::from([101]),
+                        "inventory gained unrelated dependencies"
+                    );
+                }
+                if check_only {
+                    assert!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| { !matches!(key.kind, 103 | 105 | 130 | 131 | 133) }),
+                        "CHECK demanded code generation"
+                    );
+                }
+            }
+        }
+    }
+}

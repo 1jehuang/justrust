@@ -348,6 +348,13 @@ pub(super) fn validate_program_names(program: &Program) -> Result<(), String> {
     generated_metadata::validate(program)?;
     let mut validator = Validator::new(program)?;
     validator.require_coverage = true;
+    validator.work(program.duplicate_modules.len())?;
+    for duplicate in program.duplicate_modules.iter() {
+        duplicate.validate(program)?;
+        validator.source_module(duplicate.parent)?;
+        validator.declaration_path(&duplicate.first, duplicate.parent)?;
+        validator.declaration_path(&duplicate.second, duplicate.parent)?;
+    }
     for recipe in generated_metadata::debug_recipes(&program.generated_metadata) {
         if recipe.implementation.is_none() {
             validator.work(1)?;
