@@ -273,7 +273,7 @@ impl type_check::Checker<'_> {
                 owner.clone(),
                 kind == ir::BorrowKind::Mut,
             )?;
-            self.borrow_temporaries.push((local, false));
+            self.register_borrow_temporary(local, false, None)?;
             let borrowed = self.borrow_expression(
                 kind,
                 ir::Place {
@@ -392,7 +392,7 @@ impl type_check::Checker<'_> {
         };
         let (index, _) = self.field_type(referent, field)?;
         let local = self.temporary("$deref_field", carrier_ty.clone(), false)?;
-        self.borrow_temporaries.push((local, false));
+        self.register_borrow_temporary(local, false, None)?;
         let derefs = selected.depth
             + usize::from(matches!(selected.adjustment, ReceiverAdjustment::Identity));
         self.charge_node((derefs + 2) * std::mem::size_of::<ir::Projection>() + 128)?;

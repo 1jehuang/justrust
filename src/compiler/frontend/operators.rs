@@ -142,7 +142,7 @@ impl type_check::Checker<'_> {
         projection.extend(std::iter::repeat_n(ir::Projection::Deref, remaining));
         self.charge_node(projection.len() * std::mem::size_of::<ir::Projection>())?;
         let local = self.temporary("$index_receiver", carrier_ty, false)?;
-        self.borrow_temporaries.push((local, false));
+        self.register_borrow_temporary(local, false, None)?;
         let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
         let ty = self.exprs[borrowed.0].ty.clone();
         let completion = self.exprs[carrier.0].completion;
@@ -1268,7 +1268,7 @@ impl type_check::Checker<'_> {
         let carrier_ty = self.exprs[carrier.0].ty.clone();
         let local = self.temporary("$index_deref", carrier_ty, true)?;
         self.charge_node(std::mem::size_of::<ir::LocalId>() + 3 * 64)?;
-        self.borrow_temporaries.push((local, false));
+        self.register_borrow_temporary(local, false, None)?;
         let mut statements = vec![ir::TypedStmt::Assign {
             local,
             value: carrier,

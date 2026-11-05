@@ -565,7 +565,6 @@ fn main() { run(true); run(false); }
 }
 
 #[test]
-#[ignore = "pending native direct let borrow temporary lifetime extension obligation"]
 fn memory_direct_borrow_temporary_lifetime_extension_matches_stock() {
     oracle::check(
         "memory-direct-borrow-temporary-lifetime-extension",

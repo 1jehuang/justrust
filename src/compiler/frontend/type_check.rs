@@ -2236,9 +2236,12 @@ pub(super) struct Checker<'a> {
     /// whether the temporary is lifetime-extended by an enclosing `let`.
     /// Extended temporaries are declared by the enclosing block; others are
     /// declared by a block wrapping only their statement or initializer.
-    pub(super) borrow_temporaries: Vec<(ir::LocalId, bool)>,
+    /// A direct extending-let destructor owner carries its initializer here
+    /// until it is emitted as an owning Let in the enclosing lexical block.
+    pub(super) borrow_temporaries: Vec<(ir::LocalId, bool, Option<ir::ExprId>)>,
     /// Source addresses of borrow operands in extending `let` positions.
     pub(super) extending_borrows: Vec<usize>,
+    direct_extending_borrow: Option<usize>,
 }
 #[derive(Clone, Copy)]
 pub(super) struct ApplicationExpectation<'a> {
@@ -4279,6 +4282,7 @@ impl<'a> Checker<'a> {
             binding_mode: std::cell::Cell::new(None),
             borrow_temporaries: Vec::new(),
             extending_borrows: Vec::new(),
+            direct_extending_borrow: None,
             canonical: None,
         }
     }
@@ -4739,6 +4743,16 @@ impl<'a> Checker<'a> {
             mutable,
         });
         Ok(local)
+    }
+    pub(super) fn register_borrow_temporary(
+        &mut self,
+        local: ir::LocalId,
+        extended: bool,
+        initializer: Option<ir::ExprId>,
+    ) -> Result<(), String> {
+        self.charge_node(std::mem::size_of::<(ir::LocalId, bool, Option<ir::ExprId>)>())?;
+        self.borrow_temporaries.push((local, extended, initializer));
+        Ok(())
     }
     pub(super) fn bind(
         &mut self,
@@ -5836,6 +5850,7 @@ impl<'a> Checker<'a> {
             });
             return Ok(id);
         }
+        let temporaries_start = self.borrow_temporaries.len();
         let value = self.expr_expected(value, hint.as_ref())?;
         let flow = self.flow(value);
         if !flow.completes {
@@ -5897,13 +5912,20 @@ impl<'a> Checker<'a> {
         // A non-extended temporary dies at the end of the enclosing statement,
         // exactly like `$method_receiver`/`$deref_receiver` temporaries, so a
         // destructor there is fine (`*c.borrow()`, `&guard()` operands).
-        // Lifetime-extended temporaries with destructors remain unsupported.
-        if extended && !self.trivially_dropped(&flow.ty)? {
-            return Err("unsupported: borrowing a temporary whose type has a destructor".into());
+        // A direct extending-let destructor temporary is a lexical owner, not
+        // an expression-statement temporary. Its owning Let below gets ordinary
+        // initialized flags, move transfer, and reverse-scope cleanup. Broader
+        // extending positions and initializers depending on borrowed statement
+        // temporaries need their own evaluation/storage-order proof.
+        let owning_initializer = extended && !self.trivially_dropped(&flow.ty)?;
+        if owning_initializer
+            && (self.direct_extending_borrow != Some(source as *const Expr as usize)
+                || self.borrow_temporaries.len() != temporaries_start)
+        {
+            return Err("unsupported: destructor temporary lifetime extension requires a direct let borrow without dependent borrowed temporaries".into());
         }
         let local = self.temporary("$borrow_temporary", flow.ty.clone(), true)?;
-        self.charge_node(std::mem::size_of::<ir::LocalId>())?;
-        self.borrow_temporaries.push((local, extended));
+        self.register_borrow_temporary(local, extended, owning_initializer.then_some(value))?;
         let borrowed = self.borrow_expression(
             kind,
             ir::Place {
@@ -5912,6 +5934,9 @@ impl<'a> Checker<'a> {
             },
         )?;
         let ty = self.exprs[borrowed.0].ty.clone();
+        if owning_initializer {
+            return Ok(borrowed);
+        }
         self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
         let id = ir::ExprId(self.exprs.len());
         self.exprs.push(ir::TypedExpr {
@@ -5973,9 +5998,12 @@ impl<'a> Checker<'a> {
             return Ok(statement);
         }
         let mut local_scope = Vec::new();
-        for (local, extended) in self.borrow_temporaries.drain(start..) {
+        for (local, extended, initializer) in self.borrow_temporaries.drain(start..) {
             if extended {
-                statements.push(ir::TypedStmt::Declare { local });
+                statements.push(match initializer {
+                    Some(value) => ir::TypedStmt::Let { local, value },
+                    None => ir::TypedStmt::Declare { local },
+                });
             } else {
                 local_scope.push(ir::TypedStmt::Declare { local });
             }
@@ -6052,7 +6080,7 @@ impl<'a> Checker<'a> {
         let drained: Vec<_> = self.borrow_temporaries.drain(start..).collect();
         self.charge_node(std::mem::size_of::<ir::TypedStmt>() * drained.len())?;
         let mut declarations = Vec::new();
-        for (local, extended) in drained {
+        for (local, extended, _) in drained {
             if extended {
                 return Err("unsupported: lifetime-extended temporary in a condition".into());
             }
@@ -7773,6 +7801,13 @@ impl<'a> Checker<'a> {
                     };
                     let extending = self.extending_borrows.len();
                     self.mark_extending_borrows(value, 0)?;
+                    let direct = self.direct_extending_borrow;
+                    self.direct_extending_borrow = match value {
+                        Expr::BorrowValue { value, .. } => {
+                            Some(value.as_ref() as *const Expr as usize)
+                        }
+                        _ => None,
+                    };
                     let expected = if matches!(written, Type::Infer) {
                         annotation
                             .as_ref()
@@ -7781,6 +7816,7 @@ impl<'a> Checker<'a> {
                         annotation.as_ref().into()
                     };
                     let value = self.expr_with_expectation(value, expected);
+                    self.direct_extending_borrow = direct;
                     self.extending_borrows.truncate(extending);
                     let value = value?;
                     let f = self.flow(value);
@@ -8285,7 +8321,10 @@ impl<'a> Checker<'a> {
                 }
             }
         }
-        for (local, _) in self.borrow_temporaries.drain(temporaries_start..) {
+        for (local, _, initializer) in self.borrow_temporaries.drain(temporaries_start..) {
+            if initializer.is_some() {
+                return Err("unsupported: extending-let owner outside its statement scope".into());
+            }
             statements.push(ir::TypedStmt::Declare { local });
         }
         let mut flow = tail.map_or_else(
@@ -9869,7 +9908,7 @@ impl<'a> Checker<'a> {
             let value = self.expr_expected(receiver, inferred_receiver.then_some(&ty))?;
             let receiver_ty = self.exprs[value.0].ty.clone();
             let local = self.temporary("$method_receiver", receiver_ty, mutable)?;
-            self.borrow_temporaries.push((local, false));
+            self.register_borrow_temporary(local, false, None)?;
             let borrowed = self.borrow_expression(
                 if mutable {
                     ir::BorrowKind::Mut
@@ -12529,7 +12568,7 @@ impl<'a> Checker<'a> {
                         }
                     }
                 }
-                for (local, extended) in self.borrow_temporaries.drain(temporaries_start..) {
+                for (local, extended, _) in self.borrow_temporaries.drain(temporaries_start..) {
                     if extended {
                         return Err(
                             "unsupported: lifetime-extended temporary in an if-let scrutinee"

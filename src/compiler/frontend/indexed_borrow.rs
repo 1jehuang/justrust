@@ -151,7 +151,7 @@ impl type_check::Checker<'_> {
         }
         let local = self.temporary("$reborrow_call", carrier_ty, true)?;
         self.charge_node(std::mem::size_of::<ir::LocalId>() + projection.len() * 16)?;
-        self.borrow_temporaries.push((local, false));
+        self.register_borrow_temporary(local, false, None)?;
         let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
         let ty = self.exprs[borrowed.0].ty.clone();
         self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
@@ -190,7 +190,7 @@ impl type_check::Checker<'_> {
         }
         let local = self.temporary("$reborrow_call", ty, true)?;
         self.charge_node(std::mem::size_of::<ir::LocalId>())?;
-        self.borrow_temporaries.push((local, false));
+        self.register_borrow_temporary(local, false, None)?;
         let borrowed = self.borrow_expression(
             kind,
             ir::Place {

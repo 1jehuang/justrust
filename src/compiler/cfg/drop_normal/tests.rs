@@ -13,6 +13,166 @@ fn publish(text: &str, budget: &ir::PlanBudget) -> Arc<CanonicalSourcePublicatio
     publication
 }
 const TWO: &str = "fn f(){let a=D{v:1};let b=D{v:2};} struct D{v:i32} impl Drop for D{fn drop(&mut self){self.v=0;}} fn main(){}";
+const BORROWED: &str = "fn f(){let a=&D{v:1};let b=&mut E{v:2};let n=a.v;b.v=n;} struct D{v:i32} impl Drop for D{fn drop(&mut self){self.v=0;}} struct E{v:i32} impl Drop for E{fn drop(&mut self){self.v=0;}} fn main(){}";
+const EXACT_BORROWED: &str = r#"struct Guard { n: i32 }
+impl Drop for Guard { fn drop(&mut self) { println!("drop {}", self.n); } }
+fn main() {
+    let borrowed = &Guard { n: 7 };
+    println!("value {}", borrowed.n);
+    println!("end");
+}
+"#;
+
+#[test]
+fn direct_let_borrowed_owners_have_lexical_storage_and_canonical_cleanup() {
+    let budget = ir::PlanBudget::default();
+    let publication = publish(BORROWED, &budget);
+    let function = lower_source_closed(&publication, &budget).unwrap();
+    let owners: Vec<_> = function
+        .locals
+        .iter()
+        .enumerate()
+        .filter(|(_, local)| local.name == "$borrow_temporary")
+        .map(|(index, _)| LocalId(index))
+        .collect();
+    assert_eq!(owners.len(), 2);
+    for owner in owners {
+        let statements: Vec<_> = function.blocks.iter().flat_map(|b| &b.statements).collect();
+        assert_eq!(
+            statements
+                .iter()
+                .filter(|s| matches!(s.value, Statement::StorageLive(local) if local == owner))
+                .count(),
+            1
+        );
+        assert_eq!(
+            statements
+                .iter()
+                .filter(|s| matches!(s.value, Statement::StorageDead(local) if local == owner))
+                .count(),
+            1
+        );
+        assert_eq!(function.blocks.iter().filter(|b| matches!(&b.terminator.value, Terminator::Drop {cleanup, ..} if cleanup.owner() == &place(owner))).count(), 1);
+        assert_eq!(
+            function
+                .loan_sites
+                .iter()
+                .filter(|site| site.place.local == owner)
+                .count(),
+            1
+        );
+    }
+    let concrete = ownership::analyze_closed(
+        close(Arc::new(function), publication.facts().clone(), &budget).unwrap(),
+    )
+    .unwrap();
+    assert!(concrete.analysis().passed());
+    reject_cleanup_forgery(BORROWED, false);
+}
+
+#[test]
+fn direct_let_borrowed_owner_rejects_typed_storage_and_initializer_transplants() {
+    for text in [BORROWED, EXACT_BORROWED] {
+        let budget = ir::PlanBudget::default();
+        let publication = publish(text, &budget);
+        let source = publication.source();
+        crate::compiler::source_replay::replay_original_calls(
+            source.clone(),
+            publication.original(),
+            publication.facts(),
+            &budget,
+        )
+        .unwrap();
+        let owners: Vec<_> = source
+            .body
+            .statements
+            .iter()
+            .enumerate()
+            .filter_map(|(index, statement)| match statement {
+                ir::TypedStmt::Let { local, .. }
+                    if source.locals[local.0].name == "$borrow_temporary" =>
+                {
+                    Some(index)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(owners.len(), if text == BORROWED { 2 } else { 1 });
+        for mutation in 0..4 {
+            let mut forged = source.as_ref().clone();
+            match mutation {
+                0 => {
+                    let ir::TypedStmt::Let { local, .. } = forged.body.statements[owners[0]] else {
+                        unreachable!()
+                    };
+                    forged.body.statements[owners[0]] = ir::TypedStmt::Declare { local };
+                }
+                1 => forged.body.statements.swap(owners[0], owners[0] + 1),
+                2 => {
+                    let ir::TypedStmt::Let { value: other, .. } =
+                        forged.body.statements[owners[0] + 1]
+                    else {
+                        unreachable!()
+                    };
+                    let ir::TypedStmt::Let { value, .. } = &mut forged.body.statements[owners[0]]
+                    else {
+                        unreachable!()
+                    };
+                    *value = other;
+                }
+                _ => {
+                    let owner = forged.body.statements.remove(owners[0]);
+                    let ir::TypedStmt::Let { value, .. } = &mut forged.body.statements[owners[0]]
+                    else {
+                        unreachable!()
+                    };
+                    let inner = *value;
+                    *value = ir::ExprId(forged.exprs.len());
+                    let mut wrapper = forged.exprs[inner.0].clone();
+                    wrapper.kind = ir::ExprKind::Block(ir::TypedBlock {
+                        statements: vec![owner],
+                        tail: Some(inner),
+                    });
+                    forged.exprs.push(wrapper);
+                }
+            }
+            let forged = Arc::new(forged);
+            assert!(
+                publication
+                    .validate_source(&forged, publication.facts(), &budget)
+                    .is_err(),
+                "typed mutation {mutation} reused exact immutable source authority"
+            );
+            // Retained-call replay is not source authentication. Even if its
+            // narrower correspondence checks pass, it cannot mint publication
+            // authority for this supplied replacement arena.
+        }
+        let foreign_budget = ir::PlanBudget::default();
+        let foreign = publish(text, &foreign_budget);
+        assert!(
+            crate::compiler::source_replay::replay_original_calls(
+                source.clone(),
+                foreign.original(),
+                publication.facts(),
+                &budget,
+            )
+            .is_err()
+        );
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        let mut forged = function.clone();
+        let block = forged.blocks.iter_mut().find(|block| matches!(&block.terminator.value, Terminator::Drop {cleanup, ..} if forged.locals[cleanup.owner().local.0].name == "$borrow_temporary")).unwrap();
+        let Terminator::Drop { next, .. } = block.terminator.value else {
+            unreachable!()
+        };
+        block.terminator.value = Terminator::Goto(next);
+        assert!(
+            forged
+                .validate_source_publication(&publication, &budget)
+                .is_err()
+        );
+        assert!(close(Arc::new(forged), publication.facts().clone(), &budget).is_err());
+    }
+}
 
 #[test]
 fn structural_tuple_destructuring_retains_move_and_cleanup_proof() {
@@ -191,17 +351,18 @@ fn normal_drop_implicit_mutable_access_conflicts_with_a_live_field_loan() {
 
 #[test]
 fn normal_drop_exact_shape_rejects_omission_transplant_move_and_stale_proof() {
-    reject_cleanup_forgery(TWO);
+    reject_cleanup_forgery(TWO, false);
 }
 
 #[test]
 fn enum_drop_exact_shape_rejects_cleanup_and_move_flag_forgery() {
     reject_cleanup_forgery(
         "fn f(){let e=E::Pair(D{v:1},D{v:2});match e{E::Pair(a,_)=>{let b=a;},E::Empty=>()};let other=D{v:3};} enum E{Pair(D,D),Empty} struct D{v:i32} impl Drop for D{fn drop(&mut self){self.v=0;}} fn main(){}",
+        true,
     );
 }
 
-fn reject_cleanup_forgery(text: &str) {
+fn reject_cleanup_forgery(text: &str, enum_moves: bool) {
     let budget = ir::PlanBudget::default();
     let publication = publish(text, &budget);
     let function = lower_source_closed(&publication, &budget).unwrap();
@@ -221,7 +382,7 @@ fn reject_cleanup_forgery(text: &str) {
     )
     .unwrap();
     assert!(concrete.analysis().passed());
-    for change in 0..if text == TWO { 6 } else { 7 } {
+    for change in 0..if enum_moves { 7 } else { 6 } {
         let mut forged = function.clone();
         let (block, cleanup, next) = &sites[0];
         match change {
@@ -331,30 +492,32 @@ fn reject_cleanup_forgery(text: &str) {
 
 #[test]
 fn normal_drop_foreign_world_cleanup_is_rejected() {
-    let budget = ir::PlanBudget::default();
-    let publication = publish(TWO, &budget);
-    let foreign = publish(TWO, &ir::PlanBudget::default());
-    let function = lower_source_closed(&publication, &budget).unwrap();
-    let other = lower_source_closed(&foreign, foreign.facts().budget()).unwrap();
-    let foreign_cleanup = other
-        .blocks
-        .iter()
-        .find_map(|b| match &b.terminator.value {
-            Terminator::Drop { cleanup, .. } => Some(cleanup.clone()),
-            _ => None,
-        })
-        .unwrap();
-    let mut forged = function.clone();
-    let target = forged
-        .blocks
-        .iter_mut()
-        .find_map(|b| match &mut b.terminator.value {
-            Terminator::Drop { cleanup, .. } => Some(cleanup),
-            _ => None,
-        })
-        .unwrap();
-    *target = foreign_cleanup;
-    assert!(close(Arc::new(forged), publication.facts().clone(), &budget).is_err());
+    for text in [TWO, BORROWED] {
+        let budget = ir::PlanBudget::default();
+        let publication = publish(text, &budget);
+        let foreign = publish(text, &ir::PlanBudget::default());
+        let function = lower_source_closed(&publication, &budget).unwrap();
+        let other = lower_source_closed(&foreign, foreign.facts().budget()).unwrap();
+        let foreign_cleanup = other
+            .blocks
+            .iter()
+            .find_map(|b| match &b.terminator.value {
+                Terminator::Drop { cleanup, .. } => Some(cleanup.clone()),
+                _ => None,
+            })
+            .unwrap();
+        let mut forged = function.clone();
+        let target = forged
+            .blocks
+            .iter_mut()
+            .find_map(|b| match &mut b.terminator.value {
+                Terminator::Drop { cleanup, .. } => Some(cleanup),
+                _ => None,
+            })
+            .unwrap();
+        *target = foreign_cleanup;
+        assert!(close(Arc::new(forged), publication.facts().clone(), &budget).is_err());
+    }
 }
 
 #[test]

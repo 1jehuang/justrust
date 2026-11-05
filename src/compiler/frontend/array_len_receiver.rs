@@ -47,7 +47,7 @@ impl type_check::Checker<'_> {
         self.charge_node(
             std::mem::size_of::<ir::LocalId>() + std::mem::size_of::<ir::Projection>(),
         )?;
-        self.borrow_temporaries.push((local, false));
+        self.register_borrow_temporary(local, false, None)?;
         let borrowed = self.borrow_expression(
             ir::BorrowKind::Shared,
             ir::Place {

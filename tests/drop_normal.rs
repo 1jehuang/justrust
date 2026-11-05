@@ -11,6 +11,7 @@ use justrust_engine::compiler;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -52,6 +53,209 @@ match show(&mk(5)){5=>println!("five"),_=>{}}let c=RefCell::new(5i32);*c.borrow_
             },
         ],
     );
+}
+
+#[test]
+fn direct_let_borrowed_destructor_temporaries_match_stock() {
+    use explicit_drop_oracle::{Case, Expect};
+    explicit_drop_oracle::check(
+        "direct-let-borrowed-destructor-temporaries",
+        &[
+            Case {
+                name: "lexical_owners_outlive_last_use_and_nested_blocks_drop_in_reverse_order",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn main(){let first=D{n:1};let borrowed=&D{n:2};println!("value {}",borrowed.n);
+{let nested=&D{n:3};let last=D{n:4};println!("nested {}",nested.n);}
+println!("outer");let last=D{n:5};println!("end");}"#,
+                expect: Expect::Run(
+                    "value 2\nnested 3\ndrop 4\ndrop 3\nouter\nend\ndrop 5\ndrop 2\ndrop 1\n",
+                ),
+            },
+            Case {
+                name: "mutable_borrow_owns_the_original_storage_until_block_exit",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn main(){let borrowed=&mut D{n:6};borrowed.n=7;let shared=&*borrowed;
+println!("value {}",shared.n);println!("end");}"#,
+                expect: Expect::Run("value 7\nend\ndrop 7\n"),
+            },
+            Case {
+                name: "factory_runs_once_and_shadowed_reference_does_not_end_first_owner",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn make(n:i32)->D{println!("make {}",n);D{n}}
+fn main(){let borrowed=&make(1);println!("first {}",borrowed.n);
+let borrowed=&make(2);println!("second {}",borrowed.n);println!("end");}"#,
+                expect: Expect::Run("make 1\nfirst 1\nmake 2\nsecond 2\nend\ndrop 2\ndrop 1\n"),
+            },
+            Case {
+                name: "expression_statement_is_not_an_extending_let",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn main(){&D{n:1};println!("statement ended");let borrowed=&D{n:2};
+println!("value {}",borrowed.n);&D{n:3};println!("end");}"#,
+                expect: Expect::Run("drop 1\nstatement ended\nvalue 2\ndrop 3\nend\ndrop 2\n"),
+            },
+            Case {
+                name: "normal_early_return_cleans_initialized_extended_owners",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn run(early:bool){let before=D{n:1};let borrowed=&D{n:2};let after=D{n:3};
+println!("value {}",borrowed.n);if early{return;}println!("tail");}
+fn main(){run(true);println!("between");run(false);println!("end");}"#,
+                expect: Expect::Run(
+                    "value 2\ndrop 3\ndrop 2\ndrop 1\nbetween\nvalue 2\ntail\ndrop 3\ndrop 2\ndrop 1\nend\n",
+                ),
+            },
+            Case {
+                name: "return_before_owner_initialization_does_not_destroy_uninitialized_storage",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn run(){let before=D{n:1};let borrowed=&D{n:{return;}};println!("unreachable");}
+fn main(){run();println!("end");}"#,
+                expect: Expect::Run("drop 1\nend\n"),
+            },
+            Case {
+                name: "unused_call_argument_does_not_extend_a_temporary",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){}}
+fn identity(value:&D)->&D{value}
+fn unused(){let borrowed=identity(&D{n:7});println!("{}",borrowed.n);}fn main(){}"#,
+                expect: Expect::InvalidAfterParse("E0716"),
+            },
+            Case {
+                name: "unused_outer_reference_cannot_outlive_inner_extended_owner",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){}}
+fn unused(){let borrowed:&D;{let inner=&D{n:7};borrowed=inner;}println!("{}",borrowed.n);}fn main(){}"#,
+                expect: Expect::InvalidAfterParse("E0716"),
+            },
+            Case {
+                name: "unused_named_owner_still_ends_at_its_own_block_boundary",
+                source: r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){}}
+fn unused(){let borrowed:&D;{let inner=D{n:7};borrowed=&inner;}println!("{}",borrowed.n);}fn main(){}"#,
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn direct_let_borrowed_destructor_panic_cleanup_matches_stock() {
+    // Exercise only the existing native abort and bounded unwind protocols.
+    // This does not add catch_unwind, foreign unwinding or generic dropck.
+    let source = r#"struct D{n:i32}impl Drop for D{fn drop(&mut self){println!("drop {}",self.n);}}
+fn main(){let before=D{n:1};let borrowed=&D{n:2};let after=D{n:3};
+println!("value {}",borrowed.n);panic!("borrowed owner panic");}"#;
+    let scratch = Scratch::new();
+    let input = scratch.write("borrowed-panic.rs", source.as_bytes());
+    for unwind in [false, true] {
+        let stock_image = scratch.path(&format!("stock-panic-{unwind}"));
+        let compiled = capture(
+            Command::new(stock_rustc())
+                .env_remove("RUSTC_BOOTSTRAP")
+                .args([
+                    "--edition=2024",
+                    "-Awarnings",
+                    if unwind {
+                        "-Cpanic=unwind"
+                    } else {
+                        "-Cpanic=abort"
+                    },
+                ])
+                .arg(&input)
+                .arg("-o")
+                .arg(&stock_image),
+            &scratch,
+            30,
+        );
+        successful(&compiled, "stock borrowed-owner panic compile");
+        let stock = capture(
+            Command::new(&stock_image).env("RUST_BACKTRACE", "0"),
+            &scratch,
+            10,
+        );
+        assert_eq!(
+            stock.stdout,
+            if unwind {
+                b"value 2\ndrop 3\ndrop 2\ndrop 1\n".as_slice()
+            } else {
+                b"value 2\n".as_slice()
+            }
+        );
+        assert_eq!(stock.status.code(), unwind.then_some(101));
+        assert_eq!(stock.status.signal(), (!unwind).then_some(6));
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let native = compiler::compile_observed_with_options(
+                    source.into(),
+                    workers,
+                    check_only,
+                    compiler::source::SourceOptions {
+                        panic_unwind: unwind,
+                        ..Default::default()
+                    },
+                )
+                .unwrap_or_else(|failure| {
+                    panic!("unwind={unwind} workers={workers} CHECK={check_only}: {failure}")
+                });
+                assert!(native.analyses.iter().all(|analysis| analysis.passed()));
+                assert!(native.report.capture_complete);
+                assert_eq!(native.report.events_dropped, 0);
+                assert!(
+                    native
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .all(|(_, count)| *count == 1)
+                );
+                assert_eq!(native.executable.is_none(), check_only);
+                if check_only {
+                    assert!(
+                        native
+                            .report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133))
+                    );
+                    continue;
+                }
+                let image = scratch.path(&format!("native-panic-{unwind}-{workers}"));
+                fs::write(&image, native.executable.unwrap()).unwrap();
+                fs::set_permissions(&image, fs::Permissions::from_mode(0o700)).unwrap();
+                let ran = capture(Command::new(image).env("RUST_BACKTRACE", "0"), &scratch, 10);
+                assert_eq!(ran.status.code(), stock.status.code(), "{ran}");
+                assert_eq!(ran.status.signal(), stock.status.signal(), "{ran}");
+                assert_eq!(ran.stdout, stock.stdout, "{ran}");
+                assert!(
+                    String::from_utf8_lossy(&ran.stderr).contains("borrowed owner panic"),
+                    "{ran}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn direct_let_borrowed_destructor_extension_keeps_explicit_boundaries() {
+    for (index, source) in [
+        "struct D{n:i32}impl Drop for D{fn drop(&mut self){}}fn unused(){let references=(&D{n:1},);}fn main(){}",
+        "struct D{n:i32}impl Drop for D{fn drop(&mut self){}}fn value(d:&D)->i32{d.n}fn unused(){let reference=&D{n:value(&D{n:1})};}fn main(){}",
+    ].into_iter().enumerate() {
+        let scratch = Scratch::new();
+        let input = scratch.write("boundary.rs", source.as_bytes());
+        let stock_image = scratch.path("stock-boundary");
+        let stock = capture(
+            Command::new(stock_rustc()).env_remove("RUSTC_BOOTSTRAP")
+                .args(["--edition=2024", "-Cpanic=abort", "-Awarnings"])
+                .arg(input).arg("-o").arg(stock_image), &scratch, 30,
+        );
+        successful(&stock, "stock accepts the deliberately unsupported extension boundary");
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure = match compiler::compile_observed(source.into(), workers, check_only) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("boundary={index} workers={workers} CHECK={check_only}: unsupported extension was admitted"),
+                };
+                assert!(failure.error.to_string().contains("unsupported: destructor temporary lifetime extension requires a direct let borrow without dependent borrowed temporaries"), "boundary={index} workers={workers} CHECK={check_only}: {failure}");
+                assert!(failure.resource_usage.first_failure.is_none());
+                assert!(!failure.resource_usage.poisoned);
+            }
+        }
+    }
 }
 
 #[test]
