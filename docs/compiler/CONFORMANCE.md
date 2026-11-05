@@ -588,6 +588,13 @@ suffixed type, and `overflowing_literals` lint policy. Unary negation is not
 part of a literal token. All rows remain unreviewed, with missing tests and no
 witness attribution or executable credit.
 
+Use `--profile grouped` with `generate` or `validate` for all six labels on
+the pinned grouped-expression page. Grouping preserves the enclosed operand's
+value and place/value category, and can override precedence. Unit and tuple
+construction, borrow permission, temporary lifetime rules and method lookup
+retain their linked obligations. Callable-field grouping is not method dispatch.
+All rows remain unreviewed, with missing tests and no executable credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
