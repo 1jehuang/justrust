@@ -14,6 +14,156 @@ enum IndexedBorrowStep<'e> {
 }
 
 impl type_check::Checker<'_> {
+    /// An owned aggregate rvalue has fresh storage, unlike a place reached
+    /// through a reference. Retain the complete owner, then borrow its checked
+    /// projection. In particular, do not copy a projected reference referent.
+    pub(super) fn borrow_owned_projection(
+        &mut self,
+        kind: ir::BorrowKind,
+        source: &Expr,
+    ) -> Result<Option<ir::ExprId>, String> {
+        let mut steps = Vec::new();
+        let mut root = source;
+        loop {
+            if steps.len() >= ir::MAX_PATTERN_PROJECTION_DEPTH {
+                return Err("place projection nesting exceeds limit128".into());
+            }
+            match root {
+                Expr::Field { base, field } => {
+                    steps.push(IndexedBorrowStep::Field(field));
+                    root = base;
+                }
+                Expr::Index { base, index, .. } => {
+                    steps.push(IndexedBorrowStep::Const(*index, root));
+                    root = base;
+                }
+                Expr::DynamicIndex { base, index, .. } => {
+                    steps.push(IndexedBorrowStep::Runtime(index, root));
+                    root = base;
+                }
+                _ => break,
+            }
+        }
+        if steps.is_empty() || type_check::place_expression(root) {
+            return Ok(None);
+        }
+        let Some(mut ty) = self.method_receiver_hint(root)? else {
+            return Ok(None);
+        };
+        steps.reverse();
+        for step in &steps {
+            // Autoderef requires the original reference's storage/provenance.
+            // Leave it to the returned-reference and indexed-place protocols.
+            if matches!(ty, ir::Ty::Ref { .. } | ir::Ty::RawPtr { .. }) {
+                return Ok(None);
+            }
+            match step {
+                IndexedBorrowStep::Field(field) => {
+                    let (_, field_ty) = self.field_type(&ty, field)?;
+                    ty = field_ty;
+                }
+                IndexedBorrowStep::Const(index, _) => {
+                    if !matches!(ty, ir::Ty::Array { .. }) {
+                        return Ok(None);
+                    }
+                    ty = self.index_type(&ty, *index)?;
+                }
+                IndexedBorrowStep::Runtime(..) => {
+                    let ir::Ty::Array { element, .. } = ty else {
+                        return Ok(None);
+                    };
+                    ty = element.as_ref().clone();
+                }
+                _ => unreachable!(),
+            }
+        }
+        let value = self.expr(root)?;
+        let flow = self.flow(value);
+        if !flow.completes {
+            return Ok(Some(value));
+        }
+        let local = self.temporary("$projected_owner", flow.ty, true)?;
+        let extended = self
+            .extending_borrows
+            .contains(&(source as *const Expr as usize));
+        // Destructors in extending positions need the owning-let protocol,
+        // rather than a statement-scoped assignment.
+        if extended && !self.trivially_dropped(&self.locals[local.0].ty)? {
+            return Err("unsupported: destructor projected temporary lifetime extension".into());
+        }
+        self.register_borrow_temporary(local, extended, None)?;
+        let mut projection = Vec::new();
+        let mut statements = vec![ir::TypedStmt::Assign { local, value }];
+        let mut ty = self.locals[local.0].ty.clone();
+        for step in steps {
+            self.charge_node(std::mem::size_of::<ir::Projection>())?;
+            match step {
+                IndexedBorrowStep::Field(field) => {
+                    let (index, field_ty) = self.field_type(&ty, field)?;
+                    projection.push(ir::Projection::Field(index));
+                    ty = field_ty;
+                }
+                IndexedBorrowStep::Const(index, _) => {
+                    ty = self.index_type(&ty, index)?;
+                    projection.push(ir::Projection::ConstantIndex(index));
+                }
+                IndexedBorrowStep::Runtime(index, original) => {
+                    let usize_ty = ir::Ty::Int(ir::IntTy::Usize);
+                    let index = self.expr_expected(index, Some(&usize_ty))?;
+                    self.require_index(&self.flow(index))?;
+                    if !self.flow(index).completes {
+                        statements.push(ir::TypedStmt::Expr(index));
+                        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+                        let id = ir::ExprId(self.exprs.len());
+                        self.exprs.push(ir::TypedExpr {
+                            ty: ir::Ty::Never,
+                            completion: ir::Completion::Never,
+                            kind: ir::ExprKind::Block(ir::TypedBlock {
+                                statements,
+                                tail: None,
+                            }),
+                        });
+                        return Ok(Some(id));
+                    }
+                    let saved = self.temporary("$projected_index", usize_ty.clone(), false)?;
+                    self.charge_node(std::mem::size_of::<ir::TypedStmt>())?;
+                    statements.push(ir::TypedStmt::Let {
+                        local: saved,
+                        value: index,
+                    });
+                    let checked = self.for_expr(usize_ty, ir::ExprKind::Local(saved))?;
+                    self.index_bounds_probe(
+                        &ir::Place {
+                            local,
+                            projection: projection.clone(),
+                        },
+                        checked,
+                        original,
+                        &mut statements,
+                    )?;
+                    let ir::Ty::Array { element, .. } = ty else {
+                        return Err("owned projection array type changed".into());
+                    };
+                    ty = element.as_ref().clone();
+                    projection.push(ir::Projection::DynamicIndex(saved));
+                }
+                IndexedBorrowStep::Deref => unreachable!(),
+            }
+        }
+        let borrowed = self.borrow_expression(kind, ir::Place { local, projection })?;
+        self.charge_node(std::mem::size_of::<ir::TypedExpr>() + 64)?;
+        let id = ir::ExprId(self.exprs.len());
+        self.exprs.push(ir::TypedExpr {
+            ty: self.exprs[borrowed.0].ty.clone(),
+            completion: ir::Completion::Returns,
+            kind: ir::ExprKind::Block(ir::TypedBlock {
+                statements,
+                tail: Some(borrowed),
+            }),
+        });
+        Ok(Some(id))
+    }
+
     /// Lower `&place` / `&mut place` for an indexed local-rooted place or a
     /// dereferenced call result. Returns `None` for other place shapes.
     pub(super) fn borrow_indexed_place(

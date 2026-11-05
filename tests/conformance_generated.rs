@@ -400,7 +400,6 @@ fn main() {}"#,
 }
 
 #[test]
-#[ignore = "pending native compatibility obligation"]
 fn const_fn_aggregate_initializer_source() {
     oracle::check(
         "const-fn-aggregate-initializer-source",

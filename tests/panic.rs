@@ -24,6 +24,64 @@ mod thread_query_stock;
 fn thread_panicking_workers1_8_matches_stock_during_normal_and_panic_cleanup() {
     let fixtures = [
         (
+            "owned-projection-early-return",
+            r#"struct Table{values:[i32;3]}
+impl Drop for Table{fn drop(&mut self){println!("drop={}",std::thread::panicking());}}
+fn make()->Table{println!("owner");Table{values:[7,11,24]}}
+fn main(){println!("{}",make().values[{println!("index");return;0usize}]);}
+"#,
+            "owner\nindex\ndrop=false\n",
+            Some(0),
+            None,
+        ),
+        (
+            "owned-projection-early-return-argument-order",
+            r#"struct Table{values:[i32;3]}
+impl Drop for Table{fn drop(&mut self){println!("drop={}",std::thread::panicking());}}
+fn make()->Table{println!("owner");Table{values:[7,11,24]}}
+fn first()->i32{println!("first");1}fn later()->i32{println!("later");2}
+fn main(){println!("{} {} {}",first(),make().values[{println!("index");return;0usize}],later());}
+"#,
+            "first\nowner\nindex\ndrop=false\n",
+            Some(0),
+            None,
+        ),
+        (
+            "owned-projection-direct-index-panic",
+            r#"struct Table{values:[i32;3]}
+impl Drop for Table{fn drop(&mut self){println!("drop={}",std::thread::panicking());}}
+fn make()->Table{println!("owner");Table{values:[7,11,24]}}
+fn main(){println!("{}",make().values[{println!("index");panic!("query outer panic");0usize}]);}
+"#,
+            "owner\nindex\ndrop=true\n",
+            Some(101),
+            None,
+        ),
+        (
+            "owned-projection-index-panic",
+            r#"struct Table{values:[i32;3]}
+impl Drop for Table{fn drop(&mut self){println!("drop={}",std::thread::panicking());}}
+fn make()->Table{println!("owner");Table{values:[7,11,24]}}
+fn index()->usize{println!("index");panic!("query outer panic")}
+fn main(){println!("{}",make().values[index()]);}
+"#,
+            "owner\nindex\ndrop=true\n",
+            Some(101),
+            None,
+        ),
+        (
+            "owned-projection-bounds",
+            r#"struct Table{values:[i32;3]}
+impl Drop for Table{fn drop(&mut self){println!("drop={}",std::thread::panicking());}}
+fn make()->Table{println!("owner");Table{values:[7,11,24]}}
+fn index()->usize{println!("index");4usize}
+fn main(){println!("{}",make().values[index()]);}
+"#,
+            "owner\nindex\ndrop=true\n",
+            Some(101),
+            None,
+        ),
+        (
             "normal",
             r#"use std::thread::panicking as query;
 fn helper()->bool{query()}
@@ -138,7 +196,11 @@ fn main(){println!("before={}",std::thread::panicking());let _guard=Guard;panic!
                 assert!(stderr.is_empty(), "{name} workers={workers}: {native:?}");
             } else {
                 assert!(
-                    stderr.contains("query outer panic"),
+                    stderr.contains(if name == "owned-projection-bounds" {
+                        "index out of bounds"
+                    } else {
+                        "query outer panic"
+                    }),
                     "{name} workers={workers}: {native:?}"
                 );
                 if signal == Some(6) {

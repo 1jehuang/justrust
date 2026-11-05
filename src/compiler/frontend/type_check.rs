@@ -5766,6 +5766,9 @@ impl<'a> Checker<'a> {
         if let Some(id) = self.borrow_call_rooted_field(kind, value)? {
             return Ok(id);
         }
+        if let Some(id) = self.borrow_owned_projection(kind, value)? {
+            return Ok(id);
+        }
         if place_expression(value) {
             return Err(
                 "unsupported: borrowing runtime indexed or dereferenced places is unsupported"

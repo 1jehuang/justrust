@@ -2201,6 +2201,220 @@ fn call_result_reborrow_rejects_forged_place_and_mutability() {
 }
 
 #[test]
+fn owned_projected_borrow_rejects_source_typed_cfg_and_cross_owner_forgery() {
+    let program = parse("struct Table{values:[i32;3],other:[i32;3]}fn make()->Table{Table{values:[7,11,24],other:[1,2,3]}}fn first(){let a=&make().values;let b=&make().other;println!(\"{} {}\",a.len(),b.len());}fn second(){let a=&make().values;let b=&make().other;println!(\"{} {}\",a.len(),b.len());}fn main(){}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let PublishedCallableBody::Source(publication) = plan
+        .publish_callable_body(plan.function_decl(1).unwrap(), &budget)
+        .unwrap()
+    else {
+        panic!("source publication required")
+    };
+    let PublishedCallableBody::Source(other) = plan
+        .publish_callable_body(plan.function_decl(2).unwrap(), &budget)
+        .unwrap()
+    else {
+        panic!("source publication required")
+    };
+    let source = publication.source();
+    let facts = publication.facts();
+    publication.validate_source(source, facts, &budget).unwrap();
+    let borrowed: Vec<_> = source
+        .exprs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expression)| match &expression.kind {
+            ir::ExprKind::Borrow { place, .. }
+                if source.locals[place.local.0].name == "$projected_owner" =>
+            {
+                Some((ir::ExprId(index), place.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(borrowed.len(), 2);
+    assert_ne!(borrowed[0].1.local, borrowed[1].1.local);
+    let lowered = crate::compiler::cfg::lower_source_closed(&publication, &budget).unwrap();
+    lowered.validate_provenance(facts, &budget).unwrap();
+    let other_lowered = crate::compiler::cfg::lower_source_closed(&other, &budget).unwrap();
+    let mut foreign_proof = lowered.clone();
+    foreign_proof.lowering_proof = other_lowered.lowering_proof.clone();
+    assert!(foreign_proof.validate_provenance(facts, &budget).is_err());
+    assert!(lowered.validate_provenance(other.facts(), &budget).is_err());
+    assert!(
+        publication
+            .validate_source(source, other.facts(), &budget)
+            .is_err()
+    );
+    assert!(
+        publication
+            .validate_source(other.source(), facts, &budget)
+            .is_err()
+    );
+    assert!(
+        other
+            .validate_source(source, other.facts(), &budget)
+            .is_err()
+    );
+    for mutation in 0..4 {
+        let mut forged = source.as_ref().clone();
+        let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[borrowed[0].0.0].kind else {
+            unreachable!()
+        };
+        match mutation {
+            0 => place.local = borrowed[1].1.local,
+            1 => place.projection = vec![ir::Projection::Field(1)],
+            2 => place.projection.clear(),
+            _ => forged.exprs[borrowed[0].0.0].ty = ir::Ty::Bool,
+        }
+        if mutation >= 2 {
+            assert!(
+                forged.validate().is_err(),
+                "ill-typed projected borrow accepted"
+            );
+        }
+        assert!(
+            publication
+                .validate_source(&Arc::new(forged), facts, &budget)
+                .is_err()
+        );
+        let mut forged = lowered.clone();
+        let site = forged
+            .loan_sites
+            .iter_mut()
+            .find(|site| site.origin == Some(borrowed[0].0))
+            .unwrap();
+        match mutation {
+            0 => site.place.local = borrowed[1].1.local,
+            1 => site.place.projection = vec![ir::Projection::Field(1)],
+            2 => site.place.projection.clear(),
+            _ => site.origin = Some(borrowed[1].0),
+        }
+        assert!(forged.validate_provenance(facts, &budget).is_err());
+    }
+}
+
+#[test]
+fn owned_dynamic_projection_rejects_saved_index_and_bounds_origin_substitution() {
+    let program = parse("struct Table{values:[i32;3]}fn make()->Table{Table{values:[7,11,24]}}fn first(i:usize,j:usize){let a=&make().values[i];let b=&make().values[j];println!(\"{} {}\",*a,*b);}fn main(){first(0usize,1usize);}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let PublishedCallableBody::Source(publication) = plan
+        .publish_callable_body(plan.function_decl(1).unwrap(), &budget)
+        .unwrap()
+    else {
+        panic!("source publication required")
+    };
+    let source = publication.source();
+    let facts = publication.facts();
+    publication.validate_source(source, facts, &budget).unwrap();
+    let borrows: Vec<_> = source
+        .exprs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expression)| match &expression.kind {
+            ir::ExprKind::Borrow { place, .. }
+                if matches!(
+                    place.projection.last(),
+                    Some(ir::Projection::DynamicIndex(_))
+                ) =>
+            {
+                Some((ir::ExprId(index), place.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let checks: Vec<_> = source
+        .exprs
+        .iter()
+        .enumerate()
+        .filter_map(|(index, expression)| match &expression.kind {
+            ir::ExprKind::BoundsCheck { index: operand, .. } => Some((ir::ExprId(index), *operand)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(borrows.len(), 2);
+    assert_eq!(checks.len(), 2);
+    let ir::Projection::DynamicIndex(saved) = *borrows[0].1.projection.last().unwrap() else {
+        unreachable!()
+    };
+    let ir::Projection::DynamicIndex(other_saved) = *borrows[1].1.projection.last().unwrap() else {
+        unreachable!()
+    };
+    assert_ne!(saved, other_saved);
+    assert_ne!(checks[0].0, checks[1].0);
+    let lowered = crate::compiler::cfg::lower_source_closed(&publication, &budget).unwrap();
+    lowered.validate_provenance(facts, &budget).unwrap();
+    for mutation in 0..3 {
+        let mut forged = source.as_ref().clone();
+        if mutation == 0 {
+            let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[borrows[0].0.0].kind else {
+                unreachable!()
+            };
+            *place.projection.last_mut().unwrap() = ir::Projection::DynamicIndex(other_saved);
+        } else {
+            let ir::ExprKind::BoundsCheck { array, index } = &mut forged.exprs[checks[0].0.0].kind
+            else {
+                unreachable!()
+            };
+            if mutation == 1 {
+                *index = checks[1].1;
+            } else {
+                array.local = borrows[1].1.local;
+            }
+        }
+        assert!(
+            publication
+                .validate_source(&Arc::new(forged), facts, &budget)
+                .is_err()
+        );
+    }
+    for mutation in 0..4 {
+        let mut forged = lowered.clone();
+        if mutation == 3 {
+            let site = forged
+                .loan_sites
+                .iter_mut()
+                .find(|site| site.origin == Some(borrows[0].0))
+                .unwrap();
+            site.origin = Some(borrows[1].0);
+        } else {
+            let statement = forged
+                .blocks
+                .iter_mut()
+                .flat_map(|block| &mut block.statements)
+                .find(|statement| {
+                    statement.origin == Some(checks[0].0)
+                        && matches!(
+                            statement.value,
+                            crate::compiler::cfg::Statement::IndexInspect { .. }
+                        )
+                })
+                .unwrap();
+            if mutation == 1 {
+                statement.origin = Some(checks[1].0);
+            } else {
+                let crate::compiler::cfg::Statement::IndexInspect { array, index } =
+                    &mut statement.value
+                else {
+                    unreachable!()
+                };
+                if mutation == 0 {
+                    *index = crate::compiler::cfg::Operand::Copy(ir::Place {
+                        local: other_saved,
+                        projection: Vec::new(),
+                    });
+                } else {
+                    array.local = borrows[1].1.local;
+                }
+            }
+        }
+        assert!(forged.validate_provenance(facts, &budget).is_err());
+    }
+}
+
+#[test]
 fn trait_default_sources_have_separate_identity_and_rigid_self_facts() {
     let p =
         parse("mod m{fn helper()->i32{7}pub trait V{fn value(&self)->i32{helper()}}}fn main(){}")

@@ -200,7 +200,7 @@ impl Checker<'_> {
         // (value id, native, borrow-or-value id for the native Format)
         let mut evaluated: Vec<(ir::ExprId, bool, ir::ExprId)> = Vec::new();
         for (argument, spec) in arguments.iter().zip(specs) {
-            let checked_index_reference =
+            let mut checked_index_reference =
                 if matches!(argument, Expr::Index { .. } | Expr::DynamicIndex { .. }) {
                     self.format_indexed_place_borrow(argument)?
                 } else if matches!(argument, Expr::Field { .. })
@@ -213,16 +213,24 @@ impl Checker<'_> {
                 } else {
                     None
                 };
+            if checked_index_reference.is_none() {
+                checked_index_reference =
+                    self.borrow_owned_projection(ir::BorrowKind::Shared, argument)?;
+            }
             let id = if let Some(reference) = checked_index_reference {
-                let ir::Ty::Ref { referent, .. } = self.exprs[reference.0].ty.clone() else {
-                    return Err("indexed format operand must be a checked reference".into());
-                };
-                let id = self.format_lit(
-                    referent.as_ref().clone(),
-                    ir::ExprKind::Deref { value: reference },
-                )?;
-                self.exprs[id.0].completion = self.exprs[reference.0].completion;
-                id
+                if self.exprs[reference.0].completion == ir::Completion::Never {
+                    reference
+                } else {
+                    let ir::Ty::Ref { referent, .. } = self.exprs[reference.0].ty.clone() else {
+                        return Err("indexed format operand must be a checked reference".into());
+                    };
+                    let id = self.format_lit(
+                        referent.as_ref().clone(),
+                        ir::ExprKind::Deref { value: reference },
+                    )?;
+                    self.exprs[id.0].completion = self.exprs[reference.0].completion;
+                    id
+                }
             } else {
                 self.expr_expected(argument, None)?
             };
@@ -258,7 +266,7 @@ impl Checker<'_> {
             };
             let flow = self.flow(id);
             completes &= flow.completes;
-            let native = Self::native_format(spec, &flow.ty);
+            let native = !flow.completes || Self::native_format(spec, &flow.ty);
             if spec.native_mode().is_some() && !native {
                 // Plain placeholder: keep the precise native diagnostic for
                 // types that std::fmt cannot print either.
@@ -326,7 +334,9 @@ impl Checker<'_> {
                     None
                 }
             });
-            let operand = if let Some(reference) = shared_slice_operand {
+            let operand = if !flow.completes {
+                id
+            } else if let Some(reference) = shared_slice_operand {
                 reference
             } else if mut_scalar_referent.is_some() {
                 // The scalar was already read through the `&mut`.
@@ -362,6 +372,32 @@ impl Checker<'_> {
                 + std::mem::size_of_val(pieces)
                 + std::mem::size_of_val(modes),
         )?;
+        if !completes {
+            if evaluated.iter().any(|(_, native, _)| !native) {
+                // The library route below establishes Display/Debug call
+                // obligations. Do not bypass those obligations on a dead path.
+                return Err("unsupported: divergent non-native formatting operands".into());
+            }
+            // All arguments above are still checked, including those following
+            // a divergent index. At runtime evaluate operands in source order,
+            // but do not emit any formatting or invent a completed borrow.
+            self.charge_node(
+                evaluated
+                    .len()
+                    .checked_mul(std::mem::size_of::<ir::TypedStmt>())
+                    .ok_or("divergent format operand storage overflow")?,
+            )?;
+            return Ok((
+                ir::ExprKind::Block(ir::TypedBlock {
+                    statements: evaluated
+                        .into_iter()
+                        .map(|(_, _, operand)| ir::TypedStmt::Expr(operand))
+                        .collect(),
+                    tail: None,
+                }),
+                Flow::never(),
+            ));
+        }
         let flow = Flow {
             ty: ir::Ty::Unit,
             completes,

@@ -7,6 +7,44 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[test]
+fn const_aggregate_projected_receivers_check_without_codegen() {
+    let source = r#"struct Table { values: [i32; 3], sum: i32 }
+const fn make_table() -> Table {
+    let values = [7i32, 11i32, 24i32];
+    Table { values, sum: values[0] + values[1] + values[2] }
+}
+const TABLE: Table = make_table();
+fn main() {
+    println!("{} {} {} {} {}", TABLE.values.len(), TABLE.values[0], TABLE.values[1], TABLE.values[2], TABLE.sum);
+}"#;
+    for workers in [1, 8] {
+        let checked = compiler::compile_observed(source.into(), workers, true)
+            .unwrap_or_else(|error| panic!("workers={workers}: {error}"));
+        assert!(checked.executable.is_none());
+        assert!(checked.report.capture_complete);
+        for kind in [104, 118, 119, 120] {
+            assert!(checked.report.published_kind(kind), "missing kind {kind}");
+        }
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+            "CHECK demanded code generation"
+        );
+        assert!(
+            checked
+                .report
+                .node_evaluations
+                .iter()
+                .filter(|(key, _)| matches!(key.kind, 118..=120))
+                .all(|(_, count)| *count == 1)
+        );
+    }
+}
+
+#[test]
 fn mutable_static_source_rejects_before_accessor_or_codegen() {
     let directory = std::env::temp_dir().join(format!(
         "justrust-mutable-static-boundary-{}",

@@ -11,6 +11,71 @@ mod closure_oracle;
 use closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
+fn owned_aggregate_projected_borrows_match_stock() {
+    closure_oracle::check_with_compiler(
+        "owned-aggregate-projected-borrows",
+        &[
+            closure_oracle::Case {
+                name: "constant_and_variable_receivers_and_indices",
+                source: r#"struct Table { values: [i32; 3], sum: i32 }
+const fn make_table() -> Table { let values=[7i32,11i32,24i32]; Table {values,sum:values[0]+values[1]+values[2]} }
+const TABLE:Table=make_table();
+fn main(){let table=make_table();let i=1usize;println!("{} {} {} {} {}",TABLE.values.len(),TABLE.values[0],TABLE.values[i],TABLE.values[2],TABLE.sum);println!("{} {} {} {} {}",table.values.len(),table.values[0],table.values[i],table.values[2],table.sum);}"#,
+                expect: closure_oracle::Expect::Run("3 7 11 24 42\n3 7 11 24 42\n"),
+            },
+            closure_oracle::Case {
+                name: "owned_call_roots_evaluate_once_in_argument_order",
+                source: r#"struct Table{values:[i32;3],sum:i32}
+fn make(n:i32)->Table{println!("make {}",n);Table{values:[n,n+1,n+2],sum:n+3}}
+fn main(){println!("{} {} {}",make(1).values.len(),make(7).values[1],make(20).sum);}"#,
+                expect: closure_oracle::Expect::Run("make 1\nmake 7\nmake 20\n3 8 23\n"),
+            },
+            closure_oracle::Case {
+                name: "runtime_index_follows_owned_receiver_once",
+                source: r#"struct Table{values:[i32;3]}fn make()->Table{println!("owner");Table{values:[7,11,24]}}fn index()->usize{println!("index");1usize}fn main(){println!("{}",make().values[index()]);}"#,
+                expect: closure_oracle::Expect::Run("owner\nindex\n11\n"),
+            },
+            closure_oracle::Case {
+                name: "non_copy_owner_lives_through_projected_borrow",
+                source: r#"struct Table{values:[i32;3]}impl Drop for Table{fn drop(&mut self){println!("drop {}",self.values[0]);}}fn make()->Table{println!("owner");Table{values:[7,11,24]}}fn main(){println!("{}",make().values.len());println!("done");}"#,
+                expect: closure_oracle::Expect::Run("owner\n3\ndrop 7\ndone\n"),
+            },
+            closure_oracle::Case {
+                name: "extended_owned_projection_is_a_real_place",
+                source: r#"struct Table{values:[i32;3]}const TABLE:Table=Table{values:[7,11,24]};fn make()->Table{Table{values:[7,11,24]}}fn main(){let r=&make().values[1];let m=&mut make().values;(*m)[0]=9;println!("{} {} {}",*r,m.len(),TABLE.values[0]);}"#,
+                expect: closure_oracle::Expect::Run("11 3 7\n"),
+            },
+            closure_oracle::Case {
+                name: "returned_reference_projection_keeps_original_storage",
+                source: r#"struct Table{values:[i32;3]}fn get(t:&mut Table)->&mut Table{println!("get");t}fn main(){let mut t=Table{values:[7,11,24]};let r=&mut get(&mut t).values;(*r)[0]=9;println!("{} {}",r.len(),t.values[0]);}"#,
+                expect: closure_oracle::Expect::Run("get\n3 9\n"),
+            },
+            closure_oracle::Case {
+                name: "divergent_index_does_not_skip_checking_later_arguments",
+                source: "struct Table{values:[i32;3]}fn make()->Table{Table{values:[7,11,24]}}fn main(){println!(\"{} {}\",make().values[{return;0usize}],true+1);}",
+                expect: closure_oracle::Expect::Invalid("E0369"),
+            },
+            closure_oracle::Case {
+                name: "unused_invalid_constant_is_not_bypassed",
+                source: "struct Table{values:[i32;3]}const fn make()->Table{Table{values:[7,11,24]}}const TABLE:Table=make();const BAD:i32=1/0;fn main(){println!(\"{}\",TABLE.values.len());}",
+                expect: closure_oracle::Expect::Invalid("E0080"),
+            },
+            closure_oracle::Case {
+                name: "unused_invalid_body_is_not_bypassed",
+                source: "struct Table{values:[i32;3]}const TABLE:Table=Table{values:[7,11,24]};fn bad(){let x:i32=true;}fn main(){println!(\"{}\",TABLE.values.len());}",
+                expect: closure_oracle::Expect::Invalid("E0308"),
+            },
+            closure_oracle::Case {
+                name: "owned_projection_cannot_escape_temporary_storage",
+                source: "struct Table{values:[i32;3]}fn make()->Table{Table{values:[7,11,24]}}fn bad<'a>()->&'a [i32;3]{&make().values}fn main(){}",
+                expect: closure_oracle::Expect::Invalid("E0515"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn scalar_cell_shared_storage_effects_match_stock() {
     use closure_oracle::{Case, Expect};
     closure_oracle::check_with_compiler(

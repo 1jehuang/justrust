@@ -2,6 +2,39 @@
 use justrust_engine::compiler;
 use std::os::unix::fs::PermissionsExt;
 
+#[path = "support/stock_rustc.rs"]
+mod pinned_stock;
+
+#[test]
+fn divergent_non_native_formatting_is_fail_closed() {
+    let directory = std::env::temp_dir().join(format!(
+        "indexed-format-divergent-boundary-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&directory).unwrap();
+    for (index,(source,valid)) in [
+        ("struct Table{values:[i32;3]}fn make()->Table{Table{values:[7,11,24]}}fn main(){println!(\"{:>3} {}\",1i32,make().values[{return;0usize}]);}",true),
+        ("struct Table{values:[i32;3]}struct Bad;fn make()->Table{Table{values:[7,11,24]}}fn main(){println!(\"{} {}\",make().values[{return;0usize}],Bad);}",false),
+    ].into_iter().enumerate() {
+        let input=directory.join(format!("case{index}.rs"));
+        std::fs::write(&input,source).unwrap();
+        let stock=std::process::Command::new(pinned_stock::stock_rustc()).env_remove("RUSTC_BOOTSTRAP").args(["--edition=2024","--emit=metadata"]).arg(&input).arg("-o").arg(directory.join("stock.rmeta")).output().unwrap();
+        assert_eq!(stock.status.success(),valid,"{}",String::from_utf8_lossy(&stock.stderr));
+        if !valid {assert!(String::from_utf8_lossy(&stock.stderr).contains("E0277"));}
+        // A boundary rejection is not claimed as semantic-invalid evidence.
+        // Neither stock-valid formatting nor a missing Display impl may be
+        // accepted by skipping library trait obligations after divergence.
+        for workers in [1,8] {for check in [true,false] {
+            let failure=compiler::compile_observed(source.into(),workers,check).err().expect("divergent library formatting accepted without its obligations");
+            assert!(failure.to_string().contains("unsupported: divergent non-native formatting operands"),"{failure}");
+            if check {
+                assert!(failure.report.as_ref().unwrap().node_evaluations.iter().all(|(key,_)|key.kind!=103), "CHECK demanded codegen: workers={workers}");
+            }
+        }}
+    }
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 #[test]
 fn indexed_format_matches_stock() {
     let source = include_str!("fixtures/indexed_format/transport.rs");
