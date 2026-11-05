@@ -605,6 +605,13 @@ or cancellation correctness, and have no review or executable credit. The five
 return rules overlap the branching profile and are counted once in the global
 rule union, while both authored interpretations remain available for review.
 
+Use `--profile ranges` with `generate` or `validate` for all five range and
+five underscore-expression labels. The six range forms construct distinct
+standard types, not universally iterable or indexable values. Underscore
+assignees are not wildcard patterns or arbitrary expression values. Iterator,
+indexing, ownership, temporary destruction and lint contracts remain linked
+obligations. All proposals remain unreviewed with no executable credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
