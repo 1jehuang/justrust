@@ -579,6 +579,15 @@ user-defined dereference wrappers are not interchangeable for field splitting.
 Tuple fields, visibility, packed alignment and unsafe union reads retain their
 linked obligations. All rows remain unreviewed with no execution credit.
 
+Use `--profile literals` with `generate` or `validate` for all 87 labels on
+the pinned literal-expression page. These proposals distinguish lexical token
+acceptance from decoded values and types, cooked versus raw escapes, UTF-8
+strings versus byte arrays, and C-string bytes with their terminating NUL.
+Numeric needs separate the `u128` parse ceiling, conversion to the inferred or
+suffixed type, and `overflowing_literals` lint policy. Unary negation is not
+part of a literal token. All rows remain unreviewed, with missing tests and no
+witness attribution or executable credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
