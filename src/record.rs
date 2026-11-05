@@ -587,7 +587,9 @@ fn compatible_toolchain(
                 && (crate::remote_artifacts::musl_target(target_name)
                     || crate::remote_artifacts::glibc_target(target_name)
                     || crate::darwin_tools::supported(target_name)
-                    || crate::ios_tools::supported(target_name)
+                    // Unmanaged local iOS builds keep the caller's toolchain.
+                    || (crate::ios_tools::supported(target_name)
+                        && std::env::var_os("JUSTRUST_DARWIN_SDK").is_some())
                     || crate::arm64_tools::supported(target_name)
                     || crate::msvc_tools::supported(target_name)
                     || crate::cross_tools::supported(target_name))
