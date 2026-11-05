@@ -514,6 +514,13 @@ fn apply_platform_tools(cmd: &mut Command, args: &mut Vec<OsString>) -> Result<(
             )?;
             crate::darwin_tools::apply(cmd, target, &id)?;
         }
+        Some("build") if crate::ios_tools::supported(target) => {
+            // Without a managed SDK selection keep the caller's own iOS
+            // linker setup (local builds); hosted builds always select one.
+            if let Ok(id) = std::env::var("JUSTRUST_DARWIN_SDK") {
+                crate::ios_tools::apply(cmd, &id)?;
+            }
+        }
         Some("build") if cfg!(target_arch = "x86_64") && crate::arm64_tools::supported(target) => {
             let text: Vec<String> = args
                 .iter()
@@ -580,6 +587,7 @@ fn compatible_toolchain(
                 && (crate::remote_artifacts::musl_target(target_name)
                     || crate::remote_artifacts::glibc_target(target_name)
                     || crate::darwin_tools::supported(target_name)
+                    || crate::ios_tools::supported(target_name)
                     || crate::arm64_tools::supported(target_name)
                     || crate::msvc_tools::supported(target_name)
                     || crate::cross_tools::supported(target_name))

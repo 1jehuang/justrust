@@ -99,6 +99,12 @@ fn routable(sub: &str) -> bool {
     matches!(sub, "check" | "clippy" | "test")
 }
 
+/// iOS builds route to hosted only with a managed SDK ID to select there.
+fn ios_sdk_selected() -> bool {
+    std::env::var("JUSTRUST_DARWIN_SDK")
+        .is_ok_and(|id| id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
 /// Cross execution is never allowed. Additional platform paths are build-only.
 fn extra_zig_target(target: &str) -> bool {
     crate::remote_artifacts::glibc_target(target) || crate::darwin_tools::supported(target)
@@ -125,7 +131,9 @@ fn unsupported_hosted_target(args: &[OsString], env_target: Option<OsString>) ->
                     && target.to_str().is_some_and(extra_zig_target))
                 && !(args.first().is_some_and(|a| a == "build")
                     && target.to_str().is_some_and(|t| {
-                        crate::msvc_tools::supported(t) || crate::arm64_tools::supported(t)
+                        crate::msvc_tools::supported(t)
+                            || crate::arm64_tools::supported(t)
+                            || (crate::ios_tools::supported(t) && ios_sdk_selected())
                     })
                     && routable_build(&strings))
                 && !(windows_compile && target == crate::cross_tools::WINDOWS_GNU)
@@ -155,7 +163,10 @@ fn routable_build(args: &[String]) -> bool {
             return false;
         }
     } else if let Some(target) = crate::remote_artifacts::build_target(args) {
-        if crate::msvc_tools::supported(target) || crate::arm64_tools::supported(target) {
+        if crate::msvc_tools::supported(target)
+            || crate::arm64_tools::supported(target)
+            || (crate::ios_tools::supported(target) && ios_sdk_selected())
+        {
             let os: Vec<OsString> = args.iter().map(OsString::from).collect();
             return crate::slots::profile_dir(&os).file_name()
                 != Some(std::ffi::OsStr::new("debug"));

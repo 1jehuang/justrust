@@ -63,6 +63,7 @@ mod hotpatch {
     pub fn after_link(_raw: &[OsString]) {}
 }
 mod install;
+mod ios_tools;
 mod linker;
 mod live;
 mod localcache;

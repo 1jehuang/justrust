@@ -210,7 +210,7 @@ fn llvm_output(cmd: &mut Command) -> Result<std::process::Output> {
     Ok(output)
 }
 
-fn find_llvm(names: &[&str], marker: &str) -> Result<PathBuf> {
+pub(crate) fn find_llvm(names: &[&str], marker: &str) -> Result<PathBuf> {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
         .unwrap_or_default();
@@ -374,7 +374,7 @@ fn llvm_package(arch: &str) -> Result<(&'static str, &'static str, &'static str)
     }
 }
 
-fn install_llvm_ar(install: bool) -> Result<PathBuf> {
+pub(crate) fn install_llvm_ar(install: bool) -> Result<PathBuf> {
     let (origin, arch, hash) = llvm_package(std::env::consts::ARCH)?;
     let parent = crate::toolchain::root()?.join("llvm-packages");
     let root = parent.join(format!("llvm-18.1.3-1-{arch}-{hash}"));

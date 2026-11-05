@@ -88,7 +88,61 @@ fn inventory(root: &Path, dir: &Path, files: &mut BTreeMap<String, String>) -> R
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    MacOs,
+    Ios,
+}
+
 fn minimum_sdk(sdk: &Path) -> Result<()> {
+    platform(sdk).map(|_| ())
+}
+
+/// Which Apple platform a managed SDK serves, from its preflight stubs.
+fn platform(sdk: &Path) -> Result<Platform> {
+    match minimum_macos_sdk(sdk) {
+        Ok(()) => Ok(Platform::MacOs),
+        Err(mac) => minimum_ios_sdk(sdk)
+            .map(|()| Platform::Ios)
+            .map_err(|ios| anyhow::anyhow!("not a macOS SDK ({mac:#}) nor an iOS SDK ({ios:#})")),
+    }
+}
+
+fn minimum_ios_sdk(sdk: &Path) -> Result<()> {
+    let stubs = [
+        "usr/lib/libSystem.tbd",
+        "System/Library/Frameworks/Foundation.framework/Foundation.tbd",
+        "System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd",
+        "System/Library/Frameworks/UIKit.framework/UIKit.tbd",
+    ];
+    for name in [
+        "usr/include/stdio.h",
+        "usr/include/stdlib.h",
+        "usr/include/TargetConditionals.h",
+    ]
+    .iter()
+    .chain(stubs.iter())
+    {
+        if !sdk.join(name).is_file() {
+            bail!("Apple SDK is missing required header/framework stub: {name}");
+        }
+    }
+    if !sdk.join("SDKSettings.json").is_file() && !sdk.join("SDKSettings.plist").is_file() {
+        bail!("Apple SDK has no SDKSettings metadata");
+    }
+    for name in stubs {
+        let stub = std::fs::read_to_string(sdk.join(name))?;
+        let tokens: Vec<_> = stub
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+            .collect();
+        if !tokens.contains(&"ios") || !(tokens.contains(&"arm64") || tokens.contains(&"arm64e")) {
+            bail!("Apple SDK stub must support iOS on arm64: {name}");
+        }
+    }
+    Ok(())
+}
+
+fn minimum_macos_sdk(sdk: &Path) -> Result<()> {
     for name in [
         "usr/include/stdio.h",
         "usr/include/stdlib.h",
@@ -213,6 +267,15 @@ fn validate(root: &Path, id: &str) -> Result<PathBuf> {
     Ok(sdk)
 }
 
+/// The validated managed SDK directory for `id`, which must serve `want`.
+pub fn validated(id: &str, want: Platform) -> Result<PathBuf> {
+    let sdk = validate(&store()?, id)?;
+    if platform(&sdk)? != want {
+        bail!("managed Apple SDK {id} is not a {want:?} SDK");
+    }
+    Ok(sdk)
+}
+
 /// Configure only the owned target build command, never the agent process or
 /// user's shell. Caller selects cargo-zigbuild and passes the matching --target.
 pub fn apply(cmd: &mut Command, target: &str, sdk_id: &str) -> Result<()> {
@@ -220,6 +283,9 @@ pub fn apply(cmd: &mut Command, target: &str, sdk_id: &str) -> Result<()> {
         bail!("unsupported managed Darwin target: {target}");
     }
     let sdk = validate(&store()?, sdk_id)?;
+    if platform(&sdk)? != Platform::MacOs {
+        bail!("managed Apple SDK {sdk_id} is not a macOS SDK");
+    }
     crate::release_tools::apply(cmd, crate::release_tools::ensure()?)?;
     cmd.env("SDKROOT", sdk);
     Ok(())
@@ -309,6 +375,33 @@ mod tests {
         std::os::unix::fs::symlink(".", root.join("source/cycle")).unwrap();
         assert!(provision_into(&root.join("source"), &store).is_err());
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn ios_sdk_is_recognized_and_kept_apart_from_macos() {
+        let root = fixture();
+        let src = root.join("source");
+        std::fs::remove_dir_all(src.join("System/Library/Frameworks/AppKit.framework")).unwrap();
+        for name in [
+            "usr/lib/libSystem.tbd",
+            "System/Library/Frameworks/Foundation.framework/Foundation.tbd",
+            "System/Library/Frameworks/CoreFoundation.framework/CoreFoundation.tbd",
+            "System/Library/Frameworks/UIKit.framework/UIKit.tbd",
+        ] {
+            let p = src.join(name);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, "targets: [ arm64e-ios, arm64-ios ]").unwrap();
+        }
+        let store = root.join("store");
+        let id = provision_into(&src, &store).unwrap();
+        let sdk = validate(&store, &id).unwrap();
+        assert_eq!(platform(&sdk).unwrap(), Platform::Ios);
+        let mac = fixture();
+        let mac_id = provision_into(&mac.join("source"), &mac.join("store")).unwrap();
+        let mac_sdk = validate(&mac.join("store"), &mac_id).unwrap();
+        assert_eq!(platform(&mac_sdk).unwrap(), Platform::MacOs);
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(mac).unwrap();
     }
 
     #[test]

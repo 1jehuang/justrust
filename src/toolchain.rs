@@ -934,6 +934,7 @@ pub(crate) fn add_target(tc: &Toolchain, target: &str, log: &mut dyn std::io::Wr
         && !crate::cross_tools::supported(target)
         && !crate::remote_artifacts::glibc_target(target)
         && !crate::darwin_tools::supported(target)
+        && !crate::ios_tools::supported(target)
         && !crate::arm64_tools::supported(target)
         && !crate::msvc_tools::supported(target)
     {

@@ -629,6 +629,7 @@ fn check_darwin(data: &[u8], target: &str) -> Result<()> {
     let expected = match target {
         "aarch64-apple-darwin" => object::Architecture::Aarch64,
         "x86_64-apple-darwin" => object::Architecture::X86_64,
+        "aarch64-apple-ios" => object::Architecture::Aarch64,
         _ => bail!("unsupported Darwin artifact target"),
     };
     let file = object::File::parse(data).context("expected Mach-O artifact")?;
@@ -825,7 +826,9 @@ fn fetch_inner(
     let windows = build_target(args).filter(|target| {
         *target == crate::cross_tools::WINDOWS_GNU || crate::msvc_tools::supported(target)
     });
-    let darwin = build_target(args).filter(|target| crate::darwin_tools::supported(target));
+    let darwin = build_target(args).filter(|target| {
+        crate::darwin_tools::supported(target) || crate::ios_tools::supported(target)
+    });
     let arm64 = build_target(args).is_some_and(crate::arm64_tools::supported);
     let mut records = load_records();
     // A newer locally built file is not evidence that it is this hosted
@@ -1367,6 +1370,15 @@ mod tests {
         assert!(check_darwin(b"not a Mach-O", "x86_64-apple-darwin").is_err());
     }
 
+    #[test]
+    fn darwin_accepts_segments_without_sections() {
+        // Real executables start with __PAGEZERO (nsects 0). object must not
+        // reject its empty section table on alignment grounds.
+        let mut image = macho_fixture(0x0100000c);
+        image[96..100].copy_from_slice(&0u32.to_le_bytes());
+        check_darwin(&image, "aarch64-apple-ios").unwrap();
+    }
+
     #[cfg(unix)]
     #[test]
     fn glibc_baseline_rejects_before_replacing_artifacts() {
@@ -1625,3 +1637,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
+
