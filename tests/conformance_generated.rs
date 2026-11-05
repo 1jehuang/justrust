@@ -1472,7 +1472,6 @@ fn main() {}
 }
 
 #[test]
-#[ignore = "pending native representation-alignment rejection obligation"]
 fn layout_unused_non_power_of_two_alignment_is_rejected_source() {
     oracle::check(
         "layout-unused-non-power-of-two-alignment-is-rejected-source",

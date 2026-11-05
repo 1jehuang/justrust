@@ -346,6 +346,26 @@ impl Parser<'_> {
         }
         self.nodes += 1;
         let start = self.pos;
+        // Rust meta lists admit literal arguments, including repr(align(N)).
+        // Consumers still decide whether such a literal is valid for their attribute.
+        if self.text[self.pos..]
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_digit())
+        {
+            while self.text[self.pos..]
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_alphanumeric() || c == '_')
+            {
+                self.pos += 1;
+            }
+            return Ok(Meta {
+                name: String::new(),
+                value: MetaValue::OtherLiteral,
+                range: self.base + start..self.base + self.pos,
+            });
+        }
         let mut name = self.ident()?;
         while self.eat("::")? {
             name.push_str("::");

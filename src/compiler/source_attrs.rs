@@ -731,8 +731,12 @@ impl Filter<'_> {
                         ("repr", MetaValue::List(values)) => {
                             owner == Owner::FreeItem
                                 && values.len() == 1
-                                && values[0].name == "C"
-                                && matches!(values[0].value, MetaValue::Word)
+                                && ((values[0].name == "C"
+                                    && matches!(values[0].value, MetaValue::Word))
+                                    || (values[0].name == "align"
+                                        && matches!(&values[0].value, MetaValue::List(args)
+                                            if args.len() == 1 && args[0].name.is_empty()
+                                                && matches!(args[0].value, MetaValue::OtherLiteral))))
                         }
                         ("unsafe", MetaValue::List(values)) => {
                             owner == Owner::Function
@@ -749,7 +753,7 @@ impl Filter<'_> {
                         return Err(error(
                             AttributeErrorKind::Unsupported,
                             meta.range,
-                            "only original repr(C) structs and unsafe(no_mangle) extern C functions are supported",
+                            "only original repr(C)/repr(align(N)) structs and unsafe(no_mangle) extern C functions are supported",
                         ));
                     }
                     retained_abi.push(original.unwrap().range.clone());

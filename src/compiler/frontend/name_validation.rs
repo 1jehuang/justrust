@@ -181,6 +181,7 @@ impl StructSources {
 }
 #[derive(Debug)]
 struct StructSource {
+    repr_align: Option<c_abi::SourceAlignment>,
     module: ModuleId,
     name: PathKey,
     shape: StructShape,
@@ -275,6 +276,7 @@ pub(super) fn capture_struct_sources(
             .charge(Counter::Work, declaration.name.len() as u64)
             .map_err(|error| native_adapter::transport_error(error.into()))?;
         rows.push(StructSource {
+            repr_align: declaration.repr_align,
             module: declaration.module,
             name: declaration.name.key(Namespace::Type),
             shape: declaration.shape,
@@ -316,7 +318,13 @@ pub(super) fn validate_struct_sources(program: &Program) -> Result<(), String> {
             .name
             .check(&*program.names)
             .map_err(native_adapter::name_diagnostic)?;
-        if declaration.module != original.module
+        let same_alignment = match (&declaration.repr_align, &original.repr_align) {
+            (None, None) => true,
+            (Some(actual), Some(expected)) => actual.same(expected, &program.names)?,
+            _ => false,
+        };
+        if !same_alignment
+            || declaration.module != original.module
             || declaration.shape != original.shape
             || declaration.name.key(Namespace::Type) != original.name
             || declaration.fields.len() != original.fields.len()
@@ -2207,6 +2215,7 @@ mod tests {
         let module = input.module_root().unwrap();
         let path = input.path("crate::S").unwrap();
         input.structs.push(StructDecl {
+            repr_align: None,
             module,
             shape: StructShape::Record,
             type_params: Vec::new(),
@@ -2224,11 +2233,64 @@ mod tests {
         assert!(input.finish().is_err());
     }
     #[test]
+    fn representation_alignment_source_authority_rejects_forged_headers() {
+        let source = "#[repr(align(3))]struct First{value:u8}#[repr(align(8))]struct Second{value:u8}struct Plain{value:u8}fn main(){}";
+        let genuine = parse(source).unwrap();
+        genuine.validate_name_handles().unwrap();
+        let plan = PlanCtx::from_program(&genuine, &ir::PlanBudget::default()).unwrap();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        assert!(
+            plan.publish_nominal_declaration(declaration)
+                .unwrap_err()
+                .contains("E0589")
+        );
+        let mut omitted = genuine.clone();
+        omitted.structs[0].repr_align = None;
+        assert!(omitted.validate_name_handles().is_err());
+        let mut same_owner = genuine.clone();
+        same_owner.structs[0].repr_align = genuine.structs[1].repr_align;
+        assert!(same_owner.validate_name_handles().is_err());
+        let mut injected = genuine.clone();
+        injected.structs[2].repr_align = genuine.structs[0].repr_align;
+        assert!(injected.validate_name_handles().is_err());
+        let foreign = parse(source).unwrap();
+        let mut cross_owner = genuine.clone();
+        cross_owner.structs[0].repr_align = foreign.structs[0].repr_align;
+        assert!(cross_owner.validate_name_handles().is_err());
+        let mut same_owner_header = genuine.clone();
+        same_owner_header.structs[0].name = genuine.structs[1].name.clone();
+        assert!(same_owner_header.validate_name_handles().is_err());
+        let mut cross_owner_header = genuine.clone();
+        cross_owner_header.structs[0].name = foreign.structs[0].name.clone();
+        assert!(cross_owner_header.validate_name_handles().is_err());
+        // Even bypassing the outer source-shape check cannot transplant an
+        // alignment onto a different declaration occurrence or source owner.
+        let alignment = genuine.structs[0].repr_align.unwrap();
+        assert!(
+            alignment
+                .value(&genuine.names, &genuine.structs[1])
+                .is_err()
+        );
+        assert!(
+            alignment
+                .value(&foreign.names, &foreign.structs[0])
+                .is_err()
+        );
+        assert_eq!(
+            alignment
+                .value(&genuine.names, &genuine.structs[0])
+                .unwrap(),
+            3
+        );
+    }
+
+    #[test]
     fn struct_shape_integrity_does_not_reject_genuine_unit_names() {
         let mut input = builder();
         let module = input.module_root().unwrap();
         let name = input.path("crate::Unit").unwrap();
         input.structs.push(StructDecl {
+            repr_align: None,
             module,
             shape: StructShape::Unit,
             type_params: Vec::new(),
@@ -2746,6 +2808,7 @@ mod tests {
         let module = input.module_root().unwrap();
         let name = input.path("crate::Pair").unwrap();
         input.structs.push(StructDecl {
+            repr_align: None,
             module,
             shape: StructShape::Tuple,
             type_params: Vec::new(),

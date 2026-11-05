@@ -82,6 +82,93 @@ impl Program {
         Ok(())
     }
 }
+/// Original representation syntax, not a computed layout or a parser diagnostic.
+/// Only the parser can construct it, and the source shape receipt retains it.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SourceAlignment {
+    syntax: crate::compiler::token_session::SpanId,
+    module: ModuleId,
+    name: AstIdent,
+}
+impl SourceAlignment {
+    pub(super) fn parsed(
+        syntax: crate::compiler::token_session::SpanId,
+        module: ModuleId,
+        name: AstIdent,
+    ) -> Self {
+        Self {
+            syntax,
+            module,
+            name,
+        }
+    }
+    pub(super) fn same(&self, other: &Self, names: &NameStore) -> Result<bool, String> {
+        Ok(self.syntax == other.syntax
+            && self.module == other.module
+            && exact_source_ident(names, self.name, other.name)?)
+    }
+    pub(super) fn value(
+        &self,
+        names: &NameStore,
+        declaration: &StructDecl,
+    ) -> Result<u128, String> {
+        let name = declaration
+            .name
+            .segments()
+            .last()
+            .ok_or("missing representation declaration name")?;
+        if self.module != declaration.module || !exact_source_ident(names, *name, self.name)? {
+            return Err("contract: representation source declaration changed".into());
+        }
+        names
+            .check(self.name)
+            .map_err(native_adapter::name_diagnostic)?;
+        let session = names.session();
+        let original = |span| -> Result<_, String> {
+            match session
+                .span(span)
+                .map_err(|error| error.to_string())?
+                .origin
+            {
+                crate::compiler::expansion_span::SpanOrigin::Original(original) => Ok(original),
+                _ => Err("contract: representation requires original source syntax".into()),
+            }
+        };
+        let literal = original(self.syntax)?;
+        let name = original(
+            names
+                .span(self.name)
+                .map_err(native_adapter::name_diagnostic)?,
+        )?;
+        let snapshot = session.sources();
+        let range = snapshot
+            .render_span(literal)
+            .map_err(|error| error.to_string())?;
+        let owner = snapshot
+            .render_span(name)
+            .map_err(|error| error.to_string())?;
+        if range.file != owner.file || range.hi > owner.lo {
+            return Err(
+                "contract: representation literal belongs to another source declaration".into(),
+            );
+        }
+        let text = snapshot
+            .text(literal.file())
+            .map_err(|error| error.to_string())?;
+        names
+            .budget()
+            .charge(
+                crate::compiler::expansion_budget::Counter::Work,
+                u64::from(range.hi - range.lo),
+            )
+            .map_err(|error| error.to_string())?;
+        let value = parse_integer_literal(&text[range.lo as usize..range.hi as usize])?;
+        if value.suffix.is_some() {
+            return Err("unsupported: suffixed representation alignment literal".into());
+        }
+        Ok(value.magnitude)
+    }
+}
 impl Parser<'_, '_> {
     pub(in crate::compiler) fn c_attributes(&mut self) -> Result<(), ParseError> {
         while self.eat("#") {
@@ -91,12 +178,34 @@ impl Parser<'_, '_> {
             self.expect("[")?;
             if self.eat("repr") {
                 self.expect("(")?;
-                self.expect("C")?;
-                self.expect(")")?;
-                if self.pending_repr_c {
-                    return Err(self.error("duplicate repr(C)"));
+                if self.pending_repr_c || self.pending_repr_align.is_some() {
+                    return Err(
+                        self.unsupported("combined representation attributes are unsupported")
+                    );
                 }
-                self.pending_repr_c = true;
+                if self.eat("C") {
+                    self.pending_repr_c = true;
+                } else if self.eat("align") {
+                    self.expect("(")?;
+                    if primitive_constants::original_token(self).is_none() {
+                        return Err(
+                            self.unsupported("representation alignment requires original source")
+                        );
+                    }
+                    let literal = parse_integer_literal(self.token().text)
+                        .map_err(|error| self.unsupported(&error))?;
+                    if literal.suffix.is_some() {
+                        return Err(self.unsupported("suffixed representation alignment literal"));
+                    }
+                    self.pending_repr_align = Some(self.token().span);
+                    self.cursor.bump();
+                    self.eat(",");
+                    self.expect(")")?;
+                } else {
+                    return Err(self.unsupported("unsupported representation attribute"));
+                }
+                self.eat(",");
+                self.expect(")")?;
             } else if self.is("unsafe") {
                 self.reject_forbidden_unsafe()?;
                 self.cursor.bump();

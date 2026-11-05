@@ -9550,6 +9550,7 @@ pub struct RegionDecls {
 }
 #[derive(Clone, Debug)]
 pub struct StructDecl {
+    repr_align: Option<c_abi::SourceAlignment>,
     pub shape: StructShape,
     pub module: ModuleId,
     pub type_params: Vec<AstIdent>,
@@ -11477,6 +11478,7 @@ struct Parser<'input, 'names> {
     pending_c_abi: bool,
     pending_c_export: bool,
     pending_repr_c: bool,
+    pending_repr_align: Option<super::token_session::SpanId>,
     foreign_c: bool,
     debug_assertions: bool,
     input: &'input NativeTokenBuffer,
@@ -11673,6 +11675,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_c_abi: false,
             pending_c_export: false,
             pending_repr_c: false,
+            pending_repr_align: None,
             foreign_c: false,
             debug_assertions: self.debug_assertions,
             input: &buffer,
@@ -13185,6 +13188,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_c_abi: false,
             pending_c_export: false,
             pending_repr_c: false,
+            pending_repr_align: None,
             foreign_c: false,
             debug_assertions: self.debug_assertions,
             input: buffer,
@@ -13609,6 +13613,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             pending_c_abi: false,
             pending_c_export: false,
             pending_repr_c: false,
+            pending_repr_align: None,
             foreign_c: false,
             input: tokens,
             names,
@@ -15156,15 +15161,19 @@ impl<'input, 'names> Parser<'input, 'names> {
             || (self.is("unsafe") && self.cursor.peek(1).is_some_and(|t| t.matches("extern"))))
             && !self.starts_qualified_function()
         {
-            if explicit_visibility || self.pending_c_export || self.pending_repr_c {
+            if explicit_visibility
+                || self.pending_c_export
+                || self.pending_repr_c
+                || self.pending_repr_align.is_some()
+            {
                 return Err(
                     self.unsupported("attributes or visibility on extern blocks are unsupported")
                 );
             }
             return self.c_foreign_block(module, module_path, parsed);
         }
-        if self.pending_repr_c && !self.is("struct") {
-            return Err(self.unsupported("repr(C) currently requires a struct"));
+        if (self.pending_repr_c || self.pending_repr_align.is_some()) && !self.is("struct") {
+            return Err(self.unsupported("representation attributes currently require a struct"));
         }
         if self.pending_c_export && !self.starts_qualified_function() {
             return Err(self.unsupported("no_mangle requires a free extern C function"));
@@ -15610,7 +15619,12 @@ impl<'input, 'names> Parser<'input, 'names> {
                 StructShape::Record
             };
             let declaration = parsed.program.structs.len();
+            let repr_align = self
+                .pending_repr_align
+                .take()
+                .map(|syntax| c_abi::SourceAlignment::parsed(syntax, module, name));
             parsed.program.structs.push(StructDecl {
+                repr_align,
                 shape,
                 module,
                 type_params,

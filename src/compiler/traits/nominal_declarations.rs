@@ -3,6 +3,7 @@ use super::*;
 
 #[derive(Clone, Debug)]
 pub struct NominalDeclarationSchema {
+    pub representation_alignment: Option<u128>,
     pub declaration: DeclId,
     pub env: Arc<GenericEnv>,
     pub predicates: Arc<[Predicate]>,
@@ -114,6 +115,18 @@ impl ValidatedTraitWorld {
                 "nominal declaration source binder changed",
             ));
         }
+        if let Some(alignment) = schema.representation_alignment {
+            if !alignment.is_power_of_two() || alignment > (1u128 << 29) {
+                return Err(FactsError::unproved(
+                    &self.budget,
+                    "E0589: invalid repr(align) attribute: alignment must be a power of two no larger than 2^29",
+                ));
+            }
+            return Err(FactsError::unsupported(
+                &self.budget,
+                "unsupported: repr(align) layout is not implemented",
+            ));
+        }
         for predicate in schema.predicates.iter() {
             self.validate_predicate_metadata(predicate, &schema.env)?;
         }
@@ -209,7 +222,8 @@ impl ValidatedTraitWorld {
             ));
         }
         let expected = self.nominal_declaration_wellformed(declaration)?;
-        if !self.same_env(&proof.schema.env, &expected.schema.env)?
+        if proof.schema.representation_alignment != expected.schema.representation_alignment
+            || !self.same_env(&proof.schema.env, &expected.schema.env)?
             || proof.schema.predicates.len() != expected.schema.predicates.len()
             || proof.schema.projections.len() != expected.schema.projections.len()
             || proof.schema.defaults.len() != expected.schema.defaults.len()
@@ -321,6 +335,101 @@ mod tests {
         let source = crate::compiler::frontend::parse("trait Base<A,B>{type Item;}trait Sub<A,B>:Base<A,B>{}struct Direct<T:Base<i32,bool>>{value:<T as Base<i32,bool>>::Item}struct Inherited<T:Sub<i32,bool>>{value:<T as Base<i32,bool>>::Item}fn main(){}").unwrap();
         crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
             .unwrap()
+    }
+
+    #[test]
+    fn nominal_representation_alignment_proof_replay_rejects_injected_and_changed_fields() {
+        let source = crate::compiler::frontend::parse("struct Plain{value:u8}fn main(){}").unwrap();
+        let plan =
+            crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
+                .unwrap();
+        let world = plan.trait_world().unwrap();
+        let declaration = plan.nominal_declaration(0).unwrap();
+        let issued = world.nominal_declaration_wellformed(declaration).unwrap();
+        assert_eq!(issued.schema.representation_alignment, None);
+        world
+            .replay_nominal_declaration(declaration, &issued)
+            .unwrap();
+
+        let mut injected = issued.clone();
+        injected.schema.representation_alignment = Some(3);
+        let error = world
+            .replay_nominal_declaration(declaration, &injected)
+            .unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+        assert!(error.to_string().contains("omitted or changed source rows"));
+
+        let mut changed = injected;
+        changed.schema.representation_alignment = Some(8);
+        let error = world
+            .replay_nominal_declaration(declaration, &changed)
+            .unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::InvalidMetadata);
+        assert!(error.to_string().contains("omitted or changed source rows"));
+
+        // Restoring the genuinely issued plain schema is valid. There is no
+        // required alignment to omit from an authentic plain declaration.
+        changed.schema.representation_alignment = None;
+        world
+            .replay_nominal_declaration(declaration, &changed)
+            .unwrap();
+        world
+            .replay_nominal_declaration(declaration, &issued)
+            .unwrap();
+    }
+
+    #[test]
+    fn nominal_representation_alignment_proof_replay_rejects_omitted_source_alignment() {
+        let source = crate::compiler::frontend::parse(
+            "struct Plain{value:u8}#[repr(align(3))]struct Invalid{value:u8}#[repr(align(8))]struct Unsupported{value:u8}fn main(){}",
+        ).unwrap();
+        let plan =
+            crate::compiler::frontend::PlanCtx::from_program(&source, &ir::PlanBudget::default())
+                .unwrap();
+        let world = plan.trait_world().unwrap();
+        let plain = plan.nominal_declaration(0).unwrap();
+        let issued = world.nominal_declaration_wellformed(plain).unwrap();
+        world.replay_nominal_declaration(plain, &issued).unwrap();
+
+        for (index, alignment, kind, diagnostic) in [
+            (1, 3, FactsErrorKind::Unproved, "E0589"),
+            (
+                2,
+                8,
+                FactsErrorKind::Unsupported,
+                "unsupported: repr(align) layout",
+            ),
+        ] {
+            let declaration = plan.nominal_declaration(index).unwrap();
+            let authentic = world
+                .schema
+                .nominal_declaration_schema(declaration)
+                .unwrap();
+            assert_eq!(authentic.declaration, declaration);
+            assert_eq!(authentic.representation_alignment, Some(alignment));
+            let error = world
+                .nominal_declaration_wellformed(declaration)
+                .unwrap_err();
+            assert_eq!(error.kind(), kind);
+            assert!(error.to_string().contains(diagnostic));
+
+            // Aligned proofs cannot genuinely issue in this bounded milestone.
+            // Exercise the accessible same-world replay seam using an otherwise
+            // issued plain proof with the authentic target schema. Only its
+            // representation row is then omitted or changed. Re-derivation of
+            // the original source, not the forged value, must reject admission.
+            for replacement in [None, Some(4), Some(16)] {
+                let mut forged = issued.clone();
+                forged.schema = authentic.clone();
+                forged.schema.representation_alignment = replacement;
+                let error = world
+                    .replay_nominal_declaration(declaration, &forged)
+                    .unwrap_err();
+                assert_eq!(error.kind(), kind, "replacement={replacement:?}");
+                assert!(error.to_string().contains(diagnostic), "{error}");
+            }
+        }
+        world.replay_nominal_declaration(plain, &issued).unwrap();
     }
 
     #[test]

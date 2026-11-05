@@ -25,6 +25,147 @@ fn stock(source: &str, tag: &str) -> (std::path::PathBuf, std::process::Output) 
 }
 
 #[test]
+fn representation_alignment_invalid_unused_declarations_are_semantic() {
+    for (tag, source) in [
+        (
+            "zero",
+            "#[repr(align(0))] struct Record { value:u8 } fn main(){}",
+        ),
+        (
+            "non-power",
+            "#[repr(align(3))] struct Record { value:u8 } fn main(){}",
+        ),
+        (
+            "too-large",
+            "#[repr(align(1073741824))] struct Record { value:u8 } fn main(){}",
+        ),
+        (
+            "nested-unused",
+            "mod hidden { #[repr(align(3))] pub struct Record { value:u8 } } fn main(){}",
+        ),
+        (
+            "tuple-unused",
+            "#[repr(align(3))] struct Record(u8); fn main(){}",
+        ),
+        (
+            "unit-unused",
+            "#[repr(align(3))] struct Record; fn main(){}",
+        ),
+        (
+            "used",
+            r#"#[repr(align(3))] struct Record { value:u8 } fn main(){let record=Record{value:7u8};println!("{}",record.value);}"#,
+        ),
+    ] {
+        let (root, output) = stock(source, tag);
+        assert!(!output.status.success(), "stock accepted {tag}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("E0589"),
+            "{tag}: {output:?}"
+        );
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = compiler::compile_observed(source.into(), workers, check)
+                    .err()
+                    .expect("representation must be rejected");
+                assert!(
+                    failure.to_string().contains("E0589"),
+                    "{tag} workers={workers} CHECK={check}: {failure}"
+                );
+                let report = failure.report.unwrap();
+                assert!(report.capture_complete);
+                assert!(
+                    report.published_kind(121),
+                    "original source syntax was not published"
+                );
+                assert!(
+                    report.published_kind(101),
+                    "declarations were not published"
+                );
+                assert!(
+                    report
+                        .node_evaluations
+                        .iter()
+                        .any(|(key, _)| key.kind == 138 && key.params.len() == 2)
+                );
+                assert!(
+                    !report.published_kind(105),
+                    "invalid layout published build success"
+                );
+                if check {
+                    assert!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+                        "CHECK demanded code generation"
+                    );
+                }
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn representation_alignment_valid_syntax_stays_explicitly_unsupported() {
+    for (tag, source) in [
+        (
+            "one",
+            "#[repr(align(1))] struct Record { value:u8 } fn main(){}",
+        ),
+        (
+            "normal",
+            "#[repr(align(8))] struct Record { value:u8 } fn main(){}",
+        ),
+        (
+            "maximum",
+            "#[repr(align(536870912))] struct Record { value:u8 } fn main(){}",
+        ),
+        (
+            "trailing",
+            "#[repr(align(8,),)] struct Record { value:u8 } fn main(){}",
+        ),
+    ] {
+        let (root, output) = stock(source, tag);
+        assert!(output.status.success(), "{tag}: {output:?}");
+        assert!(Command::new(root.join("stock")).status().unwrap().success());
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = compiler::compile_observed(source.into(), workers, check)
+                    .err()
+                    .expect("representation must be rejected");
+                assert!(
+                    failure
+                        .to_string()
+                        .contains("unsupported: repr(align) layout"),
+                    "{tag}: {failure}"
+                );
+                assert!(
+                    !failure.to_string().contains("E0589"),
+                    "valid alignment was mislabeled invalid"
+                );
+                let report = failure.report.unwrap();
+                assert!(report.published_kind(121) && report.published_kind(101));
+                assert!(!report.published_kind(105));
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn representation_alignment_canonical_unattributed_and_c_controls_match_stock() {
+    physical_matches_stock(
+        r#"struct Record{value:u8}fn main(){let record=Record{value:7u8};assert_eq!(std::mem::align_of::<Record>(),1usize);println!("{}",record.value);}"#,
+        "repr-default-control",
+    );
+    physical_matches_stock(
+        r#"#[repr(C)]struct Record{value:u8}fn main(){let record=Record{value:7u8};println!("{}",record.value);}"#,
+        "repr-c-control",
+    );
+}
+
+#[test]
 fn private_vec_element_storage_matches_stock() {
     physical_matches_stock(
         r#"
@@ -457,10 +598,10 @@ fn target_alignment_unknown_layouts_fail_explicitly_instead_of_using_private_sto
                     .expect("invalid or unsupported alignment must be rejected")
                     .to_string();
                 if tag == "overaligned" {
-                    // The attribute parser rejects this spelling before a layout query
-                    // can be issued. This is an ingress boundary, not layout support.
+                    // Original syntax is published, but valid over-aligned storage
+                    // remains unsupported until its layout is implemented.
                     assert!(
-                        error.contains("expected attribute identifier"),
+                        error.contains("unsupported: repr(align) layout"),
                         "{tag}: {error}"
                     );
                 } else {

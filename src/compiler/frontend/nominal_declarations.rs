@@ -70,6 +70,16 @@ impl SchemaAdapter {
             }
             _ => return Err("nominal declaration proof requires a struct or enum".into()),
         };
+        let representation_alignment = if info.kind == ir::DeclKind::Struct {
+            let source = &self.program.structs[info.source_index];
+            source
+                .repr_align
+                .as_ref()
+                .map(|alignment| alignment.value(self.program.names.as_ref(), source))
+                .transpose()?
+        } else {
+            None
+        };
         let args = symbolic_args(&info.param_env, &self.budget)?;
         let env = Arc::new(ir::GenericEnv::new(
             std::slice::from_ref(&info.param_env),
@@ -211,6 +221,7 @@ impl SchemaAdapter {
                 walk_depth_inspecting(DepthNode::Type(field), None, None, Some(&mut inspect))?;
             }
             Ok(tr::NominalDeclarationSchema {
+                representation_alignment,
                 declaration,
                 env,
                 predicates: predicates.into(),
