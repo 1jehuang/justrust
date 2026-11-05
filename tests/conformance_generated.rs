@@ -177,12 +177,8 @@ probes!(false;
     valid_08 = 8, valid_09 = 9, valid_10 = 10, valid_11 = 11,
     valid_12 = 12, valid_13 = 13, valid_14 = 14,
 );
-// This newly added source is stock-valid but native CHECK currently rejects it
-// with "contract: nested index place projection". The progress driver always
-// uses --include-ignored, so this remains a FAILED compatibility obligation,
-// never a passing unsupported-boundary test. Keep the original source unchanged.
+// Retain the original source and strict worker-1/8 CHECK/BUILD/run oracle.
 #[test]
-#[ignore = "known native gap: owned move closure with shared tuple-field origin"]
 fn valid_15() {
     probe(15, false);
 }

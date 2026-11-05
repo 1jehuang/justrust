@@ -3,6 +3,46 @@
 use justrust_engine::compiler;
 
 #[test]
+fn moved_reference_and_guard_keep_per_callable_graph_checks() {
+    let source = "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){println!(\"drop {}\",self.n);}}fn main(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};println!(\"{}\",f());println!(\"{}\",pair.1);}";
+    // BUILD may additionally demand destructor glue analysis. Compare each
+    // root's independently keyed checks across workers, not across roots.
+    let mut previous = std::collections::BTreeMap::new();
+    for workers in [1, 8] {
+        for check_only in [true, false] {
+            let compiled = compiler::compile(source.into(), workers, check_only).unwrap();
+            let keys: std::collections::BTreeSet<_> = compiled
+                .report
+                .node_evaluations
+                .iter()
+                .filter(|(key, _)| matches!(key.kind, 110 | 112))
+                .map(|(key, count)| {
+                    assert_eq!(*count, 1);
+                    assert!(!key.params.is_empty());
+                    (key.kind, key.params.clone())
+                })
+                .collect();
+            for kind in [110, 112] {
+                assert!(keys.iter().filter(|(actual, _)| *actual == kind).count() >= 3);
+            }
+            if check_only {
+                assert!(
+                    compiled
+                        .report
+                        .node_evaluations
+                        .iter()
+                        .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130))
+                );
+                assert!(compiled.executable.is_none());
+            }
+            if let Some(previous) = previous.insert(check_only, keys.clone()) {
+                assert_eq!(keys, previous);
+            }
+        }
+    }
+}
+
+#[test]
 fn mutable_captures_keep_independent_checked_bodies_and_immutable_facts() {
     let source = "fn run(mut n:i32,m:i32)->i32{let x=(||->i32{let old=n;n+=m;old+n})();x+(||->i32{n+=1;n})()}fn main(){assert_eq!(run(1,2),8);}";
     let mut previous = None;

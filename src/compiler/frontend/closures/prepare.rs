@@ -187,6 +187,9 @@ impl Checker<'_> {
             &candidate_indices,
             child.facts(),
         )?;
+        if by_move {
+            capture_use::by_value(&mut uses);
+        }
         if self.names()?.edition().pre_2021() {
             capture_use::whole_variable(&mut uses);
         }

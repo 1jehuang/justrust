@@ -57,3 +57,72 @@ fn borrowed_capture_drop_order_matches_stock() {
         }],
     );
 }
+
+#[test]
+fn move_reference_carriers_match_stock() {
+    oracle::check(
+        "move_reference_carriers",
+        &[
+            Case {
+                name: "owned_guard_and_shared_tuple_origin",
+                source: "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){println!(\"drop {}\",self.n);}}fn main(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};println!(\"{}\",f());println!(\"{}\",pair.1);}",
+                expect: Expect::Run("drop 7\n10\n4\n"),
+            },
+            Case {
+                name: "retained_reducer_smaller_source",
+                source: "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){}}fn main(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};println!(\"{}\",f());}",
+                expect: Expect::Run("10\n"),
+            },
+            Case {
+                name: "copied_reference_keeps_original_target",
+                source: "fn main(){let a=3i32;let b=9i32;let mut r=&a;let f=move||*r;r=&b;assert_eq!(f(),3);assert_eq!(*r,9);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "shared_carrier_merges_disjoint_pointee_fields",
+                source: "fn main(){let pair=(3i32,4i32);let r=&pair;let f=move||(*r).0+(*r).1;assert_eq!(f(),7);assert_eq!(f(),7);assert_eq!(pair.1,4);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "mutable_carrier_merges_read_and_write",
+                source: "fn main(){let mut pair=(3i32,4i32);let r=&mut pair;let mut f=move||{(*r).0+=(*r).1;(*r).0};assert_eq!(f(),7);assert_eq!(f(),11);assert_eq!(pair.1,4);}",
+                expect: Expect::Run(""),
+            },
+            Case {
+                name: "uncalled_owned_guard_cleanup",
+                source: "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){println!(\"drop {}\",self.n);}}fn main(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};println!(\"created\");drop(f);println!(\"tail {}\",pair.1);}",
+                expect: Expect::Run("created\ndrop 7\ntail 4\n"),
+            },
+            Case {
+                name: "unused_dangling_move_reference",
+                source: "fn unused(){let f={let pair=(3i32,4i32);let r=&pair.0;move||*r};let value=f();}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0597"),
+            },
+            Case {
+                name: "unused_live_copied_reference_conflict",
+                source: "fn unused(){let mut pair=(3i32,4i32);let r=&pair.0;let f=move||*r;pair.0=9;let value=f();}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0506"),
+            },
+            Case {
+                name: "unused_mutable_carrier_moved",
+                source: "fn unused(){let mut n=3i32;let r=&mut n;let mut f=move||{*r+=1;*r};let value=*r;let result=f();}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0382"),
+            },
+            Case {
+                name: "unused_noncopy_pointee_move",
+                source: "struct Item{n:i32}fn unused(){let item=Item{n:3};let r=&item;let f=move||{let owned=*r;owned.n};let value=f();}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0507"),
+            },
+            Case {
+                name: "unused_guard_capture_reused",
+                source: "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){}}fn unused(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};drop(guard);let value=f();}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0382"),
+            },
+            Case {
+                name: "unused_fnonce_called_twice",
+                source: "struct Guard{n:i32}impl Drop for Guard{fn drop(&mut self){}}fn unused(){let pair=(3i32,4i32);let r=&pair.0;let guard=Guard{n:7};let f=move||{let value=*r+guard.n;drop(guard);value};let a=f();let b=f();}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0382"),
+            },
+        ],
+    );
+}

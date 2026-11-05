@@ -95,12 +95,17 @@ fn record(
         .count();
     place.projection.truncate(precise);
     let captures = uses.get_mut(*index).ok_or("invalid capture index")?;
+    merge_capture(captures, place, usage);
+    Ok(())
+}
+
+fn merge_capture(captures: &mut Vec<Capture>, place: ir::Place, usage: CaptureUse) {
     if let Some(existing) = captures
         .iter_mut()
         .find(|c| place.projection.starts_with(&c.place.projection))
     {
         existing.usage.merge(usage);
-        return Ok(());
+        return;
     }
     let mut combined = usage;
     captures.retain(|existing| {
@@ -115,7 +120,26 @@ fn record(
         place,
         usage: combined,
     });
-    Ok(())
+}
+
+/// A move closure owns the reference carrier, never a snapshot of its pointee.
+/// Truncation can make formerly disjoint paths overlap, so merge their uses
+/// before finalizing the environment layout and callable capability.
+pub(super) fn by_value(uses: &mut [Vec<Capture>]) {
+    for captures in uses {
+        let original = std::mem::take(captures);
+        for mut capture in original {
+            if let Some(index) = capture
+                .place
+                .projection
+                .iter()
+                .position(|step| matches!(step, ir::Projection::Deref))
+            {
+                capture.place.projection.truncate(index);
+            }
+            merge_capture(captures, capture.place, capture.usage);
+        }
+    }
 }
 
 fn binding_use(

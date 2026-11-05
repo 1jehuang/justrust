@@ -1,5 +1,80 @@
 use super::*;
 
+#[test]
+fn move_reference_capture_retains_carrier_and_rejects_forged_pointee() {
+    let program =
+        parse("fn main(){let pair=(3i32,4i32);let r=&pair;let f=move||(*r).0+(*r).1;}").unwrap();
+    let budget = ir::PlanBudget::default();
+    let plan = PlanCtx::from_program(&program, &budget).unwrap();
+    let (provider, owner) = (0..plan.callable_count())
+        .find_map(|index| {
+            let provider = plan.callable_decl(index).ok()?;
+            plan.stored_closure_owner(provider)
+                .ok()
+                .flatten()
+                .map(|(owner, _)| (provider, owner))
+        })
+        .unwrap();
+    let (_, bodies) =
+        type_check::type_callable_source_and_closures(&program, owner, &plan, &budget, None)
+            .unwrap();
+    let original = bodies
+        .iter()
+        .find(|body| body.ty.provider() == provider)
+        .unwrap();
+    let [capture] = original.ty.captures() else {
+        panic!("disjoint pointee fields must share one reference carrier")
+    };
+    assert!(matches!(
+        capture,
+        ir::Ty::Ref {
+            kind: ir::BorrowKind::Shared,
+            ..
+        }
+    ));
+    let [source] = original.ty.sources() else {
+        panic!("one carrier source")
+    };
+    assert_eq!(source.kind, ir::CaptureKind::Value);
+    assert!(source.place.projection.is_empty());
+    let target = |ty: Arc<ir::ClosureTy>| ir::CallTarget {
+        declaration: provider,
+        type_args: Arc::from([
+            ir::Ty::Closure(ty),
+            ir::Ty::Unit,
+            original.ty.result().clone(),
+        ]),
+    };
+    plan.validate_closure_instance(original, &target(original.ty.clone()))
+        .unwrap();
+    let mut changed_source = source.clone();
+    changed_source.place.projection.push(ir::Projection::Deref);
+    let forged = Arc::new(
+        (*original.ty)
+            .clone()
+            .with_sources(Arc::from([changed_source])),
+    );
+    assert!(
+        plan.validate_closure_instance(original, &target(forged))
+            .is_err()
+    );
+    let forged = Arc::new(
+        original
+            .ty
+            .try_map::<String>(|ty| {
+                Ok(match ty {
+                    ir::Ty::Ref { referent, .. } => referent.as_ref().clone(),
+                    _ => ty.clone(),
+                })
+            })
+            .unwrap(),
+    );
+    assert!(
+        plan.validate_closure_instance(original, &target(forged))
+            .is_err()
+    );
+}
+
 #[path = "shape_tests.rs"]
 mod membership_audit;
 
