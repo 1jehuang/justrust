@@ -621,6 +621,20 @@ one field. Evaluation order, ownership, Drop, privacy and unsafe reads retain
 their linked contracts. These source-only proposals remain unreviewed with no
 semantic, executable or completion credit and do not establish struct support.
 
+Use `--profile blocks` with `generate` or `validate` for all forty-three labels
+on the pinned block-expression page. Final operands differ from semicolon
+statements, and never-without-tail differs from an explicit unreachable unit
+tail. All reachable paths and unread never places matter; the nightly
+`never_type` illustration is not stable eligibility. Async construction is not
+polling, promises no layout or executor, and confines return, `?`, break and
+continue to its boundary under linked contracts. Executed inline consts must
+be evaluated even if ignored; nonexecuted consts may or may not evaluate,
+without a required dead-panic outcome. In-scope generics are allowed unlike
+free constant items. Unsafe does not bypass validation. Inner attributes have
+only the listed contexts, with linked cfg and lint requirements. These bounded
+source-only proposals remain unreviewed with no execution, completion or
+compiler-support credit. Full Rust compatibility remains incomplete.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching

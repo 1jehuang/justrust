@@ -24,8 +24,8 @@ SELECTED = ('src/tokens.md',)
 CLASSES = set(CLASS_NAMES.values())
 TOP_FIELDS = {'schema_version','review_status','purpose','scope','bindings','selected_pages','rows','unselected_rules','counts','limitations'}
 ROW_FIELDS = {'id','page','rule','line','end_line','source_block_sha256','classifications','rationale','candidate_obligation_ids','relationship','missing_test_needs','review_status'}
-PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14))
-SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,), 'operators': (112,), 'closures': (17,), 'calls': (11, 12), 'aggregates': (22, 16), 'fields': (8,), 'literals': (87,), 'grouped': (6,), 'transfers': (5, 9), 'ranges': (5, 5), 'structs': (14,)}
+PROPOSAL_COUNTS = (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43))
+SOURCE_ONLY_PAGE_COUNTS = {'unsafe': (16, 11), 'abi': (24,), 'visibility': (18,), 'branching': (19, 34, 5), 'destructors': (50,), 'loops': (60,), 'operators': (112,), 'closures': (17,), 'calls': (11, 12), 'aggregates': (22, 16), 'fields': (8,), 'literals': (87,), 'grouped': (6,), 'transfers': (5, 9), 'ranges': (5, 5), 'structs': (14,), 'blocks': (43,)}
 
 
 def digest(data):
@@ -69,8 +69,10 @@ def source_only_proposals(profile):
         import transfers_reconciliation_proposals as proposals
     elif profile == 'ranges':
         import ranges_reconciliation_proposals as proposals
-    else:
+    elif profile == 'structs':
         import structs_reconciliation_proposals as proposals
+    else:
+        import blocks_reconciliation_proposals as proposals
     return proposals
 
 
@@ -96,7 +98,7 @@ def proposal_row_id(label, profile):
     # expr.loop.break-label and expr.loop.break.label. A lossy slug merges them.
     # Use reversible UTF-8 bytes for newer profiles, without changing
     # previously published profile artifact identities or canonical bytes.
-    if profile in ('loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs'):
+    if profile in ('loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks'):
         return 'reconcile-' + profile + '-' + label.encode('utf-8').hex()
     return 'reconcile-' + re.sub('[^a-z0-9]+', '-', label)
 
