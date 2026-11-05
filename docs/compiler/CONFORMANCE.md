@@ -612,6 +612,15 @@ assignees are not wildcard patterns or arbitrary expression values. Iterator,
 indexing, ownership, temporary destruction and lint contracts remain linked
 obligations. All proposals remain unreviewed with no executable credit.
 
+Use `--profile structs` with `generate` or `validate` for all fourteen labels
+on the pinned struct-expression page. Brace type-namespace construction is
+distinct from tuple value-constructor calls and unit value paths. Functional
+update is struct-only, requires the same type and visibility of every field,
+and transfers only omitted base fields. Union construction requires exactly
+one field. Evaluation order, ownership, Drop, privacy and unsafe reads retain
+their linked contracts. These source-only proposals remain unreviewed with no
+semantic, executable or completion credit and do not establish struct support.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
