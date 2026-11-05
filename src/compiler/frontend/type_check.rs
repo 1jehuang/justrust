@@ -5542,6 +5542,9 @@ impl<'a> Checker<'a> {
         ty: &ir::Ty,
         field: &FieldSelector,
     ) -> Result<(usize, ir::Ty), String> {
+        if let FieldSelector::InvalidTuple(occurrence) = field {
+            return Err(occurrence.rejection(self.names()?)?);
+        }
         if matches!(ty, ir::Ty::Ref { .. }) {
             return Err("implicit reference autodereference is unsupported in B1; use an explicit (*r) place".into());
         }
@@ -12397,7 +12400,9 @@ impl<'a> Checker<'a> {
                 if fields.iter().any(|(selector, _)| {
                     matches!(
                         selector,
-                        FieldSelector::Deref | FieldSelector::ConstantIndex(_)
+                        FieldSelector::Deref
+                            | FieldSelector::ConstantIndex(_)
+                            | FieldSelector::InvalidTuple(_)
                     )
                 }) {
                     return Err("unsupported constructor inference selector".into());
@@ -12409,7 +12414,9 @@ impl<'a> Checker<'a> {
                             match selector {
                                 FieldSelector::Named(name) => InferField::Named(name),
                                 FieldSelector::Tuple(index) => InferField::Tuple(*index),
-                                FieldSelector::Deref | FieldSelector::ConstantIndex(_) => {
+                                FieldSelector::Deref
+                                | FieldSelector::ConstantIndex(_)
+                                | FieldSelector::InvalidTuple(_) => {
                                     unreachable!("constructor fields are named or tuple selectors")
                                 }
                             },

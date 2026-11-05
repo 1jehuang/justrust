@@ -9596,7 +9596,57 @@ pub enum FieldSelector {
     Deref,
     ConstantIndex(usize),
     Tuple(usize),
+    /// A real numeric occurrence that cannot name a positional field.
+    InvalidTuple(SourceInvalidTupleField),
     Named(AstIdent),
+}
+/// Original token authority, not a normalized index or a fabricated identifier.
+/// Only the source parser can issue this certificate. The original spelling is
+/// borrowed from the sealed source snapshot whenever it is validated or used.
+#[derive(Clone, Debug)]
+pub struct SourceInvalidTupleField {
+    span: super::expansion_span::SpanId,
+}
+impl SourceInvalidTupleField {
+    fn spelling<'a>(&self, names: &'a impl NameAccess) -> Result<&'a str, String> {
+        let session = names.session();
+        let data = session
+            .span(self.span)
+            .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        let super::expansion_span::SpanOrigin::Original(original) = data.origin else {
+            return Err("contract: tuple field requires original token provenance".into());
+        };
+        if data.expansion.is_some() || data.context != session.root_context() {
+            return Err("contract: tuple field requires original root context".into());
+        }
+        let source = session.sources();
+        let range = source
+            .render_span(original)
+            .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        let text = source
+            .text(original.file())
+            .map_err(|e| super::source::SourceError::from_token(e).to_string())?;
+        let spelling = text
+            .get(range.lo as usize..range.hi as usize)
+            .ok_or("contract: invalid tuple field source range")?;
+        names
+            .budget()
+            .charge(
+                super::expansion_budget::Counter::Work,
+                spelling.len() as u64,
+            )
+            .map_err(|e| super::source::SourceError::from_token(e.into()).to_string())?;
+        if spelling.len() < 2
+            || !spelling.starts_with('0')
+            || !spelling.bytes().all(|c| c.is_ascii_digit())
+        {
+            return Err("contract: invalid noncanonical tuple field certificate".into());
+        }
+        Ok(spelling)
+    }
+    fn rejection(&self, names: &impl NameAccess) -> Result<String, String> {
+        Ok(format!("unknown tuple field `{}`", self.spelling(names)?))
+    }
 }
 /// Structured source path. Arguments belong to their declaration segment.
 #[derive(Clone, Debug)]
@@ -17420,19 +17470,33 @@ impl<'input, 'names> Parser<'input, 'names> {
         Ok({
             let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
                 let token = self.token();
-                if token.string
-                    || !token.text.bytes().all(|c| c.is_ascii_digit())
-                    || (token.text.len() > 1 && token.text.starts_with('0'))
-                {
+                if token.string || !token.text.bytes().all(|c| c.is_ascii_digit()) {
                     return Err(self
                         .error("tuple field index must be a canonical unsigned decimal integer"));
                 }
-                let index = token
-                    .text
-                    .parse::<usize>()
-                    .map_err(|_| self.error("tuple field index is out of range"))?;
+                let field = if token.text.len() > 1 && token.text.starts_with('0') {
+                    if token.provenance == TokenProvenance::Expanded {
+                        return Err(
+                            self.unsupported("expanded noncanonical tuple fields are unsupported")
+                        );
+                    }
+                    let occurrence = SourceInvalidTupleField { span: token.span };
+                    let spelling = occurrence
+                        .spelling(self.names)
+                        .map_err(|message| self.error(&message))?;
+                    if spelling != token.text {
+                        return Err(self.error("contract: tuple field token/source mismatch"));
+                    }
+                    FieldSelector::InvalidTuple(occurrence)
+                } else {
+                    let index = token
+                        .text
+                        .parse::<usize>()
+                        .map_err(|_| self.error("tuple field index is out of range"))?;
+                    FieldSelector::Tuple(index)
+                };
                 self.cursor.bump();
-                FieldSelector::Tuple(index)
+                field
             } else {
                 FieldSelector::Named(self.ident()?)
             };

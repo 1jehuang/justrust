@@ -2148,6 +2148,9 @@ impl<'s> Solver<'_, '_, 's> {
         Ok(())
     }
     fn project(&mut self, base: Term, field: &FieldSelector) -> Result<Option<Term>, String> {
+        if let FieldSelector::InvalidTuple(occurrence) = field {
+            return Err(occurrence.rejection(self.checker.names()?)?);
+        }
         // Autoderef belongs to field/index lookup. An explicit Deref must
         // consume exactly its reference or pointer layer, not the referent.
         let base = if matches!(field, FieldSelector::Deref) {

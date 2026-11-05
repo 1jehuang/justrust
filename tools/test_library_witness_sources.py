@@ -58,7 +58,8 @@ class LibraryWitnessSources(unittest.TestCase):
             self.assertTrue(link['rationale'])
             self.assertTrue(link['limitations'])
             self.assertEqual(link['source_file'], witness.FIXTURE)
-            self.assertTrue(1086 <= link['selector_line'] <= 1225)
+            expected_lines = (1154, 1182, 1200, 1226, 1246, 1276)
+            self.assertEqual(link['selector_line'], expected_lines[witness.ROWS.index(row)])
             self.assertEqual(len(link['selector_body_sha256']), 64)
 
     def test_no_execution_review_completion_or_denominator(self):

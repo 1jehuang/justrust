@@ -968,9 +968,8 @@ fn main() {}
     );
 }
 
-// Exact original-source token-rule obligations. Passing witnesses are ordinary
-// regressions. The remaining ignored semantic-stage gap is still executed by
-// the compatibility tracker with --include-ignored.
+// Exact original-source token-rule obligations. Each ordinary regression keeps
+// its pinned stock oracle and strict native phase evidence.
 #[test]
 fn token_suffix_literal_and_tt_macro_consumption_source() {
     oracle::check(
@@ -1063,7 +1062,6 @@ fn main() {}
 }
 
 #[test]
-#[ignore = "pending exact token-rule oracle obligation, unmeasured"]
 fn token_unused_tuple_leading_zero_field_error_source() {
     oracle::check(
         "token-unused-tuple-leading-zero-field-error-source",
@@ -1078,6 +1076,76 @@ fn main() {}
             expect: Expect::InvalidAfterParse("E0609"),
         }],
     );
+}
+
+// Native staging regression, deliberately separate from the unchanged pinned
+// stock obligation above. Passing this test alone is not stock acceptance.
+#[test]
+fn tuple_noncanonical_field_retains_semantic_source_facts() {
+    use justrust_engine::compiler;
+    for field in [
+        "00",
+        "01",
+        "0001",
+        "000000000000000000000000000000000000001",
+        "0.01",
+    ] {
+        let pair = if field == "0.01" {
+            "((11i32,29i32),37i32)"
+        } else {
+            "(11i32,29i32)"
+        };
+        let source = format!("fn unused(){{let pair={pair};let _=pair.{field};}}fn main(){{}}");
+        let invalid = field.rsplit('.').next().unwrap();
+        for workers in [1, 8] {
+            for check in [true, false] {
+                let failure = compiler::compile_observed(source.clone(), workers, check)
+                    .err()
+                    .expect("noncanonical spelling cannot select a tuple field");
+                oracle::validate_semantic_rejection(&failure).unwrap();
+                assert!(
+                    failure
+                        .error
+                        .0
+                        .contains(&format!("unknown tuple field `{invalid}`")),
+                    "{}",
+                    failure.error.0
+                );
+                let report = failure.report.as_ref().unwrap();
+                if check {
+                    assert!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| ![103, 105, 130, 131, 133].contains(&key.kind))
+                    );
+                }
+                assert!(
+                    report
+                        .node_ids
+                        .iter()
+                        .zip(&report.node_evaluations)
+                        .filter(|(_, (key, _))| key.kind == 105)
+                        .all(|(node, _)| !report
+                            .events
+                            .iter()
+                            .any(|event| event.kind == "publish" && event.node == Some(*node)))
+                );
+            }
+        }
+    }
+    // The canonical selectors remain successful in CHECK and BUILD. The
+    // existing differential tuple corpus exercises their executable behavior.
+    for workers in [1, 8] {
+        for check in [true, false] {
+            compiler::compile_observed(
+                "fn main(){let pair=(11i32,29i32);println!(\"{} {}\",pair.0,pair.1);}".into(),
+                workers,
+                check,
+            )
+            .unwrap();
+        }
+    }
 }
 
 // Independent exact original-source library regressions. These bounded

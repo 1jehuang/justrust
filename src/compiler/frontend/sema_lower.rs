@@ -372,6 +372,7 @@ impl<'a> Lower<'a> {
 
     fn project(&mut self, base: h::ExprId, f: &FieldSelector) -> R<h::ExprId> {
         Ok(match f {
+            FieldSelector::InvalidTuple(_) => return un("invalid tuple field cannot be lowered"),
             FieldSelector::Deref => self.push(h::HirExpr::Unary(h::UnOp::Deref, base)),
             FieldSelector::Tuple(i) => self.push(h::HirExpr::TupleField {
                 base,

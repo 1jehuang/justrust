@@ -62,7 +62,14 @@ pub(super) fn region_eq(
 impl FieldSelector {
     pub fn semantic_eq(&self, other: &Self, names: &impl NameAccess) -> Result<bool, String> {
         work(names, 1)?;
+        if let Self::InvalidTuple(occurrence) = self {
+            occurrence.spelling(names)?;
+        }
+        if let Self::InvalidTuple(occurrence) = other {
+            occurrence.spelling(names)?;
+        }
         match (self, other) {
+            (Self::InvalidTuple(a), Self::InvalidTuple(b)) => Ok(a.span == b.span),
             (Self::Named(a), Self::Named(b)) => ident_eq(names, *a, *b, LookupClass::Member),
             (Self::Named(a), _) | (_, Self::Named(a)) => {
                 names.check(*a).map_err(native_adapter::name_diagnostic)?;

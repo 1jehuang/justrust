@@ -21,12 +21,12 @@ CLASS_NAMES = {'N':'normative-semantic','G':'grammar','I':'index','X':'cross-ref
 # authored from token-six-oracles.mapping.json, not inferred from test titles.
 # Old mapping fixture hashes and authored program hashes are deliberately absent.
 WITNESS_SOURCE_CONTRACT = {
-    'base_commit': 'b16e1858cb60de4a2b1faddf6572709fe72ff777',
+    'base_commit': '5c3f0f2836b80087e8f8dad05e20a4549ef60019',
     'reference_commit': '86635e30bf861a038dc197d7e16fd09e7e514e7a',
     'rule_index_sha256': '1effa762db774710eced1a7b7e74354163e5e6156a0d90c992ca3300cccc5c85',
     'candidate_inventory_sha256': '29e61520b930ee3f15ae005e79e70223e095901fc0f286ac61c82613e2f47a0c',
     'files': {
-        'tests/conformance_generated.rs': 'cb2a7adfc7789a01337c891994b2e75c9e861905e4b4cad17bfcc62e0d8fe4c5',
+        'tests/conformance_generated.rs': '9b4ac7733b59d65e288759fbc6f7f47521563fb55edc43c388807b8238761337',
         'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
         'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
         'data/compiler-compatibility-scope.json': '88afac0397deb6ae82dd586c166f81ec1316c14a22c716d98a774d87b07b3f59',
@@ -63,7 +63,7 @@ DIRECT_WITNESSES = (
      ('lex.token.literal.int.tuple-field.syntax', 'lex.token.literal.int.tuple-field.eq'),
      ('int', 'tuple'),
      'Tuple projection .01 is admitted as an integer-shaped index but must not normalize to canonical field 1. Intended unused-body rejection is E0609 after parsing.',
-     'Known ignored case remains linked, not passed. No forbidden suffixes, malformed radix digits or broader field/move rules are covered.'),
+     'Source attribution alone is not a passing observation. No forbidden suffixes, malformed radix digits or broader field/move rules are covered.'),
 )
 ROWS = r'''
 lex.token|I|The block is only the chapter heading and adds no standalone acceptance rule.|lit pun|Review chapter routing without executable credit.|No standalone rejection obligation follows from this heading.|Check all subordinate token sections remain represented.

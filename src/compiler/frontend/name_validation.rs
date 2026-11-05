@@ -8,6 +8,147 @@ use crate::compiler::semantic_scope::{
 };
 use crate::compiler::token_session::{BudgetVec, TokenError};
 
+#[cfg(test)]
+mod invalid_tuple_source_tests {
+    use super::*;
+
+    #[test]
+    fn invalid_tuple_certificate_rejects_canonical_whole_spelling_and_synthetic_origin() {
+        use crate::compiler::expansion_span::SyntheticReason;
+        use crate::compiler::token::Edition;
+        use crate::compiler::token_session::{SourceSnapshot, TokenSession};
+        let budget = super::super::super::expansion_budget::ExpansionBudget::default();
+        let snapshot = SourceSnapshot::from_text(
+            std::path::Path::new("tuple-certificate.rs"),
+            "01 0 1 x01 \"01\"",
+            &budget,
+            crate::compiler::owner_path::standalone_issued(
+                &budget,
+                crate::compiler::owner_path::OwnerDomain::SourceSnapshot,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let file = snapshot.file(0).unwrap();
+        let (mut session, cap) = TokenSession::standalone(snapshot, budget).unwrap();
+        let mut invalid = Vec::new();
+        // Full spelling is mandatory: neither an identifier ending in `01`
+        // nor a string containing those bytes is a decimal field occurrence.
+        for (lo, hi) in [(3, 4), (5, 6), (7, 10), (11, 15)] {
+            let source = session.sources().span(file, lo, hi).unwrap();
+            invalid.push(session.original_span(source).unwrap());
+        }
+        let source = session.sources().span(file, 0, 2).unwrap();
+        let anchor = session.original_span(source).unwrap();
+        let synthetic = session
+            .synthetic_span(anchor, SyntheticReason::ExpansionToken)
+            .unwrap();
+        let names = NameStoreBuilder::new(session, cap, Edition::E2024)
+            .unwrap()
+            .freeze()
+            .unwrap();
+        for span in invalid {
+            assert!(
+                SourceInvalidTupleField { span }
+                    .spelling(names.as_ref())
+                    .unwrap_err()
+                    .contains("invalid noncanonical tuple field certificate")
+            );
+        }
+        assert!(
+            SourceInvalidTupleField { span: synthetic }
+                .spelling(names.as_ref())
+                .unwrap_err()
+                .contains("original token provenance")
+        );
+    }
+
+    fn selector(program: &mut Program) -> &mut FieldSelector {
+        program.functions[0]
+            .body
+            .statements
+            .iter_mut()
+            .find_map(|statement| {
+                let value = match statement {
+                    Stmt::Let { value, .. } | Stmt::LetPattern { value, .. } => value,
+                    _ => return None,
+                };
+                match value {
+                    Expr::Field { field, .. } => Some(field),
+                    _ => None,
+                }
+            })
+            .expect("source tuple projection")
+    }
+
+    #[test]
+    fn invalid_tuple_source_occurrences_are_not_indices_or_foreign_authority() {
+        let source = "fn unused(){let pair=(11i32,29i32);let _=pair.01;}fn main(){}";
+        let mut original = parse(source).unwrap();
+        validate_program_names(&original).unwrap();
+        let field = selector(&mut original).clone();
+        let FieldSelector::InvalidTuple(occurrence) = &field else {
+            panic!("leading zero must not normalize to an integer selector")
+        };
+        assert_eq!(occurrence.spelling(original.names.as_ref()).unwrap(), "01");
+        assert!(
+            !field
+                .semantic_eq(&FieldSelector::Tuple(1), original.names.as_ref())
+                .unwrap()
+        );
+        assert!(
+            !FieldSelector::Tuple(1)
+                .semantic_eq(&field, original.names.as_ref())
+                .unwrap()
+        );
+        assert!(field.semantic_eq(&field, original.names.as_ref()).unwrap());
+        let repeated_source = source.replace("let _=pair.01;", "let _=pair.01;let _=pair.01;");
+        let mut repeated = parse(&repeated_source).unwrap();
+        let first = selector(&mut repeated).clone();
+        repeated.functions[0].body.statements.remove(1);
+        let second = selector(&mut repeated).clone();
+        assert!(!first.semantic_eq(&second, repeated.names.as_ref()).unwrap());
+
+        let mut independently_parsed = parse(source).unwrap();
+        assert!(
+            occurrence
+                .spelling(independently_parsed.names.as_ref())
+                .is_err()
+        );
+        *selector(&mut independently_parsed) = field.clone();
+        assert!(validate_program_names(&independently_parsed).is_err());
+        assert!(
+            field
+                .semantic_eq(
+                    &FieldSelector::Tuple(1),
+                    independently_parsed.names.as_ref()
+                )
+                .is_err()
+        );
+
+        // Even a genuine same-owner identifier span cannot certify a numeric
+        // occurrence. No spelling-based repair or fixture identifier is used.
+        let name = original.functions[0].name.segments()[0];
+        let forged = SourceInvalidTupleField {
+            span: original.names.span(name).unwrap(),
+        };
+        *selector(&mut original) = FieldSelector::InvalidTuple(forged);
+        assert!(
+            validate_program_names(&original)
+                .unwrap_err()
+                .contains("invalid noncanonical tuple field certificate")
+        );
+
+        for (spelling, index) in [("0", 0), ("1", 1)] {
+            let mut canonical = parse(&source.replace(".01", &format!(".{spelling}"))).unwrap();
+            assert!(
+                matches!(selector(&mut canonical), FieldSelector::Tuple(actual) if *actual == index)
+            );
+            validate_program_names(&canonical).unwrap();
+        }
+    }
+}
+
 fn transport(error: TokenError) -> String {
     super::super::source::SourceError::from_token(error).to_string()
 }
@@ -1382,6 +1523,9 @@ impl<'a> Validator<'a> {
                 self.many(&place.fields, Visit::Selector)?;
             }
             Visit::Selector(selector) => match selector {
+                FieldSelector::InvalidTuple(occurrence) => {
+                    occurrence.spelling(self.program.names.as_ref())?;
+                }
                 FieldSelector::Named(name) => {
                     self.push(Visit::Ident(*name, LookupClass::Member))?
                 }
