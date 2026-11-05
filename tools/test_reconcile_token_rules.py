@@ -203,9 +203,9 @@ class ProposalSummaryTests(unittest.TestCase):
     def test_standalone_without_prose_artifacts_or_root(self):
         result = self.summary()
         self.assertEqual(result['global_rule_identities'], 2965)
-        self.assertEqual(result['proposed_rule_identities'], 763)
-        self.assertEqual(result['rule_identities_without_proposals'], 2202)
-        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43)):
+        self.assertEqual(result['proposed_rule_identities'], 809)
+        self.assertEqual(result['rule_identities_without_proposals'], 2156)
+        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43), ('expression-core', 46)):
             profile = result['profiles'][name]
             self.assertEqual(profile['proposed_rule_identities'], count)
             self.assertEqual(profile['review_status'], 'unreviewed')
@@ -220,7 +220,7 @@ class ProposalSummaryTests(unittest.TestCase):
 
     def assert_backlog_matches_metadata(self, result):
         pages = self.index['pages'] + self.index['unlinked_markdown_files']
-        selected = {path for name in ('tokens', 'const-eval', 'unsafe', 'abi', 'visibility', 'branching', 'destructors', 'loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks')
+        selected = {path for name in ('tokens', 'const-eval', 'unsafe', 'abi', 'visibility', 'branching', 'destructors', 'loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks', 'expression-core')
                     for path in reconciliation.profile_inputs(name)[0]}
         proposed = {(page['path'], rule['label']) for page in pages
                     if page['path'] in selected for rule in page['rules']}
@@ -260,7 +260,7 @@ class ProposalSummaryTests(unittest.TestCase):
     def test_backlog_covers_every_pinned_page_and_exact_missing_metadata(self):
         result = self.summary()
         self.assertEqual((result['global_rule_identities'], result['proposed_rule_identities'],
-                          result['rule_identities_without_proposals']), (2965, 763, 2202))
+                          result['rule_identities_without_proposals']), (2965, 809, 2156))
         self.assert_backlog_matches_metadata(result)
         self.assertEqual(result, self.summary())
         self.assertTrue(any(not page['rules'] for page in self.index['pages']))
@@ -367,9 +367,9 @@ class ProposalSummaryTests(unittest.TestCase):
                 reconciliation, 'WITNESS_SOURCE_CONTRACT', pin):
             result = self.summary()
             self.assert_backlog_matches_metadata(result)
-            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 719)
-        self.assertEqual(result['proposed_rule_identities'], 719)
-        self.assertEqual(result['rule_identities_without_proposals'], 2246)
+            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 765)
+        self.assertEqual(result['proposed_rule_identities'], 765)
+        self.assertEqual(result['rule_identities_without_proposals'], 2200)
 
     def test_malformed_metadata_binding_counts_and_false_credit(self):
         import compatibility_inventory as inventory
@@ -498,8 +498,8 @@ class RuleBacklogQueryTests(unittest.TestCase):
         self.assertEqual(result['selected_proposed_rule_identities'], proposed)
         self.assertEqual(result['selected_rule_identities_without_proposals'], len(rows) - proposed)
         self.assertEqual(sum(row['selected_rule_identities'] for row in pages), len(rows))
-        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 763),
-                           ('rule_identities_without_proposals', 2202), ('total_pages', 122),
+        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 809),
+                           ('rule_identities_without_proposals', 2156), ('total_pages', 122),
                            ('readiness', 'review-required'), ('review_status', 'unreviewed')):
             self.assertEqual(result[key], value)
         for key in ('reviewed_rule_rows', 'completed_rule_rows', 'rows_with_exact_executable_evidence'):
@@ -541,7 +541,7 @@ class RuleBacklogQueryTests(unittest.TestCase):
     def test_missing_only_preserves_known_fully_proposed_and_zero_rule_pages(self):
         result = self.query(missing_only=True)
         self.assert_query(result, missing_only=True)
-        self.assertEqual(len(result['rows']), 2202)
+        self.assertEqual(len(result['rows']), 2156)
         self.assertEqual(len(result['pages']), 122)
         for selection in ({'page': 'src/tokens.md', 'missing_only': True},
                           {'page': 'src/SUMMARY.md'},
@@ -790,8 +790,8 @@ class RuleBacklogQueryTests(unittest.TestCase):
                 reconciliation, 'profile_inputs', side_effect=inputs):
             result = self.query(include_proposals=True)
             self.assert_proposal_query(result)
-            self.assertEqual(result['selected_proposed_rule_identities'], 763)
-            self.assertEqual(result['selected_authored_proposal_count'], 883)
+            self.assertEqual(result['selected_proposed_rule_identities'], 809)
+            self.assertEqual(result['selected_authored_proposal_count'], 929)
             result = self.query(page='src/tokens.md', include_proposals=True)
             self.assertEqual(result['selected_proposed_rule_identities'], 115)
             self.assertEqual(result['selected_authored_proposal_count'], 230)
@@ -5367,7 +5367,7 @@ class PinnedStructsProfileTests(unittest.TestCase):
                        for o in section['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('structs', 'blocks')
+        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('structs', 'blocks', 'expression-core')
                        for path in reconciliation.profile_inputs(name)[0]}
         prior = {(page['path'], rule['label'])
                  for page in index['pages'] + index['unlinked_markdown_files']
@@ -5689,7 +5689,7 @@ class PinnedBlocksProfileTests(unittest.TestCase):
                        for o in section['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name != 'blocks'
+        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('blocks', 'expression-core')
                        for path in reconciliation.profile_inputs(name)[0]}
         prior = {(page['path'], rule['label'])
                  for page in index['pages'] + index['unlinked_markdown_files']
@@ -5927,6 +5927,330 @@ class PinnedBlocksProfileTests(unittest.TestCase):
         self.assertEqual(canonical(data), expected)
         self.assertEqual(digest(canonical(data)),
                          '5fb87b17efaa5ac3d34840f9735b2499760c748ba7d9a5fa6a8909f4321f621e')
+
+
+class ExpressionCoreSourceReconciliationTests(unittest.TestCase):
+    """Independent pinned-source structural checks, not semantic execution credit."""
+    PAGE = 'src/expressions.md'
+    PAGE_HASH = 'e8dbb403137e2debda174d4add7a603c34467de1e36b473f816132a03d380480'
+    LABELS = ('expr', 'expr.syntax', 'expr.intro', 'expr.evaluation', 'expr.operands',
+              'expr.behavior', 'expr.structure', 'expr.precedence', 'expr.operand-order',
+              'expr.operand-order.default', 'expr.operand-order.operands-before-primary',
+              'expr.place-value', 'expr.place-value.intro', 'expr.place-value.place-memory-location',
+              'expr.place-value.place-expr-kinds', 'expr.place-value.value-expr-kinds',
+              'expr.place-value.value-result', 'expr.place-value.place-context',
+              'expr.place-value.assignee', 'expr.place-value.parenthesis', 'expr.move',
+              'expr.move.intro', 'expr.move.copy', 'expr.move.requires-sized',
+              'expr.move.movable-place', 'expr.move.deinitialization', 'expr.move.place-invalid',
+              'expr.mut', 'expr.mut.intro', 'expr.mut.valid-places', 'expr.temporary',
+              'expr.super-macros', 'expr.super-macros.intro', 'expr.super-macros.format_args',
+              'expr.super-macros.format_args.super-operands',
+              'expr.super-macros.format_args.super-temporaries', 'expr.super-macros.pin',
+              'expr.super-macros.pin.super-operands', 'expr.super-macros.pin.super-temporaries',
+              'expr.implicit-borrow', 'expr.implicit-borrow-intro',
+              'expr.implicit-borrow.application', 'expr.overload', 'expr.attr',
+              'expr.attr.restriction', 'expr.attr.never-before')
+    STARTS = (1, 4, 48, 51, 54, 57, 64, 70, 97, 100, 123, 145, 148, 151, 154,
+              157, 160, 163, 179, 190, 193, 196, 199, 202, 205, 213, 216, 219,
+              222, 225, 237, 242, 245, 251, 254, 266, 295, 298, 308, 320, 323,
+              339, 351, 356, 359, 367)
+    BLOCK_HASHES = (
+        '55de7ede8cbbe7cdc03be155f301808555d13b728775ae65802532b0f834281e',
+        '866a57170cb813210c570e5b9f94ec2dbb51e358680206dc419234ee266bd488',
+        '004c9613541bc0600bc8d4747cc4f056ece1c7ab77d35fe6b62857d8f9f96d12',
+        'a552f7876e883bf0aaffefcac25520b1f6e35088fa54a0b296662deccca40c32',
+        'b1288ff695d6e092fe11cb8d1e0f1329f19736429642a4e05d70b424a369a0f3',
+        'f5c32a051e8c27588b400a6cea6d19bbb9f2ed667b04cde30681325c243d4e82',
+        '54ea180f4f6912140dea8cbfa1bab8331a71252d655269223f0fa85844ac24f6',
+        '8094a34f49fb66664ee40a285ca54415e3915fab6d0814aee90818790b9eb11d',
+        'f1a4e292bb83334cd519de5d858e05b2bc4adbdc22dea153d78bc8ea5863bd60',
+        '668094cb87140392fe93d73678da19bbf6f4a4c0cd267053e4713413ab2899db',
+        'e0abb94eb9bc228c194ebbcf79c1676b1117a49536f41f625b534cb252738e38',
+        'add853ace61090f1b733384ae1929c359f5894c57e524205f650b0bb17ae1e9f',
+        '8709431a41a1d09a429adcccbf025f1aad5f9d44ea84c3cc642c7b4b948c78b5',
+        'efe6cde8151e401f88fc2adfc50e903e132ae62ce8dd2b139763d49ddf80adb6',
+        '40d6a9281ffe1f8148fbf3a4ba6021a41c5ccc0bf4fb5b1d02ff61bf50b7e8e3',
+        '00b2e7a8fac2f68554298851b91f671f3189932a226b90b37b7cbeba67e2c5d0',
+        '2f70fa99ef69419b7d68a14130fcf41a822d24b1a5437ae65d890362690830b3',
+        'aea318df0a450db9eb8d6240ba79d1cf36a9944ac6dab2be5d197321094de192',
+        '4df962ae9d600e204b0e72afbcb7ff02fe3a6f8f7e4e1161b99c4011ee64827b',
+        'da95cd8312b2b2b12a3b80a156e43ec0cbe4f18538aaaf6cf935d28d2499c1c6',
+        'b0614761e83eaf91e5da4dba00bb7c36c35aea51a038f6cf1df29b330c9c0ab6',
+        'f1d2ae1dfcc3b91e732faa72931e68d90ab6507ff2b4368051f3ba5a00dfaa1e',
+        '70116ffc341b1a2dade571a759193c4486320aafd1d215491896ece2888be5bb',
+        '7e7b47e46f3223574b18c7afb1be87a36c231cb94bd4028ee47f3c90a1d57331',
+        '90b0d523c2c4c3c5400e89b5d13ffaeb2bcd38c7bbfb4134dfd530d958d6735c',
+        'd01cb12aa1c1187ee6847f73be29d779f18160a29a26a8da140bd7627d9b44aa',
+        '9ab8035dfa683c4986aaf6b8fe43b92c0887466d2a8a40f155d49533d196b3e2',
+        '5aaa5b2333ed96010a9fdb207da90b56486f7cf710cf57d655ec6451aef98084',
+        '60cc35bbebb12c8b0724970cbb9a1bc1331c2e7323dd11813d6ae883693b8282',
+        'def7b003a10beafa3005c5303fcd1f9968d883d29cab3d2c88bf76b698c07ce8',
+        '38826e491af12ee7cf233a7c687f8d5c68f0d731ed2ed897b1ae4277a78309bb',
+        'afbed40b3539e668a817d973db53b1549cb7a7faab6ae7c70a0de4a63471ccc0',
+        'c39951cb56141d7a7f74891d438443e8e4a201948d1d7cb6fd3351dfc9b72fd5',
+        'ba8514e28e44b3688ec059ae39673554b1e9700839f43a122dc6d18ab3cc80ef',
+        '740cb330b521781b146cfe6d62e57beee4bf053081a01a1e3d6aa39c318cdd01',
+        '3eb3ba700724c2932fc53eada5c60217b9f1c1bad62331cf77f848be8a5f4711',
+        '666c7514d693c9d5a7bbbd07e6dfdf7d79adc7ac9afaddef558a9f69b740e38a',
+        '6409e5cc023e9e0232e57d48602733e5908532ed7e49d841c3feeccc0e85a204',
+        'e139fb115724062746738c6f8e9520dcea8546dfed7f58a6d5ba887c24d8c9de',
+        '15bc2b0bf31859537b0969d73ac6d903fb3c995b41a9a474f9eeea0dfecf5054',
+        '29cfb44744a50e7e31054a5d38dc7eea41ec97c42c6c4b8a3c2f237687aba01a',
+        'a89b1ad249050130fb9887e7abda14dbb54ac87ac37d6d7bbf6e8c9986be6994',
+        'e3e772c3165d7670a8bbb817a96bbb0d685a40ea205b624f912570ef3507d518',
+        '473198874a4c81dd82c85a001cfb1460fa72202b9395da784aef0d9cf37a8bd5',
+        '262c3cce95fbd19f46af464a0d815720abb6e8adb8546955264bbe29dbcb6674',
+        '8dd167cb472763188f8962969913c9e78d3368f3f81663e0ae8644bd10ef59aa',
+    )
+
+    def setUp(self):
+        source = os.environ.get('JUSTRUST_WITNESS_REFERENCE_ROOT')
+        if not source:
+            self.skipTest('set JUSTRUST_WITNESS_REFERENCE_ROOT for pinned-source structural checks')
+        self.source = Path(source)
+        repo = Path(os.environ.get('JUSTRUST_WITNESS_REPO_ROOT', BASE.parent))
+        self.index = repo / 'data/compiler-language-reference-rules.json'
+        self.inventory = repo / 'data/compiler-language-inventory.json'
+
+    def artifact(self, source=None):
+        return build(self.index, self.inventory,
+                     self.source if source is None else source, 'expression-core')
+
+    def verify(self, data, source=None):
+        return validate(data, self.index, self.inventory,
+                        self.source if source is None else source, 'expression-core')
+
+    def test_actual_aliases_pins_no_overlap_and_integrated_totals(self):
+        import expression_core_reconciliation_proposals as proposals
+        self.assertEqual(proposals.SELECTED, (self.PAGE,))
+        self.assertEqual(proposals.PAGE_SHA256, {self.PAGE: self.PAGE_HASH})
+        self.assertEqual(proposals.SOURCE_COMMIT, '86635e30bf861a038dc197d7e16fd09e7e514e7a')
+        self.assertEqual(proposals.ALIASES, {
+            'order': 'reference-expressions-operand-order',
+            'precedence': 'reference-expressions-precedence',
+            'borrow': 'reference-expressions-operator-expr-borrow-deref',
+            'assign': 'reference-expressions-operator-expr-assignments',
+            'traits': 'reference-special-types-and-traits-lang-contracts',
+            'drop': 'reference-destructors-drop-order',
+            'extend': 'reference-destructors-temporary-extension',
+            'attr': 'reference-attributes-attribute-placement',
+        })
+        obligations = {o['id'] for s in json.loads(self.inventory.read_bytes())['sections']
+                       for o in s['obligations']}
+        self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
+        index = json.loads(self.index.read_bytes())
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name != 'expression-core'
+                       for p in reconciliation.profile_inputs(name)[0]}
+        prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
+                 if p['path'] in prior_pages for r in p['rules']}
+        current = {(r['page'], r['rule']) for r in self.artifact()['rows']}
+        self.assertFalse(prior & current)
+        self.assertEqual((len(prior), len(current), len(prior | current)), (763, 46, 809))
+        summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
+        self.assertEqual((summary['proposed_rule_identities'],
+                          summary['rule_identities_without_proposals']), (809, 2156))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 814)
+        self.assertEqual(summary['profiles']['expression-core']['completed_rule_rows'], 0)
+
+    def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
+        import re
+        data = self.artifact()
+        counts = self.verify(data)
+        self.assertEqual([counts[k] for k in ('selected_rule_rows', 'unselected_rule_identities',
+                                             'global_rule_identities')], [46, 2919, 2965])
+        raw = (self.source / self.PAGE).read_bytes()
+        self.assertEqual(digest(raw), self.PAGE_HASH)
+        lines = raw.splitlines(keepends=True)
+        self.assertEqual(len(lines), 430)
+        markers = [(i, m.group(1).decode()) for i, line in enumerate(lines, 1)
+                   if (m := re.fullmatch(rb'r\[([^\]\r\n]+)\]\r?\n?', line))]
+        self.assertEqual(markers, list(zip(self.STARTS, self.LABELS)))
+        self.assertEqual(tuple(r['rule'] for r in data['rows']), self.LABELS)
+        self.assertEqual([(p['path'], p['sha256']) for p in data['selected_pages']],
+                         [(self.PAGE, self.PAGE_HASH)])
+        for i, row in enumerate(data['rows']):
+            end = self.STARTS[i + 1] - 1 if i + 1 < 46 else 430
+            with self.subTest(rule=row['rule']):
+                self.assertEqual((row['page'], row['line'], row['end_line']),
+                                 (self.PAGE, self.STARTS[i], end))
+                self.assertEqual(digest(b''.join(lines[self.STARTS[i] - 1:end])), self.BLOCK_HASHES[i])
+                self.assertEqual(row['source_block_sha256'], self.BLOCK_HASHES[i])
+                prefix = 'reconcile-expression-core-'
+                self.assertEqual(row['id'], prefix + self.LABELS[i].encode().hex())
+                self.assertEqual(bytes.fromhex(row['id'][len(prefix):]).decode(), self.LABELS[i])
+                self.assertEqual(row['review_status'], 'unreviewed')
+                self.assertEqual(len(row['missing_test_needs']), 4)
+                for need, kind in zip(row['missing_test_needs'], ('positive', 'invalid', 'interaction', 'end-to-end')):
+                    self.assertTrue(need.startswith(kind + ': Missing '))
+                self.assertIn('stable1.98.1 eligibility classification', row['missing_test_needs'][-1])
+        self.assertEqual(len({r['id'] for r in data['rows']}), 46)
+        for k in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence'):
+            self.assertEqual(counts[k], 0)
+        index = json.loads(self.index.read_bytes())
+        universe = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
+                    for r in p['rules']}
+        selected = {(r['page'], r['rule']) for r in data['rows']}
+        other = {(r['page'], r['rule']) for r in data['unselected_rules']}
+        self.assertEqual((len(selected), len(other), len(universe)), (46, 2919, 2965))
+        self.assertEqual(len(data['unselected_rules']), 2919)
+        self.assertFalse(selected & other)
+        self.assertEqual(selected | other, universe)
+        self.assertEqual(self.artifact(), data)
+
+    def test_permuted_authored_rows_preserve_canonical_order(self):
+        import expression_core_reconciliation_proposals as proposals
+        baseline = self.artifact()
+        rows = proposals.ROWS.strip().splitlines()
+        for changed in (rows[::-1], rows[7:] + rows[:7], rows[::2] + rows[1::2]):
+            with mock.patch.object(proposals, 'ROWS', '\n'.join(changed)):
+                data = self.artifact()
+                self.assertEqual(data, baseline)
+                self.assertEqual(tuple(r['rule'] for r in data['rows']), self.LABELS)
+                self.assertEqual(self.verify(data), self.verify(baseline))
+
+    def test_missing_duplicate_foreign_malformed_authored_rows_rejected(self):
+        import expression_core_reconciliation_proposals as proposals
+        valid = self.artifact()
+        rows = proposals.ROWS.strip().splitlines()
+        self.assertEqual(tuple(r.split('|')[0] for r in rows), self.LABELS)
+        cases = [rows[5:], rows[:5], rows[:-1], [], rows + [rows[0]],
+                 ['expr.loop' + rows[0][4:], *rows[1:]],
+                 ['|'.join(rows[0].split('|')[:-1]), *rows[1:]],
+                 [rows[0] + '|extra', *rows[1:]]]
+        for col in (4, 5, 6):
+            fields = rows[0].split('|')
+            fields[col] = '   '
+            cases.append(['|'.join(fields), *rows[1:]])
+        for i, changed in enumerate(cases):
+            with self.subTest(case=i), mock.patch.object(proposals, 'ROWS', '\n'.join(changed)):
+                with self.assertRaises(ValueError):
+                    self.artifact()
+                with self.assertRaises(ValueError):
+                    self.verify(valid)
+
+    def test_29_actual_changing_forgeries_rejected(self):
+        baseline = self.artifact()
+        mutations = (
+            lambda d: d['rows'].pop(),
+            lambda d: d['rows'].append(copy.deepcopy(d['rows'][0])),
+            lambda d: d['rows'].reverse(),
+            lambda d: d['rows'][0].update(page='src/expressions/block-expr.md'),
+            lambda d: d['rows'][5].update(page='src/expressions/struct-expr.md'),
+            lambda d: d['rows'][0].update(rule='expr.loop'),
+            lambda d: d['rows'][0].update(line=True),
+            lambda d: d['rows'][0].update(line=1.0),
+            lambda d: d['counts'].update(reviewed_rule_rows=False),
+            lambda d: d['rows'][0].update(relationship='exact-executable-evidence'),
+            lambda d: d['rows'][0].update(classifications=['grammar']),
+            lambda d: d['rows'][0].update(end_line=99999),
+            lambda d: d['rows'][0].update(source_block_sha256='0' * 64),
+            lambda d: d['rows'][9].update(source_block_sha256='0' * 64),
+            lambda d: d['rows'][0].update(id='reconcile-expression-core-expr'),
+            lambda d: d['rows'][0].update(id=d['rows'][1]['id']),
+            lambda d: d['rows'][0].update(review_status='reviewed'),
+            lambda d: d['rows'][0].update(rationale='invented interpretation'),
+            lambda d: d['rows'][0].update(candidate_obligation_ids=['foreign']),
+            lambda d: d['rows'][0].update(missing_test_needs=[]),
+            lambda d: d['rows'][0]['missing_test_needs'].__setitem__(0, 'positive: implemented'),
+            lambda d: d['counts'].update(reviewed_rule_rows=1),
+            lambda d: d['counts'].update(rows_with_exact_executable_evidence=1),
+            lambda d: d['selected_pages'][0].update(sha256='0' * 64),
+            lambda d: d['selected_pages'].clear(),
+            lambda d: d['bindings'].update(reference_commit='0' * 40),
+            lambda d: d['unselected_rules'].pop(),
+            lambda d: d['unselected_rules'].append(copy.deepcopy(d['unselected_rules'][0])),
+            lambda d: d['unselected_rules'][0].update(page=d['rows'][0]['page'], rule=d['rows'][0]['rule']),
+        )
+        self.assertEqual(len(mutations), 29)
+        for i, mutate in enumerate(mutations):
+            changed = copy.deepcopy(baseline)
+            mutate(changed)
+            self.assertNotEqual(json.dumps(changed, sort_keys=True), json.dumps(baseline, sort_keys=True))
+            with self.subTest(mutation=i), self.assertRaises(ValueError):
+                self.verify(changed)
+
+    def test_source_faults_preserve_exact_error_types(self):
+        data = self.artifact()
+        for state, error in (('stale', ValueError), ('missing', FileNotFoundError),
+                             ('directory', IsADirectoryError), ('symlink', ValueError)):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                target = root / self.PAGE
+                target.parent.mkdir(parents=True)
+                if state == 'stale':
+                    target.write_bytes((self.source / self.PAGE).read_bytes() + b'\n')
+                elif state == 'directory':
+                    target.mkdir()
+                elif state == 'symlink':
+                    target.symlink_to(self.source / self.PAGE)
+                for action in (lambda: self.artifact(root), lambda: self.verify(data, root)):
+                    with self.assertRaises(error) as caught:
+                        action()
+                    self.assertIs(type(caught.exception), error)
+
+    def test_source_only_restrictions_precede_io_and_execution(self):
+        args = ['--profile', 'expression-core', '--rule-index', '/absent/index',
+                '--inventory', '/absent/inventory', '--source-root', '/absent/source',
+                '--artifact', '/absent/artifact']
+        extras = ([], ['--repo-root', '/absent/repo'], ['--evidence', '/absent/evidence'],
+                  ['--repo-root', '/absent/repo', '--evidence', '/absent/evidence'])
+        cases = [(action, extra) for action in ('generate-witness-links', 'build-witness-links',
+                  'validate-witness-links', 'assess-witness-links') for extra in extras]
+        cases += [(action, extra) for action in ('generate', 'validate') for extra in extras[1:]]
+        with contextlib.ExitStack() as stack:
+            for name in ('read_bytes', 'read_text', 'open', 'is_symlink', 'is_file',
+                         'write_bytes', 'write_text', 'mkdir'):
+                stack.enter_context(mock.patch.object(Path, name, side_effect=AssertionError('IO')))
+            stack.enter_context(mock.patch.object(subprocess, 'run', side_effect=AssertionError('execution')))
+            for action, extra in cases:
+                with self.subTest(action=action, extra=extra), self.assertRaises(ValueError):
+                    main([action, *args, *extra])
+            for call in (
+                lambda: reconciliation.build_witness_links(
+                    self.index, self.inventory, self.source, self.source, 'expression-core'),
+                lambda: reconciliation.validate_witness_links(
+                    {}, self.index, self.inventory, self.source, self.source, 'expression-core'),
+                lambda: reconciliation.assess_witness_links(
+                    {}, self.index, self.inventory, self.source, self.source, (), 'expression-core'),
+            ):
+                with self.assertRaises(ValueError):
+                    call()
+
+    def test_cli_exclusive_generation_validation_and_no_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'expression-core.json'
+            args = ['--profile', 'expression-core', '--rule-index', str(self.index),
+                    '--inventory', str(self.inventory), '--source-root', str(self.source),
+                    '--artifact', str(artifact)]
+            expected = (json.dumps(self.artifact(), indent=2) + '\n').encode()
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main(['generate', *args])
+            self.assertEqual(artifact.read_bytes(), expected)
+            self.assertEqual(json.loads(output.getvalue()), self.verify(self.artifact()))
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(FileExistsError):
+                main(['generate', *args])
+            self.assertEqual(artifact.read_bytes(), expected)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main(['validate', *args])
+            self.assertEqual(json.loads(output.getvalue()), self.verify(self.artifact()))
+            self.assertEqual(artifact.read_bytes(), expected)
+            forged = json.loads(expected)
+            forged['counts']['reviewed_rule_rows'] = 1
+            artifact.write_text(json.dumps(forged))
+            before = artifact.read_bytes()
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                main(['validate', *args])
+            self.assertEqual(artifact.read_bytes(), before)
+
+    def test_last_prior_blocks_canonical_bytes_without_new_module(self):
+        canonical = lambda data: (json.dumps(data, indent=2) + '\n').encode()
+        expected = canonical(build(self.index, self.inventory, self.source, 'blocks'))
+        with mock.patch.dict(sys.modules, {'expression_core_reconciliation_proposals': None}):
+            data = build(self.index, self.inventory, self.source, 'blocks')
+            validate(data, self.index, self.inventory, self.source, 'blocks')
+        self.assertEqual(canonical(data), expected)
+        self.assertEqual(digest(canonical(data)),
+                         '44247bc80441734de02b723d046fd34d801801ee2fda6c7d50fcd0154c5e3a90')
 
 
 if __name__ == '__main__':

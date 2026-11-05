@@ -635,6 +635,21 @@ only the listed contexts, with linked cfg and lint requirements. These bounded
 source-only proposals remain unreviewed with no execution, completion or
 compiler-support credit. Full Rust compatibility remains incomplete.
 
+Use `--profile expression-core` with `generate` or `validate` for all forty-six
+labels on pinned `src/expressions.md`. Precedence groups expressions, not their
+evaluation order. Default left-to-right operands apply only to enumerated kinds,
+with separate assignment and short-circuit contracts. Place/value categories
+and contexts, legal Copy/move places, loans, Drop and Box privilege remain
+distinct. Mutable-reference binding exceptions do not generalize DerefMut.
+Temporary drop is usually statement end, with linked promotion and extension.
+`format_args!` nonformat inputs are implicitly borrowed place contexts; `pin!`
+input is a value context. Internal format temporaries remain unspecified.
+Super-macro semantics require explicit pinned stable1.98.1 eligibility
+classification, not automatic support from source identity. Outer attributes
+have only listed contexts and never precede ranges or listed binary forms,
+including casts and assignments. These source-only proposals remain unreviewed
+with no semantic, execution or completion credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
