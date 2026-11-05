@@ -571,6 +571,14 @@ invalidity, runtime panic and lint policy separate. Tuple numeric fields have
 their own syntax and place semantics. All proposals remain unreviewed with no
 witness attribution or execution credit.
 
+Use `--profile fields` with `generate` or `validate` for all eight labels on
+the pinned named-field-expression page. Missing needs distinguish callable
+fields from method calls, mutable projected places, automatic dereferencing,
+disjoint field borrowing and the restrictions on partial moves. `Box` and
+user-defined dereference wrappers are not interchangeable for field splitting.
+Tuple fields, visibility, packed alignment and unsafe union reads retain their
+linked obligations. All rows remain unreviewed with no execution credit.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
