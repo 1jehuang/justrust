@@ -595,6 +595,16 @@ construction, borrow permission, temporary lifetime rules and method lookup
 retain their linked obligations. Callable-field grouping is not method dispatch.
 All rows remain unreviewed, with missing tests and no executable credit.
 
+Use `--profile transfers` with `generate` or `validate` for all five return
+and nine await labels on the two pinned pages. Return output moves, cleanup
+and never typing retain their linked ownership and function contracts. Await
+separates one-time `IntoFuture` conversion from repeated polling of the pinned
+future using the current task context. Its approximate desugaring is explicitly
+non-normative. These proposals do not establish async support, executor behavior
+or cancellation correctness, and have no review or executable credit. The five
+return rules overlap the branching profile and are counted once in the global
+rule union, while both authored interpretations remain available for review.
+
 All profiles refer to the same 2,965-rule universe, not additive language
 denominators. Proposed page decomposition is not tested Rust compatibility.
 For a rule-backlog query, add `--with-rule-proposals` to expose each matching
