@@ -1842,9 +1842,14 @@ fn unsupported_module_forms_are_rejected_explicitly() {
             "type Alias<T> where T:Copy=T;fn main(){}",
             "type alias bounds and where clauses are unsupported",
         ),
-        ("mod a{} mod a{} fn main(){}", "duplicate item"),
     ] {
         assert!(parse(source).unwrap_err().contains(message), "{source}");
+    }
+    for source in [
+        "mod a{} mod a{} fn main(){}",
+        "mod unused{mod a{} mod a{}} fn main(){}",
+    ] {
+        stock_native_reject_with_diagnostics(source, Some(("E0428", "e0428")));
     }
     stock_native_reject("use crate::*; fn main(){}");
     stock_native_reject("pub use crate::*; fn main(){}");
@@ -1854,6 +1859,27 @@ fn unsupported_module_forms_are_rejected_explicitly() {
     let nested = format!("{}{}fn main(){{}}", "mod a{".repeat(300), "}".repeat(300));
     assert!(parse(&nested).unwrap_err().contains("nesting"));
 }
+#[test]
+fn same_module_spelling_under_distinct_parents_matches_stock() {
+    let source = r#"
+        mod left {pub mod shared {pub fn value()->i32 {7}}}
+        mod right {pub mod shared {pub fn value()->i32 {11}}}
+        fn main(){
+            assert!(left::shared::value()+right::shared::value()==18);
+            println!("distinct modules ok");
+        }
+    "#;
+    let output = std::env::temp_dir().join(format!("module-valid-stock-{}", std::process::id()));
+    let checked = stock_compile(source, &output, true);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(!output.exists());
+    stock_native_run(source);
+}
+
 #[test]
 fn self_glob_imports_reject_unused_and_preserve_parent_child_targets() {
     for source in [
