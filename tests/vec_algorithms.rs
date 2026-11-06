@@ -45,6 +45,27 @@ impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Value{&mut self.value}}
 }
 
 #[test]
+fn overloaded_deref_field_method_receivers_match_stock() {
+    let prefix = r#"
+use std::ops::{Deref,DerefMut};
+struct Value{entries:Vec<i32>}
+struct Owner{value:Value}
+impl Deref for Owner{type Target=Value;fn deref(&self)->&Value{&self.value}}
+impl DerefMut for Owner{fn deref_mut(&mut self)->&mut Value{&mut self.value}}
+"#;
+    iterator_oracle::stock_native(&format!(
+        "{prefix}fn main(){{let mut owner=Owner{{value:Value{{entries:vec![1i32]}}}};owner.entries.push(2i32);println!(\"{{}}\",owner.entries.len());}}"
+    ));
+    for body in [
+        "fn unused(){let owner=Owner{value:Value{entries:vec![1i32]}};owner.entries.push(2i32);}fn main(){}",
+        "fn unused(){let mut owner=Owner{value:Value{entries:vec![1i32]}};owner.entries.push(owner.entries.len() as i32);}fn main(){}",
+        "fn unused(){let mut owner=Owner{value:Value{entries:vec![1i32]}};let loan=&owner.entries;owner.entries.push(2i32);println!(\"{:?}\",loan);}fn main(){}",
+    ] {
+        iterator_oracle::stock_and_native_reject(&format!("{prefix}{body}"));
+    }
+}
+
+#[test]
 fn unchanged_sort_by_actual_program() {
     iterator_oracle::stock_native(include_str!("fixtures/full_programs/34_sort_by.rs"));
 }

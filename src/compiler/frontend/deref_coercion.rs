@@ -413,9 +413,9 @@ impl type_check::Checker<'_> {
                 tail: Some(borrowed),
             }),
         });
-        Ok(Some((
-            id,
-            (kind == ir::BorrowKind::Mut).then_some(ir::ImplicitBorrowKind::MutableReceiver),
-        )))
+        // The overloaded DerefMut call already activated the owner's loan.
+        // Its returned-reference field is an immediate reborrow, not a new
+        // two-phase autoref of the original source owner.
+        Ok(Some((id, None)))
     }
 }
