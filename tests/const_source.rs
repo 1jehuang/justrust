@@ -207,29 +207,155 @@ fn names_imports_visibility_and_local_shadowing_use_value_namespace() {
 }
 #[test]
 fn qualification_cycles_reject_even_skipped_references_and_preserve_partial_body_gate() {
-    for workers in [1, 8] {
-        for source in [
-            "const A:bool=false&&A;fn main(){}",
-            "const A:bool=true||A;fn main(){}",
-            "const A:bool=false&&B;const B:bool=true||A;fn main(){}",
-            "const A:bool=A;fn main(){}",
-        ] {
-            let failure = match compiler::compile_observed(source.into(), workers, true) {
-                Ok(_) => panic!("accepted {source}"),
-                Err(error) => error,
-            };
-            let report = failure.report.as_ref().expect("captured graph");
+    use compiler::{frontend, ir, source};
+    use justrust_engine::engine::Report;
+
+    fn constant_indices(program: &frontend::Program, prelude: bool) -> Vec<u64> {
+        let plan = frontend::PlanCtx::from_program(program, &ir::PlanBudget::default()).unwrap();
+        plan.sema_declarations()
+            .iter()
+            .filter(|info| info.kind == ir::DeclKind::Const)
+            .filter(|info| plan.is_prelude_decl(info.id).unwrap() == prelude)
+            // Source declaration indices are canonical across catalog snapshots.
+            // CONST_BODY and CONST_VALUE keys carry this index, not the snapshot.
+            .map(|info| info.id.index)
+            .collect()
+    }
+    fn node(report: &Report, kind: u32, declaration: u64) -> u64 {
+        let mut nodes = report
+            .node_ids
+            .iter()
+            .zip(&report.node_evaluations)
+            .filter_map(|(node, (key, _))| {
+                (key.kind == kind && key.params == [declaration]).then_some(*node)
+            });
+        let node = nodes.next().expect("demanded exact constant producer");
+        assert!(
+            nodes.next().is_none(),
+            "duplicate canonical constant producer"
+        );
+        node
+    }
+    fn published(report: &Report, node: u64, slot: usize) -> bool {
+        let prefix = format!("slot {slot} =");
+        report.events.iter().any(|event| {
+            event.node == Some(node) && event.kind == "publish" && event.detail.starts_with(&prefix)
+        })
+    }
+    fn value_unpublished(report: &Report, declaration: u64) -> bool {
+        !published(report, node(report, 120, declaration), 0)
+    }
+
+    // Identify foreign library constants from their source declarations, never
+    // numeric IDs or a kind-wide ban on independent successful publications.
+    let prepared = source::prepare_text_with_prelude(
+        "<text>",
+        "fn main(){}",
+        &source::SourceOptions::default(),
+    )
+    .unwrap();
+    let library = frontend::resolve(&frontend::parse_prepared(&prepared).unwrap()).unwrap();
+    let foreign = constant_indices(&library, true);
+    assert!(!foreign.is_empty(), "foreign prelude publication control");
+    let directory = std::env::temp_dir().join(format!(
+        "justrust-const-qualification-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    for (case, source) in [
+        "const A:bool=false&&A;fn main(){}",
+        "const A:bool=true||A;fn main(){}",
+        "const A:bool=false&&B;const B:bool=true||A;fn main(){}",
+        "const A:bool=A;fn main(){}",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let declarations = constant_indices(&frontend::parse(source).unwrap(), false);
+        assert!(!declarations.is_empty());
+        assert!(declarations.iter().all(|id| !foreign.contains(id)));
+        let input = directory.join(format!("case{case}.rs"));
+        fs::write(&input, source).unwrap();
+        for check in [true, false] {
+            let mut stock = Command::new(stock_rustc::stock_rustc());
+            stock.env_remove("RUSTC_BOOTSTRAP").arg("--edition=2024");
+            if check {
+                stock.arg("--emit=metadata");
+            }
+            let output = stock
+                .arg(&input)
+                .arg("-o")
+                .arg(directory.join("stock"))
+                .output()
+                .unwrap();
+            assert!(!output.status.success(), "stock accepted {source}");
             assert!(
-                report.published_kind(119),
-                "typed body0 should publish before qualification wait"
+                String::from_utf8_lossy(&output.stderr).contains("E0391"),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
             );
-            assert!(
-                !report.published_kind(120),
-                "body0 must not launder qualification failure"
-            );
-            assert!(failure.to_string().contains("E0391"), "{failure}");
+            for workers in [1, 8] {
+                let failure = match compiler::compile_observed(source.into(), workers, check) {
+                    Ok(_) => panic!("accepted {source}, workers={workers}, check={check}"),
+                    Err(error) => error,
+                };
+                assert!(failure.to_string().contains("E0391"), "{failure}");
+                let report = failure.report.as_ref().expect("captured graph");
+                assert!(report.capture_complete);
+                for declaration in &declarations {
+                    let body = node(report, 119, *declaration);
+                    assert!(
+                        published(report, body, 0),
+                        "typed body0 should publish before qualification wait"
+                    );
+                    assert!(
+                        !published(report, body, 1),
+                        "cyclic constant must not publish qualification"
+                    );
+                    assert!(
+                        value_unpublished(report, *declaration),
+                        "body0 must not launder qualification failure"
+                    );
+                }
+                let cycle = report.dependency_cycle().expect("live qualification cycle");
+                assert_eq!(cycle.edges().len(), declarations.len());
+                for (position, edge) in cycle.edges().iter().enumerate() {
+                    assert_eq!(edge.output(), 1);
+                    assert_eq!(edge.consumer().kind, 119);
+                    assert_eq!(edge.producer().kind, 119);
+                    assert_eq!(edge.consumer().params.len(), 1);
+                    assert_eq!(edge.producer().params.len(), 1);
+                    assert!(declarations.contains(&edge.consumer().params[0]));
+                    assert!(declarations.contains(&edge.producer().params[0]));
+                    assert_eq!(
+                        edge.producer(),
+                        cycle.edges()[(position + 1) % cycle.edges().len()].consumer()
+                    );
+                }
+                // Substituting an independently identified foreign key changes
+                // the rejection predicate's result: it detects a real value
+                // publication, while the cyclic user keys above remain blocked.
+                assert!(
+                    foreign.iter().any(|id| !value_unpublished(report, *id)),
+                    "foreign prelude must retain independent successful value publication"
+                );
+                assert!(
+                    !report.published_kind(105),
+                    "published successful executable"
+                );
+                if check {
+                    assert!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+                        "CHECK demanded code generation"
+                    );
+                }
+            }
         }
     }
+    fs::remove_dir_all(directory).unwrap();
 }
 
 #[test]
