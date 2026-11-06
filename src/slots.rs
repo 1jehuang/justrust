@@ -259,20 +259,8 @@ pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<Pat
         "1",
         "--offline",
     ]);
-    let mut it = args.iter().map(|a| a.to_string_lossy().into_owned());
-    while let Some(a) = it.next() {
-        if a == "--" {
-            break;
-        }
-        if a == "--manifest-path" {
-            cmd.arg(&a);
-            if let Some(v) = it.next() {
-                cmd.arg(v);
-            }
-        } else if a.starts_with("--manifest-path=") {
-            cmd.arg(&a);
-        }
-    }
+    let (metadata_args, explicit_target) = target_metadata_options(args)?;
+    cmd.args(metadata_args);
     let out = cmd
         .stderr(Stdio::piped())
         .output()
@@ -287,10 +275,52 @@ pub fn target_dir_in_result(cwd: &Path, args: &[OsString]) -> anyhow::Result<Pat
     }
     let v: serde_json::Value =
         serde_json::from_slice(&out.stdout).context("decoding Cargo metadata target directory")?;
+    // `metadata` has no --target-dir option. The build's explicit selector
+    // takes precedence over environment and config, relative to its cwd.
+    if let Some(target) = explicit_target {
+        return Ok(if target.is_absolute() {
+            target
+        } else {
+            cwd.join(target)
+        });
+    }
     v.get("target_directory")
         .and_then(|v| v.as_str())
         .map(PathBuf::from)
         .context("Cargo metadata returned no target_directory")
+}
+
+fn target_metadata_options(args: &[OsString]) -> anyhow::Result<(Vec<OsString>, Option<PathBuf>)> {
+    let mut metadata = Vec::new();
+    let mut target = None;
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            break;
+        }
+        if arg == "--target-dir" {
+            let value = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing --target-dir value"))?;
+            anyhow::ensure!(!value.is_empty(), "empty --target-dir value");
+            target = Some(PathBuf::from(value));
+        } else if let Some(value) = arg.to_str().and_then(|s| s.strip_prefix("--target-dir=")) {
+            anyhow::ensure!(!value.is_empty(), "empty --target-dir value");
+            target = Some(PathBuf::from(value));
+        } else if arg == "--manifest-path" || arg == "--config" || arg == "-m" {
+            let value = args
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("missing value for {arg:?}"))?;
+            metadata.push(arg.clone());
+            metadata.push(value.clone());
+        } else if arg
+            .to_str()
+            .is_some_and(|s| s.starts_with("--manifest-path=") || s.starts_with("--config="))
+        {
+            metadata.push(arg.clone());
+        }
+    }
+    Ok((metadata, target))
 }
 
 fn try_lock(path: &Path) -> Option<File> {
@@ -1507,6 +1537,77 @@ fn human_age(secs: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn target_metadata_preserves_config_and_explicit_directory() {
+        let (forwarded, target) = target_metadata_options(&os(&[
+            "test",
+            "--no-run",
+            "--manifest-path",
+            "project/Cargo.toml",
+            "--config",
+            "build.target-dir='configured'",
+            "--config=profile.test.debug=0",
+            "--target-dir",
+            "chosen",
+            "--",
+            "--target-dir=ignored",
+        ]))
+        .unwrap();
+        assert_eq!(
+            forwarded,
+            os(&[
+                "--manifest-path",
+                "project/Cargo.toml",
+                "--config",
+                "build.target-dir='configured'",
+                "--config=profile.test.debug=0",
+            ])
+        );
+        assert_eq!(target, Some(PathBuf::from("chosen")));
+        let (_, target) =
+            target_metadata_options(&os(&["test", "--target-dir=/absolute"])).unwrap();
+        assert_eq!(target, Some(PathBuf::from("/absolute")));
+        for malformed in [
+            os(&["test", "--target-dir"]),
+            os(&["test", "--target-dir="]),
+            os(&["test", "--config"]),
+        ] {
+            assert!(target_metadata_options(&malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn target_metadata_resolves_build_output_root() {
+        let root =
+            std::env::temp_dir().join(format!("justrust-target-metadata-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[package]\nname='target-metadata-probe'\nversion='0.0.0'\n[workspace]\n",
+        )
+        .unwrap();
+        std::fs::write(root.join("src/lib.rs"), "").unwrap();
+        let root = root.canonicalize().unwrap();
+        let configured = os(&["test", "--config", "build.target-dir='configured'"]);
+        assert_eq!(
+            target_dir_in_result(&root, &configured).unwrap(),
+            root.join("configured")
+        );
+        let mut explicit = configured.clone();
+        explicit.extend(os(&["--target-dir", "explicit"]));
+        assert_eq!(
+            target_dir_in_result(&root, &explicit).unwrap(),
+            root.join("explicit")
+        );
+        let absolute = root.join("absolute");
+        explicit.extend([
+            OsString::from("--target-dir"),
+            absolute.clone().into_os_string(),
+        ]);
+        assert_eq!(target_dir_in_result(&root, &explicit).unwrap(), absolute);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn reflink_probe_failure_explains_fallback_without_caching_failure() {
