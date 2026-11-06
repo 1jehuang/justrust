@@ -1,0 +1,17 @@
+statement Bob: 375
+blocked: destination busy: RefCell already borrowed
+rejected: insufficient funds: Bob
+rejected: same account
+read blocked: RefCell already mutably borrowed
+reserve held: 250
+aliases 3 same true
+Alice: 865 (2 entries)
+  to Bob: 125
+  to Bob: 10
+Bob: 385 (3 entries)
+  from Alice: 125
+  to Reserve: 50
+  from Alice: 10
+Reserve: 250 (1 entries)
+  from Bob: 50
+total 1500 across 3 transfers

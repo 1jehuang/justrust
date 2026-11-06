@@ -1280,6 +1280,12 @@ impl<'s> Checker<'s> {
             Expr::Borrow { kind, place } => {
                 plan.budget.charge_work(place.fields.len() + 1)?;
                 self.infer_storage(place.fields.len() + 1)?;
+                if let Some(ir::Ty::Ref { referent, .. }) =
+                    self.explicit_field_borrow_hint(*kind, place)?
+                {
+                    let inner = self.infer_type_term(&referent, None, depth + 1)?;
+                    return self.infer_node(InferKind::Ref(*kind, inner));
+                }
                 if let Some(ir::Ty::Ref { referent, .. }) = self.static_index_borrow_hint(place)? {
                     let inner = self.infer_type_term(&referent, None, depth + 1)?;
                     return self.infer_node(InferKind::Ref(*kind, inner));
@@ -5277,7 +5283,11 @@ impl<'a> Checker<'a> {
                 })
             }
             Expr::Borrow { kind, place } => {
-                if let Some(ir::Ty::Ref { referent, .. }) = self.static_index_borrow_hint(place)? {
+                if let Some(hint) = self.explicit_field_borrow_hint(*kind, place)? {
+                    Some(hint)
+                } else if let Some(ir::Ty::Ref { referent, .. }) =
+                    self.static_index_borrow_hint(place)?
+                {
                     Some(ir::Ty::Ref {
                         kind: *kind,
                         referent,
@@ -9391,6 +9401,9 @@ impl<'a> Checker<'a> {
             Expr::TraitCall { .. } | Expr::MethodCall { .. } | Expr::AssociatedCall { .. }
         ) {
             return self.associated_expression(e, expectation.hard());
+        }
+        if let Some(id) = self.explicit_field_borrow(e)? {
+            return Ok(id);
         }
         if let Some(id) = self.overloaded_index_borrow(e)? {
             return Ok(id);

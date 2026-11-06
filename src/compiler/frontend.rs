@@ -8834,6 +8834,7 @@ pub(in crate::compiler) use const_inputs::SealedBodyConstants;
 mod const_items;
 #[cfg(test)]
 mod const_source_tests;
+mod explicit_field_borrow;
 mod index_bounds;
 mod indexed_borrow;
 #[cfg(test)]

@@ -51,3 +51,4 @@
 35_while_loop_match	pass
 36_iter_adapters	pass	
 37_struct_methods_lifetimes	pass	
+38_shared_ledger	pass

@@ -4,6 +4,8 @@ use super::*;
 
 mod borrow_coercion;
 mod generic_method;
+mod projected_borrow;
+mod shared_deref;
 
 // This bounded arithmetic slice obtains its width only from authored suffixes,
 // never from checked expression types or a caller's inferred actuals.
@@ -2582,10 +2584,21 @@ impl Replay<'_> {
                     },
                 )?
             }
+            (source @ Expr::Borrow { place, .. }, ir::ExprKind::Block(block))
+                if !place.fields.is_empty() =>
+            {
+                self.projected_borrow(source, node, id, block, depth + 1)?
+            }
             (source @ Expr::Borrow { place, .. }, ir::ExprKind::Call { .. })
                 if place.fields.is_empty() =>
             {
                 self.explicit_borrow_coercion(source, node, id, depth + 1)?
+            }
+            (Expr::Borrow { place, .. }, ir::ExprKind::Call { .. }) if !place.fields.is_empty() => {
+                return Err(FactsError::invalid(
+                    self.budget,
+                    "projected borrow cannot omit its carrier block and projected tail",
+                ));
             }
             (
                 Expr::Call { .. },
@@ -3268,6 +3281,328 @@ mod literal_context_tests {
     }
 
     #[test]
+    fn projected_borrow_replays_original_fields_and_rejects_forgeries() {
+        for (formal, borrow, kind) in [
+            ("&[T;2]", "&owner.values.0", ir::BorrowKind::Shared),
+            ("&mut[T;2]", "&mut owner.values.0", ir::BorrowKind::Mut),
+        ] {
+            let source = format!(
+                "use std::ops::{{Deref,DerefMut}};struct Target<T>{{values:([T;2],[T;2]),other:([T;2],[T;2])}}struct Owner<T>{{inner:Target<T>}}impl<T> Deref for Owner<T>{{type Target=Target<T>;fn deref(&self)->&Target<T>{{&self.inner}}}}impl<T> DerefMut for Owner<T>{{fn deref_mut(&mut self)->&mut Target<T>{{&mut self.inner}}}}fn take<T>(v:{formal}){{}}fn main(){{let mut owner:Owner<i32>=Owner{{inner:Target{{values:([3i32,7i32],[5i32,9i32]),other:([11i32,13i32],[17i32,19i32])}}}};take({borrow});}}"
+            );
+            let prepared = crate::compiler::source::prepare_text_with_prelude(
+                "projected-borrow-source.rs",
+                &source,
+                &crate::compiler::source::SourceOptions::default(),
+            )
+            .unwrap();
+            let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("original projected borrow body");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            assert!(
+                !replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap()
+                    .is_empty()
+            );
+            let (index, operator, _) = original
+                .call_mapping
+                .iter()
+                .find(|(index, _, _)| original.calls[*index].operator_candidate)
+                .unwrap();
+            let operator = *operator;
+            let operand = match &checked.exprs[operator.0].kind {
+                ir::ExprKind::Call { args, .. } => args[0],
+                _ => unreachable!(),
+            };
+            let owner_local = match &checked.exprs[operand.0].kind {
+                ir::ExprKind::Borrow { place, .. } => place.local,
+                _ => unreachable!(),
+            };
+            let (wrapper, carrier, tail) = checked
+                .exprs
+                .iter()
+                .enumerate()
+                .find_map(|(index, expr)| {
+                    let ir::ExprKind::Block(block) = &expr.kind else {
+                        return None;
+                    };
+                    let ([ir::TypedStmt::Assign { local, value }], Some(tail)) =
+                        (block.statements.as_slice(), block.tail)
+                    else {
+                        return None;
+                    };
+                    (*value == operator).then_some((ir::ExprId(index), *local, tail))
+                })
+                .unwrap();
+            for mutation in 0..24 {
+                let mut forged = checked.as_ref().clone();
+                match mutation {
+                    0..=3 => {
+                        let ir::ExprKind::Block(block) = &mut forged.exprs[wrapper.0].kind else {
+                            unreachable!()
+                        };
+                        match mutation {
+                            0 => block.statements.push(ir::TypedStmt::Assign {
+                                local: carrier,
+                                value: operator,
+                            }),
+                            1 => block.tail = None,
+                            2 => {
+                                block.statements = vec![ir::TypedStmt::Assign {
+                                    local: carrier,
+                                    value: operand,
+                                }]
+                            }
+                            _ => {
+                                block.statements = vec![ir::TypedStmt::Assign {
+                                    local: owner_local,
+                                    value: operator,
+                                }]
+                            }
+                        }
+                    }
+                    4 => forged.locals[carrier.0].ty = ir::Ty::Bool,
+                    5 => forged.locals[carrier.0].mutable = true,
+                    6..=9 => {
+                        let ir::ExprKind::Borrow {
+                            kind: actual_kind,
+                            place,
+                            timing,
+                        } = &mut forged.exprs[tail.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        match mutation {
+                            6 => *place.projection.last_mut().unwrap() = ir::Projection::Field(1),
+                            7 => place.local = owner_local,
+                            8 => {
+                                *actual_kind = if kind == ir::BorrowKind::Mut {
+                                    ir::BorrowKind::Shared
+                                } else {
+                                    ir::BorrowKind::Mut
+                                }
+                            }
+                            _ => {
+                                *timing = ir::BorrowTiming::TwoPhase {
+                                    activation: operator,
+                                    argument: 0,
+                                    reason: ir::ImplicitBorrowKind::MutableReceiver,
+                                }
+                            }
+                        }
+                    }
+                    10 => forged.exprs[tail.0].ty = ir::Ty::Bool,
+                    11..=14 => {
+                        let ir::ExprKind::Call {
+                            target: ir::Callee::Direct(target),
+                            signature,
+                            ..
+                        } = &mut forged.exprs[operator.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        match mutation {
+                            11 => target.declaration = declaration,
+                            12 => target.type_args = vec![ir::Ty::Bool].into(),
+                            13 => signature.params.clear(),
+                            _ => signature.ref_contract = Arc::new(ir::RefContract::default()),
+                        }
+                    }
+                    15 | 16 => {
+                        let mut evidence = forged.call_evidence.to_vec();
+                        let row = evidence
+                            .iter_mut()
+                            .find(|row| row.call == operator)
+                            .unwrap();
+                        if mutation == 15 {
+                            row.arguments = Arc::from([]);
+                        } else {
+                            row.type_actual_regions = vec![ir::TypeActualRegion {
+                                argument: 0,
+                                location: ir::CarrierLocation {
+                                    path: ir::CarrierPath(Arc::from([])),
+                                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                                        depth: 0,
+                                    }),
+                                },
+                                source: ir::ActualRegion::Elided,
+                            }]
+                            .into();
+                        }
+                        forged.call_evidence = evidence.into();
+                    }
+                    17..=19 => {
+                        let ir::ExprKind::Borrow {
+                            kind: actual_kind,
+                            place,
+                            ..
+                        } = &mut forged.exprs[operand.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        match mutation {
+                            17 => place.projection.push(ir::Projection::Field(0)),
+                            18 => place.local = carrier,
+                            _ => {
+                                *actual_kind = if kind == ir::BorrowKind::Mut {
+                                    ir::BorrowKind::Shared
+                                } else {
+                                    ir::BorrowKind::Mut
+                                }
+                            }
+                        }
+                    }
+                    20 => forged.exprs[operator.0].completion = ir::Completion::Never,
+                    21 => forged.exprs[tail.0].completion = ir::Completion::Never,
+                    22 => forged.exprs[wrapper.0].ty = ir::Ty::Bool,
+                    _ => forged.exprs[wrapper.0] = forged.exprs[operator.0].clone(),
+                }
+                assert_eq!(
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .expect_err(&format!("projected borrow checked mutation {mutation}"))
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            let function = plan.callable_body(&plan.program, declaration).unwrap();
+            let inventory =
+                SourceInventory::build(&plan.program, function, original.identity.clone(), &budget)
+                    .unwrap();
+            let (pointer, root, fields) = function
+                .body
+                .statements
+                .iter()
+                .find_map(|statement| {
+                    let Stmt::Expr(Expr::Call { args, .. }) = statement else {
+                        return None;
+                    };
+                    let Expr::Borrow { place, .. } = &args[0] else {
+                        return None;
+                    };
+                    let LocalName::Named(root) = place.local else {
+                        return None;
+                    };
+                    Some((&args[0] as *const Expr as usize, root, &place.fields))
+                })
+                .unwrap();
+            let second = inventory.call_pointers[&deref_coercion::site(pointer, 2)];
+            for mutation in 0..4 {
+                let mut forged = original.clone();
+                match mutation {
+                    0 => forged
+                        .call_mapping
+                        .retain(|(_, value, _)| *value != operator),
+                    1 => {
+                        forged
+                            .call_mapping
+                            .iter_mut()
+                            .find(|(_, value, _)| *value == operator)
+                            .unwrap()
+                            .0 = second
+                    }
+                    2 => forged.call_mapping.push(
+                        original
+                            .call_mapping
+                            .iter()
+                            .find(|(site, _, _)| site == index)
+                            .unwrap()
+                            .clone(),
+                    ),
+                    _ => {
+                        forged
+                            .binding_mapping
+                            .iter_mut()
+                            .find(|(_, local)| *local == owner_local)
+                            .unwrap()
+                            .1 = carrier
+                    }
+                }
+                assert_eq!(
+                    replay_source_body(&forged, checked, publication.facts(), &budget)
+                        .unwrap_err()
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "projected original mutation {mutation}"
+                );
+            }
+            for mutation in 0..8 {
+                let mut forged = SourceInventory::build(
+                    &plan.program,
+                    function,
+                    original.identity.clone(),
+                    &budget,
+                )
+                .unwrap();
+                let key = deref_coercion::site(pointer, 1);
+                match mutation {
+                    0 => {
+                        forged.call_pointers.remove(&key);
+                    }
+                    1 => {
+                        forged.call_pointers.insert(key, second);
+                    }
+                    2 => forged.calls[*index].operator_candidate = false,
+                    3 => {
+                        forged.calls[*index].node.owner = sr::OriginalBodyId::new(&budget).unwrap()
+                    }
+                    4 => {
+                        forged
+                            .call_pointers
+                            .insert(deref_coercion::site(pointer, 3), *index);
+                    }
+                    _ => {}
+                }
+                let wrong = [FieldSelector::Tuple(0)];
+                let wrong_tail = [fields[0].clone(), FieldSelector::Tuple(1)];
+                let FieldName::Named(other) = program.structs[0].fields[1].name else {
+                    unreachable!()
+                };
+                let wrong_member = [FieldSelector::Named(other), fields[1].clone()];
+                let expected_fields: &[FieldSelector] = match mutation {
+                    5 => &wrong,
+                    6 => &wrong_tail,
+                    7 => &wrong_member,
+                    _ => fields,
+                };
+                assert_eq!(
+                    Replay::borrow_coercion_field_site(
+                        &original,
+                        &forged,
+                        &original.calls[*index].node,
+                        kind,
+                        root,
+                        expected_fields,
+                        &budget
+                    )
+                    .unwrap_err()
+                    .kind(),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "projected inventory mutation {mutation}"
+                );
+            }
+            let foreign_program = parse("fn main(){}").unwrap();
+            let foreign_budget = ir::PlanBudget::default();
+            let foreign = PlanCtx::from_program(&foreign_program, &foreign_budget).unwrap();
+            let facts = foreign
+                .callable_facts(foreign.function_decl(0).unwrap())
+                .unwrap();
+            assert_eq!(
+                replay_source_body(&original, checked, &facts, &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
+    }
+
+    #[test]
     fn explicit_borrow_coercion_replays_original_owner_and_rejects_forgeries() {
         for (formal, borrow, kind) in [
             ("&[T]", "&owner", ir::BorrowKind::Shared),
@@ -3484,6 +3819,31 @@ mod literal_context_tests {
     }
 
     #[test]
+    fn projected_borrow_does_not_guess_named_actual_regions() {
+        let source = "use std::ops::Deref;struct Target<T>{value:T}struct Owner<T>{target:Target<T>}impl<T> Deref for Owner<T>{type Target=Target<T>;fn deref(&self)->&Target<T>{&self.target}}fn take<T>(v:&T){}fn use_it<'a>(value:&'a i32){let owner:Owner<&'a i32>=Owner{target:Target{value}};take(&owner.value);}fn main(){let value=7i32;use_it(&value);}";
+        let prepared = crate::compiler::source::prepare_text_with_prelude(
+            "projected-borrow-regions.rs",
+            source,
+            &crate::compiler::source::SourceOptions::default(),
+        )
+        .unwrap();
+        let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let error = match plan.publish_callable_body(plan.function_decl(1).unwrap(), &budget) {
+            Err(error) => error,
+            Ok(_) => panic!("projected named actuals must not acquire guessed regions"),
+        };
+        assert_eq!(error.kind(), tr::FactsErrorKind::Unsupported);
+        assert!(
+            error
+                .to_string()
+                .contains("independently reference-free generic actuals")
+        );
+        assert!(!budget.has_resource_failure());
+    }
+
+    #[test]
     fn explicit_borrow_coercion_does_not_guess_named_actual_regions() {
         let source = "use std::ops::Deref;struct Wrapper<T>{values:[T;1]}impl<T> Deref for Wrapper<T>{type Target=[T];fn deref(&self)->&[T]{&self.values}}fn take<T>(v:&[T]){}fn use_it<'a>(value:&'a i32){let owner:Wrapper<&'a i32>=Wrapper{values:[value]};take(&owner);}fn main(){let value=7i32;use_it(&value);}";
         let prepared = crate::compiler::source::prepare_text_with_prelude(
@@ -3506,6 +3866,198 @@ mod literal_context_tests {
                 .contains("independently reference-free generic actuals")
         );
         assert!(!budget.has_resource_failure());
+    }
+
+    #[test]
+    fn shared_local_deref_reconstructs_owner_and_rejects_forged_evidence() {
+        for receiver in ["wrapper", "borrowed"] {
+            let source = format!(
+                "use std::ops::Deref;struct Owner<T>{{n:T}}struct Wrapper<T>{{v:Owner<T>}}struct View<'a,T>{{r:&'a T}}impl<T> Deref for Wrapper<T>{{type Target=Owner<T>;fn deref(&self)->&Owner<T>{{&self.v}}}}impl<T> Owner<T>{{fn view<'a>(&'a self)->View<'a,T>{{View{{r:&self.n}}}}}}fn consume<T>(x:T){{}}fn main(){{let wrapper=Wrapper{{v:Owner{{n:7i32}}}};let borrowed=&wrapper;let row={receiver}.view();consume(row);}}"
+            );
+            let prepared = crate::compiler::source::prepare_text_with_prelude(
+                "shared-receiver.rs",
+                &source,
+                &crate::compiler::source::SourceOptions::default(),
+            )
+            .unwrap();
+            let program = resolve(&parse_prepared(&prepared).unwrap()).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected original shared receiver source");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            assert!(
+                !replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap()
+                    .is_empty()
+            );
+            let (source_index, operator, _) = original
+                .call_mapping
+                .iter()
+                .find(|(index, _, _)| original.calls[*index].operator_candidate)
+                .unwrap();
+            let operator = *operator;
+            let operand = match &checked.exprs[operator.0].kind {
+                ir::ExprKind::Call { args, .. } => args[0],
+                _ => unreachable!(),
+            };
+            for mutation in 0..7 {
+                let mut forged = checked.as_ref().clone();
+                match mutation {
+                    0 => {
+                        let ir::ExprKind::Call {
+                            target: ir::Callee::Direct(target),
+                            ..
+                        } = &mut forged.exprs[operator.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        target.declaration = declaration;
+                    }
+                    1 => match &mut forged.exprs[operand.0].kind {
+                        ir::ExprKind::Borrow { place, .. } => place.local = ir::LocalId(usize::MAX),
+                        ir::ExprKind::Local(local) => *local = ir::LocalId(usize::MAX),
+                        _ => unreachable!(),
+                    },
+                    2 => forged.exprs[operator.0].ty = ir::Ty::Bool,
+                    3 => {
+                        let ir::ExprKind::Call {
+                            target: ir::Callee::Direct(target),
+                            ..
+                        } = &mut forged.exprs[operator.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        target.type_args = vec![ir::Ty::Bool].into();
+                    }
+                    _ => {
+                        let mut rows = forged.call_evidence.to_vec();
+                        let row = rows.iter_mut().find(|row| row.call == operator).unwrap();
+                        if mutation == 4 {
+                            row.arguments = Arc::from([]);
+                        } else if mutation == 5 {
+                            let mut args = row.arguments.to_vec();
+                            args[0].expectation = ir::CallExpectation::NoFirmReference;
+                            row.arguments = args.into();
+                        } else {
+                            row.type_actual_regions = vec![ir::TypeActualRegion {
+                                argument: 0,
+                                location: ir::CarrierLocation {
+                                    path: ir::CarrierPath(Arc::from([])),
+                                    channel: ir::CarrierChannel::Fixed(ir::ReferencePosition {
+                                        depth: 0,
+                                    }),
+                                },
+                                source: ir::ActualRegion::Elided,
+                            }]
+                            .into();
+                        }
+                        forged.call_evidence = rows.into();
+                    }
+                }
+                assert_eq!(
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .expect_err(&format!("forged shared Deref mutation={mutation}"))
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            let function = plan.callable_body(&plan.program, declaration).unwrap();
+            let inventory =
+                SourceInventory::build(&plan.program, function, original.identity.clone(), &budget)
+                    .unwrap();
+            let pointer = function
+                .body
+                .statements
+                .iter()
+                .find_map(|statement| {
+                    let Stmt::Let {
+                        value: Expr::MethodCall { receiver, .. },
+                        ..
+                    } = statement
+                    else {
+                        return None;
+                    };
+                    Some(receiver.as_ref() as *const Expr as usize)
+                })
+                .unwrap();
+            let second = inventory.call_pointers[&deref_coercion::site(pointer, 2)];
+            for mutation in 0..3 {
+                let mut forged = original.clone();
+                match mutation {
+                    0 => forged
+                        .call_mapping
+                        .retain(|(_, expression, _)| *expression != operator),
+                    1 => {
+                        let row = forged
+                            .call_mapping
+                            .iter_mut()
+                            .find(|(_, expression, _)| *expression == operator)
+                            .unwrap();
+                        row.0 = second;
+                    }
+                    _ => forged.call_mapping.push(
+                        original
+                            .call_mapping
+                            .iter()
+                            .find(|(index, _, _)| index == source_index)
+                            .unwrap()
+                            .clone(),
+                    ),
+                }
+                assert_eq!(
+                    replay_source_body(&forged, checked, publication.facts(), &budget)
+                        .unwrap_err()
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            let node = &inventory.calls[*source_index].node;
+            for mutation in 0..3 {
+                let mut inventory = SourceInventory::build(
+                    &plan.program,
+                    function,
+                    original.identity.clone(),
+                    &budget,
+                )
+                .unwrap();
+                let first_key = deref_coercion::site(pointer, 1);
+                match mutation {
+                    0 => {
+                        inventory.call_pointers.remove(&first_key);
+                    }
+                    1 => {
+                        inventory.call_pointers.insert(first_key, second);
+                    }
+                    _ => {
+                        inventory.calls[*source_index].operator_candidate = false;
+                    }
+                }
+                assert_eq!(
+                    Replay::shared_deref_site(&original, &inventory, node, &budget)
+                        .unwrap_err()
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata
+                );
+            }
+            let foreign_program = parse("fn main(){}").unwrap();
+            let foreign_budget = ir::PlanBudget::default();
+            let foreign = PlanCtx::from_program(&foreign_program, &foreign_budget).unwrap();
+            let facts = foreign
+                .callable_facts(foreign.function_decl(0).unwrap())
+                .unwrap();
+            assert_eq!(
+                replay_source_body(&original, checked, &facts, &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
     }
 
     #[test]

@@ -139,49 +139,62 @@ impl Replay<'_> {
                     ));
                 }
                 let (local, source_ty) = self.operand(&receiver_node, depth + 1)?;
-                let mut owner = source_ty.clone();
-                let mut projection = Vec::new();
-                while let ir::Ty::Ref { referent, .. } = &owner {
-                    sr::depth(self.budget, depth + projection.len())?;
-                    sr::push(&mut projection, ir::Projection::Deref, self.budget)?;
-                    owner = referent.as_ref().clone();
-                }
-                let input = self.reference(kind, owner.clone())?;
-                let exact = match &argument.kind {
-                    ir::ExprKind::Borrow {
-                        kind: actual_kind,
-                        place,
-                        timing,
-                    } => {
-                        let exact_timing = match (kind, timing) {
-                            (ir::BorrowKind::Shared, ir::BorrowTiming::Immediate) => true,
-                            (
-                                ir::BorrowKind::Mut,
-                                ir::BorrowTiming::TwoPhase {
-                                    activation,
-                                    argument,
-                                    reason: ir::ImplicitBorrowKind::MutableReceiver,
-                                },
-                            ) => *activation == id && *argument == 0,
-                            _ => false,
-                        };
-                        *actual_kind == kind
-                            && exact_timing
-                            && place.local == local
-                            && place.projection == projection
+                if kind == ir::BorrowKind::Shared
+                    && matches!(argument.kind, ir::ExprKind::Call { .. })
+                {
+                    let (owner, input) = self.shared_deref_receiver(
+                        &receiver_node,
+                        args[0],
+                        local,
+                        &source_ty,
+                        depth + 1,
+                    )?;
+                    (owner, input, ir::CallExpectation::FirmReference { kind })
+                } else {
+                    let mut owner = source_ty.clone();
+                    let mut projection = Vec::new();
+                    while let ir::Ty::Ref { referent, .. } = &owner {
+                        sr::depth(self.budget, depth + projection.len())?;
+                        sr::push(&mut projection, ir::Projection::Deref, self.budget)?;
+                        owner = referent.as_ref().clone();
                     }
-                    ir::ExprKind::Local(actual) if kind == ir::BorrowKind::Shared => {
-                        *actual == local && self.equal(&source_ty, &input)?
+                    let input = self.reference(kind, owner.clone())?;
+                    let exact = match &argument.kind {
+                        ir::ExprKind::Borrow {
+                            kind: actual_kind,
+                            place,
+                            timing,
+                        } => {
+                            let exact_timing = match (kind, timing) {
+                                (ir::BorrowKind::Shared, ir::BorrowTiming::Immediate) => true,
+                                (
+                                    ir::BorrowKind::Mut,
+                                    ir::BorrowTiming::TwoPhase {
+                                        activation,
+                                        argument,
+                                        reason: ir::ImplicitBorrowKind::MutableReceiver,
+                                    },
+                                ) => *activation == id && *argument == 0,
+                                _ => false,
+                            };
+                            *actual_kind == kind
+                                && exact_timing
+                                && place.local == local
+                                && place.projection == projection
+                        }
+                        ir::ExprKind::Local(actual) if kind == ir::BorrowKind::Shared => {
+                            *actual == local && self.equal(&source_ty, &input)?
+                        }
+                        _ => false,
+                    };
+                    if !exact || !self.equal(&argument.ty, &input)? {
+                        return Err(FactsError::invalid(
+                            self.budget,
+                            "generic method changed its source receiver adjustment",
+                        ));
                     }
-                    _ => false,
-                };
-                if !exact || !self.equal(&argument.ty, &input)? {
-                    return Err(FactsError::invalid(
-                        self.budget,
-                        "generic method changed its source receiver adjustment",
-                    ));
+                    (owner, input, ir::CallExpectation::FirmReference { kind })
                 }
-                (owner, input, ir::CallExpectation::FirmReference { kind })
             }
             _ => {
                 return Err(FactsError::unsupported(

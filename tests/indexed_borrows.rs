@@ -11,6 +11,70 @@ mod closure_oracle;
 use closure_oracle::pinned_stock as stock_rustc;
 
 #[test]
+fn explicit_local_deref_refcell_field_borrows_match_stock() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check_with_compiler(
+        "explicit-local-deref-refcell-field-borrows",
+        &[
+            Case {
+                name: "authored_concrete_guard_entries_iteration",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn main(){let account=RefCell::new(Account{entries:vec![String::from("first"),String::from("second")]});
+let view=account.borrow();for entry in &view.entries{println!("{}",entry);}println!("{}",view.entries.len());}"#,
+                expect: Expect::Run("first\nsecond\n2\n"),
+            },
+            Case {
+                name: "authored_concrete_mutable_guard_field_borrow",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn main(){let account=RefCell::new(Account{entries:vec![String::from("first")]});
+{let mut view=account.borrow_mut();let entries=&mut view.entries;entries.push(String::from("second"));}
+let view=account.borrow();for entry in &view.entries{println!("{}",entry);}}"#,
+                expect: Expect::Run("first\nsecond\n"),
+            },
+            Case {
+                name: "stored_field_precedence_does_not_call_deref",
+                source: r#"use std::ops::Deref;struct Target{value:i32}struct Owner{value:i32,target:Target}
+impl Deref for Owner{type Target=Target;fn deref(&self)->&Target{println!("deref");&self.target}}
+fn main(){let owner=Owner{value:3i32,target:Target{value:7i32}};let value=&owner.value;println!("{}",*value);}"#,
+                expect: Expect::Run("3\n"),
+            },
+            Case {
+                name: "unused_shared_guard_cannot_mutably_borrow_field",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn unused(account:&RefCell<Account>){let mut view=account.borrow();let entries=&mut view.entries;entries.push(String::new());}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_missing_guard_target_field_rejects",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn unused(account:&RefCell<Account>){let view=account.borrow();let entries=&view.missing;}fn main(){}"#,
+                expect: Expect::Invalid("E0609"),
+            },
+            Case {
+                name: "unused_private_deref_target_field_rejects",
+                source: r#"use std::ops::Deref;mod hidden{pub struct Target{value:i32}}
+struct Owner{target:hidden::Target}impl Deref for Owner{type Target=hidden::Target;fn deref(&self)->&hidden::Target{&self.target}}
+fn unused(owner:Owner){let value=&owner.value;}fn main(){}"#,
+                expect: Expect::Invalid("E0616"),
+            },
+            Case {
+                name: "unused_guard_field_borrow_requires_mutable_owner",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn unused(account:&RefCell<Account>){let view=account.borrow_mut();let entries=&mut view.entries;entries.push(String::new());}fn main(){}"#,
+                expect: Expect::Invalid("E0596"),
+            },
+            Case {
+                name: "unused_overlapping_guard_field_borrows_reject",
+                source: r#"use std::cell::RefCell;struct Account{entries:Vec<String>}
+fn unused(account:&RefCell<Account>){let mut view=account.borrow_mut();let a=&mut view.entries;let b=&mut view.entries;a.push(String::new());b.push(String::new());}fn main(){}"#,
+                expect: Expect::Invalid("E0499"),
+            },
+        ],
+        std::path::Path::new(&stock_rustc::stock_rustc()),
+    );
+}
+
+#[test]
 fn returned_promotion_unproven_scope_is_explicit_unsupported() {
     use std::{fs, process::Command};
     let directory =

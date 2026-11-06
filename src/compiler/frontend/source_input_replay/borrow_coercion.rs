@@ -1,4 +1,4 @@
-//! Replay one expected-site coercion of an authored, unprojected local borrow.
+//! Replay one canonical adjustment of an authored local borrow.
 use super::*;
 
 impl Replay<'_> {
@@ -8,6 +8,18 @@ impl Replay<'_> {
         node: &sr::SourceNode,
         kind: ir::BorrowKind,
         root: AstIdent,
+        budget: &ir::PlanBudget,
+    ) -> Result<usize, FactsError> {
+        Self::borrow_coercion_field_site(original, inventory, node, kind, root, &[], budget)
+    }
+
+    pub(super) fn borrow_coercion_field_site(
+        original: &OriginalSource,
+        inventory: &SourceInventory,
+        node: &sr::SourceNode,
+        kind: ir::BorrowKind,
+        root: AstIdent,
+        fields: &[FieldSelector],
         budget: &ir::PlanBudget,
     ) -> Result<usize, FactsError> {
         validate_original_occurrence(original, node, budget)?;
@@ -38,7 +50,7 @@ impl Replay<'_> {
                 };
                 let class = crate::compiler::semantic_name::LookupClass::Local;
                 if *source_kind != kind
-                    || !place.fields.is_empty()
+                    || place.fields.len() != fields.len()
                     || inventory
                         .names
                         .key(name, class)
@@ -49,6 +61,29 @@ impl Replay<'_> {
                             .map_err(native_adapter::name_diagnostic)?
                 {
                     return Ok(());
+                }
+                for (source, expected) in place.fields.iter().zip(fields) {
+                    budget.charge_work(1)?;
+                    let equal = match (source, expected) {
+                        (FieldSelector::Deref, FieldSelector::Deref) => true,
+                        (FieldSelector::ConstantIndex(a), FieldSelector::ConstantIndex(b))
+                        | (FieldSelector::Tuple(a), FieldSelector::Tuple(b)) => a == b,
+                        (FieldSelector::Named(a), FieldSelector::Named(b)) => {
+                            let class = crate::compiler::semantic_name::LookupClass::Member;
+                            inventory
+                                .names
+                                .key(*a, class)
+                                .map_err(native_adapter::name_diagnostic)?
+                                == inventory
+                                    .names
+                                    .key(*b, class)
+                                    .map_err(native_adapter::name_diagnostic)?
+                        }
+                        _ => false,
+                    };
+                    if !equal {
+                        return Ok(());
+                    }
                 }
                 let pointer = *expr as *const Expr as usize;
                 let Some(index) = inventory
@@ -116,12 +151,6 @@ impl Replay<'_> {
                 "coercion lost authored borrow syntax",
             ));
         };
-        if !place.fields.is_empty() {
-            return Err(FactsError::unsupported(
-                self.budget,
-                "coercion requires an unprojected authored borrow",
-            ));
-        }
         let LocalName::Named(root) = place.local else {
             return Err(FactsError::unsupported(
                 self.budget,
@@ -219,14 +248,26 @@ impl Replay<'_> {
                 "selected explicit borrow coercion parameter changed",
             ));
         }
-        let source_index = Self::borrow_coercion_site(
-            self.original,
-            self.inventory,
-            node,
-            kind,
-            root,
-            self.budget,
-        )?;
+        let source_index = if place.fields.is_empty() {
+            Self::borrow_coercion_site(
+                self.original,
+                self.inventory,
+                node,
+                kind,
+                root,
+                self.budget,
+            )?
+        } else {
+            Self::borrow_coercion_field_site(
+                self.original,
+                self.inventory,
+                node,
+                kind,
+                root,
+                &place.fields,
+                self.budget,
+            )?
+        };
         sr::work(self.budget, self.original.call_mapping.len())?;
         let mut positions = self
             .original
