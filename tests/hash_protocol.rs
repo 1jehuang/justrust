@@ -41,6 +41,84 @@ fn primitive_and_tuple_byte_streams_match_stock() {
 }
 
 #[test]
+fn slice_hash_protocol_matches_stock() {
+    oracle::check(
+        "hash_protocol_slices",
+        &[
+            Case {
+                name: "length_prefix_and_bulk_primitive_bytes",
+                source: r#"use std::hash::{Hash,Hasher};
+struct Log {}
+impl Hasher for Log {
+    fn finish(&self)->u64{0}
+    fn write(&mut self,b:&[u8]){print!("write {}:",b.len());for byte in b{print!(" {}",byte);}println!();}
+    fn write_usize(&mut self,n:usize){println!("len {}",n);}
+    fn write_u8(&mut self,n:u8){println!("u8 {}",n);}
+    fn write_u16(&mut self,_n:u16){panic!("bulk slice must not call write_u16");}
+}
+fn main(){
+    let mut log=Log{};
+    let empty:&[u16]=&[];empty.hash(&mut log);
+    let bytes:&[u8]=&[1,255];bytes.hash(&mut log);
+    let words:&[u16]=&[258,772];words.hash(&mut log);
+    let signed:&[i32]=&[-2,1];signed.hash(&mut log);
+    let flags:&[bool]=&[true,false,true];flags.hash(&mut log);
+    let chars:&[char]=&['A','é'];chars.hash(&mut log);
+    <u16 as Hash>::hash_slice(words,&mut log);
+    <u128 as Hash>::hash_slice(&[0x0102030405060708090a0b0c0d0e0f10u128],&mut log);
+    <i128 as Hash>::hash_slice(&[-1i128],&mut log);
+    <isize as Hash>::hash_slice(&[-2isize],&mut log);
+    <u64 as Hash>::hash_slice(&[1u64],&mut log);
+}"#,
+                expect: Expect::Run(
+                    "len 0\nwrite 0:\nlen 2\nwrite 2: 1 255\nlen 2\nwrite 4: 2 1 4 3\nlen 2\nwrite 8: 254 255 255 255 1 0 0 0\nlen 3\nu8 1\nu8 0\nu8 1\nlen 2\nwrite 4: 65 0 0 0\nwrite 4: 233 0 0 0\nwrite 4: 2 1 4 3\nwrite 16: 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1\nwrite 16: 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255 255\nwrite 8: 254 255 255 255 255 255 255 255\nwrite 8: 1 0 0 0 0 0 0 0\n",
+                ),
+            },
+            Case {
+                name: "generic_default_override_and_vector_forwarding",
+                source: r#"use std::hash::{Hash,Hasher};
+struct Log {}
+impl Hasher for Log {
+    fn finish(&self)->u64{0}
+    fn write(&mut self,b:&[u8]){println!("write {}",b.len());}
+    fn write_usize(&mut self,n:usize){println!("len {}",n);}
+    fn write_u8(&mut self,n:u8){println!("u8 {}",n);}
+}
+struct Item{v:u8}
+impl Hash for Item{fn hash<H:Hasher>(&self,h:&mut H){h.write_u8(self.v);}}
+struct Batch{}
+impl Hash for Batch{
+    fn hash<H:Hasher>(&self,h:&mut H){h.write_u8(1);}
+    fn hash_slice<H:Hasher>(data:&[Self],h:&mut H){h.write_u8(90+data.len() as u8);}
+}
+fn hash_any<T:Hash+?Sized>(value:&T,h:&mut Log){value.hash(h);}
+fn main(){
+    let mut log=Log{};
+    let items:&[Item]=&[Item{v:3},Item{v:5}];hash_any::<[Item]>(items,&mut log);
+    <Item as Hash>::hash_slice(items,&mut log);
+    let batches:&[Batch]=&[Batch{},Batch{}];batches.hash(&mut log);
+    let empty:&[Batch]=&[];empty.hash(&mut log);
+    let values:Vec<u16>=vec![258,772];hash_any::<Vec<u16>>(&values,&mut log);
+}"#,
+                expect: Expect::Run(
+                    "len 2\nu8 3\nu8 5\nu8 3\nu8 5\nlen 2\nu8 92\nlen 0\nu8 90\nlen 2\nwrite 4\n",
+                ),
+            },
+            Case {
+                name: "missing_element_hash_in_unused_function",
+                source: "use std::hash::{Hash,Hasher};struct Missing;fn unused<H:Hasher>(values:&[Missing],h:&mut H){values.hash(h);}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "wrong_hash_slice_element_in_unused_function",
+                source: "use std::hash::{Hash,Hasher};fn unused<H:Hasher>(values:&[u32],h:&mut H){<u16 as Hash>::hash_slice(values,h);}fn main(){}",
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn derived_hash_is_generic_over_the_hasher() {
     oracle::check(
         "hash_protocol_derive",

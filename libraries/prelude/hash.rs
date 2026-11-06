@@ -87,6 +87,42 @@ impl Hasher for DefaultHasher {
 
 pub trait Hash {
     fn hash<H: Hasher>(&self, state: &mut H);
+
+    fn hash_slice<H: Hasher>(data: &[Self], state: &mut H) where Self: Sized {
+        let mut i = 0usize;
+        while i < data.len() {
+            <Self as Hash>::hash(&data[i], state);
+            i += 1usize;
+        }
+    }
+}
+
+// Integer representations have no padding or uninitialized
+// bytes. Their slice protocol writes the whole native-endian representation
+// once, rather than calling a potentially overridden write_* per element.
+// Only those primitive implementations call this private helper.
+fn hash_primitive_slice<T, H: Hasher>(data: &[T], state: &mut H) {
+    if data.len() == 0usize {
+        state.write(&[]);
+    } else {
+        let pointer = &data[0] as *const T as *const u8;
+        let length = data.len() * super::mem::size_of::<T>();
+        let bytes = unsafe { super::slice::from_raw_parts::<u8>(pointer, length) };
+        state.write(bytes);
+    }
+}
+
+impl<T: Hash> Hash for [T] {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write_usize(self.len());
+        T::hash_slice(self, state);
+    }
+}
+
+impl<T: Hash> Hash for super::vec::Vec<T> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_slice().hash(state);
+    }
 }
 
 impl<T: Hash + ?Sized> Hash for &T {
@@ -99,11 +135,17 @@ impl Hash for i8 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_i8(*self);
     }
+    fn hash_slice<H: Hasher>(data: &[i8], state: &mut H) {
+        hash_primitive_slice(data, state);
+    }
 }
 
 impl Hash for i16 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_i16(*self);
+    }
+    fn hash_slice<H: Hasher>(data: &[i16], state: &mut H) {
+        hash_primitive_slice(data, state);
     }
 }
 
@@ -111,11 +153,17 @@ impl Hash for i32 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_i32(*self);
     }
+    fn hash_slice<H: Hasher>(data: &[i32], state: &mut H) {
+        hash_primitive_slice(data, state);
+    }
 }
 
 impl Hash for i64 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_i64(*self);
+    }
+    fn hash_slice<H: Hasher>(data: &[i64], state: &mut H) {
+        hash_primitive_slice(data, state);
     }
 }
 
@@ -123,11 +171,17 @@ impl Hash for isize {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_isize(*self);
     }
+    fn hash_slice<H: Hasher>(data: &[isize], state: &mut H) {
+        hash_primitive_slice(data, state);
+    }
 }
 
 impl Hash for u8 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u8(*self);
+    }
+    fn hash_slice<H: Hasher>(data: &[u8], state: &mut H) {
+        hash_primitive_slice(data, state);
     }
 }
 
@@ -135,11 +189,17 @@ impl Hash for u16 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u16(*self);
     }
+    fn hash_slice<H: Hasher>(data: &[u16], state: &mut H) {
+        hash_primitive_slice(data, state);
+    }
 }
 
 impl Hash for u32 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u32(*self);
+    }
+    fn hash_slice<H: Hasher>(data: &[u32], state: &mut H) {
+        hash_primitive_slice(data, state);
     }
 }
 
@@ -147,11 +207,17 @@ impl Hash for u64 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u64(*self);
     }
+    fn hash_slice<H: Hasher>(data: &[u64], state: &mut H) {
+        hash_primitive_slice(data, state);
+    }
 }
 
 impl Hash for usize {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_usize(*self);
+    }
+    fn hash_slice<H: Hasher>(data: &[usize], state: &mut H) {
+        hash_primitive_slice(data, state);
     }
 }
 
@@ -159,11 +225,17 @@ impl Hash for u128 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_u128(*self);
     }
+    fn hash_slice<H: Hasher>(data: &[u128], state: &mut H) {
+        hash_primitive_slice(data, state);
+    }
 }
 
 impl Hash for i128 {
     fn hash<H: Hasher>(&self, state: &mut H) {
         state.write_i128(*self);
+    }
+    fn hash_slice<H: Hasher>(data: &[i128], state: &mut H) {
+        hash_primitive_slice(data, state);
     }
 }
 
