@@ -96,3 +96,135 @@ fn unsafe_operations_outside_unsafe_are_rejected() {
         }
     }
 }
+
+#[path = "support/oracle.rs"]
+mod target_feature_oracle;
+
+#[test]
+fn baseline_target_features_preserve_unsafe_scalar_semantics() {
+    use target_feature_oracle::{Case, Expect};
+    let cases = [
+        Case {
+            name: "baseline_feature_scalar",
+            source: "#[target_feature(enable=\"sse2\")] unsafe fn calculate(x:u32)->u32{x*3+2} fn main(){println!(\"{}\",unsafe{calculate(7)});}",
+            expect: Expect::Run("23\n"),
+        },
+        Case {
+            name: "baseline_feature_module",
+            source: "mod arithmetic { #[target_feature(enable=\"sse2\")] pub unsafe fn compute(x:u32)->u32{x*3+2} } fn main(){println!(\"{}\",unsafe{arithmetic::compute(7)});}",
+            expect: Expect::Run("23\n"),
+        },
+        Case {
+            name: "baseline_feature_set",
+            source: "#[target_feature(enable=\"fxsr,sse,sse2,sse2\")] unsafe fn calculate(x:u32)->u32{x*3+2} fn main(){println!(\"{}\",unsafe{calculate(7)});}",
+            expect: Expect::Run("23\n"),
+        },
+        Case {
+            name: "target_feature_call_requires_unsafe",
+            source: "#[target_feature(enable=\"sse2\")] unsafe fn calculate(x:u32)->u32{x+1} fn main(){println!(\"{}\",calculate(7));}",
+            expect: Expect::Invalid("E0133"),
+        },
+        Case {
+            name: "unused_invalid_target_feature",
+            source: "#[target_feature(enable=\"not_a_real_x86_extension\")] unsafe fn unused(){} fn main(){}",
+            expect: Expect::Invalid("not valid for this target"),
+        },
+        Case {
+            name: "target_feature_whitespace_name_invalid",
+            source: "#[target_feature(enable=\"sse2, sse\")] unsafe fn unused(){} fn main(){}",
+            expect: Expect::Invalid("not valid for this target"),
+        },
+        Case {
+            name: "target_feature_configured_inline_invalid",
+            source: "#[target_feature(enable=\"sse2\")] #[cfg_attr(all(),inline(always))] unsafe fn unused(){} fn main(){}",
+            expect: Expect::Invalid("inline(always)"),
+        },
+        Case {
+            name: "target_feature_inline_always_invalid",
+            source: "#[target_feature(enable=\"sse2\")] #[inline(always)] unsafe fn unused(){} fn main(){}",
+            expect: Expect::Invalid("inline(always)"),
+        },
+    ];
+    target_feature_oracle::check("baseline_target_features", &cases);
+    let stock = target_feature_oracle::pinned_stock::stock_rustc();
+    let directory = std::env::temp_dir().join(format!(
+        "justrust-feature-boundaries-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    let input = directory.join("input.rs");
+    for source in [
+        "#[target_feature(enable=\"sse2\")] const unsafe fn unused(){} fn main(){}",
+        "#[target_feature(enable=\"avx2\")] unsafe fn unused(){} fn main(){}",
+        "#[target_feature(enable=\"sse2\")] fn unused(){} fn main(){}",
+    ] {
+        fs::write(&input, source).unwrap();
+        let output = Command::new(&stock)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args([
+                "--edition=2024",
+                "--emit=metadata",
+                "--crate-name=feature_boundary",
+                "-Awarnings",
+            ])
+            .arg(&input)
+            .arg("-o")
+            .arg(directory.join("output.rmeta"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "valid unsupported feature control: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    for workers in [1, 8] {
+        for case in &cases {
+            for check in [true, false] {
+                match case.expect {
+                    Expect::Run(expected) if !check => {
+                        assert_eq!(run(case.source, workers, case.name), expected)
+                    }
+                    Expect::Run(_) => {
+                        let compiled =
+                            compiler::compile_observed(case.source.into(), workers, true).unwrap();
+                        assert!(compiled.executable.is_none());
+                        assert!(
+                            compiled
+                                .report
+                                .node_evaluations
+                                .iter()
+                                .all(|(key, _)| ![103, 105].contains(&key.kind))
+                        );
+                    }
+                    Expect::Invalid(_) => {
+                        let error = compiler::compile_observed(case.source.into(), workers, check)
+                            .err()
+                            .expect("invalid target feature accepted");
+                        assert!(!error.to_string().contains("unsupported"), "{error}");
+                    }
+                }
+            }
+        }
+        for source in [
+            "#[target_feature(enable=\"sse2\",enable=\"sse\")] unsafe fn unused(){} fn main(){}",
+            "#[target_feature(enable=concat!(\"sse\",\"2\"))] unsafe fn unused(){} fn main(){}",
+            "#[target_feature(enable=\"sse2\")] const unsafe fn unused(){} fn main(){}",
+            "#[target_feature(enable=\"avx2\")] unsafe fn unused(){} fn main(){}",
+            "#[target_feature(enable=\"amx-tile\")] unsafe fn unused(){} fn main(){}",
+            "#[target_feature(enable=\"sse2\")] fn unused(){} fn main(){}",
+            "#[target_feature(enable=\"sse2\")] unsafe fn f(){let x=(|x:u32|->u32{x+1})(1);} fn main(){}",
+            "struct S{} impl S{#[target_feature(enable=\"sse2\")] unsafe fn f(){}} fn main(){}",
+        ] {
+            for check in [true, false] {
+                let error = compiler::compile_observed(source.into(), workers, check)
+                    .err()
+                    .expect("unsupported target feature route accepted");
+                assert!(
+                    error.to_string().contains("unsupported"),
+                    "{source}: {error}"
+                );
+            }
+        }
+    }
+}

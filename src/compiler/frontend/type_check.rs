@@ -13888,6 +13888,12 @@ fn type_callable_source_and_closures_inner(
         || f.module != original.module
         || f.lexical_scope != original.lexical_scope
         || f.visibility != original.visibility
+        || !target_features::same(
+            &program.names,
+            f.target_feature.as_deref(),
+            original.target_feature.as_deref(),
+        )?
+        || (f.target_feature.is_some() && f.unsafety != original.unsafety)
         || !signature_source_equal(plan, f.into(), original.into())?
     {
         return Err(
@@ -15660,6 +15666,7 @@ mod checked_identity_tests {
         let module = builder.module_root().unwrap();
         builder.functions.push(Function {
             const_params: Vec::new(),
+            target_feature: None,
             embedded_source: None,
             direct_return_source: None,
             suspended_source: None,

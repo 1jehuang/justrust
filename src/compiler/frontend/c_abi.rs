@@ -176,7 +176,9 @@ impl Parser<'_, '_> {
                 return Err(self.unsupported("generated ABI attributes are unsupported"));
             }
             self.expect("[")?;
-            if self.eat("repr") {
+            if self.is("target_feature") {
+                self.target_feature_attribute()?;
+            } else if self.eat("repr") {
                 self.expect("(")?;
                 if self.pending_repr_c || self.pending_repr_align.is_some() {
                     return Err(

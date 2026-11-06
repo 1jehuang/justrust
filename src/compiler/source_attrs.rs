@@ -657,6 +657,21 @@ impl Filter<'_> {
                 "attributes at this attachment position are unsupported",
             ));
         }
+        if effective.iter().any(|meta| meta.name == "target_feature") {
+            for raw in &effective {
+                if raw.name == "inline" {
+                    let inline = parse_meta(&self.text[raw.range.clone()], raw.range.start)?;
+                    if matches!(&inline.value, MetaValue::List(args) if args.iter().any(|arg| arg.name == "always"))
+                    {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            inline.range,
+                            "inline(always) cannot be combined with target_feature",
+                        ));
+                    }
+                }
+            }
+        }
         let mut seen_identity_metadata = std::collections::BTreeSet::new();
         let mut retained_abi = Vec::new();
         for raw in effective {
@@ -692,6 +707,7 @@ impl Filter<'_> {
                 "doc"
                     | "inline"
                     | "must_use"
+                    | "target_feature"
                     | "repr"
                     | "unsafe"
                     | "no_std"
@@ -703,7 +719,13 @@ impl Filter<'_> {
                     | "expect"
             ) {
                 parse_meta(&self.text[raw.range.clone()], raw.range.start).map_err(|e| {
-                    if raw.name == "doc" && !e.limit {
+                    if raw.name == "target_feature" && !e.limit {
+                        error(
+                            AttributeErrorKind::Unsupported,
+                            raw.range.clone(),
+                            "target_feature attribute expression syntax is unsupported",
+                        )
+                    } else if raw.name == "doc" && !e.limit {
                         error(
                             AttributeErrorKind::Unsupported,
                             raw.range.clone(),
@@ -725,6 +747,26 @@ impl Filter<'_> {
                                 && meta.range.end <= attr.content.end
                         });
                     self.lint_level(&meta, root_inner)?;
+                }
+                "target_feature" => {
+                    if owner != Owner::Function {
+                        return Err(error(
+                            AttributeErrorKind::Syntax,
+                            meta.range,
+                            "target_feature requires a function owner",
+                        ));
+                    }
+                    let original = attrs
+                        .iter()
+                        .find(|attr| attr.content == meta.range && !attr.inner);
+                    let Some(original) = original else {
+                        return Err(error(
+                            AttributeErrorKind::Unsupported,
+                            meta.range,
+                            "configured target_feature attributes are unsupported",
+                        ));
+                    };
+                    retained_abi.push(original.range.clone());
                 }
                 "repr" | "unsafe" => {
                     let valid = match (&*meta.name, &meta.value) {

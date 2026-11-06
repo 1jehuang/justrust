@@ -39,6 +39,7 @@ mod char_literal;
 pub(super) mod closures;
 mod extern_crate;
 mod local_consts;
+mod target_features;
 pub use closures::shape_seal::ClosureShapeSeal;
 #[cfg(test)]
 mod trait_method_source_tests;
@@ -9443,6 +9444,7 @@ pub enum FieldName {
 pub struct Function {
     pub(super) direct_return_source: Option<Arc<direct_return::ParsedSource>>,
     pub const_params: Vec<SourceConstParameter>,
+    pub(super) target_feature: Option<Arc<target_features::Attribute>>,
     pub(super) embedded_source: Option<Arc<function_source::FunctionSource>>,
     pub(super) suspended_source: Option<Arc<function_source::AsyncBodySource>>,
     pub lexical_scope: Option<super::semantic_scope::ScopeId>,
@@ -11536,6 +11538,7 @@ struct Parser<'input, 'names> {
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     c_abi: c_abi::Declarations,
     pending_c_abi: bool,
+    pending_target_feature: Option<target_features::Pending>,
     pending_c_export: bool,
     pending_repr_c: bool,
     pending_repr_align: Option<super::token_session::SpanId>,
@@ -11734,6 +11737,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
+            pending_target_feature: None,
             pending_c_export: false,
             pending_repr_c: false,
             pending_repr_align: None,
@@ -13248,6 +13252,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             forbid_unsafe_roots: self.forbid_unsafe_roots.clone(),
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
+            pending_target_feature: None,
             pending_c_export: false,
             pending_repr_c: false,
             pending_repr_align: None,
@@ -13675,6 +13680,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             debug_assertions: super::source::CfgSet::DEFAULT_DEBUG_ASSERTIONS,
             c_abi: c_abi::Declarations::default(),
             pending_c_abi: false,
+            pending_target_feature: None,
             pending_c_export: false,
             pending_repr_c: false,
             pending_repr_align: None,
@@ -15471,6 +15477,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                     let (body, lexical_scope) =
                         self.emitted_callable_body(signature.name, &signature.params)?;
                     Some(Function {
+                        target_feature: None,
                         embedded_source: None,
                         direct_return_source: None,
                         suspended_source: None,
@@ -16192,7 +16199,14 @@ impl<'input, 'names> Parser<'input, 'names> {
     ) -> Result<(Function, ReceiverKind), ParseError> {
         let direct_return_start = self.cursor.index();
         let enclosing_bounds = self.visible_bounds.clone();
+        let feature_owner = primitive_constants::original_token(self);
+        let pending_feature = self.pending_target_feature.take();
         let (head, receiver) = self.function_head(inherited, associated)?;
+        let feature_external = self.pending_c_abi || self.foreign_c;
+        let target_feature = pending_feature
+            .map(|feature| feature.bind(self, &head, feature_owner, associated, feature_external))
+            .transpose()?;
+        let feature_closure_serial = self.lexical.closure_serial;
         let mut body_bounds = enclosing_bounds.clone();
         self.reserve_parser_items(&mut body_bounds, head.bounds.len())?;
         body_bounds.extend(head.bounds.iter().cloned());
@@ -16236,6 +16250,7 @@ impl<'input, 'names> Parser<'input, 'names> {
             };
             Ok((
                 Function {
+                    target_feature,
                     embedded_source: None,
                     direct_return_source: None,
                     suspended_source: function_source::issue_async_body(
@@ -16266,6 +16281,11 @@ impl<'input, 'names> Parser<'input, 'names> {
             ))
         })();
         let result = result.and_then(|(mut function, receiver)| {
+            if function.target_feature.is_some()
+                && self.lexical.closure_serial != feature_closure_serial
+            {
+                return Err(self.unsupported("closures inheriting target_feature are unsupported"));
+            }
             self.record_c_function(&function, external, exported)?;
             function.direct_return_source =
                 direct_return::issue(self, direct_return_start, &function, associated, external)

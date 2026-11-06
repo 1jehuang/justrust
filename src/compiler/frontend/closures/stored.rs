@@ -130,6 +130,7 @@ impl Parser<'_, '_> {
         // parameter/capture types. Parent checking supplies its exact actuals.
         let function = Function {
             const_params: Vec::new(),
+            target_feature: None,
             embedded_source: None,
             direct_return_source: None,
             suspended_source: None,

@@ -397,6 +397,7 @@ pub(super) fn validate_function_names(
     function: &Function,
     containing_module: Option<ModuleId>,
 ) -> Result<(), String> {
+    target_features::validate(program, function)?;
     generated_owners::validate_callable(program, function)?;
     let mut validator = Validator::new(program)?;
     validator.push(Visit::Function(function, containing_module))?;
@@ -1869,6 +1870,7 @@ mod tests {
     fn function(builder: &mut ProgramBuilder) -> Function {
         Function {
             const_params: Vec::new(),
+            target_feature: None,
             embedded_source: None,
             direct_return_source: None,
             suspended_source: None,
