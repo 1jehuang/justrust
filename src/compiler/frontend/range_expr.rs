@@ -2,7 +2,7 @@
 //! `a..b`, `a..`, `..b`, `..`, `a..=b`, `..=b`.
 //!
 //! Each form desugars to a struct literal of the matching prelude type in
-//! `std::ops` (`Range`, `RangeFrom`, `RangeTo`, `RangeFull`,
+//! `core::ops` (`Range`, `RangeFrom`, `RangeTo`, `RangeFull`,
 //! `RangeInclusive`, `RangeToInclusive`). Ranges bind looser than every
 //! binary operator, so they are only recognised at minimum precedence 0;
 //! positions that own `..` themselves (slice indexing, `for` ranges) parse
@@ -43,7 +43,7 @@ impl Parser<'_, '_> {
             (None, None, _) => "RangeFull",
         };
         let mut idents = Vec::new();
-        for segment in ["std", "ops", ty] {
+        for segment in ["core", "ops", ty] {
             idents.push(
                 self.names
                     .intern_root(segment, site)

@@ -545,3 +545,67 @@ fn cfg_test_alloc_binding_keeps_the_original_no_std_harness() {
         assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed; 0 failed"));
     }
 }
+
+#[test]
+fn no_std_range_expressions_use_core_for_every_form() {
+    let root = project(
+        "ranges",
+        "#![no_std]\nstruct std;\npub fn value() -> i32 { let a = 0i32..10i32; let b = 2i32..; let c = ..4i32; let _d = ..; let e = 1i32..=3i32; let f = ..=5i32; a.end + b.start + c.end + *e.start() + *e.end() + f.end }\n",
+    );
+    let stock = Command::new("cargo")
+        .args(["run", "--offline", "--quiet"])
+        .env("RUSTC", oracle::pinned_stock::stock_rustc())
+        .env("CARGO_TARGET_DIR", root.join("stock-target"))
+        .current_dir(&root)
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    assert_eq!(stock.stdout, b"25\n");
+    for workers in ["1", "8"] {
+        for command in ["check", "build", "run"] {
+            let out = native(&root, command, workers);
+            assert!(
+                out.status.success(),
+                "{command}/{workers}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            if command == "run" {
+                assert_eq!(out.stdout, stock.stdout);
+            }
+        }
+    }
+    for body in [
+        "pub fn unused() { let _r = 0i32..true; }",
+        "pub fn unused() { let _r = 0i32..=; }",
+    ] {
+        let library = root.join("dep/src/lib.rs");
+        std::fs::write(
+            &library,
+            format!("#![no_std]\n{body}\npub fn value() -> i32 {{ 25i32 }}\n"),
+        )
+        .unwrap();
+        let stock = Command::new("cargo")
+            .args(["check", "--offline", "--quiet"])
+            .env("RUSTC", oracle::pinned_stock::stock_rustc())
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(!stock.status.success(), "stock admitted {body}");
+        for workers in ["1", "8"] {
+            for command in ["check", "build"] {
+                let out = native(&root, command, workers);
+                assert_eq!(
+                    out.status.code(),
+                    Some(101),
+                    "{body}/{command}/{workers}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+    }
+}
