@@ -23,7 +23,7 @@ WITNESS_SOURCE_CONTRACT = {
     'selected_rule_rows': 44,
     'direct_witness_selectors': 6,
     'files': {
-        'tests/const_source.rs': '601ebd842e8081f1d12539027abd3bf2c0904b8e4ff03ebe9f3af88e968a16c6',
+        'tests/const_source.rs': '57dd3bba8af8b2f7e2ef919c7ed1ffabb1d41cfe3b8d7ffa4682a598d999566f',
         'tests/support/closure_oracle.rs': 'ad21cc4daf6d4dbbded2b96ea4112ceefc45a3ff5526a05b3c7234f21bbecfea',
         'tests/support/stock_rustc.rs': '45a9473fa05601a672a1c4d5d98df72395961aea44bf73389e087282b757f238',
         'data/compiler-compatibility-scope.json': '88afac0397deb6ae82dd586c166f81ec1316c14a22c716d98a774d87b07b3f59',
