@@ -3915,7 +3915,9 @@ impl ValidatedTraitWorld {
                 ));
             }
         }
-        let mut canonical = Vec::new();
+        // Only uniqueness and the row bound are needed here. The immutable
+        // input slice owns every row for this entire validation invocation.
+        let mut canonical: Vec<&Predicate> = Vec::new();
         for predicate in predicates {
             self.validate_predicate_metadata_with_facts(predicate, env, replays, caller)?;
         }
@@ -3932,7 +3934,22 @@ impl ValidatedTraitWorld {
                     equality_domain(projection, ty, replays)?;
                 }
             }
-            self.append_predicate(&mut canonical, predicate)?;
+            let mut duplicate = false;
+            for old in &canonical {
+                if self.eq_predicate(old, predicate)? {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if !duplicate {
+                if canonical.len() >= MAX_PREDICATES {
+                    return Err(FactsError::resource(
+                        &self.budget,
+                        "predicate environment limit exceeded",
+                    ));
+                }
+                push(&self.budget, &mut canonical, predicate)?;
+            }
         }
         self.validate_equality_conflicts(predicates)?;
         Ok(())
@@ -16506,6 +16523,39 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn predicate_validation_keeps_duplicate_limit_and_foreign_row_checks() {
+        let c = case();
+        let world = c.build().unwrap();
+        let facts = world.callable_facts(c.caller).unwrap();
+        let mut duplicates = vec![c.goal(c.leaf.clone()); MAX_PREDICATES + 1];
+        world
+            .validate_predicates(&duplicates, facts.env(), None)
+            .unwrap();
+        let foreign = case();
+        duplicates.push(foreign.goal(c.leaf.clone()));
+        assert!(matches!(
+            world.validate_predicates(&duplicates, facts.env(), None),
+            Err(error) if error.kind() == FactsErrorKind::InvalidMetadata
+        ));
+        let unique: Vec<_> = (0..=MAX_PREDICATES)
+            .map(|len| {
+                c.goal(Ty::Array {
+                    element: Arc::new(Ty::Bool),
+                    len,
+                })
+            })
+            .collect();
+        world
+            .validate_predicates(&unique[..MAX_PREDICATES], facts.env(), None)
+            .unwrap();
+        let error = world
+            .validate_predicates(&unique, facts.env(), None)
+            .unwrap_err();
+        assert_eq!(error.kind(), FactsErrorKind::Resource);
+        assert_eq!(error.to_string(), "predicate environment limit exceeded");
     }
 
     #[test]
