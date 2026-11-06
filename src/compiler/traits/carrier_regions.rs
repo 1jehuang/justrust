@@ -904,6 +904,50 @@ mod tests {
     }
 
     #[test]
+    fn trait_self_slice_family_requires_its_exact_source_row() {
+        let budget = PlanBudget::default();
+        let program = crate::compiler::frontend::parse(
+            "trait Scan{fn scan(data:&[Self]) where Self:Sized;}fn main(){}",
+        )
+        .unwrap();
+        let plan = crate::compiler::frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let world = plan.trait_world().unwrap();
+        let item = world
+            .headers
+            .items
+            .iter()
+            .find(|item| {
+                item.schema
+                    .signature
+                    .params
+                    .first()
+                    .is_some_and(|ty| matches!(ty.shared_slice_element(), Some(Ty::Param(_))))
+            })
+            .unwrap();
+        let source = plan.source_region_env(item.declaration).unwrap();
+        let signature = &item.schema.signature;
+        world
+            .checked_source_carriers(&source, signature, signature)
+            .unwrap();
+        let mut missing = source.as_ref().clone();
+        missing.carriers = Arc::from([]);
+        assert!(
+            world
+                .checked_source_carriers(&missing, signature, signature)
+                .is_err()
+        );
+        let mut foreign = source.as_ref().clone();
+        let mut rows = foreign.carriers.to_vec();
+        rows[0].parameter = Some(1);
+        foreign.carriers = rows.into();
+        assert!(
+            world
+                .checked_source_carriers(&foreign, signature, signature)
+                .is_err()
+        );
+    }
+
+    #[test]
     fn generic_slice_family_rows_reject_missing_foreign_and_offset_metadata() {
         let budget = PlanBudget::default();
         let program =

@@ -197,7 +197,7 @@ impl Collector<'_> {
         self.budget.check_depth(depth)?;
         self.budget.charge_work(1)?;
         match source {
-            Type::Param(_) | Type::Named(_)
+            Type::Param(_) | Type::Named(_) | Type::SelfType
                 if matches!(semantic, ir::Ty::Param(_))
                     && path.last() == Some(&ir::CarrierStep::SliceElement)
                     && prefix == 0 =>
@@ -610,6 +610,36 @@ fn substitute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trait_self_slice_retains_declared_element_family() {
+        let source =
+            parse("trait Scan{fn scan(data:&[Self]) where Self:Sized;}fn main(){}").unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&source, &budget).unwrap();
+        let declaration = plan.registry.trait_items[0][0];
+        let regions = plan.source_region_env(declaration).unwrap();
+        let family = regions
+            .carriers
+            .iter()
+            .find(|row| matches!(row.region, ir::CarrierRegionTerm::Family { .. }))
+            .expect("trait Self slice lost its original element family");
+        assert_eq!(family.parameter, Some(0));
+        assert_eq!(
+            family.location.path.0.as_ref(),
+            &[ir::CarrierStep::Referent, ir::CarrierStep::SliceElement]
+        );
+        let ir::CarrierRegionTerm::Family { parameter } = family.region else {
+            unreachable!()
+        };
+        assert_eq!(
+            family.location.channel,
+            ir::CarrierChannel::ParamTail {
+                parameter,
+                prefix: 0
+            }
+        );
+    }
 
     #[test]
     fn empty_nominal_memo_keeps_reference_paths_and_source_arity() {
