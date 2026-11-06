@@ -41,3 +41,13 @@
 25_primes_gcd	pass
 26_generic_string_borrow	pass
 27_vec_of_string_refs	pass
+28_struct_derive	pass
+29_option_combinators	fail	filter_map
+30_string_build	pass
+31_impl_display	pass
+32_generics_traits	pass
+33_hashmap_entry	pass
+34_sort_by	fail	slice_sort_by
+35_while_loop_match	pass
+36_iter_adapters	fail	iter_adapters
+37_struct_methods_lifetimes	fail	str_range_slice
