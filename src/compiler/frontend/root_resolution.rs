@@ -1557,7 +1557,7 @@ impl Resolver<'_> {
                 }
                 _ => None,
             };
-            let mut resolved = if matches!(item.kind, ItemKind::Import(_, _)) {
+            let mut resolved = if item.kind.import_target().is_some() {
                 self.import(path, index, namespace)?
             } else {
                 kind.map(|kind| ResolvedItem {
@@ -1789,14 +1789,34 @@ impl Resolver<'_> {
             .get(&path_key)
             .and_then(|items| items.get(index))
             .ok_or("missing checked import binding")?;
-        let ItemKind::Import(target, type_only) = &item.kind else {
+        let Some((target, type_only)) = item.kind.import_target() else {
             return Err("checked import binding has wrong kind".into());
         };
+        let alloc = matches!(item.kind, ItemKind::AllocCrate(_));
         let target = target.clone();
-        let type_only = *type_only;
         let requester = item.module;
         let resolved = if type_only && !namespace {
             None
+        } else if alloc {
+            target
+                .check(self.names())
+                .map_err(native_adapter::name_diagnostic)?;
+            if let Some(found) = self.extern_path(&target, requester, namespace)? {
+                found
+            } else {
+                let module = self
+                    .program
+                    .alloc_library_module
+                    .ok_or("unsupported: native alloc library surface is unavailable")?;
+                let canonical = self.module_path(module)?;
+                let resolved = self
+                    .item(&canonical, requester, true, false)?
+                    .ok_or("native alloc library source module is missing")?;
+                if resolved.kind != ResolvedKind::Module {
+                    return Err("native alloc library identity is not a module".into());
+                }
+                Some(resolved)
+            }
         } else {
             self.path(&target, requester, namespace, true)?
         };
@@ -5749,7 +5769,7 @@ fn collect_trait_imports(
         .iter()
         .enumerate()
     {
-        if matches!(item.kind, ItemKind::Import(_, _))
+        if item.kind.import_target().is_some()
             && let Some(target) = resolver.import(path, index, true)?
             && target.kind == ResolvedKind::Trait
         {
@@ -5873,7 +5893,7 @@ fn validate_declared_path(resolver: &mut Resolver<'_>, path: &AstPath) -> Result
         .get(&key)
         .ok_or("missing source item bucket")?;
     for (index, item) in items.iter().enumerate() {
-        if let ItemKind::Import(target, type_only) = &item.kind {
+        if let Some((target, type_only)) = item.kind.import_target() {
             let type_target = resolver.import(path, index, true)?;
             let value_target = resolver.import(path, index, false)?;
             if type_target.is_none() && value_target.is_none() {

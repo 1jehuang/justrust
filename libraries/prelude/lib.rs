@@ -5,6 +5,12 @@
 // See PRELUDE.md. Add a file with `pub mod name;` here plus one entry in
 // src/compiler/source_prelude.rs.
 
+pub mod alloc_surface {
+    pub use super::boxed;
+    pub use super::string;
+    pub use super::vec;
+}
+
 pub mod core_surface {
     pub use super::option;
     pub use super::result;

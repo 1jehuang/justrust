@@ -8862,6 +8862,7 @@ pub struct Program {
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
+    alloc_library_module: Option<ModuleId>,
     generated_owners: Arc<[generated_owners::Certificate]>,
     generated_metadata: Arc<[generated_metadata::Attachment]>,
     c_abi: Arc<c_abi::Declarations>,
@@ -8988,6 +8989,7 @@ struct ProgramDeclarations {
     no_std_roots: Arc<[super::token_session::SourceFileHandle]>,
     core_prelude_scope: Option<ModuleId>,
     core_library_module: Option<ModuleId>,
+    alloc_library_module: Option<ModuleId>,
     c_abi: c_abi::Declarations,
     functions: Vec<Function>,
     constants: Vec<ConstDecl>,
@@ -9024,6 +9026,7 @@ impl ProgramDeclarations {
             no_std_roots: self.no_std_roots,
             core_prelude_scope: self.core_prelude_scope,
             core_library_module: self.core_library_module,
+            alloc_library_module: self.alloc_library_module,
             generated_owners: Arc::from([]),
             generated_metadata: self.generated_metadata.into(),
             c_abi: Arc::new(self.c_abi),
@@ -9203,6 +9206,7 @@ impl ProgramBuilder {
             no_std_roots: Arc::from([]),
             core_prelude_scope: None,
             core_library_module: None,
+            alloc_library_module: None,
             extern_mounts: Vec::new(),
             extern_crate_aliases: Vec::new(),
             closure_sources: HashMap::new(),
@@ -9364,6 +9368,16 @@ enum ItemKind {
     Trait(usize),
     Variant(ir::VariantShape),
     Import(AstPath, bool), // target path, type-namespace-only (`prefix::{self}`)
+    AllocCrate(AstPath),   // original explicit extern crate alloc target
+}
+impl ItemKind {
+    fn import_target(&self) -> Option<(&AstPath, bool)> {
+        match self {
+            Self::Import(target, type_only) => Some((target, *type_only)),
+            Self::AllocCrate(target) => Some((target, true)),
+            _ => None,
+        }
+    }
 }
 
 /// Offsets added to a file-local item's declaration index when its file's
@@ -18868,6 +18882,7 @@ fn parse_syntax_unit(
         parsed.program.prelude_scope = mount.parent.prelude_scope;
         parsed.program.core_prelude_scope = mount.parent.core_prelude_scope;
         parsed.program.core_library_module = mount.parent.core_library_module;
+        parsed.program.alloc_library_module = mount.parent.alloc_library_module;
         parsed.program.extern_mounts = mount.parent.extern_mounts.clone();
     }
     let (root, root_path) = match &mount {
@@ -20461,6 +20476,7 @@ pub(super) fn merge_crate_file_refs_at(
             (&mut program.prelude_scope, p.prelude_scope),
             (&mut program.core_prelude_scope, p.core_prelude_scope),
             (&mut program.core_library_module, p.core_library_module),
+            (&mut program.alloc_library_module, p.alloc_library_module),
         ] {
             if let Some(incoming) = incoming {
                 if target.is_some_and(|previous| previous != incoming) {

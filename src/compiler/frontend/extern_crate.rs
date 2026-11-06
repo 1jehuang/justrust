@@ -1,5 +1,5 @@
 //! `extern crate` items. The item is an ordinary type-namespace import of the
-//! crate root (native `core`/`std` or a mounted dependency, which already
+//! crate root (native `core`/`std`/explicit `alloc` or a mounted dependency, which already
 //! enters through the extern prelude), so `extern crate core as std;` makes
 //! `std::...` name core paths and the import resolver keeps deciding privacy,
 //! shadowing and collisions. An unknown dependency name fails resolution.
@@ -20,7 +20,8 @@ impl Parser<'_, '_> {
         if crate_token.string || crate_token.text == "self" {
             return Err(self.unsupported("extern crate self is unsupported"));
         }
-        let library = matches!(crate_token.text, "core" | "std");
+        let alloc = crate_token.text == "alloc";
+        let library = alloc || matches!(crate_token.text, "core" | "std");
         let crate_name = self.ident()?;
         let local = if self.eat("as") {
             if self.is("_") {
@@ -53,8 +54,9 @@ impl Parser<'_, '_> {
         // An unaliased `extern crate std;` names itself; the extern prelude
         // already provides that name, so recording a self-import would only
         // create a resolver cycle.
-        if self.name_key(local, LookupClass::Item(Namespace::Type))?
-            == self.name_key(crate_name, LookupClass::Item(Namespace::Type))?
+        if !alloc
+            && self.name_key(local, LookupClass::Item(Namespace::Type))?
+                == self.name_key(crate_name, LookupClass::Item(Namespace::Type))?
         {
             return Ok(());
         }
@@ -74,7 +76,11 @@ impl Parser<'_, '_> {
             module,
             &path,
             visibility,
-            ItemKind::Import(target, true),
+            if alloc {
+                ItemKind::AllocCrate(target)
+            } else {
+                ItemKind::Import(target, true)
+            },
         )
     }
 }

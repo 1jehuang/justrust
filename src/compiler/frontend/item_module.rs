@@ -131,6 +131,9 @@ impl Parser<'_, '_> {
             if module == prelude && spelling == "core_surface" {
                 parsed.program.core_library_module = Some(child);
             }
+            if module == prelude && spelling == "alloc_surface" {
+                parsed.program.alloc_library_module = Some(child);
+            }
             let parent = self.modules.parent(module).map_err(module_parse_error)?;
             // The crate's edition selects its implicit prelude module.
             let legacy = self.names.edition().pre_2021();

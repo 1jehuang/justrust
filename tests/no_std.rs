@@ -2,6 +2,9 @@
 #![cfg(all(target_os = "linux", target_arch = "x86_64"))]
 use std::path::PathBuf;
 use std::process::{Command, Output};
+#[path = "support/closure_oracle.rs"]
+#[allow(dead_code)]
+mod oracle;
 
 fn project(name: &str, library: &str) -> PathBuf {
     let root = std::env::var_os("JCODE_SCRATCH_DIR")
@@ -314,14 +317,9 @@ fn extern_crate_core_alias_names_core_in_no_std_and_std_crates() {
 }
 #[test]
 fn extern_crate_items_outside_the_native_libraries_are_explicit() {
-    for (name, item, accepted_by_stock) in [
-        ("alloc", "extern crate alloc;", true),
-        ("missing", "extern crate not_a_crate;", false),
-        (
-            "alias-collision",
-            "extern crate core as c;\npub struct c;",
-            false,
-        ),
+    for (name, item) in [
+        ("missing", "extern crate not_a_crate;"),
+        ("alias-collision", "extern crate core as c;\npub struct c;"),
     ] {
         let root = project(name, &format!("{item}\npub fn value() -> i32 {{ 3i32 }}\n"));
         let stock = Command::new("cargo")
@@ -330,7 +328,7 @@ fn extern_crate_items_outside_the_native_libraries_are_explicit() {
             .env("CARGO_TARGET_DIR", root.join("stock-target"))
             .output()
             .unwrap();
-        assert_eq!(stock.status.success(), accepted_by_stock, "{name}");
+        assert!(!stock.status.success(), "{name}");
         let out = native(&root, "check", "1");
         assert_eq!(
             out.status.code(),
@@ -338,10 +336,6 @@ fn extern_crate_items_outside_the_native_libraries_are_explicit() {
             "{name}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        if accepted_by_stock {
-            assert!(stderr.contains("unsupported"), "{name}: {stderr}");
-        }
     }
 }
 #[test]
@@ -386,4 +380,168 @@ fn std_io_is_unavailable_in_no_std_crates() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(String::from_utf8_lossy(&out.stderr).contains("no_std"));
+}
+
+#[test]
+fn explicit_alloc_crates_resolve_owned_source_modules_and_aliases() {
+    for (name, source) in [
+        (
+            "alloc-root",
+            "#![no_std]\nextern crate alloc;\nmod inner { use alloc::vec::Vec; pub fn value() -> i32 { let mut v = Vec::new(); v.push(3i32); v[0] } } pub fn value() -> i32 { inner::value() }\n",
+        ),
+        (
+            "alloc-alias",
+            "#![no_std]\nextern crate alloc as heap;\nmod alloc { pub fn local() -> i32 { 0i32 } } mod inner { pub fn value() -> i32 { let mut v = heap::vec::Vec::new(); let text = heap::string::String::from(\"xy\"); let boxed = heap::boxed::Box::new(1i32); v.push(text.len() as i32); v[0] + *boxed + crate::alloc::local() } } pub fn value() -> i32 { inner::value() }\n",
+        ),
+        (
+            "alloc-public-nested",
+            "#![no_std]\nmod gateway { pub extern crate alloc as heap; } mod inner { use crate::gateway::heap::vec::Vec; pub fn value() -> i32 { let mut v = Vec::new(); v.push(3i32); v[0] } } pub fn value() -> i32 { inner::value() }\n",
+        ),
+    ] {
+        let root = project(name, source);
+        let stock = Command::new("cargo")
+            .args(["run", "--offline", "--quiet"])
+            .env("RUSTC", oracle::pinned_stock::stock_rustc())
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            stock.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        assert_eq!(stock.stdout, b"3\n", "{name}");
+        for workers in [1, 8] {
+            let checked = justrust_engine::compiler::compile_file_observed_with_options(
+                root.join("dep/src/lib.rs"),
+                workers,
+                true,
+                justrust_engine::compiler::source::SourceOptions {
+                    library: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|error| panic!("{name}/{workers}: {error}"));
+            assert!(checked.executable.is_none(), "CHECK published an image");
+            assert!(
+                checked
+                    .report
+                    .node_evaluations
+                    .iter()
+                    .all(|(key, _)| { !matches!(key.kind, 103 | 105 | 130 | 131 | 133) }),
+                "{name}/{workers}: CHECK demanded code generation"
+            );
+        }
+        for workers in ["1", "8"] {
+            for command in ["check", "build", "run"] {
+                let out = native(&root, command, workers);
+                assert!(
+                    out.status.success(),
+                    "{name}/{command}/{workers}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                if command == "run" {
+                    assert_eq!(out.stdout, stock.stdout, "{name}/{workers}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn explicit_alloc_crates_preserve_visibility_and_reject_unknown_roots() {
+    for (name, source, stock_code) in [
+        (
+            "alloc-absent",
+            "#![no_std]\nmod alloc_surface { pub mod vec { pub struct Vec; } } pub fn unused() { let _v = alloc::vec::Vec::<u8>::new(); }\n",
+            "E0433",
+        ),
+        (
+            "alloc-private",
+            "#![no_std]\nmod owner { extern crate alloc as heap; } pub fn unused() { let _v = owner::heap::vec::Vec::<u8>::new(); }\n",
+            "E0603",
+        ),
+        (
+            "alloc-collision",
+            "#![no_std]\nextern crate alloc as heap; struct heap;\n",
+            "E0260",
+        ),
+        (
+            "alloc-unknown",
+            "#![no_std]\nextern crate not_a_crate as heap; pub fn unused() {}\n",
+            "E0463",
+        ),
+    ] {
+        let root = project(name, source);
+        let library = root.join("dep/src/lib.rs");
+        let stock = Command::new(oracle::pinned_stock::stock_rustc())
+            .args(["--edition=2024", "--crate-type=lib", "--emit=metadata"])
+            .arg(&library)
+            .arg("-o")
+            .arg(root.join("invalid.rmeta"))
+            .output()
+            .unwrap();
+        assert!(!stock.status.success(), "stock admitted {name}");
+        assert!(
+            String::from_utf8_lossy(&stock.stderr).contains(stock_code),
+            "{name}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let options = justrust_engine::compiler::source::SourceOptions {
+                    library: true,
+                    ..Default::default()
+                };
+                let failure = match justrust_engine::compiler::compile_file_observed_with_options(
+                    library.clone(),
+                    workers,
+                    check_only,
+                    options,
+                ) {
+                    Err(failure) => failure,
+                    Ok(_) => panic!("native admitted {name}/{workers}/CHECK={check_only}"),
+                };
+                oracle::validate_native_rejection(&failure).unwrap_or_else(|error| {
+                    panic!("{name}/{workers}/CHECK={check_only}: {error}: {failure}")
+                });
+            }
+        }
+    }
+}
+
+#[test]
+fn cfg_test_alloc_binding_keeps_the_original_no_std_harness() {
+    let root = project(
+        "alloc-tests",
+        "#![no_std]\n#[cfg(test)] extern crate alloc;\npub fn value() -> i32 { 3i32 }\n#[cfg(test)] mod tests { use alloc::vec::Vec; #[test] fn allocated() { let mut values = Vec::new(); values.push(super::value()); assert_eq!(values[0], 3i32); } }\n",
+    );
+    let dep = root.join("dep");
+    let stock = Command::new("cargo")
+        .args(["test", "--lib", "--offline", "--quiet"])
+        .env("RUSTC", oracle::pinned_stock::stock_rustc())
+        .env("CARGO_TARGET_DIR", root.join("stock-test-target"))
+        .current_dir(&dep)
+        .output()
+        .unwrap();
+    assert!(
+        stock.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stock.stderr)
+    );
+    for workers in ["1", "8"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_jr-rust"))
+            .args(["test", "--lib", "-j", workers])
+            .env("CARGO_TARGET_DIR", dep.join("native-target"))
+            .current_dir(&dep)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{workers}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(String::from_utf8_lossy(&out.stdout).contains("1 passed; 0 failed"));
+    }
 }
