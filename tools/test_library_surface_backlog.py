@@ -544,5 +544,181 @@ class BacklogTests(unittest.TestCase):
         self.assertIs(missing['has_more'], False)
 
 
+class InputAuthenticationTests(unittest.TestCase):
+    url = BacklogTests.url
+    candidate = BacklogTests.candidate
+    save = BacklogTests.save
+
+    def setUp(self):
+        BacklogTests.setUp(self)
+        self.source_path = self.root / 'library-source-index.json'
+        self.html_root = self.root / 'html'
+        self.source = {'schema_version': 1, 'review_status': 'unreviewed',
+                       'scope': self.surface['scope'],
+                       'source_identity': {k: self.identity[k] for k in
+                           ('commit', 'release', 'repository', 'root_tree_sha1', 'library_tree_sha1')}}
+        source_raw = backlog.encode(self.source)
+        self.source_path.write_bytes(source_raw)
+        self.identity['source_index_content_sha256'] = hashlib.sha256(source_raw).hexdigest()
+        for page in self.pages:
+            raw = ('<html data-rustdoc-version="' + page['rustdoc_version'] + '"></html>').encode()
+            page['byte_length'] = len(raw)
+            page['content_sha256'] = hashlib.sha256(raw).hexdigest()
+            path = self.html_root / page['path']
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        self.save()
+        self.provenance['artifacts'].append({'id': 'pinned-library-source-path-index',
+            'filename': self.source_path.name, 'byte_length': len(source_raw),
+            'content_sha256': hashlib.sha256(source_raw).hexdigest(), 'role': 'synthetic retained source'})
+        self.write_provenance()
+
+    def write_provenance(self):
+        self.provenance_path.write_bytes(backlog.encode(self.provenance))
+
+    def authenticate(self):
+        return backlog.authenticate_inputs(self.surface_path, self.source_path,
+                                          self.html_root, self.provenance_path)
+
+    def test_full_byte_authentication_and_unchanged_defaults(self):
+        before = backlog.encode(backlog.build(self.surface_path, self.provenance_path))
+        result = self.authenticate()
+        self.assertEqual(result['authenticated_sidecars'], 2)
+        self.assertEqual(result['authenticated_html_pages'], 9)
+        self.assertEqual(result['completion_credit'], 0)
+        self.assertIsNone(result['api_denominator'])
+        self.assertEqual(before, backlog.encode(backlog.build(self.surface_path, self.provenance_path)))
+        with mock.patch.object(backlog, 'authenticate_inputs', side_effect=AssertionError('opt-in only')):
+            backlog.build(self.surface_path, self.provenance_path)
+
+    def test_each_retained_file_tamper_and_omission(self):
+        for path in [self.source_path, self.surface_path] + [self.html_root / p['path'] for p in self.pages]:
+            raw = path.read_bytes()
+            for action in ('tamper', 'omit'):
+                with self.subTest(path=path, action=action):
+                    if action == 'tamper':
+                        path.write_bytes(bytes([raw[0] ^ 1]) + raw[1:])
+                    else:
+                        path.unlink()
+                    with self.assertRaises((ValueError, OSError)):
+                        self.authenticate()
+                    path.write_bytes(raw)
+
+    def test_symlink_files_and_parent_directory(self):
+        for path in (self.source_path, self.surface_path, self.provenance_path,
+                     self.html_root / self.pages[0]['path'],
+                     self.html_root / 'core'):
+            with self.subTest(path=path):
+                saved = path.with_name(path.name + '.saved')
+                path.rename(saved)
+                path.symlink_to(saved)
+                with self.assertRaises(OSError):
+                    self.authenticate()
+                path.unlink()
+                saved.rename(path)
+
+    def test_duplicate_omitted_and_traversal_descriptors(self):
+        original = copy.deepcopy(self.provenance)
+        for change in ('duplicate', 'omitted', 'traversal', 'falsecount', 'page-duplicate', 'page-traversal'):
+            with self.subTest(change=change):
+                self.provenance = copy.deepcopy(original)
+                if change == 'duplicate':
+                    self.provenance['artifacts'].append(self.provenance['artifacts'][1])
+                elif change == 'omitted':
+                    self.provenance['artifacts'].pop()
+                elif change == 'traversal':
+                    self.provenance['artifacts'][1]['filename'] = '../library-source-index.json'
+                elif change == 'falsecount':
+                    self.provenance['observations']['literal_index_link_anchor_candidate_records'] += 1
+                elif change == 'page-duplicate':
+                    self.provenance['pages'].append(self.provenance['pages'][0])
+                else:
+                    self.provenance['pages'][0]['path'] = 'alloc/../core/index.html'
+                self.write_provenance()
+                with self.assertRaises(ValueError):
+                    self.authenticate()
+
+    def test_wrong_release_marker_even_with_rebound_byte_hash(self):
+        page = self.pages[0]
+        path = self.html_root / page['path']
+        raw = path.read_bytes().replace(b'1.98.1', b'1.98.2')
+        path.write_bytes(raw)
+        page['content_sha256'] = hashlib.sha256(raw).hexdigest()
+        artifacts = self.provenance['artifacts'][1:]
+        self.save()
+        self.provenance['artifacts'].extend(artifacts)
+        self.write_provenance()
+        with self.assertRaisesRegex(ValueError, 'version/commit marker'):
+            self.authenticate()
+
+    def test_duplicate_json_and_explicit_parent_traversal(self):
+        raw = self.provenance_path.read_bytes()
+        self.provenance_path.write_bytes(raw.replace(b'{', b'{"schema_version": 1,', 1))
+        with self.assertRaisesRegex(ValueError, 'duplicate JSON key'):
+            self.authenticate()
+        with self.assertRaisesRegex(ValueError, 'noncanonical'):
+            backlog.retained_bytes(self.root / '..' / self.root.name / self.source_path.name, 100)
+
+    def test_cli_success_and_failure_emit_no_false_success(self):
+        args = ['authenticate-inputs', '--surface-index', str(self.surface_path),
+                '--source-index', str(self.source_path), '--html-root', str(self.html_root),
+                '--provenance', str(self.provenance_path)]
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(backlog.main(args), 0)
+        self.assertEqual(json.loads(output.getvalue())['authenticated_html_pages'], 9)
+        self.assertEqual(errors.getvalue(), '')
+        self.source_path.unlink()
+        output, errors = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(errors):
+            self.assertEqual(backlog.main(args), 1)
+        self.assertEqual(output.getvalue(), '')
+        self.assertIn('library surface backlog:', errors.getvalue())
+
+    def test_rebound_source_sidecar_nonfinite_constants_rejected(self):
+        original = copy.deepcopy(self.provenance)
+        for constant in ('NaN', 'Infinity', '-Infinity'):
+            with self.subTest(constant=constant):
+                self.provenance = copy.deepcopy(original)
+                source_raw = (backlog.encode(self.source).rstrip()[:-1] +
+                              b', "unused": ' + constant.encode() + b'}\n')
+                self.source_path.write_bytes(source_raw)
+                source_hash = hashlib.sha256(source_raw).hexdigest()
+                self.identity['source_index_content_sha256'] = source_hash
+                self.surface['source_identity'] = self.identity
+                self.provenance['source_identity'] = self.identity
+                surface_raw = backlog.encode(self.surface)
+                self.surface_path.write_bytes(surface_raw)
+                self.provenance['artifacts'][0].update(
+                    content_sha256=hashlib.sha256(surface_raw).hexdigest(), byte_length=len(surface_raw))
+                self.provenance['artifacts'][1].update(
+                    content_sha256=source_hash, byte_length=len(source_raw))
+                self.write_provenance()
+                with self.assertRaisesRegex(ValueError, '^' + constant + '$'):
+                    self.authenticate()
+
+    def test_provenance_nonfinite_constants_rejected(self):
+        original = backlog.encode(self.provenance)
+        for constant in ('NaN', 'Infinity', '-Infinity'):
+            with self.subTest(constant=constant):
+                self.provenance_path.write_bytes(original.rstrip()[:-1] +
+                    b', "unused": ' + constant.encode() + b'}\n')
+                with self.assertRaisesRegex(ValueError, '^' + constant + '$'):
+                    self.authenticate()
+
+    def test_rebound_surface_sidecar_nonfinite_constants_rejected(self):
+        original = backlog.encode(self.surface)
+        for constant in ('NaN', 'Infinity', '-Infinity'):
+            with self.subTest(constant=constant):
+                raw = original.replace(b'"synthetic literal observations"', constant.encode())
+                self.assertNotEqual(raw, original)
+                self.surface_path.write_bytes(raw)
+                self.provenance['artifacts'][0].update(
+                    content_sha256=hashlib.sha256(raw).hexdigest(), byte_length=len(raw))
+                self.write_provenance()
+                with self.assertRaisesRegex(ValueError, '^' + constant + '$'):
+                    self.authenticate()
+
+
 if __name__ == '__main__':
     unittest.main()

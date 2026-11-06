@@ -11,8 +11,10 @@ from datetime import date
 from functools import wraps
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import stat
 import sys
 
 MAX_BYTES = 100_000
@@ -256,11 +258,15 @@ def validate_metadata(data, provenance):
 
 
 @value_errors
-def _build_snapshot(surface_path: Path, provenance_path: Path):
+def _build_snapshot(surface_path: Path, provenance_path: Path, *, retained=None):
     """Authenticate and validate once, retaining the exact candidate snapshot."""
-    _, provenance = read_json(provenance_path, 1_000_000)
+    if retained is None:
+        _, provenance = read_json(provenance_path, 1_000_000)
+    else:
+        provenance, raw, surface = retained
     descriptor = provenance_parts(provenance)
-    raw, surface = read_json(surface_path, MAX_SURFACE_BYTES)
+    if retained is None:
+        raw, surface = read_json(surface_path, MAX_SURFACE_BYTES)
     need(len(raw) == descriptor['byte_length'] and hashlib.sha256(raw).hexdigest() ==
          descriptor['content_sha256'], 'retained sidecar byte authentication failed')
     need(type(surface) is dict and type(surface.get('schema_version')) is int and
@@ -410,9 +416,99 @@ def encode(data):
     return (json.dumps(data, indent=2, sort_keys=True, ensure_ascii=True, allow_nan=False) + '\n').encode('ascii')
 
 
+def retained_bytes(path, limit):
+    """Open canonical components without following symlinks, including parents."""
+    path = Path(path)
+    need('..' not in path.parts, 'noncanonical retained input path')
+    path = path.absolute()
+    fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:-1]:
+            next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = next_fd
+        file_fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=fd)
+        with os.fdopen(file_fd, 'rb') as stream:
+            need(stat.S_ISREG(os.fstat(stream.fileno()).st_mode), 'retained input is not a regular file')
+            raw = stream.read(limit + 1)
+        need(len(raw) <= limit, 'retained input exceeds byte limit')
+        return raw
+    finally:
+        os.close(fd)
+
+
+@value_errors
+def authenticate_inputs(surface_path, source_path, html_root, provenance_path):
+    """Authenticate recorded inputs only, not source semantics or API coverage.
+
+    Trust is relative to the supplied immutable compact provenance. No remote
+    correspondence, source blobs, tree responses or missing pages are verified.
+    """
+    import acquire_pinned_api_html as html
+
+    raw = retained_bytes(provenance_path, 1_000_000)
+    provenance = json.loads(raw, object_pairs_hook=no_duplicates,
+                            parse_constant=lambda s: (_ for _ in ()).throw(ValueError(s)))
+    provenance_parts(provenance)
+    artifacts = provenance['artifacts']
+    expected = {'pinned-html-link-anchor-candidate': ('pinned-html-api-index.json', surface_path),
+                'pinned-library-source-path-index': ('library-source-index.json', source_path)}
+    need(len(artifacts) == 2 and {a['id'] for a in artifacts} == set(expected),
+         'expected exactly two distinct retained sidecars')
+    parsed = {}
+    surface_raw = None
+    for artifact in artifacts:
+        fields(artifact, ARTIFACT_FIELDS, 'sidecar descriptor')
+        filename, path = expected[artifact['id']]
+        need(artifact['filename'] == filename and Path(path).name == filename,
+             'noncanonical retained sidecar filename')
+        need(integer(artifact['byte_length']) and 0 < artifact['byte_length'] <= MAX_SURFACE_BYTES and
+             digest(artifact['content_sha256']) and type(artifact['role']) is str and
+             bool(artifact['role']), 'invalid retained sidecar fingerprint')
+        raw = retained_bytes(path, artifact['byte_length'])
+        need(len(raw) == artifact['byte_length'] and hashlib.sha256(raw).hexdigest() ==
+             artifact['content_sha256'], 'retained sidecar byte authentication failed: ' + filename)
+        parsed[artifact['id']] = json.loads(raw, object_pairs_hook=no_duplicates,
+                                           parse_constant=lambda s: (_ for _ in ()).throw(ValueError(s)))
+        if artifact['id'] == 'pinned-html-link-anchor-candidate':
+            surface_raw = raw
+    source = parsed['pinned-library-source-path-index']
+    identity = provenance['source_identity']
+    need(type(source['schema_version']) is int and source['schema_version'] == 1 and
+         source['review_status'] == 'unreviewed' and
+         source['scope'] == provenance['scope'], 'source sidecar schema/scope mismatch')
+    need(source['source_identity'] == {key: identity[key] for key in
+         ('commit', 'release', 'repository', 'root_tree_sha1', 'library_tree_sha1')},
+         'source sidecar identity mismatch')
+    source_artifact = next(a for a in artifacts if a['id'] == 'pinned-library-source-path-index')
+    need(source_artifact['content_sha256'] == identity['source_index_content_sha256'],
+         'source sidecar identity hash mismatch')
+    # Reuse the existing complete observation recomputation, not a second counter.
+    _build_snapshot(surface_path, provenance_path, retained=(provenance, surface_raw,
+                    parsed['pinned-html-link-anchor-candidate']))
+    for page in provenance['pages']:
+        need(page['byte_length'] <= 16 * 1024 * 1024, 'retained HTML exceeds per-page limit')
+        raw = retained_bytes(Path(html_root) / path_ok(page['path']), page['byte_length'])
+        need(len(raw) == page['byte_length'] and hashlib.sha256(raw).hexdigest() ==
+             page['content_sha256'], 'retained HTML byte authentication failed: ' + page['path'])
+        need(html.parse(raw)['rustdoc_version'] == page['rustdoc_version'],
+             'retained HTML release marker mismatch: ' + page['path'])
+    return {'external_verification': 'retained-input-bytes-reverified',
+            'authenticated_sidecars': 2, 'authenticated_html_pages': len(provenance['pages']),
+            'review_credit': 0, 'execution_credit': 0, 'completion_credit': 0,
+            'api_denominator': None, 'full_rust_completion_percent': None,
+            'interpretation': 'Byte authentication relative to supplied compact provenance only. '
+                'No source semantics, remote correspondence, missing pages or API coverage verified.'}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='command', required=True)
+    auth = sub.add_parser('authenticate-inputs')
+    auth.add_argument('--surface-index', type=Path, required=True)
+    auth.add_argument('--source-index', type=Path, required=True)
+    auth.add_argument('--html-root', type=Path, required=True)
+    auth.add_argument('--provenance', type=Path, required=True)
     for command in ('generate', 'verify', 'query'):
         p = sub.add_parser(command)
         p.add_argument('--surface-index', type=Path, required=True)
@@ -428,7 +524,11 @@ def main(argv=None):
             p.add_argument('--output' if command == 'generate' else '--backlog', type=Path, required=True)
     args = parser.parse_args(argv)  # All option validation precedes any input/output IO.
     try:
-        if args.command == 'query':
+        if args.command == 'authenticate-inputs':
+            result = authenticate_inputs(args.surface_index, args.source_index,
+                                         args.html_root, args.provenance)
+            sys.stdout.write(encode(result).decode('ascii'))
+        elif args.command == 'query':
             result = query(args.surface_index, args.provenance, crate=args.crate, page=args.page,
                            anchor=args.anchor, missing_only=args.missing_pages_only,
                            limit=args.limit, offset=args.offset)
