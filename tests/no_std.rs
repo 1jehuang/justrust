@@ -609,3 +609,98 @@ fn no_std_range_expressions_use_core_for_every_form() {
         }
     }
 }
+
+#[test]
+fn parent_private_trait_globs_preserve_canonical_method_scope() {
+    for (name, imports) in [
+        (
+            "parent",
+            "use core::hash::Hasher; mod bridge { use super::*; pub fn value() -> i32 { let mut h = super::H(1u64); h.write(&[1u8, 2u8]); h.finish() as i32 } }",
+        ),
+        (
+            "renamed",
+            "use core::hash::Hasher as Digest; mod bridge { use super::*; pub fn value() -> i32 { let mut h = super::H(1u64); h.write(&[1u8, 2u8]); h.finish() as i32 } }",
+        ),
+        (
+            "chained",
+            "use core::hash::Hasher; mod bridge { use super::*; mod nested { use super::*; pub fn value() -> i32 { let mut h = crate::H(1u64); h.write(&[1u8, 2u8]); h.finish() as i32 } } pub fn value() -> i32 { nested::value() } }",
+        ),
+        (
+            "cycle",
+            "use core::hash::Hasher; use bridge::*; mod bridge { use super::*; pub fn value() -> i32 { let mut h = super::H(1u64); h.write(&[1u8, 2u8]); h.finish() as i32 } }",
+        ),
+    ] {
+        let library = format!(
+            "#![no_std]\npub struct H(u64); impl core::hash::Hasher for H {{ fn finish(&self) -> u64 {{ self.0 }} fn write(&mut self, b: &[u8]) {{ self.0 += b.len() as u64; }} }} {imports} pub fn value() -> i32 {{ bridge::value() }}\n"
+        );
+        let root = project(&format!("trait-glob-{name}"), &library);
+        let stock = Command::new("cargo")
+            .args(["run", "--offline", "--quiet"])
+            .env("RUSTC", oracle::pinned_stock::stock_rustc())
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(
+            stock.status.success(),
+            "{name}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        assert_eq!(stock.stdout, b"3\n");
+        for workers in ["1", "8"] {
+            for command in ["check", "build", "run"] {
+                let out = native(&root, command, workers);
+                assert!(
+                    out.status.success(),
+                    "{name}/{command}/{workers}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                if command == "run" {
+                    assert_eq!(out.stdout, stock.stdout);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn trait_globs_do_not_leak_private_or_ambiguous_method_scope() {
+    for (name, body) in [
+        (
+            "sibling",
+            "mod sibling { use core::hash::Hasher; } mod user { use super::sibling::*; pub fn unused() { let mut h = super::H(0u64); h.write(&[]); } }",
+        ),
+        (
+            "private",
+            "mod sibling { use core::hash::Hasher as Digest; } use sibling::Digest;",
+        ),
+        (
+            "ambiguous",
+            "mod a { pub trait T { fn method(&self) -> i32; } impl T for super::H { fn method(&self) -> i32 { 1i32 } } } mod b { pub trait U { fn method(&self) -> i32; } impl U for super::H { fn method(&self) -> i32 { 2i32 } } } mod user { use super::a::*; use super::b::*; pub fn unused() { let h = super::H(0u64); let _x = h.method(); } }",
+        ),
+    ] {
+        let library = format!(
+            "#![no_std]\npub struct H(u64); impl core::hash::Hasher for H {{ fn finish(&self) -> u64 {{ self.0 }} fn write(&mut self, b: &[u8]) {{ self.0 += b.len() as u64; }} }} {body} pub fn value() -> i32 {{ 3i32 }}\n"
+        );
+        let root = project(&format!("trait-glob-invalid-{name}"), &library);
+        let stock = Command::new("cargo")
+            .args(["check", "--offline", "--quiet"])
+            .env("RUSTC", oracle::pinned_stock::stock_rustc())
+            .env("CARGO_TARGET_DIR", root.join("stock-target"))
+            .current_dir(&root)
+            .output()
+            .unwrap();
+        assert!(!stock.status.success(), "stock admitted {name}");
+        for workers in ["1", "8"] {
+            for command in ["check", "build"] {
+                let out = native(&root, command, workers);
+                assert_eq!(
+                    out.status.code(),
+                    Some(101),
+                    "{name}/{command}/{workers}: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+    }
+}

@@ -12,6 +12,7 @@ mod lexical_calls;
 mod manually_drop;
 mod primitive_owners;
 mod stored_closures;
+mod trait_globs;
 
 #[derive(Clone, Debug)]
 enum ResolvedPath {
@@ -4939,6 +4940,17 @@ pub fn resolve_module_items(
             path_error = Some((order, diagnostic));
             break;
         }
+    }
+    if path_error.is_none()
+        && alias_error.is_none()
+        && glob_error.is_none()
+        && let Err(diagnostic) =
+            trait_globs::collect(namespace, ordinal, &mut resolver, &mut trait_imports)
+    {
+        glob_error = Some((
+            namespace.globs[ordinal].first().copied().unwrap_or(0),
+            diagnostic,
+        ));
     }
     let entry_error = check_root_entry(namespace, ordinal, &mut resolver).err();
     let mut adapters = Vec::new();
