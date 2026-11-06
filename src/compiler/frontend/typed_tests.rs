@@ -5211,6 +5211,9 @@ fn tuple_invalid_fields_assignments_and_operators_are_rejected() {
         "fn main(){let mut x=(1,);x.1=2;}",
         "fn main(){let x=(1,);let y=x.0.0;}",
         "fn main(){let x=().0;}",
+        "fn main(){let x=(1,).00;}",
+        "fn main(){let x=(1,).000;}",
+        "fn main(){let x=(1,).0000;}",
         "fn main(){let x=(1,)==(1,);}",
         "fn main(){let x=(1,)<(2,);}",
     ] {
@@ -5218,7 +5221,6 @@ fn tuple_invalid_fields_assignments_and_operators_are_rejected() {
     }
     for source in [
         "fn main(){(1,).0=2;}",
-        "fn main(){let x=(1,).00;}",
         "fn main(){let x=(1,).0usize;}",
         "fn main(){let x=(1,).-1;}",
     ] {

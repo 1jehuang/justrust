@@ -1,5 +1,43 @@
 use super::*;
 
+#[test]
+fn leading_zero_tuple_fields_match_stock_rejection() {
+    for field in ["00", "000", "0000", "01", "010"] {
+        let source = format!("fn unused(){{let pair=(1,2);let _=pair.{field};}}fn main(){{}}");
+        stock_native_reject_with_diagnostics(&source, Some(("E0609", "unknown tuple field")));
+    }
+    for source in [
+        "fn unused(){let mut pair=(1,2);pair.00=3;}fn main(){}",
+        "fn unused(){let pair=((1,2),);let _=pair.00.1;}fn main(){}",
+        "fn unused(){let pair=((1,2),);let _=pair.0.00;}fn main(){}",
+    ] {
+        stock_native_reject_with_diagnostics(source, Some(("E0609", "unknown tuple field")));
+    }
+}
+
+#[test]
+fn canonical_tuple_fields_preserve_float_and_range_lexing() {
+    let source = r#"fn main(){
+        let value=(0,1,2,3,4,5,6,7,8,9,10);
+        let nested=((2,3),);
+        let mut sum=0;
+        for n in 0..3 {sum=sum+n;}
+        assert!(value.0==0 && value.10==10 && nested.0.1==3);
+        assert!(sum==3 && 0.00f64==0.0 && 1.25f64>1.0);
+        println!("tuple lexical controls ok");
+    }"#;
+    let output =
+        std::env::temp_dir().join(format!("tuple-field-valid-stock-{}", std::process::id()));
+    let checked = stock_compile(source, &output, true);
+    assert!(
+        checked.status.success(),
+        "{}",
+        String::from_utf8_lossy(&checked.stderr)
+    );
+    assert!(!output.exists());
+    stock_native_run(source);
+}
+
 pub(super) fn stock_compile(
     source: &str,
     output: &std::path::Path,
