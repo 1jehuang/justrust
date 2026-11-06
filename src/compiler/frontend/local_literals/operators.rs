@@ -198,7 +198,9 @@ impl Solver<'_, '_, '_> {
             if matches!(kind, Kind::Index(_)) {
                 let element = match self.domain(left) {
                     Domain::Array(element, _) | Domain::Slice(element) => element,
-                    Domain::Unknown => return Ok(false),
+                    // An iterator item projection can still normalize to a
+                    // slice or array. It supplies no indexing evidence yet.
+                    Domain::Unknown | Domain::AssociatedProjection(_) => return Ok(false),
                     _ => return Err(self.user_error("E0608: cannot index this type")),
                 };
                 let usize = self.fixed(ir::Ty::Int(ir::IntTy::Usize))?;
@@ -223,6 +225,22 @@ impl Solver<'_, '_, '_> {
                             self.domain(left),
                             Domain::Fixed(ir::Ty::Int(_) | ir::Ty::Float(_))
                         ) =>
+                {
+                    return Ok(false);
+                }
+                // Borrowed iterator items may still have an open referent.
+                // Do not equate the reference with a scalar before the
+                // primitive forwarding implementation can be determined.
+                (Kind::Binary(op) | Kind::Assign(op), Some(right))
+                    if !comparison(op)
+                        && !self.projection_defaults
+                        && [left, right].into_iter().any(|term| {
+                            matches!(self.domain(term), Domain::Ref(_, inner)
+                            if matches!(
+                                self.domain(inner),
+                                Domain::Unknown | Domain::AssociatedProjection(_)
+                            ))
+                        }) =>
                 {
                     return Ok(false);
                 }
@@ -499,6 +517,30 @@ impl Solver<'_, '_, '_> {
                 return Ok(true);
             }
             receiver = next;
+        }
+        // Exact RHS selection has priority. Otherwise a unique proved formal
+        // permits call-argument coercions such as `&String` to `&str`.
+        if selected.is_none()
+            && matches!(kind, Kind::Binary(op) if !comparison(op))
+            && arguments.len() == 1
+            && let Some(formal) =
+                self.checker
+                    .unique_operator_rhs_formal(&receiver, declaration, &method)?
+        {
+            let trait_ref = ir::TraitRef {
+                declaration,
+                self_ty: receiver.clone(),
+                args: vec![formal].into(),
+            };
+            selected = plan.select_trait_with_scratch(
+                &trait_ref,
+                &method,
+                &[],
+                self.checker.facts(),
+                false,
+                &plan.budget,
+                &self.checker.trait_scratch,
+            )?;
         }
         let Some((_, signature, _)) = selected else {
             // Stock reports an unsatisfied `Index` bound as E0277; the

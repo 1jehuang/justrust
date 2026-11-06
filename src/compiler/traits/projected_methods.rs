@@ -1437,7 +1437,13 @@ impl ValidatedTraitWorld {
         for proof in proofs {
             push(&self.budget, &mut dependencies, proof)?;
         }
-        if !method_args.is_empty() || self.projected_marker_predicates(&item.schema)? {
+        // Provided methods retain all their original where-clauses, not just
+        // the restricted marker obligations admitted on required methods.
+        let provided_bounds = item.default.is_some() && !item.schema.predicates.is_empty();
+        if !method_args.is_empty()
+            || provided_bounds
+            || self.projected_marker_predicates(&item.schema)?
+        {
             // Even a nongeneric required method may carry an original
             // `Self::Out: Copy`/`Sized` obligation. Normalize it only after exact
             // substitution and prove its actual RHS in this caller context.

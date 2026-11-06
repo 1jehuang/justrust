@@ -937,6 +937,14 @@ impl type_check::Checker<'_> {
             }
             _ => return Err("operator trait arity mismatch".into()),
         };
+        let mut candidates = candidates;
+        if arity == 2
+            && module == "ops"
+            && let Some(formal) = self.unique_operator_rhs_formal(&self_ty, declaration, &ident)?
+            && !candidates.iter().any(|c| c.first() == Some(&formal))
+        {
+            candidates.push(vec![formal]);
+        }
         for trait_args in candidates {
             let trait_ref = ir::TraitRef {
                 declaration,

@@ -56,6 +56,10 @@ impl<T> Vec<T> {
         super::slice::Chunks::new(self.as_slice(), size)
     }
 
+    pub fn windows<'a>(&'a self, size: usize) -> super::slice::Windows<'a, T> {
+        super::slice::Windows::new(self.as_slice(), size)
+    }
+
     pub fn iter<'a>(&'a self) -> super::slice::Iter<'a, T> {
         super::slice::Iter::new(self.as_slice())
     }

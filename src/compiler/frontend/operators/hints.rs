@@ -89,6 +89,49 @@ impl type_check::Checker<'_> {
         Ok(unique)
     }
 
+    /// A unique proved operator application supplies an expected RHS type.
+    /// Operand coercions are checked independently during lowering, just as
+    /// ordinary call arguments are. Ambiguous or open impls give no hint.
+    pub(in crate::compiler::frontend) fn unique_operator_rhs_formal(
+        &self,
+        receiver: &ir::Ty,
+        declaration: ir::DeclId,
+        method: &AstIdent,
+    ) -> Result<Option<ir::Ty>, String> {
+        let Some(facts) = self.facts().validated() else {
+            return Ok(None);
+        };
+        let plan = self.signatures.plan()?;
+        let (applications, deferred) =
+            plan.inferred_trait_applications(receiver, declaration, facts, &plan.budget)?;
+        if deferred {
+            return Ok(None);
+        }
+        let mut unique = None;
+        for application in applications.as_slice() {
+            plan.budget.charge_work(1)?;
+            let Some((_, signature, _)) = plan.select_trait_with_scratch(
+                application,
+                method,
+                &[],
+                self.facts(),
+                false,
+                &plan.budget,
+                &self.trait_scratch,
+            )?
+            else {
+                continue;
+            };
+            let Some(argument) = signature.params.get(1) else {
+                continue;
+            };
+            if unique.replace(argument.clone()).is_some() {
+                return Ok(None);
+            }
+        }
+        Ok(unique)
+    }
+
     pub(in crate::compiler::frontend) fn unsuffixed_operator_rhs_hint(
         &self,
         receiver: &ir::Ty,
@@ -214,6 +257,15 @@ impl type_check::Checker<'_> {
             },
             _ => return Ok(None),
         };
+        let mut candidates = candidates;
+        if spec.0 == "ops"
+            && rhs.is_some()
+            && let Some(formal) =
+                self.unique_operator_rhs_formal(&receiver, declaration, &method)?
+            && !candidates.iter().any(|c| c.first() == Some(&formal))
+        {
+            candidates.push(vec![formal]);
+        }
         for args in candidates {
             let trait_ref = ir::TraitRef {
                 declaration,

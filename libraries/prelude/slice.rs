@@ -267,11 +267,53 @@ impl<'a, T> super::iter::IntoIterator for Chunks<'a, T> {
 pub trait SliceChunks<'a, T> {
     fn chunks(self, size: usize) -> Chunks<'a, T>;
     fn chunks_exact(self, size: usize) -> ChunksExact<'a, T>;
+    fn windows(self, size: usize) -> Windows<'a, T>;
 }
 
 impl<'a, T> SliceChunks<'a, T> for &'a [T] {
     fn chunks(self, size: usize) -> Chunks<'a, T> { Chunks::new(self, size) }
     fn chunks_exact(self, size: usize) -> ChunksExact<'a, T> { ChunksExact::new(self, size) }
+    fn windows(self, size: usize) -> Windows<'a, T> { Windows::new(self, size) }
+}
+
+/// Overlapping borrowed windows of exactly `size` elements.
+pub struct Windows<'a, T> {
+    values: &'a [T],
+    size: usize,
+    front: usize,
+    back: usize,
+}
+
+impl<'a, T> Windows<'a, T> {
+    pub(super) fn new(values: &'a [T], size: usize) -> Windows<'a, T> {
+        assert!(size != 0usize);
+        let back = if values.len() < size { 0usize } else { values.len() - size + 1usize };
+        Windows { values, size, front: 0usize, back }
+    }
+}
+
+impl<'a, T> super::iter::Iterator for Windows<'a, T> {
+    type Item = &'a [T];
+    fn next(&mut self) -> super::option::Option<&'a [T]> {
+        if self.front == self.back { return super::option::Option::None; }
+        let start = self.front;
+        self.front += 1usize;
+        super::option::Option::Some(&self.values[start..start + self.size])
+    }
+}
+
+impl<'a, T> super::iter::DoubleEndedIterator for Windows<'a, T> {
+    fn next_back(&mut self) -> super::option::Option<&'a [T]> {
+        if self.front == self.back { return super::option::Option::None; }
+        self.back -= 1usize;
+        super::option::Option::Some(&self.values[self.back..self.back + self.size])
+    }
+}
+
+impl<'a, T> super::iter::IntoIterator for Windows<'a, T> {
+    type Item = &'a [T];
+    type IntoIter = Self;
+    fn into_iter(self) -> Self { self }
 }
 
 /// Non-overlapping chunks of exactly `size` elements. The final
