@@ -11,6 +11,165 @@ use closure_oracle::pinned_stock as stock_rustc;
 #[path = "support/closure_oracle.rs"]
 mod closure_oracle;
 
+#[test]
+fn async_context_unused_invalid_workers1_8_check_build() {
+    use closure_oracle::{Case, Expect};
+    closure_oracle::check(
+        "async-context-boundaries",
+        &[
+            Case {
+                name: "outer_postfix_is_not_inside_its_operand",
+                source: "fn unused(){let _value=async {7i32}.await;}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0728"),
+            },
+            Case {
+                name: "ordinary_closure_resets_async_context",
+                source: "fn unused(){let _future=async {let _f=|| {async {7i32}.await};};}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0728"),
+            },
+            Case {
+                name: "wrong_context_after_valid_nested_async",
+                source: "fn unused(){let _future=async {async {7i32}.await};let _bad=async {8i32}.await;}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0728"),
+            },
+            Case {
+                name: "ordinary_closure_still_requires_async_context",
+                source: "fn unused(){let _f=|| {let _value=async move {7i32}.await;};}fn main(){}",
+                expect: Expect::InvalidAfterParse("E0728"),
+            },
+        ],
+    );
+    for source in [
+        "fn unused(){let _value=async {7i32}.await;}fn main(){}",
+        "fn unused(){let _future=async {let _f=|| {async {7i32}.await};};}fn main(){}",
+        "fn unused(){let _future=async {async {7i32}.await};let _bad=async {8i32}.await;}fn main(){}",
+        "fn unused(){let _f=|| {let _value=async move {7i32}.await;};}fn main(){}",
+    ] {
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure =
+                    justrust_engine::compiler::compile_observed(source.into(), workers, check_only)
+                        .err()
+                        .expect("invalid await accepted");
+                assert!(
+                    failure.error.0.contains("E0728"),
+                    "{workers}/{check_only}: {failure}"
+                );
+                closure_oracle::validate_semantic_rejection(&failure).unwrap();
+                if check_only {
+                    assert!(
+                        failure
+                            .report
+                            .as_ref()
+                            .unwrap()
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+                        "CHECK demanded codegen: {failure}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn async_context_stock_valid_boundaries_are_explicitly_unsupported_without_codegen() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let compiler = stock_rustc::stock_rustc();
+    let metadata = std::env::temp_dir().join(format!(
+        "jr-async-context-{}-{}.rmeta",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    for source in [
+        "fn unused(){let _future=async {7i32};}fn main(){}",
+        "fn unused(){let _future=async move {async {7i32}.await};}fn main(){}",
+        "fn unused(){let _future=async {let _f=|| {async {7i32}};};}fn main(){}",
+        "fn unused(){let _future=async {let _f=|| {async {async {7i32}.await}};};}fn main(){}",
+    ] {
+        let mut child = Command::new(&compiler)
+            .env_remove("RUSTC_BOOTSTRAP")
+            .args([
+                "--edition=2024",
+                "--crate-name=async_context_boundary",
+                "--emit=metadata",
+                "-Awarnings",
+            ])
+            .arg("-o")
+            .arg(&metadata)
+            .arg("-")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(source.as_bytes())
+            .unwrap();
+        let stock = child.wait_with_output().unwrap();
+        let _ = std::fs::remove_file(&metadata);
+        assert!(
+            stock.status.success(),
+            "stock rejected {source}: {}",
+            String::from_utf8_lossy(&stock.stderr)
+        );
+        for workers in [1, 8] {
+            for check_only in [true, false] {
+                let failure =
+                    justrust_engine::compiler::compile_observed(source.into(), workers, check_only)
+                        .err()
+                        .expect("native future execution must remain Unsupported");
+                assert!(
+                    failure.error.0.contains("unsupported:"),
+                    "{workers}/{check_only}: {failure}"
+                );
+                assert!(
+                    !failure.error.0.contains("E0728"),
+                    "well-contexted await rejected: {failure}"
+                );
+                assert!(failure.resource_usage.first_failure.is_none());
+                assert!(!failure.resource_usage.poisoned);
+                let report = failure
+                    .report
+                    .as_ref()
+                    .expect("admitted source needs graph evidence");
+                assert!(report.capture_complete && report.events_dropped == 0);
+                for (kind, params) in [(121, vec![0]), (101, vec![])] {
+                    assert!(
+                        report.node_ids.iter().zip(&report.node_evaluations).any(
+                            |(id, (key, _))| {
+                                key.kind == kind
+                                    && key.params == params
+                                    && report.events.iter().any(|event| {
+                                        event.kind == "publish" && event.node == Some(*id)
+                                    })
+                            }
+                        ),
+                        "source/declarations were not admitted: {failure}"
+                    );
+                }
+                if check_only {
+                    assert!(
+                        report
+                            .node_evaluations
+                            .iter()
+                            .all(|(key, _)| !matches!(key.kind, 103 | 105 | 130 | 131 | 133)),
+                        "CHECK demanded code generation: {failure}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn observed_rejection(diagnostic: &str, with_report: bool) -> justrust_engine::compiler::Failure {
     justrust_engine::compiler::Failure {
         error: justrust_engine::engine::Error::new(diagnostic),
@@ -262,8 +421,8 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"expression-core\"",
         "\"path-expressions\"",
         "\"global_rule_identities\": 2965",
-        "\"proposed_rule_identities\": 815",
-        "\"rule_identities_without_proposals\": 2150",
+        "\"proposed_rule_identities\": 1148",
+        "\"rule_identities_without_proposals\": 1817",
         "\"backlog\"",
         "\"total_pages\": 122",
         "\"missing_rule_sample_limit\": 100",
@@ -342,10 +501,27 @@ fn evidence_rejects_missing_stale_tampered_filtered_and_empty_results() {
         "\"selected_rule_identities\": 1",
         "\"global_rule_identities\": 2965",
         "\"linked\": false",
-        "\"proposal_status\": \"missing\"",
+        "\"proposal_status\": \"authored-unreviewed\"",
         "\"reviewed_rule_rows\": 0",
+        "\"rows_with_exact_executable_evidence\": 0",
     ] {
         assert!(rule.contains(marker), "missing {marker}: {rule}");
+    }
+    let missing_rule = python(
+        "tools/compatibility_inventory.py",
+        &["--rule", "attributes.syntax"],
+    );
+    for marker in [
+        "\"selected_rule_identities\": 1",
+        "\"selected_proposed_rule_identities\": 0",
+        "\"proposal_status\": \"missing\"",
+        "\"reviewed_rule_rows\": 0",
+        "\"rows_with_exact_executable_evidence\": 0",
+    ] {
+        assert!(
+            missing_rule.contains(marker),
+            "missing {marker}: {missing_rule}"
+        );
     }
     let proposal = python(
         "tools/compatibility_inventory.py",

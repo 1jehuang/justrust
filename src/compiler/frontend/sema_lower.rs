@@ -943,6 +943,9 @@ impl<'a> Lower<'a> {
                 });
                 self.push(h::HirExpr::Index { base: b, index: r })
             }
+            Expr::AsyncBlock { .. } | Expr::Await { .. } => {
+                return Err(Unsupported("async future lowering is unsupported".into()));
+            }
             Expr::Block(b) | Expr::Unsafe(b) => self.block(b)?,
             Expr::LabeledBlock { label, body } => {
                 let lab = self.enter_label(Some(label))?;

@@ -3214,6 +3214,9 @@ impl<'s> Solver<'_, '_, 's> {
                 }
                 Ok(result)
             }
+            Expr::AsyncBlock { .. } | Expr::Await { .. } => {
+                Err("unsupported: async future inference is unsupported".into())
+            }
             Expr::Block(block) | Expr::Unsafe(block) => self.block(block, depth + 1),
             Expr::Array(elements) => {
                 let item = self.fresh()?;

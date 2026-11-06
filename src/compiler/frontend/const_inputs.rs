@@ -51,6 +51,8 @@ impl PlanCtx {
                 let function = self
                     .callable_body(&self.program, declaration)
                     .map_err(|e| source_error(budget, &e))?;
+                async_context::check_callable(&self.program, function, budget)
+                    .map_err(|e| source_error(budget, &e))?;
                 Some(SourceInventory::build(
                     &self.program,
                     function,

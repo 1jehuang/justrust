@@ -91,6 +91,7 @@ pub use associated_constants::{AssociatedConstDecl, AssociatedConstUse};
 pub(in crate::compiler) use associated_constants::{
     AuthorizedAssociatedConstant, InitializerMemberInput,
 };
+mod async_context;
 mod iterator_source;
 mod iterator_traits;
 mod nominal_bounds;
@@ -4102,6 +4103,16 @@ impl SourceInventory {
                     "unexpanded macro syntax cannot enter active source inventory",
                 ));
             }
+            Expr::Await { operand, .. } => {
+                self.expr(
+                    operand,
+                    &node.child(45, 0, budget)?,
+                    None,
+                    None,
+                    budget,
+                    depth + 1,
+                )?;
+            }
             Expr::Try(inner) => {
                 // A differing residual error type lowers to a `From::from`
                 // call at this occurrence (operand pointer tagged 3).
@@ -4625,7 +4636,8 @@ impl SourceInventory {
                     depth + 1,
                 )?;
             }
-            Expr::Block(block)
+            Expr::AsyncBlock { body: block, .. }
+            | Expr::Block(block)
             | Expr::Unsafe(block)
             | Expr::Loop { body: block, .. }
             | Expr::LabeledBlock { body: block, .. } => {
@@ -9419,6 +9431,7 @@ pub enum FieldName {
 #[derive(Clone, Debug)]
 pub struct Function {
     pub(super) embedded_source: Option<Arc<function_source::FunctionSource>>,
+    pub(super) suspended_source: Option<Arc<function_source::AsyncBodySource>>,
     pub lexical_scope: Option<super::semantic_scope::ScopeId>,
     pub module: ModuleId,
     pub constness: Constness,
@@ -10421,6 +10434,15 @@ fn validate_source_site(
 
 #[derive(Clone, Debug)]
 pub enum Expr {
+    /// Admitted suspended syntax, never an ordinary executable block.
+    AsyncBlock {
+        source: async_context::SourceAsync,
+        body: Block,
+    },
+    Await {
+        source: async_context::SourceAsync,
+        operand: Box<Expr>,
+    },
     ManuallyDrop(Box<SourceManuallyDropCall>),
     Cell(Box<SourceCellCall>),
     PhantomData(Box<SourcePhantomData>),
@@ -11448,6 +11470,9 @@ struct ParserLexicalState {
     closure_functions: Vec<Function>,
     closure_serial: usize,
     closure_depth: usize,
+    async_boundary: Option<super::expansion_span::SpanId>,
+    async_owner: Option<AstIdent>,
+    async_serial: usize,
     closure_parent: Option<closures::ClosureParent>,
     closure_sources: Vec<closures::ClosureSource>,
 }
@@ -15383,6 +15408,7 @@ impl<'input, 'names> Parser<'input, 'names> {
                         self.emitted_callable_body(signature.name, &signature.params)?;
                     Some(Function {
                         embedded_source: None,
+                        suspended_source: None,
                         lexical_scope,
                         module,
                         constness: signature.constness,
@@ -16109,6 +16135,9 @@ impl<'input, 'names> Parser<'input, 'names> {
         if external && associated {
             return Err(self.unsupported("associated extern C functions are unsupported"));
         }
+        let async_start = self.lexical.async_serial;
+        let previous_owner = self.lexical.async_owner.replace(head.name);
+        let previous_async = self.lexical.async_boundary.take();
         let previous_parent = self.lexical.closure_parent.take();
         if !associated {
             self.lexical.closure_parent = Some(closures::ClosureParent {
@@ -16141,6 +16170,12 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok((
                 Function {
                     embedded_source: None,
+                    suspended_source: function_source::issue_async_body(
+                        &body,
+                        self.names,
+                        self.lexical.async_serial != async_start,
+                    )
+                    .map_err(|e| self.error(&e))?,
                     lexical_scope,
                     module: self.module,
                     constness: head.constness,
@@ -16166,6 +16201,8 @@ impl<'input, 'names> Parser<'input, 'names> {
             Ok((function, receiver))
         });
         self.lexical.closure_parent = previous_parent;
+        self.lexical.async_boundary = previous_async;
+        self.lexical.async_owner = previous_owner;
         self.visible_bounds = enclosing_bounds;
         result
     }
@@ -17517,6 +17554,14 @@ impl<'input, 'names> Parser<'input, 'names> {
         )
     }
     fn field_or_method_after_dot(&mut self, left: Expr) -> Result<Expr, ParseError> {
+        if self.is("await") {
+            let source = self.async_occurrence(false)?;
+            self.cursor.bump();
+            return Ok(Expr::Await {
+                source,
+                operand: Box::new(left),
+            });
+        }
         Ok({
             let field = if self.token().text.starts_with(|c: char| c.is_ascii_digit()) {
                 let token = self.token();
@@ -17729,6 +17774,9 @@ impl<'input, 'names> Parser<'input, 'names> {
     }
     #[inline(never)]
     fn ordinary_expr_prefix(&mut self, statement: bool) -> Result<Expr, ParseError> {
+        if self.is("async") {
+            return self.async_block();
+        }
         let site = self.token().span;
         if self.is("|") || self.is("||") || self.is("move") {
             return self.stored_closure();
@@ -21203,14 +21251,17 @@ fn walk_depth_inspecting<'source>(
                     push(DepthNode::Block(then_block))?;
                     push(DepthNode::Block(else_block))?;
                 }
-                Expr::Block(block)
+                Expr::AsyncBlock { body: block, .. }
+                | Expr::Block(block)
                 | Expr::Unsafe(block)
                 | Expr::Loop { body: block, .. }
                 | Expr::LabeledBlock { body: block, .. } => push(DepthNode::Block(block))?,
                 Expr::Break {
                     value: Some(value), ..
                 } => push(DepthNode::Expr(value))?,
-                Expr::Try(value) => push(DepthNode::Expr(value))?,
+                Expr::Await { operand: value, .. } | Expr::Try(value) => {
+                    push(DepthNode::Expr(value))?
+                }
                 _ => {}
             },
             DepthNode::Block(block) => {

@@ -9,6 +9,7 @@ pub(in crate::compiler::frontend) struct StoredClosureSyntax {
     pub params: Vec<(Pattern, Type)>,
     pub result: Type,
     pub body: Block,
+    pub suspended_source: Option<Arc<function_source::AsyncBodySource>>,
     pub lexical_scope: Option<super::super::super::semantic_scope::ScopeId>,
 }
 
@@ -92,6 +93,9 @@ impl Parser<'_, '_> {
             params: parent_params,
         });
         let previous = self.lexical.function.take();
+        let async_start = self.lexical.async_serial;
+        let previous_owner = self.lexical.async_owner.replace(ident);
+        let previous_async = self.lexical.async_boundary.take();
         self.lexical.closure_depth += 1;
         let body = if self.is("{") {
             self.function_body_parameters(&[], Some(&params))
@@ -107,6 +111,8 @@ impl Parser<'_, '_> {
             })
         };
         self.lexical.closure_depth -= 1;
+        self.lexical.async_boundary = previous_async;
+        self.lexical.async_owner = previous_owner;
         self.lexical.function = previous;
         self.lexical.closure_parent = parent.clone();
         let (body, lexical_scope) = body?;
@@ -124,6 +130,7 @@ impl Parser<'_, '_> {
         // parameter/capture types. Parent checking supplies its exact actuals.
         let function = Function {
             embedded_source: None,
+            suspended_source: None,
             lexical_scope: None,
             module: self.module,
             constness: Constness::Runtime,
@@ -164,6 +171,12 @@ impl Parser<'_, '_> {
                 site,
                 params,
                 result,
+                suspended_source: function_source::issue_async_body(
+                    &body,
+                    self.names,
+                    self.lexical.async_serial != async_start,
+                )
+                .map_err(|e| self.error(&e))?,
                 body,
                 lexical_scope,
             }),

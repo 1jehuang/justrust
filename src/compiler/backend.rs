@@ -5163,6 +5163,7 @@ mod tests {
     ) -> Function {
         Function {
             embedded_source: None,
+            suspended_source: None,
             constness: crate::compiler::frontend::Constness::Runtime,
             unsafety: false,
             static_mut: false,

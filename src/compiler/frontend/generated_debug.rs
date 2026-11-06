@@ -215,6 +215,7 @@ pub(super) fn construct(
         visibility: ir::Visibility::Restricted(declaration.module),
         function: Function {
             embedded_source: None,
+            suspended_source: None,
             lexical_scope: Some(recipe.scope),
             module: declaration.module,
             constness: Constness::Runtime,

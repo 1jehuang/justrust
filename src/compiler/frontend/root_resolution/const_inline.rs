@@ -46,6 +46,7 @@ fn static_elided(ty: Type) -> Type {
 pub(super) fn checked_body(declaration: &ConstDecl) -> Function {
     Function {
         embedded_source: None,
+        suspended_source: None,
         lexical_scope: None,
         module: declaration.module,
         constness: Constness::Const,

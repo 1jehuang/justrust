@@ -180,6 +180,7 @@ impl Parser<'_, '_> {
         self.expect(")")?;
         let function = Function {
             embedded_source: None,
+            suspended_source: None,
             lexical_scope,
             module: self.module,
             constness: Constness::Runtime,

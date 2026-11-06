@@ -12118,6 +12118,11 @@ impl<'a> Checker<'a> {
                 );
             }
             Expr::UnexpandedMacro(_) => return Err(UNEXPANDED_MACRO_CHECK_ERROR.into()),
+            Expr::AsyncBlock { .. } | Expr::Await { .. } => {
+                return Err(
+                    "unsupported: async future typing and execution are unsupported".into(),
+                );
+            }
             Expr::Try(operand) => self.lower_try(operand)?,
             Expr::Cast { .. } => return Err("cast bypassed expression dispatcher".into()),
             Expr::Borrow { kind, place } => {
@@ -13834,6 +13839,16 @@ fn type_callable_source_and_closures_inner(
             .map(|body| NominalCallableOutput::Ready(Box::new(body), Vec::new(), Vec::new()));
     }
     let f = plan.callable_body(program, declaration)?;
+    if !Arc::ptr_eq(&program.closure_sources, &plan.program.closure_sources) {
+        return Err("contract: callable changed original stored closure sources".into());
+    }
+    let original_source = plan.callable_body(&plan.program, declaration)?;
+    match (&f.suspended_source, &original_source.suspended_source) {
+        (None, None) => {}
+        (Some(actual), Some(original)) if Arc::ptr_eq(actual, original) => {}
+        _ => return Err("contract: callable changed original async source receipt".into()),
+    }
+    async_context::check_callable(program, f, budget)?;
     plan.validate_callable_associated_bounds(program, declaration, budget)?;
     let containing_module =
         match plan.registry.callable_sources[plan.callable_index(declaration)?] {
@@ -15629,6 +15644,7 @@ mod checked_identity_tests {
         let module = builder.module_root().unwrap();
         builder.functions.push(Function {
             embedded_source: None,
+            suspended_source: None,
             lexical_scope: None,
             module,
             constness: Constness::Runtime,

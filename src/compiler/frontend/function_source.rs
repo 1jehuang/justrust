@@ -13,6 +13,12 @@ pub(in crate::compiler) mod packed_query;
 
 #[derive(Clone, Debug)]
 enum FunctionSyntaxEvent {
+    Suspended(
+        crate::compiler::expansion_span::SpanId,
+        Option<crate::compiler::expansion_span::SpanId>,
+        bool,
+        bool,
+    ),
     CatalogCallable(Option<super::super::semantic_path::CatalogCallable>),
     SingletonSeed,
     SeedParameterType,
@@ -89,6 +95,10 @@ fn event_equal(
         return Ok(false);
     };
     Ok(match (a, b) {
+        (
+            FunctionSyntaxEvent::Suspended(a, p, k, m),
+            FunctionSyntaxEvent::Suspended(b, q, l, n),
+        ) => a == b && p == q && k == l && m == n,
         (FunctionSyntaxEvent::CatalogCallable(a), FunctionSyntaxEvent::CatalogCallable(b)) => {
             a == b
         }
@@ -168,6 +178,32 @@ fn expression(
                 if !expression(names, argument, depth + 1, emit)? {
                     return Ok(false);
                 }
+            }
+        }
+        Expr::AsyncBlock { source, body } => {
+            source.validate_kind(names, true)?;
+            let (site, parent, block_syntax, by_move) = source.syntax();
+            emit(FunctionSyntaxEvent::Suspended(
+                site,
+                parent,
+                block_syntax,
+                by_move,
+            ))?;
+            if !block(names, body, depth + 1, emit)? {
+                return Ok(false);
+            }
+        }
+        Expr::Await { source, operand } => {
+            source.validate_kind(names, false)?;
+            let (site, parent, block_syntax, by_move) = source.syntax();
+            emit(FunctionSyntaxEvent::Suspended(
+                site,
+                parent,
+                block_syntax,
+                by_move,
+            ))?;
+            if !expression(names, operand, depth + 1, emit)? {
+                return Ok(false);
             }
         }
         Expr::Unsafe(value) => {
@@ -275,6 +311,130 @@ fn block(
         return Ok(false);
     }
     Ok(true)
+}
+
+/// A finite, parser-issued original body recipe. Unlike a checked expression,
+/// these events contain authored values and exact source occurrence handles.
+/// Both authored and canonical path events remain exact. A body bearing this
+/// receipt remains source-only during resolution, never an executable recipe.
+#[derive(Clone, Debug)]
+pub(in crate::compiler) struct AsyncBodySource {
+    events: Arc<[FunctionSyntaxEvent]>,
+    _admitted: crate::compiler::expansion_budget::RetainedBytes,
+}
+
+fn async_recipe(
+    names: &impl NameAccess,
+    body: &Block,
+    emit: &mut impl FnMut(FunctionSyntaxEvent) -> Result<(), String>,
+) -> Result<bool, String> {
+    block(names, body, 0, emit)
+}
+
+pub(super) fn issue_async_body(
+    body: &Block,
+    names: &NameStoreBuilder,
+    contains_closure: bool,
+) -> Result<Option<Arc<AsyncBodySource>>, String> {
+    let mut has_suspended = contains_closure;
+    walk_depth_inspecting(
+        DepthNode::Block(body),
+        None,
+        None,
+        Some(&mut |node, _| {
+            names
+                .budget()
+                .charge(crate::compiler::expansion_budget::Counter::Work, 1)
+                .map_err(|e| e.to_string())?;
+            has_suspended |= matches!(
+                node,
+                DepthNode::Expr(Expr::AsyncBlock { .. } | Expr::Await { .. })
+            );
+            Ok(())
+        }),
+    )?;
+    if !has_suspended {
+        return Ok(None);
+    }
+    let mut count = 0usize;
+    if !async_recipe(names, body, &mut |_| {
+        names
+            .budget()
+            .charge(crate::compiler::expansion_budget::Counter::Work, 1)
+            .map_err(|e| e.to_string())?;
+        count = count
+            .checked_add(1)
+            .ok_or("async source recipe sizing overflow")?;
+        Ok(())
+    })? {
+        return Ok(None);
+    }
+    let bytes = count
+        .checked_mul(std::mem::size_of::<FunctionSyntaxEvent>())
+        .and_then(|n| n.checked_add(std::mem::size_of::<AsyncBodySource>()))
+        .ok_or("async source recipe allocation overflow")?;
+    let admitted = names
+        .budget()
+        .reserve(
+            crate::compiler::expansion_budget::Storage::Retained,
+            bytes as u64,
+        )
+        .and_then(|lease| lease.retain())
+        .map_err(|e| e.to_string())?;
+    let mut events = Vec::new();
+    events
+        .try_reserve_exact(count)
+        .map_err(|_| "async source recipe allocation failed")?;
+    if !async_recipe(names, body, &mut |event| {
+        events.push(event);
+        Ok(())
+    })? || events.len() != count
+    {
+        return Err("contract: async recipe changed during parser issuance".into());
+    }
+    Ok(Some(Arc::new(AsyncBodySource {
+        events: events.into(),
+        _admitted: admitted,
+    })))
+}
+
+impl AsyncBodySource {
+    pub(super) fn replay_admission(&self, body: &Block, names: &NameStore) -> Result<(), String> {
+        self.replay_with(body, names, || {
+            names
+                .budget()
+                .charge(crate::compiler::expansion_budget::Counter::Work, 1)
+                .map_err(|e| e.to_string())
+        })
+    }
+    pub(super) fn replay(
+        &self,
+        body: &Block,
+        names: &NameStore,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        self.replay_with(body, names, || budget.charge_work(1))
+    }
+    fn replay_with(
+        &self,
+        body: &Block,
+        names: &NameStore,
+        mut work: impl FnMut() -> Result<(), String>,
+    ) -> Result<(), String> {
+        let mut index = 0;
+        let complete = async_recipe(names, body, &mut |event| {
+            work()?;
+            if !event_equal(names, self.events.get(index), &event)? {
+                return Err("contract: async body changed original source syntax".into());
+            }
+            index += 1;
+            Ok(())
+        })?;
+        if !complete || index != self.events.len() {
+            return Err("contract: async body changed complete original source syntax".into());
+        }
+        Ok(())
+    }
 }
 fn recipe(
     names: &impl NameAccess,

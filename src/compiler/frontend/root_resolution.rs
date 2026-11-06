@@ -4449,11 +4449,14 @@ impl Resolver<'_> {
                 self.block(then_block, module, locals)?;
                 self.block(else_block, module, locals)?;
             }
-            Expr::Block(block)
+            Expr::AsyncBlock { body: block, .. }
+            | Expr::Block(block)
             | Expr::Unsafe(block)
             | Expr::Loop { body: block, .. }
             | Expr::LabeledBlock { body: block, .. } => self.block(block, module, locals)?,
-            Expr::Try(value) => self.expr(value, module, locals)?,
+            Expr::Await { operand: value, .. } | Expr::Try(value) => {
+                self.expr(value, module, locals)?
+            }
             _ => {}
         }
         Ok(())
@@ -5209,7 +5212,12 @@ fn resolve_trait_decl(
                 }
                 let names = resolver.function_locals(function, item.receiver)?;
                 validate_depth(DepthNode::Block(&function.body))?;
-                resolver.block(&mut function.body, declaration.module, &mut vec![names])?;
+                resolver.source_body(
+                    &mut function.body,
+                    function.suspended_source.is_some(),
+                    declaration.module,
+                    &mut vec![names],
+                )?;
             }
         }
         Ok(())
@@ -5306,7 +5314,7 @@ fn resolve_impl_block(
             }
             let names = resolver.function_locals(function, item.receiver)?;
             validate_depth(DepthNode::Block(&function.body))?;
-            resolver.block(&mut function.body, block.module, &mut vec![names])?;
+            resolver.source_body(&mut function.body, function.suspended_source.is_some(), block.module, &mut vec![names])?;
         }
         Ok(())
     })
@@ -5360,7 +5368,12 @@ fn resolve_free_function(
         }
         validate_depth(DepthNode::Block(&function.body))?;
         let locals = resolver.function_locals(function, ReceiverKind::None)?;
-        if let Err(error) = resolver.block(&mut function.body, function.module, &mut vec![locals]) {
+        if let Err(error) = resolver.source_body(
+            &mut function.body,
+            function.suspended_source.is_some(),
+            function.module,
+            &mut vec![locals],
+        ) {
             return Err(format!(
                 "in function {}: {error}",
                 resolver.display(&function.name)?

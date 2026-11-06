@@ -725,6 +725,9 @@ impl<'a> Validator<'a> {
                 self.push(Visit::Type(&declaration.ty))?;
             }
             Visit::Function(function, containing_module) => {
+                if let Some(source) = &function.suspended_source {
+                    source.replay_admission(&function.body, self.program.names.as_ref())?;
+                }
                 let mut declaration_role = OccurrenceRole::OriginalModule(function.module);
                 if let Some(scope) = function.lexical_scope {
                     let scopes = self
@@ -1260,6 +1263,14 @@ impl<'a> Validator<'a> {
                     if let Some(path) = &value.trait_path {
                         self.push(Visit::TraitPath(path))?;
                     }
+                }
+                Expr::AsyncBlock { source, body } => {
+                    source.validate_kind(self.program.names.as_ref(), true)?;
+                    self.push(Visit::Block(body))?;
+                }
+                Expr::Await { source, operand } => {
+                    source.validate_kind(self.program.names.as_ref(), false)?;
+                    self.push(Visit::Expr(operand))?;
                 }
                 Expr::Try(inner) => self.push(Visit::Expr(inner))?,
                 Expr::UnexpandedMacro(_) => {
@@ -1847,6 +1858,7 @@ mod tests {
     fn function(builder: &mut ProgramBuilder) -> Function {
         Function {
             embedded_source: None,
+            suspended_source: None,
             lexical_scope: None,
             module: builder.module_root().unwrap(),
             constness: Constness::Runtime,
