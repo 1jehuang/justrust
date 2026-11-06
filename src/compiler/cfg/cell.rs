@@ -43,6 +43,10 @@ struct ClosureCellProof {
 #[derive(Clone, Debug)]
 pub struct CellOperationProof {
     closure: Option<ClosureCellProof>,
+    substitution: Option<(
+        super::super::source_replay::OriginalBodyId,
+        Arc<CellOperationProof>,
+    )>,
     publication: super::super::source_replay::OriginalBodyId,
     site: ExprId,
     operation: CellOperation,
@@ -63,7 +67,15 @@ impl PartialEq for CellOperationProof {
             }
             _ => false,
         };
+        let substitution_equal = match (&self.substitution, &other.substitution) {
+            (None, None) => true,
+            (Some((a, original_a)), Some((b, original_b))) => {
+                a == b && Arc::ptr_eq(original_a, original_b)
+            }
+            _ => false,
+        };
         closure_equal
+            && substitution_equal
             && self.publication == other.publication
             && self.site == other.site
             && self.operation == other.operation
@@ -187,6 +199,7 @@ impl CellOperationProof {
         budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
         let proof = Arc::new(Self {
             closure: None,
+            substitution: None,
             publication: publication.identity().clone(),
             site,
             operation,
@@ -222,6 +235,9 @@ impl CellOperationProof {
         budget.charge_work(1)?;
         if self.closure.is_some() {
             return Err("Cell closure receipt cannot impersonate a source publication".into());
+        }
+        if self.substitution.is_some() {
+            return Err("Cell substitution receipt cannot impersonate a source publication".into());
         }
         if current_origin != Some(self.site)
             || self.publication != *publication.identity()
@@ -287,7 +303,13 @@ impl Function {
             .lowering_proof
             .as_ref()
             .ok_or("Cell operation lacks exact complete lowering shape")?;
-        if proof.closure.is_some() {
+        if proof.substitution.is_some() {
+            let body = self
+                .body_substitution
+                .as_ref()
+                .ok_or("Cell source substitution lost exact body authority")?;
+            proof.validate_substitution(body, authority, operands, authority.budget())?;
+        } else if proof.closure.is_some() {
             let identity = shape
                 .closure_origin
                 .as_ref()
@@ -376,6 +398,164 @@ struct ClosureCellContext<'a> {
     substitution: Option<&'a Arc<ir::BodySubstitutionProof>>,
 }
 impl CellOperationProof {
+    fn substitution_publication<'a>(
+        body: &'a ir::BodySubstitutionProof,
+        budget: &ir::PlanBudget,
+    ) -> Result<&'a Arc<super::super::source_replay::CanonicalSourcePublication>, String> {
+        let template = body.template();
+        let shape = template
+            .function()
+            .lowering_proof
+            .as_ref()
+            .ok_or("Cell substitution lacks verified template lowering")?;
+        if shape.closure_origin.is_some() {
+            return Err("Cell source substitution cannot use closure template authority".into());
+        }
+        let publication = shape
+            .original_publication
+            .as_ref()
+            .ok_or("Cell substitution lacks canonical source publication")?;
+        publication
+            .validate_source(template.source(), template.facts(), budget)
+            .map_err(|error| error.to_string())?;
+        Ok(publication)
+    }
+    fn seal_substitution(
+        body: &Arc<ir::BodySubstitutionProof>,
+        current: &ir::CheckedFunction,
+        facts: &super::super::traits::ValidatedFacts,
+        site: ExprId,
+        reference: Option<&Place>,
+        value: Option<&Operand>,
+        budget: &ir::PlanBudget,
+    ) -> Result<Arc<Self>, String> {
+        body.validate(current, facts, budget)?;
+        let publication = Self::substitution_publication(body, budget)?;
+        let original = Self::seal(publication, site, reference, value, budget)?;
+        let row = Self::original_in(current, site)?;
+        let source_row = Self::original(publication, site)?;
+        if row.operation != source_row.operation
+            || row.receiver != source_row.receiver
+            || row.value != source_row.value
+            || !Arc::ptr_eq(row.source, source_row.source)
+        {
+            return Err(
+                "Cell substitution changed original operation or operand occurrences".into(),
+            );
+        }
+        budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
+        let reference_copy = reference
+            .map(|place| ManuallyDropTakeProof::copy_place(place, 0, budget))
+            .transpose()?;
+        let value_copy = value
+            .map(|operand| match operand {
+                Operand::Copy(place) => Ok(Operand::Copy(ManuallyDropTakeProof::copy_place(
+                    place, 0, budget,
+                )?)),
+                Operand::Move(place) => Ok(Operand::Move(ManuallyDropTakeProof::copy_place(
+                    place, 0, budget,
+                )?)),
+                _ => Err("Cell substitution value lacks evaluated temporary".to_string()),
+            })
+            .transpose()?;
+        let proof = Self {
+            closure: None,
+            publication: publication.identity().clone(),
+            site,
+            operation: row.operation,
+            descriptor: row.descriptor.clone(),
+            source: row.source.clone(),
+            reference: reference_copy,
+            value: value_copy,
+            substitution: Some((body.identity().clone(), original)),
+        };
+        proof.validate_substitution(
+            body,
+            facts,
+            CellOperands {
+                operation: proof.operation,
+                reference,
+                value,
+                origin: Some(site),
+            },
+            budget,
+        )?;
+        Ok(Arc::new(proof))
+    }
+    fn validate_substitution(
+        &self,
+        body: &Arc<ir::BodySubstitutionProof>,
+        facts: &super::super::traits::ValidatedFacts,
+        operands: CellOperands<'_>,
+        budget: &ir::PlanBudget,
+    ) -> Result<(), String> {
+        budget.charge_work(1)?;
+        let (identity, original) = self
+            .substitution
+            .as_ref()
+            .ok_or("Cell generated source operation lacks substitution receipt")?;
+        let publication = Self::substitution_publication(body, budget)?;
+        if self.closure.is_some()
+            || identity != body.identity()
+            || self.publication != *publication.identity()
+            || self.site != original.site
+            || self.operation != original.operation
+            || !Arc::ptr_eq(&self.source, &original.source)
+            || !Self::same_reference(self.reference.as_ref(), original.reference.as_ref(), budget)?
+            || !Self::same_value(self.value.as_ref(), original.value.as_ref(), budget)?
+            || !Self::same_reference(operands.reference, self.reference.as_ref(), budget)?
+            || !Self::same_value(operands.value, self.value.as_ref(), budget)?
+        {
+            return Err(
+                "Cell substitution changed exact publication, body, source or operands".into(),
+            );
+        }
+        original.validate(publication, operands, budget)?;
+        let target = facts
+            .target()
+            .ok_or("Cell source substitution requires exact closed target")?;
+        if facts.phase() != super::super::traits::FactsPhase::Closed
+            || !facts.budget().same_authority(budget)
+            || !Arc::ptr_eq(facts.world(), publication.facts().world())
+            || facts.declaration() != publication.facts().declaration()
+            || target.declaration != body.target().declaration
+            || !facts
+                .world()
+                .types_equal(&target.type_args, &body.target().type_args)
+                .map_err(|error| error.to_string())?
+        {
+            return Err("Cell substitution changed exact owner, world or ordered actuals".into());
+        }
+        self.descriptor
+            .validate(facts.world().canonical_catalog(), budget)?;
+        if !self.descriptor.is_concrete()
+            || !facts
+                .world()
+                .types_equal(
+                    &[Ty::Cell(self.descriptor.clone())],
+                    &[Ty::Cell(original.descriptor.clone())],
+                )
+                .map_err(|error| error.to_string())?
+        {
+            return Err("Cell substitution changed canonical concrete scalar descriptor".into());
+        }
+        let expected = match self.operation {
+            CellOperation::New => Ty::Cell(self.descriptor.clone()),
+            CellOperation::Get => self.descriptor.argument().clone(),
+            CellOperation::Set => Ty::Unit,
+        };
+        if !facts
+            .world()
+            .types_equal(
+                std::slice::from_ref(body.expression_type(self.site)?),
+                std::slice::from_ref(&expected),
+            )
+            .map_err(|error| error.to_string())?
+        {
+            return Err("Cell substitution changed original expression result mapping".into());
+        }
+        Ok(())
+    }
     fn seal_closure(
         context: ClosureCellContext<'_>,
         current: &ir::CheckedFunction,
@@ -433,6 +613,7 @@ impl CellOperationProof {
             .transpose()?;
         budget.retain_bytes(std::mem::size_of::<Self>() + 2 * std::mem::size_of::<usize>())?;
         let proof = Arc::new(Self {
+            substitution: None,
             publication: context.identity.clone(),
             site,
             operation: row.operation,
@@ -468,6 +649,9 @@ impl CellOperationProof {
         budget: &ir::PlanBudget,
     ) -> Result<(), String> {
         budget.charge_work(1)?;
+        if self.substitution.is_some() {
+            return Err("Cell source substitution cannot impersonate closure authority".into());
+        }
         let original = self
             .closure
             .as_ref()
@@ -602,6 +786,25 @@ impl Lowerer<'_> {
             .facts
             .validated()
             .ok_or("Cell closure lowering requires validated facts")?;
+        if self.closure_origin.is_none()
+            && let Some(body) = self.source.body_substitution.as_ref()
+            && body
+                .template()
+                .function()
+                .lowering_proof
+                .as_ref()
+                .is_some_and(|shape| shape.original_publication.is_some())
+        {
+            return CellOperationProof::seal_substitution(
+                body,
+                self.source,
+                facts,
+                site,
+                reference,
+                value,
+                budget,
+            );
+        }
         let context = if let Some(identity) = self.closure_origin {
             ClosureCellContext {
                 identity,
@@ -831,6 +1034,183 @@ mod tests {
         assert_eq!(denied.first_resource_failure(), Some(first));
         assert!(denied.retain_bytes(1).is_err());
         assert_eq!(denied.first_resource_failure(), Some(first));
+    }
+    #[test]
+    fn scalar_cell_source_substitution_receipts_bind_exact_body_and_source() {
+        let budget = ir::PlanBudget::default();
+        let prepared = source::prepare_text_with_prelude(
+            "cell-generic-cfg.rs",
+            "use core::cell::Cell;fn update<T>(cell:&Cell<usize>,marker:T)->usize{let value=Cell::new(3usize);cell.set(value.get());cell.set(7usize);cell.get()}fn main(){let cell=Cell::new(0usize);let n=update(&cell,1i32);}",
+            &source::SourceOptions::default(),
+        ).unwrap();
+        let parsed = frontend::parse_prepared(&prepared).unwrap();
+        let program = frontend::resolve(&parsed).unwrap();
+        let mut plan = frontend::PlanCtx::from_program(&program, &budget).unwrap();
+        let owner = plan.function_decl(0).unwrap();
+        let frontend::PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(owner, &budget).unwrap()
+        else {
+            panic!("canonical generic source publication required")
+        };
+        let template = super::super::lower_source_template(&publication, &budget).unwrap();
+        let verified = crate::compiler::ownership::verify_template(template).unwrap();
+        let target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([Ty::Int(ir::IntTy::I32)]),
+        };
+        let facts = publication.facts().world().instance_facts(&target).unwrap();
+        let instance =
+            ir::instantiate_checked(&verified, &target.type_args, &facts, &mut plan, &budget)
+                .unwrap();
+        let generated = super::super::lower_with_facts(&instance, &facts, &budget).unwrap();
+        generated
+            .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+            .unwrap();
+        generated.validate_provenance(&facts, &budget).unwrap();
+        let other_target = ir::CallTarget {
+            declaration: owner,
+            type_args: Arc::from([Ty::Bool]),
+        };
+        let other_facts = publication
+            .facts()
+            .world()
+            .instance_facts(&other_target)
+            .unwrap();
+        assert!(
+            generated
+                .validate_provenance(&other_facts, &budget)
+                .is_err()
+        );
+        let foreign_target = ir::CallTarget {
+            declaration: plan.function_decl(1).unwrap(),
+            type_args: Arc::from([]),
+        };
+        let foreign_facts = publication
+            .facts()
+            .world()
+            .instance_facts(&foreign_target)
+            .unwrap();
+        assert!(
+            generated
+                .validate_provenance(&foreign_facts, &budget)
+                .is_err()
+        );
+        let other =
+            ir::instantiate_checked(&verified, &target.type_args, &facts, &mut plan, &budget)
+                .unwrap();
+        let set = generated
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .find_map(|statement| match &statement.value {
+                Statement::Assign {
+                    value:
+                        Rvalue::CellSet {
+                            reference, value, ..
+                        },
+                    ..
+                } => Some((statement.origin.unwrap(), reference, value)),
+                _ => None,
+            })
+            .unwrap();
+        let body = instance.body_substitution.as_ref().unwrap();
+        let mut changed_source = instance.clone();
+        let ir::ExprKind::CellSet {
+            receiver, value, ..
+        } = &mut changed_source.exprs[set.0.0].kind
+        else {
+            unreachable!()
+        };
+        std::mem::swap(receiver, value);
+        assert!(
+            CellOperationProof::seal_substitution(
+                body,
+                &changed_source,
+                &facts,
+                set.0,
+                Some(set.1),
+                Some(set.2),
+                &budget
+            )
+            .is_err()
+        );
+        assert!(
+            CellOperationProof::seal_substitution(
+                body,
+                &instance,
+                &other_facts,
+                set.0,
+                Some(set.1),
+                Some(set.2),
+                &budget
+            )
+            .is_err()
+        );
+        for change in 0..7 {
+            let mut forged = generated.clone();
+            if change == 0 {
+                forged.body_substitution = other.body_substitution.clone();
+            } else {
+                let statement = forged
+                    .blocks
+                    .iter_mut()
+                    .flat_map(|block| &mut block.statements)
+                    .find(|statement| {
+                        matches!(
+                            statement.value,
+                            Statement::Assign {
+                                value: Rvalue::CellSet { .. },
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap();
+                let Statement::Assign {
+                    value:
+                        Rvalue::CellSet {
+                            proof,
+                            reference,
+                            value,
+                        },
+                    ..
+                } = &mut statement.value
+                else {
+                    unreachable!()
+                };
+                let mut receipt = proof.as_ref().clone();
+                match change {
+                    1 => statement.origin = None,
+                    2 => {
+                        receipt.publication =
+                            super::super::super::source_replay::OriginalBodyId::new(&budget)
+                                .unwrap()
+                    }
+                    3 => {
+                        receipt.substitution.as_mut().unwrap().0 =
+                            super::super::super::source_replay::OriginalBodyId::new(&budget)
+                                .unwrap()
+                    }
+                    4 => {
+                        receipt.descriptor =
+                            ir::CellTy::new(facts.world().canonical_catalog(), Ty::Bool, &budget)
+                                .unwrap()
+                    }
+                    5 => reference.local = generated.return_local,
+                    _ => *value = Operand::Constant(Constant::Unit),
+                }
+                *proof = Arc::new(receipt);
+            }
+            assert!(
+                forged
+                    .validate_with_facts(ir::FactsCtx::from_validated(&facts))
+                    .is_err(),
+                "generic Cell operation forgery {change}"
+            );
+            assert!(
+                forged.validate_provenance(&facts, &budget).is_err(),
+                "generic Cell provenance forgery {change}"
+            );
+        }
     }
     #[test]
     fn scalar_cell_closure_receipts_bind_provider_token_site_and_operands() {

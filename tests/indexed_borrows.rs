@@ -226,6 +226,13 @@ fn main(){let cell=Cell::new(2usize);let a=&cell;set(a,13usize);println!("{} {}"
                 expect: Expect::Run("13 13\n"),
             },
             Case {
+                name: "generic_source_scalar_operations_preserve_storage",
+                source: r#"use core::cell::Cell;
+fn update<T>(cell:&Cell<usize>,marker:T)->usize{let next=Cell::new(cell.get()+1usize);cell.set(next.get());cell.get()}
+fn main(){let cell=Cell::new(3usize);println!("{} {}",update(&cell,1i32),cell.get());println!("{} {}",update(&cell,true),cell.get());}"#,
+                expect: Expect::Run("4 4\n5 5\n"),
+            },
+            Case {
                 name: "owned_move_keeps_distinct_storage",
                 source: r#"use core::cell::Cell;fn main(){let first=Cell::new(4usize);let second=first;let other=Cell::new(9usize);second.set(6usize);println!("{} {}",second.get(),other.get());}"#,
                 expect: Expect::Run("6 9\n"),
