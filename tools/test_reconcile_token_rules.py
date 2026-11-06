@@ -203,9 +203,9 @@ class ProposalSummaryTests(unittest.TestCase):
     def test_standalone_without_prose_artifacts_or_root(self):
         result = self.summary()
         self.assertEqual(result['global_rule_identities'], 2965)
-        self.assertEqual(result['proposed_rule_identities'], 942)
-        self.assertEqual(result['rule_identities_without_proposals'], 2023)
-        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43), ('expression-core', 46), ('path-expressions', 6), ('never-type', 5), ('coercions', 46), ('subtyping', 12), ('type-expressions', 22), ('primitive-types', 42)):
+        self.assertEqual(result['proposed_rule_identities'], 961)
+        self.assertEqual(result['rule_identities_without_proposals'], 2004)
+        for name, count in (('tokens', 115), ('const-eval', 44), ('unsafe', 27), ('abi', 24), ('visibility', 18), ('branching', 58), ('destructors', 50), ('loops', 60), ('operators', 112), ('closures', 17), ('calls', 23), ('aggregates', 38), ('fields', 8), ('literals', 87), ('grouped', 6), ('transfers', 14), ('ranges', 10), ('structs', 14), ('blocks', 43), ('expression-core', 46), ('path-expressions', 6), ('never-type', 5), ('coercions', 46), ('subtyping', 12), ('type-expressions', 22), ('primitive-types', 42), ('sequence-types', 19)):
             profile = result['profiles'][name]
             self.assertEqual(profile['proposed_rule_identities'], count)
             self.assertEqual(profile['review_status'], 'unreviewed')
@@ -220,7 +220,7 @@ class ProposalSummaryTests(unittest.TestCase):
 
     def assert_backlog_matches_metadata(self, result):
         pages = self.index['pages'] + self.index['unlinked_markdown_files']
-        selected = {path for name in ('tokens', 'const-eval', 'unsafe', 'abi', 'visibility', 'branching', 'destructors', 'loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        selected = {path for name in ('tokens', 'const-eval', 'unsafe', 'abi', 'visibility', 'branching', 'destructors', 'loops', 'operators', 'closures', 'calls', 'aggregates', 'fields', 'literals', 'grouped', 'transfers', 'ranges', 'structs', 'blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                     for path in reconciliation.profile_inputs(name)[0]}
         proposed = {(page['path'], rule['label']) for page in pages
                     if page['path'] in selected for rule in page['rules']}
@@ -260,7 +260,7 @@ class ProposalSummaryTests(unittest.TestCase):
     def test_backlog_covers_every_pinned_page_and_exact_missing_metadata(self):
         result = self.summary()
         self.assertEqual((result['global_rule_identities'], result['proposed_rule_identities'],
-                          result['rule_identities_without_proposals']), (2965, 942, 2023))
+                          result['rule_identities_without_proposals']), (2965, 961, 2004))
         self.assert_backlog_matches_metadata(result)
         self.assertEqual(result, self.summary())
         self.assertTrue(any(not page['rules'] for page in self.index['pages']))
@@ -368,9 +368,9 @@ class ProposalSummaryTests(unittest.TestCase):
                 reconciliation, 'WITNESS_SOURCE_CONTRACT', pin):
             result = self.summary()
             self.assert_backlog_matches_metadata(result)
-            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 898)
-        self.assertEqual(result['proposed_rule_identities'], 898)
-        self.assertEqual(result['rule_identities_without_proposals'], 2067)
+            self.assertEqual(sum(row['proposed_rule_identities'] for row in result['backlog']['pages']), 917)
+        self.assertEqual(result['proposed_rule_identities'], 917)
+        self.assertEqual(result['rule_identities_without_proposals'], 2048)
 
     def test_malformed_metadata_binding_counts_and_false_credit(self):
         import compatibility_inventory as inventory
@@ -499,8 +499,8 @@ class RuleBacklogQueryTests(unittest.TestCase):
         self.assertEqual(result['selected_proposed_rule_identities'], proposed)
         self.assertEqual(result['selected_rule_identities_without_proposals'], len(rows) - proposed)
         self.assertEqual(sum(row['selected_rule_identities'] for row in pages), len(rows))
-        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 942),
-                           ('rule_identities_without_proposals', 2023), ('total_pages', 122),
+        for key, value in (('global_rule_identities', 2965), ('proposed_rule_identities', 961),
+                           ('rule_identities_without_proposals', 2004), ('total_pages', 122),
                            ('readiness', 'review-required'), ('review_status', 'unreviewed')):
             self.assertEqual(result[key], value)
         for key in ('reviewed_rule_rows', 'completed_rule_rows', 'rows_with_exact_executable_evidence'):
@@ -542,7 +542,7 @@ class RuleBacklogQueryTests(unittest.TestCase):
     def test_missing_only_preserves_known_fully_proposed_and_zero_rule_pages(self):
         result = self.query(missing_only=True)
         self.assert_query(result, missing_only=True)
-        self.assertEqual(len(result['rows']), 2023)
+        self.assertEqual(len(result['rows']), 2004)
         self.assertEqual(len(result['pages']), 122)
         for selection in ({'page': 'src/tokens.md', 'missing_only': True},
                           {'page': 'src/SUMMARY.md'},
@@ -791,8 +791,8 @@ class RuleBacklogQueryTests(unittest.TestCase):
                 reconciliation, 'profile_inputs', side_effect=inputs):
             result = self.query(include_proposals=True)
             self.assert_proposal_query(result)
-            self.assertEqual(result['selected_proposed_rule_identities'], 942)
-            self.assertEqual(result['selected_authored_proposal_count'], 1062)
+            self.assertEqual(result['selected_proposed_rule_identities'], 961)
+            self.assertEqual(result['selected_authored_proposal_count'], 1081)
             result = self.query(page='src/tokens.md', include_proposals=True)
             self.assertEqual(result['selected_proposed_rule_identities'], 115)
             self.assertEqual(result['selected_authored_proposal_count'], 230)
@@ -5368,7 +5368,7 @@ class PinnedStructsProfileTests(unittest.TestCase):
                        for o in section['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('structs', 'blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('structs', 'blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for path in reconciliation.profile_inputs(name)[0]}
         prior = {(page['path'], rule['label'])
                  for page in index['pages'] + index['unlinked_markdown_files']
@@ -5690,7 +5690,7 @@ class PinnedBlocksProfileTests(unittest.TestCase):
                        for o in section['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {path for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('blocks', 'expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for path in reconciliation.profile_inputs(name)[0]}
         prior = {(page['path'], rule['label'])
                  for page in index['pages'] + index['unlinked_markdown_files']
@@ -6040,7 +6040,7 @@ class ExpressionCoreSourceReconciliationTests(unittest.TestCase):
                        for o in s['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('expression-core', 'path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
                  if p['path'] in prior_pages for r in p['rules']}
@@ -6049,8 +6049,8 @@ class ExpressionCoreSourceReconciliationTests(unittest.TestCase):
         self.assertEqual((len(prior), len(current), len(prior | current)), (763, 46, 809))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'],
-                          summary['rule_identities_without_proposals']), (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                          summary['rule_identities_without_proposals']), (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         self.assertEqual(summary['profiles']['expression-core']['completed_rule_rows'], 0)
 
     def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
@@ -6306,7 +6306,7 @@ class PathExpressionsSourceReconciliationTests(unittest.TestCase):
                        for o in s['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('path-expressions', 'never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
                  if p['path'] in prior_pages for r in p['rules']}
@@ -6315,8 +6315,8 @@ class PathExpressionsSourceReconciliationTests(unittest.TestCase):
         self.assertEqual((len(prior), len(current), len(prior | current)), (809, 6, 815))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'],
-                          summary['rule_identities_without_proposals']), (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                          summary['rule_identities_without_proposals']), (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         self.assertEqual(summary['profiles']['path-expressions']['completed_rule_rows'], 0)
 
     def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
@@ -6562,7 +6562,7 @@ class NeverTypeSourceReconciliationTests(unittest.TestCase):
                        for o in s['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
                  if p['path'] in prior_pages for r in p['rules']}
@@ -6571,8 +6571,8 @@ class NeverTypeSourceReconciliationTests(unittest.TestCase):
         self.assertEqual((len(prior), len(current), len(prior | current)), (815, 5, 820))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'],
-                          summary['rule_identities_without_proposals']), (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                          summary['rule_identities_without_proposals']), (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         self.assertEqual(summary['profiles']['never-type']['completed_rule_rows'], 0)
 
     def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
@@ -6793,7 +6793,7 @@ class NeverTypeSourceReconciliationTests(unittest.TestCase):
         }
         self.assertEqual(len(expected), 21)
         self.assertEqual(set(expected), {name for name, _ in reconciliation.PROPOSAL_COUNTS
-                                         if name not in ('never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types')})
+                                         if name not in ('never-type', 'coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')})
         with mock.patch.dict(sys.modules, {'never_type_reconciliation_proposals': None}):
             for profile, sha in expected.items():
                 with self.subTest(profile=profile):
@@ -6974,7 +6974,7 @@ class CoercionsSourceReconciliationTests(unittest.TestCase):
                        for o in s['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('coercions', 'subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
                  if p['path'] in prior_pages for r in p['rules']}
@@ -6983,8 +6983,8 @@ class CoercionsSourceReconciliationTests(unittest.TestCase):
         self.assertEqual((len(prior), len(current), len(prior | current)), (820, 46, 866))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'],
-                          summary['rule_identities_without_proposals']), (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                          summary['rule_identities_without_proposals']), (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         self.assertEqual(summary['profiles']['coercions']['completed_rule_rows'], 0)
 
     def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
@@ -7205,7 +7205,7 @@ class CoercionsSourceReconciliationTests(unittest.TestCase):
          'never-type': '5c2f254ae61a3838279518c4279654bfd2e5218a3a0492b5976153dab23a9ac5'}
         self.assertEqual(len(expected), 22)
         self.assertEqual(set(expected), {name for name, _ in reconciliation.PROPOSAL_COUNTS
-                                         if name not in ('coercions', 'subtyping', 'type-expressions', 'primitive-types')})
+                                         if name not in ('coercions', 'subtyping', 'type-expressions', 'primitive-types', 'sequence-types')})
         with mock.patch.dict(sys.modules, {'coercions_reconciliation_proposals': None}):
             for profile, sha in expected.items():
                 with self.subTest(profile=profile):
@@ -7322,7 +7322,7 @@ class SubtypingProposalTests(unittest.TestCase):
                        for o in s['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('subtyping', 'type-expressions', 'primitive-types')
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('subtyping', 'type-expressions', 'primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
                  if p['path'] in prior_pages for r in p['rules']}
@@ -7331,8 +7331,8 @@ class SubtypingProposalTests(unittest.TestCase):
         self.assertEqual((len(prior), len(current), len(prior | current)), (866, 12, 878))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'],
-                          summary['rule_identities_without_proposals']), (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                          summary['rule_identities_without_proposals']), (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         self.assertEqual(summary['profiles']['subtyping']['completed_rule_rows'], 0)
 
     def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
@@ -7556,7 +7556,7 @@ class SubtypingProposalTests(unittest.TestCase):
          'coercions': '7bc24b2e1a5b422ef29ce96bbcfb767c52aee9b9be6e4d75ea40c890f4d90526'}
         self.assertEqual(len(expected), 23)
         self.assertEqual(set(expected), {name for name, _ in reconciliation.PROPOSAL_COUNTS
-                                         if name not in ('subtyping', 'type-expressions', 'primitive-types')})
+                                         if name not in ('subtyping', 'type-expressions', 'primitive-types', 'sequence-types')})
         with mock.patch.dict(sys.modules, {'subtyping_reconciliation_proposals': None}):
             for profile, sha in expected.items():
                 with self.subTest(profile=profile):
@@ -7727,7 +7727,7 @@ class TypeExpressionsProposalTests(unittest.TestCase):
                        for o in s['obligations']}
         self.assertTrue(set(proposals.ALIASES.values()) <= obligations)
         index = json.loads(self.index.read_bytes())
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('type-expressions', 'primitive-types')
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('type-expressions', 'primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
                  if p['path'] in prior_pages for r in p['rules']}
@@ -7736,8 +7736,8 @@ class TypeExpressionsProposalTests(unittest.TestCase):
         self.assertEqual((len(prior), len(current), len(prior | current)), (878, 22, 900))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'],
-                          summary['rule_identities_without_proposals']), (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                          summary['rule_identities_without_proposals']), (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         self.assertEqual(summary['profiles']['type-expressions']['completed_rule_rows'], 0)
 
     def test_hardcoded_hash_labels_lineblocks_partition_and_zero_credit(self):
@@ -7962,7 +7962,7 @@ class TypeExpressionsProposalTests(unittest.TestCase):
          'subtyping': 'a7d6097d9ee152ae8490c09c692570cb4b65c78b61c68a33c2b89caee694d6cc'}
         self.assertEqual(len(expected), 24)
         self.assertEqual(set(expected), {name for name, _ in reconciliation.PROPOSAL_COUNTS
-                                         if name not in ('type-expressions', 'primitive-types')})
+                                         if name not in ('type-expressions', 'primitive-types', 'sequence-types')})
         with mock.patch.dict(sys.modules, {'type_expressions_reconciliation_proposals': None}):
             for profile, sha in expected.items():
                 with self.subTest(profile=profile):
@@ -8261,7 +8261,7 @@ class PrimitiveTypesProposalTests(unittest.TestCase):
     def test_global_unique_additive_union_not_authored_sum(self):
         index = json.loads(self.index.read_bytes())
         pages = index['pages'] + index['unlinked_markdown_files']
-        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name != 'primitive-types'
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name not in ('primitive-types', 'sequence-types')
                        for p in reconciliation.profile_inputs(name)[0]}
         prior = {(p['path'], r['label']) for p in pages if p['path'] in prior_pages for r in p['rules']}
         current = {(r['page'], r['rule']) for r in self.artifact()['rows']}
@@ -8269,8 +8269,8 @@ class PrimitiveTypesProposalTests(unittest.TestCase):
                          (900, 42, 0, 942))
         summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
         self.assertEqual((summary['proposed_rule_identities'], summary['rule_identities_without_proposals']),
-                         (942, 2023))
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 947)
+                         (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(summary[field], 0)
             self.assertEqual(summary['profiles']['primitive-types'][field], 0)
@@ -8279,7 +8279,7 @@ class PrimitiveTypesProposalTests(unittest.TestCase):
     def test_all_25_prior_canonical_bytes_without_new_module(self):
         self.assertEqual(len(self.PRIOR_HASHES), 25)
         self.assertEqual(set(self.PRIOR_HASHES), {name for name, _ in reconciliation.PROPOSAL_COUNTS
-                                                if name != 'primitive-types'})
+                                                if name not in ('primitive-types', 'sequence-types')})
         with mock.patch.dict(sys.modules, {'primitive_types_reconciliation_proposals': None}):
             for profile, sha in self.PRIOR_HASHES.items():
                 with self.subTest(profile=profile):
@@ -8494,6 +8494,316 @@ class PrimitiveTypesProposalTests(unittest.TestCase):
             artifact = Path(temp) / 'primitive-types.json'
             args = [sys.executable, str(BASE / 'reconcile_token_rules.py'),
                     '--profile', 'primitive-types', '--rule-index', str(self.index),
+                    '--inventory', str(self.inventory), '--source-root', str(self.source),
+                    '--artifact', str(artifact)]
+            expected = (json.dumps(self.artifact(), indent=2) + '\n').encode()
+            for action in ('generate', 'validate'):
+                result = subprocess.run([*args[:2], action, *args[2:]],
+                                        capture_output=True, text=True, check=False)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(result.stdout), self.verify(self.artifact()))
+                self.assertEqual(artifact.read_bytes(), expected)
+
+
+
+class SequenceTypesProposalTests(unittest.TestCase):
+    """Pinned source-only proposals, never evidence of sequence implementation."""
+    PAGES = ('src/types/array.md', 'src/types/slice.md', 'src/types/tuple.md')
+    PAGE_HASHES = {
+        'src/types/array.md': '82482ed63dda5923c9bb408a57af7f22795d5b027f2b0118e35bfaa74a10b5d3',
+        'src/types/slice.md': 'ad59ee3e089e43b287eabf1789829f55627c3b3eca577968ad4add918d7e313a',
+        'src/types/tuple.md': '5ba695522d4226449499ccaf2d46920fc2a1dab231ff3a88690379fbfc0fd61a',
+    }
+    # Literal page/block/line/classification pins independent of the proposal module.
+    PINS = (
+        ('src/types/array.md', 'type.array', 1, 3, '6b5a9d767288e6f5038dddaa417cf6229cc4e3312da62b2a5abd555dffdfe568', 'I'),
+        ('src/types/array.md', 'type.array.syntax', 4, 8, '11d27ad53c57510dd269134a10fbcf1a8bc2efeeaea586b87f2bff8a03a2bf71', 'G X'),
+        ('src/types/array.md', 'type.array.intro', 9, 11, '9e01f6320faa9f63c7811e531f8d7da93d2456da77d89c88aaabb507dea1f6c4', 'N'),
+        ('src/types/array.md', 'type.array.constraint', 12, 24, '17da9229a7f2ed7b5b342df2ce11c2bb85ac96afb903049cbc7f89fab7759e74', 'N X'),
+        ('src/types/array.md', 'type.array.index', 25, 32, 'f15474710f1caa01239373c19fbadf74e648c870d959f7f2cdc9f0df857b7326', 'N X'),
+        ('src/types/slice.md', 'type.slice', 1, 3, '9d3732cffd632ececc68bc30e927c54730e5b7c199c23f43b7799278a18406bc', 'I'),
+        ('src/types/slice.md', 'type.slice.syntax', 4, 8, '5e45ba7a33b317a90c497d59a8108f535ed91c3f065129777230a68e776ea1ec', 'G X'),
+        ('src/types/slice.md', 'type.slice.intro', 9, 11, 'b33ad1af520575aec754f995e2dc440b2fe95e72cf220b2536f52d0af8eada34', 'N X'),
+        ('src/types/slice.md', 'type.slice.unsized', 12, 28, 'a6e6757e05d7fbed3c97ddb35810cf51d322bd6d9b11d81fde7a315b957a6025', 'N X'),
+        ('src/types/slice.md', 'type.slice.safe', 29, 32, 'cac151b7c6fe3f9419534599a7be0d307e63c7edb206a9841a207b6106c9ca7d', 'N'),
+        ('src/types/tuple.md', 'type.tuple', 1, 3, '6e163f4e6818283b5ac39933069832664e9b19fe23da263a26908e81c5b0d0ee', 'I'),
+        ('src/types/tuple.md', 'type.tuple.syntax', 4, 10, '0bfa53f0f92a6abad61d7c875ab2ad2d50b2977c560f8b86fd28790f1902d3ae', 'G X'),
+        ('src/types/tuple.md', 'type.tuple.intro', 11, 15, 'c60461a5b493dbf3a06a358aa55d72333b9378fbae4f3957492a43cfafc2545a', 'N'),
+        ('src/types/tuple.md', 'type.tuple.restriction', 16, 18, '87ec5e0ccadb48769dbfcdde92d5a07db691e3b7cc86a0dd4829db9529ce072c', 'N X'),
+        ('src/types/tuple.md', 'type.tuple.field-number', 19, 21, 'b87988b1833380638e4d896ad97670bbea960ed55bfc59429ca07bd5e09646ea', 'N'),
+        ('src/types/tuple.md', 'type.tuple.field-name', 22, 24, '9033357d229a70e1f1517d795f000713a5323049aa1d358b2899e528135da988', 'N'),
+        ('src/types/tuple.md', 'type.tuple.unit', 25, 36, 'c802ebecb12a826c7d6f3f16f7cb3ad6fad7f64c902dea6306be084284607e75', 'N'),
+        ('src/types/tuple.md', 'type.tuple.constructor', 37, 39, 'f215a792d3fc6e95ee7f764e6bef5e1ae6b0653870d87217117655b98688d7ac', 'N X'),
+        ('src/types/tuple.md', 'type.tuple.access', 40, 49, '3ac9dd0c3e95ebf355f5e7d63eb07c4f41fb522fc184e3d9276cc40f2fe39156', 'N X'),
+    )
+    PRIOR_HASHES = dict(PrimitiveTypesProposalTests.PRIOR_HASHES, **{
+        'primitive-types': '2e867b91d4e8ab2021e8894bf7f6237d3a92436011e00ab6a048bae61f208bf2'})
+
+    setUp = PrimitiveTypesProposalTests.setUp
+
+    def artifact(self, source=None):
+        return build(self.index, self.inventory,
+                     self.source if source is None else source, 'sequence-types')
+
+    def verify(self, data, source=None):
+        return validate(data, self.index, self.inventory,
+                        self.source if source is None else source, 'sequence-types')
+
+    def test_independent_complete_page_label_block_classification_pins(self):
+        import re
+        import sequence_types_reconciliation_proposals as proposals
+        self.assertEqual(proposals.SELECTED, self.PAGES)
+        self.assertEqual(proposals.PAGE_SHA256, self.PAGE_HASHES)
+        self.assertEqual(proposals.SOURCE_COMMIT, '86635e30bf861a038dc197d7e16fd09e7e514e7a')
+        self.assertEqual(proposals.ALIASES, {
+            'array': 'reference-types-array-array-identity',
+            'slice': 'reference-types-slice-slice-metadata',
+            'tuple': 'reference-types-tuple-tuple-identity'})
+        class_names = {'N': 'normative-semantic', 'G': 'grammar', 'I': 'index',
+                       'X': 'cross-reference', 'E': 'edition-context'}
+        self.assertEqual(proposals.CLASS_NAMES, class_names)
+        authored = [row.split('|') for row in proposals.ROWS.strip().splitlines()]
+        self.assertTrue(all(len(row) == 7 and all(f.strip() for f in row) for row in authored))
+        self.assertEqual(tuple((r[0], r[1]) for r in authored), tuple((r[1], r[5]) for r in self.PINS))
+        self.assertEqual(reconciliation.SOURCE_ONLY_PAGE_COUNTS['sequence-types'], (5, 5, 9))
+        data = self.artifact()
+        counts = self.verify(data)
+        self.assertEqual([counts[k] for k in ('selected_rule_rows', 'unselected_rule_identities',
+                                             'global_rule_identities')], [19, 2946, 2965])
+        self.assertEqual(counts['proposed_classification_counts'], {
+            'normative-semantic': 13, 'grammar': 3, 'index': 3,
+            'cross-reference': 10, 'edition-context': 0})
+        actual = {(r['page'], r['rule']): r for r in data['rows']}
+        self.assertEqual(len(actual), 19)
+        self.assertEqual(len({r['id'] for r in actual.values()}), 19)
+        self.assertEqual(tuple(r['rule'] for r in data['rows']), tuple(r[1] for r in self.PINS))
+        self.assertEqual([(p['path'], p['sha256']) for p in data['selected_pages']],
+                         [(page, self.PAGE_HASHES[page]) for page in self.PAGES])
+        for page, line_count, label_count in zip(self.PAGES, (32, 32, 49), (5, 5, 9)):
+            raw = (self.source / page).read_bytes()
+            self.assertEqual(digest(raw), self.PAGE_HASHES[page])
+            lines = raw.splitlines(keepends=True)
+            self.assertEqual(len(lines), line_count)
+            markers = [(i, m.group(1).decode()) for i, line in enumerate(lines, 1)
+                       if (m := re.fullmatch(rb'r\[([^\]\r\n]+)\]\r?\n?', line))]
+            self.assertEqual(markers, [(r[2], r[1]) for r in self.PINS if r[0] == page])
+            self.assertEqual(len(markers), label_count)
+            for pinned_page, label, start, end, block_hash, classes in self.PINS:
+                if pinned_page != page:
+                    continue
+                row = actual[page, label]
+                with self.subTest(rule=label):
+                    self.assertEqual((row['line'], row['end_line']), (start, end))
+                    self.assertEqual(digest(b''.join(lines[start - 1:end])), block_hash)
+                    self.assertEqual(row['source_block_sha256'], block_hash)
+                    self.assertEqual(row['classifications'], [class_names[c] for c in classes.split()])
+                    self.assertEqual(row['id'], 'reconcile-sequence-types-' + label.encode().hex())
+                    self.assertEqual(row['candidate_obligation_ids'], [proposals.ALIASES[label.split('.')[1]]])
+                    self.assertEqual(row['review_status'], 'unreviewed')
+                    self.assertEqual(row['relationship'], 'context-only' if classes == 'I'
+                                     else 'proposed-partial-decomposition')
+                    self.assertEqual(len(row['missing_test_needs']), 4)
+                    for need, kind in zip(row['missing_test_needs'], ('positive', 'invalid', 'interaction', 'end-to-end')):
+                        self.assertTrue(need.startswith(kind + ': Missing '))
+                    for phrase in ('stable1.98.1 eligibility', 'workers1/8', 'edition2024',
+                                   'Linux x86-64', 'Never execute undefined behavior',
+                                   'CHECK must not demand codegen', 'not necessarily fail compilation'):
+                        self.assertIn(phrase, row['missing_test_needs'][-1])
+        for kind in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence'):
+            self.assertEqual(counts[kind], 0)
+        index = json.loads(self.index.read_bytes())
+        universe = {(p['path'], r['label']) for p in index['pages'] + index['unlinked_markdown_files']
+                    for r in p['rules']}
+        selected = set(actual)
+        other = {(r['page'], r['rule']) for r in data['unselected_rules']}
+        self.assertEqual((len(selected), len(other), len(universe)), (19, 2946, 2965))
+        self.assertFalse(selected & other)
+        self.assertEqual(selected | other, universe)
+        self.assertEqual(self.artifact(), data)
+
+    def test_each_artifact_row_omission_and_actual_classification_forgery_rejected(self):
+        baseline = self.artifact()
+        for i, row in enumerate(baseline['rows']):
+            for kind in ('omission', 'classification'):
+                changed = copy.deepcopy(baseline)
+                if kind == 'omission':
+                    changed['rows'].pop(i)
+                else:
+                    changed['rows'][i]['classifications'] = (
+                        ['index'] if row['classifications'] != ['index'] else ['grammar'])
+                self.assertNotEqual(changed, baseline)
+                with self.subTest(rule=row['rule'], mutation=kind), self.assertRaises(ValueError):
+                    self.verify(changed)
+
+    def test_global_unique_additive_union_not_authored_sum(self):
+        index = json.loads(self.index.read_bytes())
+        pages = index['pages'] + index['unlinked_markdown_files']
+        prior_pages = {p for name, _ in reconciliation.PROPOSAL_COUNTS if name != 'sequence-types'
+                       for p in reconciliation.profile_inputs(name)[0]}
+        prior = {(p['path'], r['label']) for p in pages if p['path'] in prior_pages for r in p['rules']}
+        current = {(r['page'], r['rule']) for r in self.artifact()['rows']}
+        self.assertEqual((len(prior), len(current), len(prior & current), len(prior | current)),
+                         (942, 19, 0, 961))
+        summary = reconciliation.summarize_proposals(self.index, self.inventory, include_proposals=True)
+        self.assertEqual((summary['proposed_rule_identities'], summary['rule_identities_without_proposals']),
+                         (961, 2004))
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in summary['profiles'].values()), 966)
+        sequence = summary['profiles']['sequence-types']
+        self.assertEqual(len(sequence['authored_proposals']), 19)
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(summary[field], 0)
+            self.assertEqual(sequence[field], 0)
+        self.assertIsNone(sequence['full_rust_completion_percent'])
+        for page, count in zip(self.PAGES, (5, 5, 9)):
+            result = reconciliation.query_rule_backlog(self.index, self.inventory, page=page,
+                                                       include_proposals=True)
+            self.assertEqual((result['selected_rule_identities'], result['selected_authored_proposal_count']),
+                             (count, count))
+            self.assertEqual(result['selected_rule_identities_without_proposals'], 0)
+            self.assertTrue(all(row['proposal_profiles'] == ['sequence-types'] for row in result['rows']))
+            missing = reconciliation.query_rule_backlog(self.index, self.inventory, page=page, missing_only=True)
+            self.assertEqual(missing['rows'], [])
+
+    def test_all_26_prior_canonical_bytes_without_new_module(self):
+        self.assertEqual(len(self.PRIOR_HASHES), 26)
+        self.assertEqual(set(self.PRIOR_HASHES), {name for name, _ in reconciliation.PROPOSAL_COUNTS
+                                                if name != 'sequence-types'})
+        with mock.patch.dict(sys.modules, {'sequence_types_reconciliation_proposals': None}):
+            for profile, sha in self.PRIOR_HASHES.items():
+                with self.subTest(profile=profile):
+                    data = build(self.index, self.inventory, self.source, profile)
+                    validate(data, self.index, self.inventory, self.source, profile)
+                    self.assertEqual(digest((json.dumps(data, indent=2) + '\n').encode()), sha)
+            self.assertEqual(digest((json.dumps(build(self.index, self.inventory, self.source), indent=2) + '\n').encode()),
+                             self.PRIOR_HASHES['tokens'])
+
+    test_each_source_page_fault_preserves_exact_error_types = (
+        PrimitiveTypesProposalTests.test_each_source_page_fault_preserves_exact_error_types)
+    test_29_actual_changing_forgeries_rejected = (
+        PrimitiveTypesProposalTests.test_29_actual_changing_forgeries_rejected)
+
+    def test_permuted_authored_rows_preserve_canonical_order(self):
+        import sequence_types_reconciliation_proposals as proposals
+        baseline = self.artifact()
+        rows = proposals.ROWS.strip().splitlines()
+        for changed in (rows[::-1], rows[2:] + rows[:2], rows[::2] + rows[1::2]):
+            with mock.patch.object(proposals, 'ROWS', '\n'.join(changed)):
+                data = self.artifact()
+                self.assertEqual(data, baseline)
+                self.assertEqual(tuple(r['rule'] for r in data['rows']), tuple(r[1] for r in self.PINS))
+                self.assertEqual(self.verify(data), self.verify(baseline))
+
+    def test_missing_duplicate_foreign_malformed_authored_rows_rejected(self):
+        import sequence_types_reconciliation_proposals as proposals
+        valid = self.artifact()
+        rows = proposals.ROWS.strip().splitlines()
+        cases = [[], rows + [rows[0]], ['foreign.rule' + rows[0][len('type.array'):], *rows[1:]],
+                 ['|'.join(rows[0].split('|')[:-1]), *rows[1:]], [rows[0] + '|extra', *rows[1:]]]
+        cases.extend(rows[:i] + rows[i + 1:] for i in range(len(rows)))
+        for col in (4, 5, 6):
+            fields = rows[0].split('|')
+            fields[col] = '   '
+            cases.append(['|'.join(fields), *rows[1:]])
+        for i, changed in enumerate(cases):
+            with self.subTest(case=i), mock.patch.object(proposals, 'ROWS', '\n'.join(changed)):
+                with self.assertRaises(ValueError):
+                    self.artifact()
+                with self.assertRaises(ValueError):
+                    self.verify(valid)
+
+    def test_rule_specific_semantic_caveats_remain_open(self):
+        import sequence_types_reconciliation_proposals as proposals
+        rows = {r.split('|')[0]: r.split('|') for r in proposals.ROWS.strip().splitlines()}
+        phrases = {
+            'type.array': ('not executable behavior',),
+            'type.array.syntax': ('Type semicolon Expression', 'does not grant nonconstant lengths', 'constant-usize'),
+            'type.array.intro': ('fixed-size', 'N elements', 'not byte count', 'homogeneous'),
+            'type.array.constraint': ('constant expression evaluating to usize', 'nonconstant lengths', 'Box', 'without importing'),
+            'type.array.index': ('initialized', 'safe methods and operators', 'possible runtime panic', 'not all compile-invalid', 'without executing undefined behavior', 'without mandatory unoptimized runtime-check nodes', 'Vec context'),
+            'type.slice': ('not metadata', 'partial metadata-named alias'),
+            'type.slice.syntax': ('bracket Type bracket', '[T; N]'),
+            'type.slice.intro': ('dynamically sized', 'view', 'homogeneous', 'without importing linked DST'),
+            'type.slice.unsized': ('generally used through pointers', '&[T] borrows without owning', '&mut [T] mutably borrows', 'Box<[T]>', 'generally versus only', 'no specified fat-pointer layout or metadata'),
+            'type.slice.safe': ('initialized', 'possible runtime panic', 'not universal compile errors', 'without executing undefined behavior', 'without mandatory runtime-check nodes'),
+            'type.tuple': ('not executable behavior',),
+            'type.tuple.syntax': ('exactly two alternatives', '()', '(Type comma)+ followed by optional Type', '(i32,)', '(i32, bool,)', '(i32) is a one-element tuple'),
+            'type.tuple.intro': ('structural', 'heterogeneous', 'equivalent ordered internal types', 'Eq trait or layout equivalence', 'nominal tuple-struct'),
+            'type.tuple.restriction': ('one-element tuple requires a comma', 'parenthesized type', '(i32,)'),
+            'type.tuple.field-number': ('length of its type list', 'arity', 'versus storage size'),
+            'type.tuple.field-name': ('starting at 0', 'same position', 'positional field types', 'not physical offsets'),
+            'type.tuple.unit': ('arity zero', 'one value', 'without invented unit size or layout', '(String, i32)', '(i32, String)'),
+            'type.tuple.constructor': ('tuple expressions', 'unit', 'context only', 'not imported'),
+            'type.tuple.access': ('tuple index expressions or pattern matching', 'structural-type footnote', 'context only, not imported contracts', 'Eq trait or layout equivalence'),
+        }
+        self.assertEqual(set(phrases), set(rows))
+        for label, needs in phrases.items():
+            for phrase in needs:
+                with self.subTest(label=label, phrase=phrase):
+                    self.assertIn(phrase, '|'.join(rows[label]))
+        for phrase in ('19 labels', 'UNREVIEWED', 'not complete Rust sequences', 'partial routing',
+                       'not contract identity', 'context only, not imported contracts',
+                       'no fat-pointer layout or metadata contract', 'do not establish full standard-library support'):
+            self.assertIn(phrase, ' '.join(proposals.LIMITATIONS))
+
+    def test_source_only_restrictions_precede_io_and_execution(self):
+        args = ['--profile', 'sequence-types', '--rule-index', '/absent/index',
+                '--inventory', '/absent/inventory', '--source-root', '/absent/source',
+                '--artifact', '/absent/artifact']
+        extras = ([], ['--repo-root', '/absent/repo'], ['--evidence', '/absent/evidence'],
+                  ['--repo-root', '/absent/repo', '--evidence', '/absent/evidence'])
+        cases = [(action, extra) for action in ('generate-witness-links', 'build-witness-links',
+                  'validate-witness-links', 'assess-witness-links') for extra in extras]
+        cases += [(action, extra) for action in ('generate', 'validate') for extra in extras[1:]]
+        with contextlib.ExitStack() as stack:
+            for name in ('read_bytes', 'read_text', 'open', 'is_symlink', 'is_file',
+                         'write_bytes', 'write_text', 'mkdir'):
+                stack.enter_context(mock.patch.object(Path, name, side_effect=AssertionError('IO')))
+            stack.enter_context(mock.patch.object(subprocess, 'run', side_effect=AssertionError('execution')))
+            for action, extra in cases:
+                with self.subTest(action=action, extra=extra), self.assertRaises(ValueError):
+                    main([action, *args, *extra])
+            for call in (
+                lambda: reconciliation.build_witness_links(
+                    self.index, self.inventory, self.source, self.source, 'sequence-types'),
+                lambda: reconciliation.validate_witness_links(
+                    {}, self.index, self.inventory, self.source, self.source, 'sequence-types'),
+                lambda: reconciliation.assess_witness_links(
+                    {}, self.index, self.inventory, self.source, self.source, (), 'sequence-types'),
+            ):
+                with self.assertRaises(ValueError):
+                    call()
+
+    def test_cli_exclusive_generation_validation_and_no_repair(self):
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'sequence-types.json'
+            args = ['--profile', 'sequence-types', '--rule-index', str(self.index),
+                    '--inventory', str(self.inventory), '--source-root', str(self.source),
+                    '--artifact', str(artifact)]
+            expected = (json.dumps(self.artifact(), indent=2) + '\n').encode()
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main(['generate', *args])
+            self.assertEqual(artifact.read_bytes(), expected)
+            self.assertEqual(json.loads(output.getvalue()), self.verify(self.artifact()))
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(FileExistsError):
+                main(['generate', *args])
+            self.assertEqual(artifact.read_bytes(), expected)
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                main(['validate', *args])
+            self.assertEqual(json.loads(output.getvalue()), self.verify(self.artifact()))
+            self.assertEqual(artifact.read_bytes(), expected)
+            forged = json.loads(expected)
+            forged['counts']['reviewed_rule_rows'] = 1
+            artifact.write_text(json.dumps(forged))
+            before = artifact.read_bytes()
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(ValueError):
+                main(['validate', *args])
+            self.assertEqual(artifact.read_bytes(), before)
+
+    def test_actual_process_cli_generate_validate(self):
+        with tempfile.TemporaryDirectory() as temp:
+            artifact = Path(temp) / 'sequence-types.json'
+            args = [sys.executable, str(BASE / 'reconcile_token_rules.py'),
+                    '--profile', 'sequence-types', '--rule-index', str(self.index),
                     '--inventory', str(self.inventory), '--source-root', str(self.source),
                     '--artifact', str(artifact)]
             expected = (json.dumps(self.artifact(), indent=2) + '\n').encode()

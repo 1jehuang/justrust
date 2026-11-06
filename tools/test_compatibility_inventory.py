@@ -58,8 +58,8 @@ class InventoryTests(unittest.TestCase):
         self.assertIsNone(report['full_rust_completion_percent'])
         expected = report['rule_proposals']
         self.assertEqual(expected['global_rule_identities'], 2965)
-        self.assertEqual(expected['proposed_rule_identities'], 942)
-        self.assertEqual(expected['rule_identities_without_proposals'], 2023)
+        self.assertEqual(expected['proposed_rule_identities'], 961)
+        self.assertEqual(expected['rule_identities_without_proposals'], 2004)
         for name, pages, count in (
                 ('loops', ['loop-expr'], 60), ('operators', ['operator-expr'], 112),
                 ('closures', ['closure-expr'], 17),
@@ -106,7 +106,18 @@ class InventoryTests(unittest.TestCase):
         for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
             self.assertEqual(primitives[field], 0)
         self.assertIsNone(primitives['full_rust_completion_percent'])
-        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 947)
+        sequence = expected['profiles']['sequence-types']
+        self.assertEqual(sequence['selected_pages'], [
+            'src/types/array.md', 'src/types/slice.md', 'src/types/tuple.md'])
+        self.assertEqual(sequence['proposed_rule_identities'], 19)
+        self.assertEqual(sequence['proposed_classification_counts'], {
+            'normative-semantic': 13, 'grammar': 3, 'index': 3,
+            'cross-reference': 10, 'edition-context': 0})
+        self.assertEqual(sequence['review_status'], 'unreviewed')
+        for field in ('reviewed_rule_rows', 'rows_with_exact_executable_evidence', 'completed_rule_rows'):
+            self.assertEqual(sequence[field], 0)
+        self.assertIsNone(sequence['full_rust_completion_percent'])
+        self.assertEqual(sum(p['proposed_rule_identities'] for p in expected['profiles'].values()), 966)
         for options in ([], ['--reference-rules', str(root / inventory.REFERENCE_RULES)]):
             process = subprocess.run([sys.executable, inventory.__file__, '--root', str(root), *options],
                                      capture_output=True, text=True, check=False)
