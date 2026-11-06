@@ -28,6 +28,33 @@ pub(super) enum InferKind {
     Projection(ir::DeclId, ir::DeclId, Arc<[InferTerm]>),
 }
 
+/// Only an authored outer argument is a coercion site. This returns inference
+/// equations, not replacement source evidence or executable coercion authority.
+/// Expected results and nested type equations must not use this operation.
+pub(super) fn call_input_equation<'a>(
+    schema: &'a InferTerm,
+    evidence: &'a InferTerm,
+) -> (&'a InferTerm, &'a InferTerm, usize) {
+    match (schema.as_ref(), evidence.as_ref()) {
+        (InferKind::Ref(target_kind, target), InferKind::Ref(source_kind, source))
+            if *target_kind == ir::BorrowKind::Shared || target_kind == source_kind =>
+        {
+            if let (InferKind::Slice(element), InferKind::Array(actual, _)) =
+                (target.as_ref(), source.as_ref())
+            {
+                return (element, actual, 2);
+            }
+        }
+        (InferKind::RawPtr(target_kind, target), InferKind::Ref(source_kind, source))
+            if *target_kind == ir::BorrowKind::Shared || target_kind == source_kind =>
+        {
+            return (target, source, 1);
+        }
+        _ => {}
+    }
+    (schema, evidence, 0)
+}
+
 // Partial context is reconstructed only from an original method header and an
 // authored outer annotation. Unmentioned receiver parameters stay unknown.
 pub(super) fn source_receiver_context(
@@ -594,13 +621,8 @@ impl CallInferenceState {
         evidence: &InferTerm,
     ) -> Result<(), FactsError> {
         self.work(0)?;
-        if let (InferKind::RawPtr(target_kind, target), InferKind::Ref(source_kind, source)) =
-            (schema.as_ref(), evidence.as_ref())
-            && (*target_kind == ir::BorrowKind::Shared || target_kind == source_kind)
-        {
-            return self.constrain(target, source, 1);
-        }
-        self.constrain(schema, evidence, 0)
+        let (schema, evidence, depth) = call_input_equation(schema, evidence);
+        self.constrain(schema, evidence, depth)
     }
 
     pub(super) fn work(&self, depth: usize) -> Result<(), FactsError> {
@@ -2845,6 +2867,113 @@ mod replay_type_equality_tests {
 #[cfg(test)]
 mod call_input_trace_tests {
     use super::*;
+
+    #[test]
+    fn borrowed_array_call_unsizing_preserves_evidence_and_nested_invariance() {
+        let budget = ir::PlanBudget::default();
+        let own = env(1);
+        let slice = |element| ir::Ty::Slice {
+            element: Arc::new(element),
+        };
+        let array = |element, len| ir::Ty::Array {
+            element: Arc::new(element),
+            len,
+        };
+        let element = ir::Ty::Int(ir::IntTy::U16);
+        for target in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+            for source in [ir::BorrowKind::Shared, ir::BorrowKind::Mut] {
+                for len in [0, 3] {
+                    let formal = reference(target, slice(param(&own, 0)));
+                    let actual = reference(source, array(element.clone(), len));
+                    let result = infer(
+                        own.clone(),
+                        std::slice::from_ref(&formal),
+                        std::slice::from_ref(&actual),
+                        &budget,
+                    );
+                    if target == ir::BorrowKind::Mut && source == ir::BorrowKind::Shared {
+                        assert!(result.is_err(), "unsizing cannot grant mutable access");
+                        continue;
+                    }
+                    let trace = result.unwrap();
+                    assert_eq!(trace.actuals(), std::slice::from_ref(&element));
+                    let InferKind::Ref(kind, pointee) = trace.evidence[0].as_ref() else {
+                        panic!("original reference evidence lost")
+                    };
+                    assert_eq!(*kind, source);
+                    assert!(matches!(pointee.as_ref(), InferKind::Array(_, n) if *n == len));
+                    let replay = infer(
+                        own.clone(),
+                        std::slice::from_ref(&formal),
+                        std::slice::from_ref(&actual),
+                        &budget,
+                    )
+                    .unwrap();
+                    trace.validate_replayed(&replay, &budget).unwrap();
+                    let changed = infer(
+                        own.clone(),
+                        std::slice::from_ref(&formal),
+                        &[reference(source, array(element.clone(), len + 1))],
+                        &budget,
+                    )
+                    .unwrap();
+                    assert!(trace.validate_replayed(&changed, &budget).is_err());
+
+                    let mut state = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+                    let (schema, evidence) = state.constrain_input(&formal, &actual).unwrap();
+                    let mut strict = CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+                    assert!(strict.constrain(&schema, &evidence, 0).is_err());
+                    for (left, right) in [
+                        (
+                            InferKind::Tuple(Arc::from([schema.clone()])),
+                            InferKind::Tuple(Arc::from([evidence.clone()])),
+                        ),
+                        (
+                            InferKind::Ref(ir::BorrowKind::Shared, schema.clone()),
+                            InferKind::Ref(ir::BorrowKind::Shared, evidence.clone()),
+                        ),
+                        (
+                            InferKind::Nominal(own.binder().declaration, Arc::from([schema])),
+                            InferKind::Nominal(own.binder().declaration, Arc::from([evidence])),
+                        ),
+                    ] {
+                        let mut nested =
+                            CallInferenceState::new(Some(own.clone()), &budget).unwrap();
+                        assert!(
+                            nested
+                                .constrain_call_input(&Arc::new(left), &Arc::new(right))
+                                .is_err()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(
+            infer_input_schema_trace(
+                Some(env(0)),
+                &[reference(ir::BorrowKind::Shared, slice(ir::Ty::Bool))],
+                &ir::Ty::Unit,
+                &[reference(ir::BorrowKind::Shared, array(element, 2))],
+                &budget,
+                &mut |_, _| unreachable!(),
+            )
+            .is_err()
+        );
+        let exhausted = ir::PlanBudget::new(ir::PlanLimits {
+            work: 0,
+            ..Default::default()
+        });
+        assert!(
+            infer(
+                own.clone(),
+                &[reference(ir::BorrowKind::Shared, slice(param(&own, 0)))],
+                &[reference(ir::BorrowKind::Shared, array(ir::Ty::Bool, 0))],
+                &exhausted,
+            )
+            .unwrap_err()
+            .is_resource()
+        );
+    }
 
     #[test]
     fn raw_call_input_preserves_original_evidence_and_strict_nested_boundaries() {

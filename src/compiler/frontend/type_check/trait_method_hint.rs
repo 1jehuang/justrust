@@ -81,7 +81,8 @@ impl Checker<'_> {
         for (formal, argument) in schema.signature.params[offset..].iter().zip(arguments) {
             let formal = self.method_owner_term(&solver.schema(formal, 0)?, &bindings, 0)?;
             let evidence = self.inference_evidence(argument, 0)?;
-            constraints.push((formal, evidence));
+            let (formal, evidence, _) = sr::call_input_equation(&formal, &evidence);
+            constraints.push((formal.clone(), evidence.clone()));
         }
         if !solver.constrain_projected_terms(constraints, true)? {
             return Ok(None);
