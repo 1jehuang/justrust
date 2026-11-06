@@ -185,6 +185,57 @@ fn profile_dir(cwd: &Path, args: &[String]) -> Result<PathBuf> {
     Ok(target.join(crate::slots::profile_dir(&os)))
 }
 
+/// Artifact lookup uses Cargo's output triple, not cargo-zigbuild's ABI
+/// selector. Normalize on the client too: deployed hosts may predate support
+/// for the selector. The original args still control local ELF validation.
+fn artifact_args(args: &[String]) -> Vec<String> {
+    let mut args = args.to_vec();
+    let mut target_value = false;
+    for arg in &mut args {
+        if arg == "--" {
+            break;
+        }
+        if target_value {
+            *arg = rust_target(arg).to_owned();
+            target_value = false;
+        } else if arg == "--target" {
+            target_value = true;
+        } else if let Some(target) = arg.strip_prefix("--target=") {
+            *arg = format!("--target={}", rust_target(target));
+        }
+    }
+    args
+}
+
+fn ensure_requested_bins(dir: &Path, args: &[String]) -> Result<()> {
+    let mut bin_value = false;
+    for arg in args.iter().take_while(|arg| arg.as_str() != "--") {
+        let bin = if bin_value {
+            bin_value = false;
+            Some(arg.as_str())
+        } else if arg == "--bin" {
+            bin_value = true;
+            None
+        } else {
+            arg.strip_prefix("--bin=")
+        };
+        if let Some(bin) = bin {
+            let name = if build_target(args).is_some_and(|target| target.contains("windows")) {
+                format!("{bin}.exe")
+            } else {
+                bin.to_owned()
+            };
+            if !safe_name(&name) || !dir.join(&name).is_file() {
+                bail!(
+                    "host did not return requested binary {name} in {}",
+                    dir.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn test_no_run(args: &[String]) -> bool {
     args.first().is_some_and(|s| s == "test")
         && args
@@ -867,7 +918,7 @@ fn fetch_inner(
     let t = backend.ensure_ready()?;
     let req = Request {
         cwd: cwd.display().to_string(),
-        args: args.to_vec(),
+        args: artifact_args(args),
         start,
         have,
         test_run: test_run.map(str::to_owned),
@@ -1039,8 +1090,16 @@ fn fetch_inner(
     } else {
         Vec::new()
     };
+    if test_run.is_none() {
+        ensure_requested_bins(&dir, args)?;
+    }
     Ok((
-        if files == 0 {
+        if files == 0 && candidates(&dir).is_empty() {
+            format!(
+                "host returned no uplifted build artifacts ({:.2}s)",
+                t0.elapsed().as_secs_f64()
+            )
+        } else if files == 0 {
             format!(
                 "artifacts already up to date here ({:.2}s)",
                 t0.elapsed().as_secs_f64()
@@ -1254,6 +1313,50 @@ mod tests {
             crate::slots::profile_dir(&args),
             Path::new("x86_64-unknown-linux-gnu/release")
         );
+    }
+
+    #[test]
+    fn artifact_request_normalizes_zig_target_without_changing_build_args() {
+        for target in [
+            vec!["--target", GLIBC_217_TARGET],
+            vec!["--target=x86_64-unknown-linux-gnu.2.17"],
+        ] {
+            let args: Vec<String> = ["zigbuild", "--profile", "selfdev"]
+                .into_iter()
+                .chain(target)
+                .map(str::to_owned)
+                .collect();
+            let normalized = artifact_args(&args);
+            assert_eq!(build_target(&args), Some(GLIBC_217_TARGET));
+            assert_eq!(build_target(&normalized), Some("x86_64-unknown-linux-gnu"));
+            let os: Vec<OsString> = normalized.iter().map(OsString::from).collect();
+            assert_eq!(
+                crate::slots::profile_dir(&os),
+                Path::new("x86_64-unknown-linux-gnu/selfdev")
+            );
+        }
+        let args = vec![
+            "build".into(),
+            "--".into(),
+            format!("--target={GLIBC_217_TARGET}"),
+        ];
+        assert_eq!(artifact_args(&args), args);
+    }
+
+    #[test]
+    fn empty_stream_cannot_satisfy_an_explicit_binary_request() {
+        let root = std::env::temp_dir().join(format!("jr-artifacts-bin-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let args = ["zigbuild", "--bin", "jcode"].map(str::to_owned);
+        assert!(ensure_requested_bins(&root, &args).is_err());
+        std::fs::write(root.join("jcode"), b"binary").unwrap();
+        assert!(ensure_requested_bins(&root, &args).is_ok());
+        let args = ["build", "--bin=jcode", "--target=x86_64-pc-windows-gnu"].map(str::to_owned);
+        assert!(ensure_requested_bins(&root, &args).is_err());
+        std::fs::write(root.join("jcode.exe"), b"binary").unwrap();
+        assert!(ensure_requested_bins(&root, &args).is_ok());
+        assert!(ensure_requested_bins(&root, &["build".into(), "--lib".into()]).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     fn glibc_fixture(version: &str) -> Vec<u8> {
@@ -1637,4 +1740,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 }
-
