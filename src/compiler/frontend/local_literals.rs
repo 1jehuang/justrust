@@ -118,6 +118,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
     scopes: Vec<HashMap<LocalKey, Term>>,
     sites: Vec<(usize, Term)>,
     receiver_sites: Vec<(usize, Term)>,
+    associated_owner_sites: Vec<(usize, Term)>,
     methods: Vec<Method>,
     projections: Vec<Projection>,
     delayed_results: Vec<Term>,
@@ -165,6 +166,7 @@ struct Solver<'a: 's, 'b: 's, 's> {
 pub(in crate::compiler) struct Hints {
     pub locals: HashMap<usize, ir::Ty>,
     pub receivers: HashMap<usize, ir::Ty>,
+    pub associated_owners: HashMap<usize, ir::Ty>,
     pub closures: HashMap<PathKey, ir::Signature>,
     // Present only for a canonical source-callable solve with explicit inputs.
     // These values still require ordinary executable facts/carrier validation.
@@ -214,7 +216,14 @@ fn finalized_hints(solver: Solver<'_, '_, '_>) -> Result<Hints, String> {
             receivers.insert(*site, ty);
         }
     }
+    let mut associated_owners = HashMap::new();
+    for (site, term) in &solver.associated_owner_sites {
+        if let Some(ty) = solver.resolve(*term, 0)? {
+            associated_owners.insert(*site, ty);
+        }
+    }
     Ok(Hints {
+        associated_owners,
         receivers,
         locals: hints,
         closures,
@@ -250,6 +259,7 @@ fn solve_body_with_seed<'a: 's, 'b: 's, 's>(
         scopes: Vec::new(),
         sites: Vec::new(),
         receiver_sites: Vec::new(),
+        associated_owner_sites: Vec::new(),
         methods: Vec::new(),
         projections: Vec::new(),
         delayed_results: Vec::new(),
@@ -3029,7 +3039,12 @@ impl<'s> Solver<'_, '_, 's> {
                 type_args,
                 args,
             } => {
+                let owner_site = owner as *const Type as usize;
                 let owner = self.source_ty(owner)?;
+                if self.resolve(owner, 0)?.is_none() {
+                    self.checker.infer_storage(1)?;
+                    self.associated_owner_sites.push((owner_site, owner));
+                }
                 let args = args
                     .iter()
                     .map(|a| self.expr(a, depth + 1))
@@ -3040,6 +3055,12 @@ impl<'s> Solver<'_, '_, 's> {
                     .collect::<Result<Vec<_>, _>>()?;
                 if let Some(candidate) = self.candidate_for_receiver(owner, *name)? {
                     return self.callable(candidate, &args, None, Some(owner), &actuals);
+                }
+                if self.resolve(owner, 0)?.is_none()
+                    && let Some(result) =
+                        self.associated_trait_receiver_constraints(owner, *name, &args, &actuals)?
+                {
+                    return Ok(result);
                 }
                 // A static trait method may be reached through a concrete type
                 // (T::from_str). Reuse ordinary selection only after its owner

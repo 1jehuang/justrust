@@ -152,6 +152,7 @@ fn inspect_with_opaque_hint(
         scopes: vec![HashMap::new()],
         sites: Vec::new(),
         receiver_sites: Vec::new(),
+        associated_owner_sites: Vec::new(),
         methods: Vec::new(),
         structural_impl_stack: Vec::new(),
         projections: Vec::new(),

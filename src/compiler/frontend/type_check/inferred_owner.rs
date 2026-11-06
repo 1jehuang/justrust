@@ -27,6 +27,16 @@ impl Checker<'_> {
         let names = self.names()?;
         let nominal_path = path.path(names)?;
         let nominal = self.nominal_decl(&nominal_path)?;
+        // This is a solved source equation, never a selected implementation.
+        // The caller still performs ordinary associated selection and proves
+        // the concrete trait application, its bounds and executable target.
+        if let Some(hint) = self
+            .associated_owner_hints
+            .get(&(owner as *const Type as usize))
+            && nominal_parts(hint).is_some_and(|(declaration, _)| declaration == nominal)
+        {
+            return Ok(hint.clone());
+        }
         let mut candidate = None;
         for id in &plan.registry.function_ids {
             plan.budget.charge_work(1)?;

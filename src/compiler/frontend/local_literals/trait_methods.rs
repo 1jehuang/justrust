@@ -347,6 +347,30 @@ impl Solver<'_, '_, '_> {
         explicit: &[Term],
         peeled: bool,
     ) -> Result<Option<Term>, String> {
+        self.structural_trait_call_constraints(receiver, name, arguments, explicit, peeled, false)
+    }
+
+    /// Associated syntax supplies an explicit receiver. Use its exact source
+    /// formal, not a guess based on the first argument's type or name.
+    pub(super) fn associated_trait_receiver_constraints(
+        &mut self,
+        receiver: Term,
+        name: AstIdent,
+        arguments: &[Term],
+        explicit: &[Term],
+    ) -> Result<Option<Term>, String> {
+        self.structural_trait_call_constraints(receiver, name, arguments, explicit, false, true)
+    }
+
+    fn structural_trait_call_constraints(
+        &mut self,
+        receiver: Term,
+        name: AstIdent,
+        arguments: &[Term],
+        explicit: &[Term],
+        peeled: bool,
+        associated: bool,
+    ) -> Result<Option<Term>, String> {
         let plan = self.checker.signatures.plan()?;
         let implicit = plan.program.implicit_prelude(self.checker.module)?;
         let mut selected = None;
@@ -366,26 +390,33 @@ impl Solver<'_, '_, '_> {
                     visible = true;
                 }
             }
-            if !visible {
+            if !visible || matches!(plan.declaration(item)?.receiver, ReceiverKind::None) {
                 continue;
             }
             let header = self.structural_impl(receiver, *trait_id)?;
             if header.is_none() {
-                if !self.numeric_nominal_actuals(receiver)? {
+                if !associated && !self.numeric_nominal_actuals(receiver)? {
                     continue;
                 }
                 let Domain::Nominal(nominal, _) = self.domain(receiver) else {
                     continue;
                 };
-                if plan.param_env(*trait_id)?.arity() != 1 {
+                if !associated && plan.param_env(*trait_id)?.arity() != 1 {
                     continue;
                 }
                 let mut exists = false;
                 for candidate in plan.trait_world()?.impl_headers() {
                     self.checker.infer_work(0)?;
+                    // For associated syntax the receiver is an explicit source
+                    // parameter. All impls of one trait share that schema, so
+                    // its equations do not require choosing any specialized
+                    // head. Final checked selection decides applicability.
                     if candidate.trait_ref.declaration == *trait_id
-                        && nominal_parts(&candidate.trait_ref.self_ty)
+                        && (nominal_parts(&candidate.trait_ref.self_ty)
                             .is_some_and(|(owner, _)| owner == nominal)
+                            || (associated
+                                && matches!(candidate.trait_ref.self_ty,
+                                    ir::Ty::Param(p) if candidate.schema_env.contains(p))))
                     {
                         exists = true;
                     }
@@ -413,7 +444,8 @@ impl Solver<'_, '_, '_> {
         }
         let schema = plan.raw_schema(item)?;
         let own = plan.param_env(item)?;
-        if schema.signature.params.len() != arguments.len() + 1
+        let skip = usize::from(!associated);
+        if schema.signature.params.len() != arguments.len() + skip
             || (!explicit.is_empty() && explicit.len() != own.arity())
         {
             return Ok(None);
@@ -454,7 +486,10 @@ impl Solver<'_, '_, '_> {
                 *actual,
             );
         }
-        for (actual, formal) in arguments.iter().zip(schema.signature.params.iter().skip(1)) {
+        for (actual, formal) in arguments
+            .iter()
+            .zip(schema.signature.params.iter().skip(skip))
+        {
             let formal = self.schema(formal, &params, 0)?;
             self.coerce(*actual, formal)?;
         }

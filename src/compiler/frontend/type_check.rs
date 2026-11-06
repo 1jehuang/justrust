@@ -2205,6 +2205,7 @@ pub(super) struct Checker<'a> {
     pub(super) closure_source_recipe: Option<sr::OriginalBodyId>,
     closure_signature_hints: HashMap<PathKey, ir::Signature>,
     method_receiver_hints: HashMap<usize, ir::Ty>,
+    associated_owner_hints: HashMap<usize, ir::Ty>,
     pub(super) capture_bindings: std::collections::HashSet<LocalKey>,
     pub(super) capture_parent_scope: Option<super::super::semantic_scope::ScopeId>,
     pub(super) opaque_hidden: Vec<ir::OpaqueHiddenType>,
@@ -4261,6 +4262,7 @@ impl<'a> Checker<'a> {
             closure_source_recipe: None,
             closure_signature_hints: HashMap::new(),
             method_receiver_hints: HashMap::new(),
+            associated_owner_hints: HashMap::new(),
             capture_bindings: std::collections::HashSet::new(),
             capture_parent_scope: None,
             inferred_closure_result: false,
@@ -7756,6 +7758,8 @@ impl<'a> Checker<'a> {
         hints: local_literals::Hints,
     ) -> Result<(ir::TypedBlock, Flow), String> {
         self.closure_signature_hints.extend(hints.closures);
+        let previous_owner_hints =
+            std::mem::replace(&mut self.associated_owner_hints, hints.associated_owners);
         let previous_receiver_hints =
             std::mem::replace(&mut self.method_receiver_hints, hints.receivers);
         let literal_hints = hints.locals;
@@ -8404,6 +8408,7 @@ impl<'a> Checker<'a> {
             statements.insert(position, ir::TypedStmt::Declare { local });
         }
         self.scopes.pop();
+        self.associated_owner_hints = previous_owner_hints;
         self.method_receiver_hints = previous_receiver_hints;
         Ok((ir::TypedBlock { statements, tail }, flow))
     }
