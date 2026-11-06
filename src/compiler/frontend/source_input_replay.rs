@@ -2,6 +2,8 @@
 //! Checked types are comparison targets, never an inference source.
 use super::*;
 
+mod generic_method;
+
 // This bounded arithmetic slice obtains its width only from authored suffixes,
 // never from checked expression types or a caller's inferred actuals.
 fn authored_float_width(
@@ -381,10 +383,15 @@ fn syntax(source: &Expr, budget: &ir::PlanBudget, depth: usize) -> Result<bool, 
             type_args,
             args,
             ..
-        } if type_args.is_empty()
-            && args.is_empty()
-            && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
-        {
+        } if type_args.is_empty() => {
+            if !syntax(receiver, budget, depth + 1)? {
+                return Ok(false);
+            }
+            for argument in args {
+                if !syntax(argument, budget, depth + 1)? {
+                    return Ok(false);
+                }
+            }
             return Ok(true);
         }
         Expr::Struct { fields, .. } => {
@@ -452,6 +459,26 @@ fn authored_len_receiver(
         Some(Type::Ref { kind: ir::BorrowKind::Shared, referent, .. })
             if matches!(referent.as_ref(), Type::Slice(_) | Type::Str)
     ))
+}
+
+// Receiver autoderef placeholders deliberately share their source node with
+// an authored nested call. Only the non-operator role owns that call.
+fn authored_call_index(
+    inventory: &SourceInventory,
+    node: &sr::SourceNode,
+    budget: &ir::PlanBudget,
+) -> Result<usize, FactsError> {
+    sr::work(budget, inventory.calls.len())?;
+    let mut found = None;
+    for (index, site) in inventory.calls.iter().enumerate() {
+        if site.node == *node && !site.operator_candidate && found.replace(index).is_some() {
+            return Err(FactsError::invalid(
+                budget,
+                "duplicate authored call source role",
+            ));
+        }
+    }
+    found.ok_or_else(|| FactsError::invalid(budget, "authored call source role missing"))
 }
 
 pub(super) fn supported(
@@ -617,24 +644,12 @@ pub(super) fn supported(
             type_args,
             args,
             ..
-        } if type_args.is_empty()
-            && args.is_empty()
-            && matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) =>
-        {
+        } if type_args.is_empty() => {
             // Selection here is provisional. Only replay of the exact builtin
             // receipt and lexical receiver below grants SliceLen authority.
-            sr::work(budget, inventory.calls.len())?;
-            let Some(site) = inventory.calls.iter().find(|site| site.node == *node) else {
-                return Ok(false);
-            };
+            let index = authored_call_index(inventory, node, budget)?;
+            let site = &inventory.calls[index];
             if let Some(original) = original {
-                let index = inventory
-                    .calls
-                    .iter()
-                    .position(|site| site.node == *node)
-                    .ok_or_else(|| {
-                        FactsError::invalid(budget, "method producer occurrence missing")
-                    })?;
                 sr::work(budget, original.call_mapping.len())?;
                 sr::work(
                     budget,
@@ -676,10 +691,7 @@ pub(super) fn supported(
                     tr::OriginalCallableSubject::Direct(target.declaration),
                 )?;
                 view.validate_for(&original.facts)?;
-                if !target.type_args.is_empty()
-                    || view.generic_env().total_arity() != 0
-                    || !original.facts.is_source_callable(target.declaration)?
-                {
+                if !original.facts.is_source_callable(target.declaration)? {
                     return Ok(false);
                 }
                 let declaration = original
@@ -687,15 +699,61 @@ pub(super) fn supported(
                     .registry
                     .declaration(target.declaration)
                     .map_err(|e| source_error(budget, &e))?;
+                let closed_header =
+                    view.generic_env().total_arity() == 0 && target.type_args.is_empty();
+                if (!args.is_empty()
+                    || matches!(
+                        declaration.receiver,
+                        ReceiverKind::Borrowed {
+                            kind: ir::BorrowKind::Mut
+                        }
+                    ))
+                    && (!closed_header
+                        || !matches!(declaration.receiver, ReceiverKind::Borrowed { .. })
+                        || !matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)))
+                {
+                    return Ok(false);
+                }
+                for (index, argument) in args.iter().enumerate() {
+                    if !supported(
+                        argument,
+                        &node.child(9, index, budget)?,
+                        function,
+                        inventory,
+                        Some(original),
+                        budget,
+                        depth + 1,
+                    )? {
+                        return Ok(false);
+                    }
+                }
                 if declaration.path.associated.is_none()
                     || !matches!(
                         declaration.receiver,
                         ReceiverKind::Borrowed {
-                            kind: ir::BorrowKind::Shared
-                        }
+                            kind: ir::BorrowKind::Shared | ir::BorrowKind::Mut
+                        } | ReceiverKind::Value { .. }
                     )
                 {
                     return Ok(false);
+                }
+                if !target.type_args.is_empty()
+                    || view.generic_env().total_arity() != 0
+                    || matches!(declaration.receiver, ReceiverKind::Value { .. })
+                    || !matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path))
+                {
+                    if declaration.param_env.arity() != 0 {
+                        return Ok(false);
+                    }
+                    return supported(
+                        receiver,
+                        &node.child(10, 0, budget)?,
+                        function,
+                        inventory,
+                        Some(original),
+                        budget,
+                        depth + 1,
+                    );
                 }
             } else if site.len_candidate {
                 // Do not route Vec/custom len methods away from their existing
@@ -706,8 +764,20 @@ pub(super) fn supported(
             }
             // Source method replay still authenticates the exact declaration,
             // original source occurrence and lexical receiver root.
-            let receiver = node.child(10, 0, budget)?;
-            Ok(inventory.operand_nodes.contains_key(&receiver.path))
+            if matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path)) {
+                let receiver = node.child(10, 0, budget)?;
+                Ok(inventory.operand_nodes.contains_key(&receiver.path))
+            } else {
+                supported(
+                    receiver,
+                    &node.child(10, 0, budget)?,
+                    function,
+                    inventory,
+                    original,
+                    budget,
+                    depth + 1,
+                )
+            }
         }
         Expr::Integer(_) | Expr::Bool(_) | Expr::Char(_) | Expr::Str(_) => Ok(true),
         _ => Ok(false),
@@ -1422,6 +1492,7 @@ impl Replay<'_> {
         target: &ir::Callee,
         signature: &ir::Signature,
         args: &[ir::ExprId],
+        depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         let Expr::MethodCall {
             receiver,
@@ -1441,6 +1512,32 @@ impl Replay<'_> {
                 "input method requires a direct source declaration",
             ));
         };
+        if !source_args.is_empty()
+            || matches!(
+                self.original
+                    .plan
+                    .registry
+                    .declaration(direct.declaration)
+                    .map_err(|e| source_error(self.budget, &e))?
+                    .receiver,
+                ReceiverKind::Borrowed {
+                    kind: ir::BorrowKind::Mut
+                }
+            )
+            || !direct.type_args.is_empty()
+            || !matches!(receiver.as_ref(), Expr::Var(path) if is_local_shaped_path(path))
+            || matches!(
+                self.original
+                    .plan
+                    .registry
+                    .declaration(direct.declaration)
+                    .map_err(|e| source_error(self.budget, &e))?
+                    .receiver,
+                ReceiverKind::Value { .. }
+            )
+        {
+            return self.generic_method_result(source, node, id, direct, signature, args, depth);
+        }
         if !type_args.is_empty() || !source_args.is_empty() || !direct.type_args.is_empty() {
             return Err(FactsError::unsupported(
                 self.budget,
@@ -1454,15 +1551,7 @@ impl Replay<'_> {
             ));
         }
         validate_original_occurrence(self.original, node, self.budget)?;
-        sr::work(self.budget, self.inventory.calls.len())?;
-        let source_index = self
-            .inventory
-            .calls
-            .iter()
-            .position(|site| site.node == *node)
-            .ok_or_else(|| {
-                FactsError::invalid(self.budget, "method producer source occurrence missing")
-            })?;
+        let source_index = authored_call_index(self.inventory, node, self.budget)?;
         sr::work(self.budget, self.original.call_mapping.len())?;
         let (position, (_, expression, original_target)) = self
             .original
@@ -1794,6 +1883,7 @@ impl Replay<'_> {
         info: &DeclInfo,
         source_index: usize,
         position: usize,
+        declared_expected: Option<&ir::Ty>,
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         sr::depth(self.budget, depth)?;
@@ -1926,6 +2016,12 @@ impl Replay<'_> {
         let mut state = sr::CallInferenceState::new(Some(env.clone()), self.budget)?;
         let result_schema =
             state.type_term(&view.signature().result, Some(env.binder()), depth + 1)?;
+        if let Some(expected) = declared_expected {
+            // Recursive constructor replay supplies original declared field
+            // types, never a checked constructor tag or inferred call result.
+            let expected = state.type_term(expected, None, depth + 1)?;
+            state.constrain(&result_schema, &expected, depth + 1)?;
+        }
         if let Some(expected) = &expected {
             // Context may intentionally contain unresolved receiver terms.
             // Constrain that authored term directly, never materialize it or
@@ -2131,6 +2227,7 @@ impl Replay<'_> {
         target: &ir::Callee,
         signature: &ir::Signature,
         arguments: &[ir::ExprId],
+        expected: Option<&ir::Ty>,
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         let Expr::AssociatedCall {
@@ -2158,15 +2255,7 @@ impl Replay<'_> {
             ));
         }
         validate_original_occurrence(self.original, node, self.budget)?;
-        sr::work(self.budget, self.inventory.calls.len())?;
-        let source_index = self
-            .inventory
-            .calls
-            .iter()
-            .position(|site| site.node == *node)
-            .ok_or_else(|| {
-                FactsError::invalid(self.budget, "static producer source occurrence missing")
-            })?;
+        let source_index = authored_call_index(self.inventory, node, self.budget)?;
         sr::work(self.budget, self.original.call_mapping.len())?;
         let (position, (_, expression, original_target)) = self
             .original
@@ -2222,6 +2311,7 @@ impl Replay<'_> {
                 info,
                 source_index,
                 position,
+                expected,
                 depth + 1,
             );
         }
@@ -2336,13 +2426,7 @@ impl Replay<'_> {
         depth: usize,
     ) -> Result<ir::Ty, FactsError> {
         validate_original_occurrence(self.original, node, self.budget)?;
-        sr::work(self.budget, self.inventory.calls.len())?;
-        let index = self
-            .inventory
-            .calls
-            .iter()
-            .position(|site| site.node == *node)
-            .ok_or_else(|| FactsError::invalid(self.budget, "len source occurrence missing"))?;
+        let index = authored_call_index(self.inventory, node, self.budget)?;
         let site = &self.inventory.calls[index];
         if !site.len_candidate
             || site.for_iterable
@@ -2512,15 +2596,7 @@ impl Replay<'_> {
                         "input producer requires direct source callable",
                     ));
                 };
-                sr::work(self.budget, self.inventory.calls.len())?;
-                let source_index = self
-                    .inventory
-                    .calls
-                    .iter()
-                    .position(|site| site.node == *node)
-                    .ok_or_else(|| {
-                        FactsError::invalid(self.budget, "producer source occurrence missing")
-                    })?;
+                let source_index = authored_call_index(self.inventory, node, self.budget)?;
                 sr::work(self.budget, self.original.call_mapping.len())?;
                 let (position, (_, expression, original_target)) = self
                     .original
@@ -2631,7 +2707,8 @@ impl Replay<'_> {
                     args,
                     ..
                 },
-            ) => self.closed_static_result(source, node, id, target, signature, args, depth)?,
+            ) => self
+                .closed_static_result(source, node, id, target, signature, args, expected, depth)?,
             (
                 Expr::MethodCall {
                     receiver,
@@ -2654,7 +2731,9 @@ impl Replay<'_> {
                     args,
                     ..
                 },
-            ) => self.concrete_method_result(source, node, id, target, signature, args)?,
+            ) => {
+                self.concrete_method_result(source, node, id, target, signature, args, depth + 1)?
+            }
             (Expr::Var(path), ir::ExprKind::Local(local)) if is_local_shaped_path(path) => {
                 let (root, ty) = self.operand(node, depth)?;
                 if root != *local {
@@ -3119,6 +3198,350 @@ mod literal_context_tests {
     use super::*;
 
     #[test]
+    fn generic_method_chains_require_unique_authored_role_not_deref_placeholders() {
+        for source in [
+            "struct A{n:i32}impl A{fn copy(&self)->A{A{n:self.n}}fn get(self)->i32{self.n}}fn main(){let a=A{n:7};let n=a.copy().get();}",
+            "struct Slot<T>{v:T}impl<T> Slot<T>{fn take(self)->T{self.v}}fn make()->Slot<i32>{Slot{v:7}}fn main(){let n=make().take();}",
+            "struct Slot{v:i32}impl Slot{fn new()->Self{Slot{v:7}}fn take(self)->i32{self.v}}fn main(){let n=Slot::new().take();}",
+        ] {
+            let program = parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let identity = sr::OriginalBodyId::new(&budget).unwrap();
+            let build = || {
+                SourceInventory::build(
+                    &program,
+                    program.functions.last().unwrap(),
+                    identity.clone(),
+                    &budget,
+                )
+                .unwrap()
+            };
+            let inventory = build();
+            let index = inventory
+                .calls
+                .iter()
+                .position(|site| {
+                    !site.operator_candidate
+                        && inventory
+                            .calls
+                            .iter()
+                            .any(|other| other.node == site.node && other.operator_candidate)
+                })
+                .unwrap();
+            let node = inventory.calls[index].node.clone();
+            assert!(
+                inventory
+                    .calls
+                    .iter()
+                    .position(|site| site.node == node)
+                    .unwrap()
+                    < index
+            );
+            assert_eq!(
+                authored_call_index(&inventory, &node, &budget).unwrap(),
+                index
+            );
+            for mode in 0..3 {
+                let mut forged = build();
+                match mode {
+                    0 => forged.calls[index].operator_candidate = true,
+                    1 => {
+                        forged.calls.remove(index);
+                    }
+                    _ => forged.calls.push(forged.calls[index].clone()),
+                }
+                assert_eq!(
+                    authored_call_index(&forged, &node, &budget)
+                        .unwrap_err()
+                        .kind(),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "mode {mode}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn closed_method_arguments_reconstruct_mut_receiver_and_reject_forged_evidence() {
+        for result in [
+            "struct Output{n:i32}impl Owner{fn make(&mut self,n:i32)->Output{self.n=n;Output{n:self.n}}}",
+            "struct Output<'a>{r:&'a i32}impl Owner{fn make<'a>(&'a mut self,n:i32)->Output<'a>{self.n=n;Output{r:&self.n}}}",
+        ] {
+            let source = format!(
+                "struct Owner{{n:i32}}{result}fn consume<T>(x:&T){{}}fn main(){{let mut owner=Owner{{n:0i32}};let mut sibling=Owner{{n:9i32}};let row=owner.make(7i32);consume(&row);}}"
+            );
+            let program = parse(&source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected original method source");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            assert!(
+                !replay_source_body(&original, checked, publication.facts(), &budget)
+                    .unwrap()
+                    .is_empty(),
+                "closed method control must demand source reconstruction"
+            );
+            let producer = checked
+                .exprs
+                .iter()
+                .enumerate()
+                .find_map(|(index, expression)| {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        args,
+                        ..
+                    } = &expression.kind
+                    else {
+                        return None;
+                    };
+                    let info = plan.registry.declaration(target.declaration).unwrap();
+                    (args.len() == 2
+                        && matches!(
+                            info.receiver,
+                            ReceiverKind::Borrowed {
+                                kind: ir::BorrowKind::Mut
+                            }
+                        ))
+                    .then_some(ir::ExprId(index))
+                })
+                .unwrap();
+            let receiver = match &checked.exprs[producer.0].kind {
+                ir::ExprKind::Call { args, .. } => args[0],
+                _ => unreachable!(),
+            };
+            for mutation in 0..6 {
+                let mut forged = checked.as_ref().clone();
+                match mutation {
+                    0 => {
+                        let ir::ExprKind::Call { args, .. } = &mut forged.exprs[producer.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        args.pop();
+                    }
+                    1 => {
+                        let ir::ExprKind::Call { args, .. } = &mut forged.exprs[producer.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        args[1] = receiver;
+                    }
+                    2 => {
+                        let ir::ExprKind::Borrow { place, .. } = &mut forged.exprs[receiver.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        place.local = ir::LocalId(usize::MAX);
+                    }
+                    3 => {
+                        let ir::ExprKind::Borrow { timing, .. } =
+                            &mut forged.exprs[receiver.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        *timing = ir::BorrowTiming::Immediate;
+                    }
+                    4 => {
+                        let ir::ExprKind::Call {
+                            target: ir::Callee::Direct(target),
+                            ..
+                        } = &mut forged.exprs[producer.0].kind
+                        else {
+                            unreachable!()
+                        };
+                        target.declaration = declaration;
+                    }
+                    _ => {
+                        let mut rows = forged.call_evidence.to_vec();
+                        let row = rows.iter_mut().find(|r| r.call == producer).unwrap();
+                        let mut arguments = row.arguments.to_vec();
+                        arguments[1].expectation = ir::CallExpectation::FirmReference {
+                            kind: ir::BorrowKind::Shared,
+                        };
+                        row.arguments = arguments.into();
+                        forged.call_evidence = rows.into();
+                    }
+                }
+                let error =
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .expect_err(&format!(
+                            "forged closed method mutation={mutation} must fail"
+                        ));
+                assert_eq!(
+                    error.kind(),
+                    tr::FactsErrorKind::InvalidMetadata,
+                    "mutation={mutation}"
+                );
+            }
+            let mut forged = original.clone();
+            forged
+                .call_mapping
+                .retain(|(_, expression, _)| *expression != producer);
+            let error = replay_source_body(&forged, checked, publication.facts(), &budget)
+                .expect_err("missing closed method source receipt");
+            assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
+            let foreign_plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let foreign = foreign_plan
+                .callable_facts(
+                    foreign_plan
+                        .function_decl(program.functions.len() - 1)
+                        .unwrap(),
+                )
+                .unwrap();
+            assert_eq!(
+                replay_source_body(&original, checked, &foreign, &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata
+            );
+        }
+    }
+
+    #[test]
+    fn generic_method_chains_reconstruct_owner_and_reject_forged_evidence() {
+        let source = "struct Owner<T>{n:T}struct View<'a,T>{r:&'a T}struct Slot<T>{v:T}impl<T> Owner<T>{fn slot<'a>(&'a self)->Slot<View<'a,T>>{Slot{v:View{r:&self.n}}}}impl<T> Slot<T>{fn take(self)->T{self.v}fn other(self)->T{self.v}}fn consume<T>(x:T){}fn main(){let owner=Owner{n:7i32};let sibling=Owner{n:9i32};let row=owner.slot().take();consume(row);}";
+        let program = parse(source).unwrap();
+        let budget = ir::PlanBudget::default();
+        let plan = PlanCtx::from_program(&program, &budget).unwrap();
+        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+        let PublishedCallableBody::Source(publication) =
+            plan.publish_callable_body(declaration, &budget).unwrap()
+        else {
+            panic!("expected generic method source");
+        };
+        let original = publication.original().source_for_test();
+        let checked = publication.source();
+        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+        let (method, receiver) = checked
+            .exprs
+            .iter()
+            .enumerate()
+            .find_map(|(index, expr)| {
+                let ir::ExprKind::Call {
+                    target: ir::Callee::Direct(target),
+                    args,
+                    ..
+                } = &expr.kind
+                else {
+                    return None;
+                };
+                let info = plan.declaration(target.declaration).unwrap();
+                (matches!(
+                    info.receiver,
+                    ReceiverKind::Borrowed {
+                        kind: ir::BorrowKind::Shared
+                    }
+                ) && args.len() == 1)
+                    .then_some((ir::ExprId(index), args[0]))
+            })
+            .unwrap();
+        let sibling = ir::LocalId(
+            checked
+                .locals
+                .iter()
+                .position(|local| local.name == "sibling")
+                .unwrap(),
+        );
+        for mode in 0..5 {
+            let mut payload = checked.as_ref().clone();
+            match mode {
+                0 => {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        ..
+                    } = &mut payload.exprs[method.0].kind
+                    else {
+                        unreachable!()
+                    };
+                    target.type_args = vec![ir::Ty::Bool].into();
+                }
+                1 => {
+                    let ir::ExprKind::Borrow { place, .. } = &mut payload.exprs[receiver.0].kind
+                    else {
+                        unreachable!()
+                    };
+                    place.local = sibling;
+                }
+                2 => payload.exprs[method.0].ty = ir::Ty::Bool,
+                3 => {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        ..
+                    } = &mut payload.exprs[method.0].kind
+                    else {
+                        unreachable!()
+                    };
+                    target.declaration = declaration;
+                }
+                _ => {
+                    let ir::ExprKind::Call { args, .. } = &mut payload.exprs[method.0].kind else {
+                        unreachable!()
+                    };
+                    args.clear();
+                }
+            }
+            assert_eq!(
+                replay_source_body(&original, &Arc::new(payload), publication.facts(), &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata,
+                "mode {mode}"
+            );
+        }
+        let mapping = original
+            .call_mapping
+            .iter()
+            .find(|(_, expression, _)| *expression == method)
+            .unwrap()
+            .clone();
+        let wrong_role = original
+            .calls
+            .iter()
+            .position(|site| site.operator_candidate && site.node == original.calls[mapping.0].node)
+            .unwrap();
+        for mode in 0..3 {
+            let mut source = original.clone();
+            match mode {
+                0 => source
+                    .call_mapping
+                    .retain(|(_, expression, _)| *expression != method),
+                1 => {
+                    source
+                        .call_mapping
+                        .iter_mut()
+                        .find(|(_, expression, _)| *expression == method)
+                        .unwrap()
+                        .0 = wrong_role
+                }
+                _ => source.call_mapping.push(mapping.clone()),
+            }
+            assert_eq!(
+                replay_source_body(&source, checked, publication.facts(), &budget)
+                    .unwrap_err()
+                    .kind(),
+                tr::FactsErrorKind::InvalidMetadata,
+                "original mapping mode {mode}"
+            );
+        }
+        let other = PlanCtx::from_program(&program, &ir::PlanBudget::default()).unwrap();
+        let foreign = other
+            .callable_facts(other.function_decl(program.functions.len() - 1).unwrap())
+            .unwrap();
+        assert_eq!(
+            replay_source_body(&original, checked, &foreign, &budget)
+                .unwrap_err()
+                .kind(),
+            tr::FactsErrorKind::InvalidMetadata
+        );
+    }
+
+    #[test]
     fn thread_panicking_transplanted_source_fails_original_replay_and_publication() {
         let program =
             parse("fn query()->bool{std::thread::panicking()}fn ordinary()->bool{true}fn main(){}")
@@ -3470,64 +3893,67 @@ mod literal_context_tests {
             )
             .unwrap();
         assert!(state.constrain(&raw, &reference, 0).is_err());
-        let program = parse(
+        for source in [
             "enum Slot<T>{Empty,Value(T)}impl<T> Slot<T>{fn empty()->Slot<T>{Slot::Empty}}fn take<T>(s:&Slot<T>){}fn main(){let slot:Slot<u32>=Slot::empty();take(&slot);}",
-        ).unwrap();
-        let budget = ir::PlanBudget::default();
-        let plan = PlanCtx::from_program(&program, &budget).unwrap();
-        let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
-        let PublishedCallableBody::Source(publication) =
-            plan.publish_callable_body(declaration, &budget).unwrap()
-        else {
-            panic!("expected original generic static producer source");
-        };
-        let original = publication.original().source_for_test();
-        let checked = publication.source();
-        replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
-        let producer = checked
-            .exprs
-            .iter()
-            .enumerate()
-            .find_map(|(index, expression)| {
+            "enum Slot<T>{Empty,Value(T)}impl<T> Slot<T>{fn empty()->Slot<T>{Slot::Empty}}struct Owner{slot:Slot<u32>}fn take<T>(s:&T){}fn main(){let owner=Owner{slot:Slot::empty()};take(&owner);}",
+        ] {
+            let program = parse(source).unwrap();
+            let budget = ir::PlanBudget::default();
+            let plan = PlanCtx::from_program(&program, &budget).unwrap();
+            let declaration = plan.function_decl(program.functions.len() - 1).unwrap();
+            let PublishedCallableBody::Source(publication) =
+                plan.publish_callable_body(declaration, &budget).unwrap()
+            else {
+                panic!("expected original generic static producer source");
+            };
+            let original = publication.original().source_for_test();
+            let checked = publication.source();
+            replay_source_body(&original, checked, publication.facts(), &budget).unwrap();
+            let producer = checked
+                .exprs
+                .iter()
+                .enumerate()
+                .find_map(|(index, expression)| {
+                    let ir::ExprKind::Call {
+                        target: ir::Callee::Direct(target),
+                        args,
+                        ..
+                    } = &expression.kind
+                    else {
+                        return None;
+                    };
+                    (args.is_empty() && target.type_args.len() == 1).then_some(ir::ExprId(index))
+                })
+                .expect("generic static producer call");
+            for mutation in 0..3 {
+                let mut forged = checked.as_ref().clone();
                 let ir::ExprKind::Call {
                     target: ir::Callee::Direct(target),
+                    signature,
                     args,
                     ..
-                } = &expression.kind
+                } = &mut forged.exprs[producer.0].kind
                 else {
-                    return None;
+                    unreachable!();
                 };
-                (args.is_empty() && target.type_args.len() == 1).then_some(ir::ExprId(index))
-            })
-            .expect("generic static producer call");
-        for mutation in 0..3 {
-            let mut forged = checked.as_ref().clone();
-            let ir::ExprKind::Call {
-                target: ir::Callee::Direct(target),
-                signature,
-                args,
-                ..
-            } = &mut forged.exprs[producer.0].kind
-            else {
-                unreachable!();
-            };
-            match mutation {
-                0 => target.type_args = vec![ir::Ty::Bool].into(),
-                1 => signature.result = ir::Ty::Bool,
-                _ => args.push(producer),
+                match mutation {
+                    0 => target.type_args = vec![ir::Ty::Bool].into(),
+                    1 => signature.result = ir::Ty::Bool,
+                    _ => args.push(producer),
+                }
+                let error =
+                    replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
+                        .expect_err("forged generic static producer must fail");
+                assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
             }
-            let error =
-                replay_source_body(&original, &Arc::new(forged), publication.facts(), &budget)
-                    .expect_err("forged generic static producer must fail");
+            let mut forged = original.clone();
+            forged
+                .call_mapping
+                .retain(|(_, expression, _)| *expression != producer);
+            let error = replay_source_body(&forged, checked, publication.facts(), &budget)
+                .expect_err("missing generic static source receipt must fail");
             assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
         }
-        let mut forged = original.clone();
-        forged
-            .call_mapping
-            .retain(|(_, expression, _)| *expression != producer);
-        let error = replay_source_body(&forged, checked, publication.facts(), &budget)
-            .expect_err("missing generic static source receipt must fail");
-        assert_eq!(error.kind(), tr::FactsErrorKind::InvalidMetadata);
     }
 
     #[test]

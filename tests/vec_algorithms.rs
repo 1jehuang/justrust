@@ -694,6 +694,31 @@ let c=RefCell::new(vec![1u32,2]);let g=c.borrow();for x in g.iter(){println!(\"{
 }
 
 #[test]
+fn generic_owner_method_chains_replay_consumed_borrowed_values() {
+    iterator_oracle::stock_native(
+        r#"struct Owner<T>{n:T}
+struct View<'a,T>{r:&'a T}
+struct Slot<T>{v:T}
+impl<T> Owner<T>{fn slot<'a>(&'a self)->Slot<View<'a,T>>{Slot{v:View{r:&self.n}}}}
+impl<T> Slot<T>{fn take(self)->T{self.v}}
+fn consume<'a,T:std::fmt::Display>(v:View<'a,T>){println!("{}",v.r);}
+fn main(){let owner=Owner{n:7i32};let row=owner.slot().take();consume(row);let text=Owner{n:String::from("shared")};let row=text.slot().take();consume(row);}"#,
+    );
+}
+
+#[test]
+fn generic_owner_method_chains_replay_free_call_receiver() {
+    iterator_oracle::stock_native(
+        r#"struct View<'a,T>{r:&'a T}
+struct Slot<T>{v:T}
+impl<T> Slot<T>{fn take(self)->T{self.v}}
+fn make<'a,T>(x:&'a T)->Slot<View<'a,T>>{Slot{v:View{r:x}}}
+fn consume<'a,T:std::fmt::Display>(v:View<'a,T>){println!("{}",v.r);}
+fn main(){let n=13i32;let row=make(&n).take();consume(row);let text=String::from("fresh");let row=make(&text).take();consume(row);}"#,
+    );
+}
+
+#[test]
 fn field_reads_through_nested_references() {
     compare(
         "struct It{id:u32,q:u32}\nfn f(i:&&It)->u32{i.q}\n\
@@ -903,6 +928,30 @@ fn main(){let s=String::from(\"blue\");let a=\"x\";let b=String::from(\"x\");\
 println!(\"{} {} {} {} {}\",eqk::<String,str>(&s,\"blue\"),eqk::<String,str>(&s,\"red\"),a==b,b==a,\"x\"==\"y\");}\n",
         "true false true true false\n",
         "str-borrow",
+    );
+}
+
+#[test]
+fn closed_method_arguments_mut_receiver_match_stock() {
+    iterator_oracle::stock_native(
+        r#"
+struct Owner{n:i64}
+struct Output{n:i64}
+impl Drop for Output{fn drop(&mut self){println!("owned {}",self.n);}}
+struct View<'a>{r:&'a i64}
+impl Owner{
+    fn make(&mut self,label:&str,n:i64)->Output{self.n+=n;println!("{} {}",label,self.n);Output{n:self.n}}
+    fn view<'a>(&'a mut self,n:i64)->View<'a>{self.n+=n;View{r:&self.n}}
+}
+fn consume<T>(value:T){drop(value);}
+fn examine<T>(value:&T){}
+fn main(){
+    let mut owner=Owner{n:10i64};
+    let out=owner.make("deposit",7i64);examine(&out);consume(out);
+    let row=owner.view(3i64);println!("view {}",row.r);consume(row);
+    println!("final {}",owner.n);
+}
+"#,
     );
 }
 

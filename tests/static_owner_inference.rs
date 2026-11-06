@@ -5,6 +5,49 @@ mod oracle;
 use oracle::{Case, Expect};
 
 #[test]
+fn declared_field_static_result_contexts_match_stock() {
+    oracle::check(
+        "declared-field-static-result-contexts",
+        &[
+            Case {
+                name: "distinct_fixed_fields_and_nested_original_annotations",
+                source: r#"
+enum Slot<T> { Empty, Value(T) }
+impl<T> Slot<T> { fn empty() -> Slot<T> { Slot::Empty } }
+struct Record { number: Slot<u32>, text: Slot<String> }
+struct Tuple(Slot<u64>);
+struct Holder<T> { value: T }
+fn consume<T>(value: &T) { println!("seen"); }
+fn main() {
+    let record = Record { number: Slot::empty(), text: Slot::empty() };
+    let tuple = Tuple(Slot::empty());
+    let holder: Holder<Slot<u32>> = Holder { value: Slot::empty() };
+    consume(&record);
+    consume(&tuple);
+    consume(&holder);
+}
+"#,
+                expect: Expect::Run("seen\nseen\nseen\n"),
+            },
+            Case {
+                name: "unused_field_context_cannot_replace_written_value_type",
+                source: r#"
+enum Slot<T> { Empty, Value(T) }
+struct Record { number: Slot<u32> }
+fn consume<T>(value: &T) {}
+fn bad() {
+    let record = Record { number: Slot::Value(false) };
+    consume(&record);
+}
+fn main() {}
+"#,
+                expect: Expect::Invalid("E0308"),
+            },
+        ],
+    );
+}
+
+#[test]
 fn rc_trait_receiver_associated_owner_identity_matches_stock() {
     oracle::check(
         "rc-trait-receiver-associated-owner-identity",
