@@ -97,6 +97,68 @@ pub trait Hash {
     }
 }
 
+pub trait BuildHasher {
+    type Hasher: Hasher;
+
+    fn build_hasher(&self) -> Self::Hasher;
+
+    fn hash_one<T: Hash>(&self, value: T) -> u64
+    where
+        Self: Sized,
+        Self::Hasher: Hasher,
+    {
+        let mut state = self.build_hasher();
+        value.hash(&mut state);
+        state.finish()
+    }
+}
+
+// The function marker records H without owning it or inheriting its auto traits.
+// Construction and cloning never construct a hasher. Only build_hasher does.
+pub struct BuildHasherDefault<H> {
+    marker: core::marker::PhantomData<fn() -> H>,
+}
+
+impl<H> BuildHasherDefault<H> {
+    pub const fn new() -> BuildHasherDefault<H> {
+        BuildHasherDefault { marker: core::marker::PhantomData }
+    }
+}
+
+impl<H> super::default::Default for BuildHasherDefault<H> {
+    fn default() -> BuildHasherDefault<H> {
+        BuildHasherDefault::<H>::new()
+    }
+}
+
+impl<H> Clone for BuildHasherDefault<H> {
+    fn clone(&self) -> BuildHasherDefault<H> {
+        BuildHasherDefault::<H>::new()
+    }
+}
+
+impl<H> super::cmp::PartialEq for BuildHasherDefault<H> {
+    fn eq(&self, _other: &BuildHasherDefault<H>) -> bool {
+        true
+    }
+}
+
+impl<H> super::cmp::Eq for BuildHasherDefault<H> {}
+
+impl<H> super::fmt::Debug for BuildHasherDefault<H> {
+    fn fmt(&self, f: &mut super::fmt::Formatter) -> super::fmt::Result {
+        f.write_str("BuildHasherDefault")
+    }
+}
+
+impl<H: super::default::Default + Hasher> BuildHasher for BuildHasherDefault<H> {
+    type Hasher = H;
+
+    fn build_hasher(&self) -> H {
+        H::default()
+    }
+}
+
 // Integer representations have no padding or uninitialized
 // bytes. Their slice protocol writes the whole native-endian representation
 // once, rather than calling a potentially overridden write_* per element.

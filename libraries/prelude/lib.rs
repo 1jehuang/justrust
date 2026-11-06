@@ -19,7 +19,7 @@ pub mod core_surface {
     pub use super::num;
     pub use super::char;
     pub mod hash {
-        pub use super::super::hash::{Hash, Hasher};
+        pub use super::super::hash::{BuildHasher, BuildHasherDefault, Hash, Hasher};
     }
     pub mod ptr {
         pub use super::super::ptr::{null, null_mut, read, write, eq};

@@ -210,3 +210,114 @@ fn non_std_hash_forms_reject() {
         ],
     );
 }
+
+#[test]
+fn build_hasher_associated_type_and_hash_one_match_stock() {
+    oracle::check(
+        "build_hasher_protocol",
+        &[
+            Case {
+                name: "generic_builder_and_fresh_hash_one",
+                source: r#"use std::hash::{BuildHasher, Hasher};
+struct Sum(u64);
+impl Hasher for Sum {
+    fn finish(&self)->u64 { self.0 }
+    fn write(&mut self, bytes:&[u8]) { for byte in bytes { self.0 += *byte as u64; } }
+}
+
+struct Start(u64);
+impl BuildHasher for Start {
+    type Hasher = Sum;
+    fn build_hasher(&self)->Sum { Sum(self.0) }
+}
+fn through_trait<B:BuildHasher>(builder:&B)->u64 {
+    let mut hasher=builder.build_hasher();
+    hasher.write(b"az");
+    hasher.finish()
+}
+fn digest<B:BuildHasher,T:std::hash::Hash>(builder:&B,value:T)->u64 {
+    builder.hash_one(value)
+}
+fn main() {
+    let builder=Start(5);
+    println!("{} {} {}",through_trait(&builder),builder.hash_one(258u16),digest(&builder,258u16));
+}"#,
+                expect: Expect::Run("224 8 8\n"),
+            },
+            Case {
+                name: "unused_builder_associated_type_must_be_hasher",
+                source: "use std::hash::BuildHasher;struct Bad;impl BuildHasher for Bad{type Hasher=u64;fn build_hasher(&self)->u64{0}}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+            Case {
+                name: "unused_generic_builder_requires_build_hasher_bound",
+                source: "use std::hash::{BuildHasher,Hasher};fn unused<B>(builder:&B){let mut hasher=builder.build_hasher();hasher.write(b\"a\");}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+        ],
+    );
+}
+
+#[test]
+fn default_hasher_builder_matches_stock_without_owning_a_hasher() {
+    oracle::check(
+        "build_hasher_default",
+        &[
+            Case {
+                name: "fresh_state_only_when_building",
+                source: r#"use std::hash::{BuildHasher,BuildHasherDefault,Hasher};
+struct Sum(u64);
+impl Default for Sum { fn default()->Self { println!("new hasher");Sum(17) } }
+impl Hasher for Sum {
+    fn finish(&self)->u64 { self.0 }
+    fn write(&mut self,bytes:&[u8]) { for byte in bytes { self.0+=*byte as u64; } }
+}
+fn main() {
+    let builder=BuildHasherDefault::<Sum>::new();
+    println!("{:?} {}",builder.clone(),builder==BuildHasherDefault::<Sum>::default());
+    let mut first=builder.build_hasher();first.write(b"ab");
+    let second=builder.build_hasher();
+    println!("{} {}",first.finish(),second.finish());
+    println!("{}",builder.hash_one(258u16));
+}"#,
+                expect: Expect::Run(
+                    "BuildHasherDefault true\nnew hasher\nnew hasher\n212 17\nnew hasher\n20\n",
+                ),
+            },
+            Case {
+                name: "marker_traits_have_no_hasher_bounds_or_owned_state",
+                source: r#"use core::hash::BuildHasherDefault;
+struct Never;
+impl Drop for Never { fn drop(&mut self) { println!("unexpected hasher drop"); } }
+fn require_eq<T:Eq>() {}
+fn require_sync<T:Sync>() {}
+fn main() {
+    let one=BuildHasherDefault::<Never>::new();
+    let two=one.clone();
+    let three=BuildHasherDefault::<Never>::default();
+    require_eq::<BuildHasherDefault<Never>>();
+    require_sync::<BuildHasherDefault<core::cell::Cell<u8>>>();
+    println!("{:?} {} {}",one,one==two,two==three);
+    drop(one);drop(two);drop(three);
+    println!("done");
+}"#,
+                expect: Expect::Run("BuildHasherDefault true true\ndone\n"),
+            },
+            Case {
+                name: "unused_build_requires_default",
+                source: "use std::hash::{BuildHasher,BuildHasherDefault,Hasher};struct H;impl Hasher for H{fn finish(&self)->u64{0}fn write(&mut self,_bytes:&[u8]){}}fn unused(){let builder=BuildHasherDefault::<H>::new();let _=builder.build_hasher();}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "unused_build_requires_hasher",
+                source: "use std::hash::{BuildHasher,BuildHasherDefault};struct H;impl Default for H{fn default()->H{H}}fn unused(){let builder=BuildHasherDefault::<H>::default();let _=builder.build_hasher();}fn main(){}",
+                expect: Expect::Invalid("E0599"),
+            },
+            Case {
+                name: "builder_is_not_copy_even_when_hasher_is_copy",
+                source: "use std::hash::BuildHasherDefault;fn require_copy<T:Copy>(){}fn unused(){require_copy::<BuildHasherDefault<u64>>();}fn main(){}",
+                expect: Expect::Invalid("E0277"),
+            },
+        ],
+    );
+}
